@@ -1,10 +1,12 @@
-package com.itheima.Dao;
+package com.itheima.dao;
 
-import org.springframework.security.crypto.bcrypt.BCrypt;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+
+
 
 import java.sql.*;
 
-public class LogIn {
+public class SearchInfo {
     public static String getPasswordHashByID(String id) {
         String url = "jdbc:mysql:///TVDatabase?useSSL=false";
         String username = "root";
@@ -29,20 +31,7 @@ public class LogIn {
         }
     }
 
-    public static void logInAsUser(String id,String rawPassword) throws Exception {
-        String hashedPassword = getPasswordHashByID(id);
-        if(hashedPassword==null){
-            System.out.println("用户不存在");
-            return;
-        }
-        boolean match = BCrypt.checkpw(rawPassword, hashedPassword);
-        if(match){
-            System.out.println("登录成功");
-        }
-        else {
-            System.out.println("登录失败");
-        }
-    }
+
     public static String getPasswordHashByPhone(String phone) {
         String url = "jdbc:mysql:///TVDatabase?useSSL=false";
         String username = "root";
@@ -67,19 +56,6 @@ public class LogIn {
         }
     }
 
-    public static void logInAsUserByPhone(String phone,String rawPassword) throws Exception {
-        String hashedPassword = getPasswordHashByPhone(phone);
-        if(hashedPassword==null){
-            System.out.println("用户不存在");
-            return;
-        }
-        boolean match = BCrypt.checkpw(rawPassword, hashedPassword);
-        if(match){
-            System.out.println("登录成功");
-        }
-        else {
-            System.out.println("登录失败");
-        }
-    }
+
 
 }

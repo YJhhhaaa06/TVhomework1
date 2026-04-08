@@ -8,9 +8,17 @@
     <artifactId>untitled</artifactId>
     <version>1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
+<!--    <modules>-->
+<!--        <module>ssm_dao</module>-->
+<!--        <module>ssm_pojo</module>-->
+<!--        <module>ssm_service</module>-->
+<!--        <module>ssm_controller</module>-->
+<!--        <module>util</module>-->
+<!--    </modules>-->
+
     <modules>
-        <module>ssm_dao</module>
         <module>ssm_pojo</module>
+        <module>ssm_dao</module>
         <module>ssm_service</module>
         <module>ssm_controller</module>
         <module>util</module>
@@ -22,12 +30,19 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
+    <dependencyManagement>
     <dependencies>
         <dependency>
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-crypto</artifactId>
             <version>6.4.5</version>
         </dependency>
-    </dependencies>
+        <dependency>
+            <groupId>commons-logging</groupId>
+            <artifactId>commons-logging</artifactId>
+            <version>1.2</version>
+        </dependency>
 
+    </dependencies>
+    </dependencyManagement>
 </project>

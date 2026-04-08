@@ -16,5 +16,36 @@
         <maven.compiler.target>25</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
+    <dependencies>
 
+        <dependency>
+            <groupId>com.itheima</groupId>
+            <artifactId>util</artifactId>
+            <version>1.0-SNAPSHOT</version>
+
+        </dependency>
+        <dependency>
+            <groupId>com.itheima</groupId>
+            <artifactId>ssm_dao</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.itheima</groupId>
+            <artifactId>ssm_pojo</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
+
+        <!--        哈希加密-->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
+        </dependency>
+
+<!--        crypto运行需要的框架-->
+        <dependency>
+            <groupId>commons-logging</groupId>
+            <artifactId>commons-logging</artifactId>
+        </dependency>
+    </dependencies>
 </project>

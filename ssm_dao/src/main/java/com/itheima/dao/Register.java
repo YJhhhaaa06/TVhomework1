@@ -1,4 +1,4 @@
-package com.itheima.Dao;
+package com.itheima.dao;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
