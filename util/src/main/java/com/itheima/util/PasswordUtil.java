@@ -1,10 +1,9 @@
-package com.itheima.service;
+package com.itheima.util;
 
 import org.springframework.security.crypto.bcrypt.BCrypt;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
-public class PasswordManage {
-
+public class PasswordUtil {
     public static String hashPassword(String rawPassword) {
         return BCrypt.hashpw(rawPassword, BCrypt.gensalt());
     }
@@ -13,5 +12,6 @@ public class PasswordManage {
         BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
         return encoder.matches(rawPassword, hashedPassword);
     }
+
 
 }

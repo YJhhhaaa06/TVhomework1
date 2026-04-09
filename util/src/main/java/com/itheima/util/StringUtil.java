@@ -11,8 +11,8 @@ public class StringUtil {
     public static boolean isSpecificLength(int length,String str){
         return str.length()==length;
     }
-    public static boolean isLengthLegal(int length,String str){//太长了返回false
-        return str.length()<length;
+    public static boolean isLengthLegal(int maxLength,String str){//太长了返回false
+        return str.length()<maxLength;
     }
     public static boolean phoneCheck(String phone){
         if (!isAllDigit(phone)){//如果不是全数字
