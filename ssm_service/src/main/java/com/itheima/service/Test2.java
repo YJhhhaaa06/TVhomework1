@@ -8,4 +8,3 @@ public class Test2 {
         LogIn.logInAsUserByPhone("12345678901","123456");
     }
 }
-class a
