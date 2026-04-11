@@ -1,24 +1,24 @@
 package com.itheima.pojo;
 
 public class Video {
-    private long videoID;
+    private long videoId;
     private long uploadID;
     private String videoTitle;
     private String briefIntroduction;
 
     public Video(long videoID, long uploadID, String videoTitle, String briefIntroduction) {
-        this.videoID = videoID;
+        this.videoId = videoID;
         this.uploadID = uploadID;
         this.videoTitle = videoTitle;
         this.briefIntroduction = briefIntroduction;
     }
 
     public long getVideoID() {
-        return videoID;
+        return videoId;
     }
 
     public void setVideoID(long videoID) {
-        this.videoID = videoID;
+        this.videoId = videoID;
     }
 
     public long getUploadID() {
@@ -47,7 +47,7 @@ public class Video {
     @Override
     public String toString() {
         return "Video{" +
-                "videoID=" + videoID +
+                "videoID=" + videoId +
                 ", uploadID=" + uploadID +
                 ", videoTitle='" + videoTitle + '\'' +
                 ", briefIntroduction='" + briefIntroduction + '\'' +

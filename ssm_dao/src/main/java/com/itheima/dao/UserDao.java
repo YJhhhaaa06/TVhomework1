@@ -1,5 +1,7 @@
 package com.itheima.dao;
 
+import com.itheima.pojo.User;
+
 import java.sql.*;
 
 public class UserDao {
@@ -7,62 +9,65 @@ public class UserDao {
     private static final String username = "root";
     private static final String password = "MySQL";
 
-    public static int addUser(String user,String hashedPassword,String phone){
-        String url = "jdbc:mysql:///TVDatabase?useSSL=false";
-        String username = "root";
-        String password = "MySQL";
-        String sql="insert into userTable(username,hashedPassword,phone) values(?,?,?)";
-        try (Connection conn = DriverManager.getConnection(url, username, password);
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-
-            // 设置参数（占位符从1开始）
+    //增
+    //添加用户
+    public static long addUser(Connection conn,String user,String hashedPassword,String phone) throws SQLException {
+        String sql="insert into users(username,hashedPassword,phone) values(?,?,?)";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql,Statement.RETURN_GENERATED_KEYS)) {
             pstmt.setString(1, user);
             pstmt.setString(2, hashedPassword);
             pstmt.setString(3, phone);
-            // 执行插入，返回受影响的行数
-            int result = pstmt.executeUpdate();
-            return result;
-        } catch (SQLException e) {
-            System.out.println("注册在Dao出问题");
-            throw new RuntimeException(e);
+            // 执行插入，返回影响行数
+            int rows = pstmt.executeUpdate();
+
+            if(rows == 0){
+                throw new SQLException("插入失败");
+            }
+            //获取主键（用户ID）
+            else {ResultSet rs = pstmt.getGeneratedKeys();
+                if (rs.next()) {
+                    return rs.getLong("id");
+                }
+                else {
+                    //获取不到ID也当异常处理
+                    throw new SQLException("插入成功，但未获取到ID");
+                }
+            }
         }
     }
 
-    public static String getPasswordHashByID(String id) {
-        String sql = "select hashedPassword from userTable where id=?";
-        try (Connection conn = DriverManager.getConnection(url, username, password);
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+    //删
+    //删除用户
+    public static int deleteUser(Connection conn,String phone,long id) throws SQLException {
+        String sql = "delete from users where phone=? and id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, phone);
+            pstmt.setLong(2, id);
+            return pstmt.executeUpdate();
+        }
+    }
 
-            pstmt.setString(1, id);
-
+    //查
+    //通过ID获取用户名
+    public static String findUserById(Connection conn,long id)throws SQLException{
+        String sql = "select username from users where id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, id);
             // 获取结果集
             try (ResultSet res = pstmt.executeQuery()) {
                 if (res.next()) {
-                    return res.getString("hashedPassword");
+                    return res.getString("username");
                 } else {
                     return null; // 用户不存在
                 }
-            } catch (SQLException e) {
-                throw new RuntimeException(e);
-                //暂时不处理异常
             }
-        } catch (SQLException e) {//catch的是conn和pstmt的异常
-            throw new RuntimeException(e);
-            //暂时不处理异常
         }
     }
-
-
     //通过ID获取哈希后的密码
-
-    public static String getPasswordHashByPhone(String phone) {
-        String sql = "select hashedPassword from userTable where phone=?";
-        try (Connection conn = DriverManager.getConnection(url, username, password);
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-
-            // 设置参数（占位符从1开始）
-            pstmt.setString(1, phone);
-
+    public static String findPasswordHashByID(Connection conn,long id) throws SQLException {
+        String sql = "select hashedPassword from users where id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, id);
             // 获取结果集
             try (ResultSet res = pstmt.executeQuery()) {
                 if (res.next()) {
@@ -71,30 +76,83 @@ public class UserDao {
                     return null; // 用户不存在
                 }
             }
-        } catch (SQLException e) {
-            return null;//返回null，上一层就会认为这个用户不存在
         }
     }
-
-    public static boolean isPhoneUsed(String phone){
-        String sql = "select hashedPassword from userTable where phone=?";
-        try (Connection conn = DriverManager.getConnection(url, username, password);
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-
+    //根据手机号获取哈希后的密码
+    public static String findPasswordHashByPhone(Connection conn,String phone) throws SQLException {
+        String sql = "select hashedPassword from users where phone=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             // 设置参数（占位符从1开始）
             pstmt.setString(1, phone);
-
             // 获取结果集
-            try (ResultSet res = pstmt.executeQuery()) {
+            try (ResultSet res = pstmt.executeQuery();){
                 if (res.next()) {
-                    return false;
+                    return res.getString("hashedPassword");
                 } else {
-                    return true; // 用户不存在
+                    return null; // 用户不存在
                 }
             }
-        } catch (SQLException e) {
-            return true;//返回null，上一层就会认为这个用户不存在
         }
     }
+    //查看手机号是否已经被使用
+    public static boolean isPhoneUsed(Connection conn,String phone) throws SQLException {
+        String sql = "select hashedPassword from users where phone=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, phone);
+            // 获取结果集
+            try (ResultSet rs = pstmt.executeQuery()) {
+                return rs.next();//手机号已被使用返回true
+            }
+        }
+    }
+    //根据手机号查询id
+    public static String findIDbyPhone(Connection conn,String phone)throws SQLException{
+        String sql = "select id from users where phone=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, phone);
+            try (ResultSet res = pstmt.executeQuery();){
+                if (res.next()) {
+                    return res.getString("id");
+                } else {
+                    return null; // 用户不存在
+                }
+            }
+        }
+    }
+
+    //改
+    //修改用户名
+    public static int updateUserName(Connection conn,String phone,long id,String newName) throws SQLException {
+        String sql = "update users set username=? where phone=? and id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, newName);
+            pstmt.setString(2, phone);
+            pstmt.setLong(3, id);
+            return pstmt.executeUpdate();
+        }
+    }
+    //修改手机号
+    public static int updateUserPhone(Connection conn,String phone,long id,String newPhone) throws SQLException {
+        String sql = "update users set phone=? where phone=? and id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, newPhone);
+            pstmt.setString(2, phone);
+            pstmt.setLong(3, id);
+            return pstmt.executeUpdate();
+        }
+    }
+    //修改密码
+    public static int updateUserPassword(Connection conn,String phone,long id,String newHashedPassword) throws SQLException {
+        String sql = "update users set hashedPassword=? where phone=? and id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, newHashedPassword);
+            pstmt.setString(2, phone);
+            pstmt.setLong(3, id);
+            return pstmt.executeUpdate();
+        }
+    }
+    
+    
+
 
 }
