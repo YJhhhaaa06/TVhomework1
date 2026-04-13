@@ -1,6 +1,7 @@
 package com.itheima.dao;
 
 import com.itheima.pojo.Comment;
+import com.itheima.pojo.User;
 import com.itheima.pojo.Video;
 import com.itheima.pojo.VideoResult;
 
@@ -38,6 +39,17 @@ public class ResultMap {
         cm.setLikeCount(rs.getInt("like_count"));
         cm.setIsDeleted(rs.getBoolean("is_deleted"));
         return cm;
+    }
+
+    public static User mapResultToUser(ResultSet rs)throws SQLException{
+
+        long id=rs.getLong("id");
+        String userName=rs.getString("username");
+        String hashedPassword=rs.getString("hashedPassword");
+        int followerCount=rs.getInt("follower_count");
+        int followCount=rs.getInt("follow_count");
+        String phone=rs.getString("phone");
+        return new User(id,userName,hashedPassword,followerCount,followCount,phone);
     }
 
 }

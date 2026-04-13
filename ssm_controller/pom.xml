@@ -9,6 +9,8 @@
         <version>1.0-SNAPSHOT</version>
     </parent>
 
+    <packaging>war</packaging>
+
     <artifactId>ssm_controller</artifactId>
 
     <properties>
@@ -23,5 +25,12 @@
             <artifactId>ssm_service</artifactId>
             <version>1.0-SNAPSHOT</version>
         </dependency>
+
+        <dependency>
+            <groupId>jakarta.servlet</groupId>
+            <artifactId>jakarta.servlet-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
+
 </project>

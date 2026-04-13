@@ -5,9 +5,7 @@ import com.itheima.pojo.User;
 import java.sql.*;
 
 public class UserDao {
-    private static final String url = "jdbc:mysql:///TVDatabase?useSSL=false";
-    private static final String username = "root";
-    private static final String password = "MySQL";
+
 
     //增
     //添加用户
@@ -49,7 +47,7 @@ public class UserDao {
 
     //查
     //通过ID获取用户名
-    public static String findUserById(Connection conn,long id)throws SQLException{
+    public static String findUsernameById(Connection conn,long id)throws SQLException{
         String sql = "select username from users where id=?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setLong(1, id);
@@ -63,31 +61,31 @@ public class UserDao {
             }
         }
     }
-    //通过ID获取哈希后的密码
-    public static String findPasswordHashByID(Connection conn,long id) throws SQLException {
-        String sql = "select hashedPassword from users where id=?";
+    //通过ID获取用户
+    public static User findUserByID(Connection conn,long id) throws SQLException {
+        String sql = "select * from users where id=?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setLong(1, id);
             // 获取结果集
-            try (ResultSet res = pstmt.executeQuery()) {
-                if (res.next()) {
-                    return res.getString("hashedPassword");
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return ResultMap.mapResultToUser(rs);
                 } else {
                     return null; // 用户不存在
                 }
             }
         }
     }
-    //根据手机号获取哈希后的密码
-    public static String findPasswordHashByPhone(Connection conn,String phone) throws SQLException {
-        String sql = "select hashedPassword from users where phone=?";
+    //根据手机号获取用户
+    public static User findUserByPhone(Connection conn,String phone) throws SQLException {
+        String sql = "select * from users where phone=?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             // 设置参数（占位符从1开始）
             pstmt.setString(1, phone);
             // 获取结果集
-            try (ResultSet res = pstmt.executeQuery();){
-                if (res.next()) {
-                    return res.getString("hashedPassword");
+            try (ResultSet rs = pstmt.executeQuery();){
+                if (rs.next()) {
+                    return ResultMap.mapResultToUser(rs);
                 } else {
                     return null; // 用户不存在
                 }
@@ -106,10 +104,23 @@ public class UserDao {
         }
     }
     //根据手机号查询id
-    public static String findIDbyPhone(Connection conn,String phone)throws SQLException{
+    public static long findIDbyPhone(Connection conn,String phone)throws SQLException{
         String sql = "select id from users where phone=?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, phone);
+            try (ResultSet res = pstmt.executeQuery();){
+                if (res.next()) {
+                    return res.getLong("id");
+                } else {
+                    throw new RuntimeException("USER_NOT_FOUND"); // 用户不存在
+                }
+            }
+        }
+    }
+    public static String findPhoneById(Connection conn,long id)throws SQLException{
+        String sql = "select phone from users where id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, id);
             try (ResultSet res = pstmt.executeQuery();){
                 if (res.next()) {
                     return res.getString("id");

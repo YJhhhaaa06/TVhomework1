@@ -1,54 +1,44 @@
 package com.itheima.pojo;
 
-import java.util.Random;
-
 public class Token {
-    private String username;
     private long id;
-    private String signTime;
-    private int checkCode;
-
-    public Token(String username, String signTime, long id) {
-        this.username = username;
-        this.signTime = signTime;
-        this.id = id;
-        Random r=new Random();
-        this.checkCode=r.nextInt()%10;
-    }
-
-    public String getUsername() {
-        return username;
-    }
-
-    public void setUsername(String username) {
-        this.username = username;
-    }
-
-    public String getSignTime() {
-        return signTime;
-    }
-
-    public void setSignTime(String signTime) {
-        this.signTime = signTime;
-    }
+    private int random;
+    private long expireTime;
+    private String signature;
 
     public long getId() {
         return id;
     }
-
     public void setId(long id) {
         this.id = id;
     }
-
-    public int getCheckCode() {
-        return checkCode;
+    public int getRandom() {
+        return random;
+    }
+    public void setRandom(int random) {
+        this.random = random;
+    }
+    public long getExpireTime() {
+        return expireTime;
+    }
+    public void setExpireTime(long expireTime) {
+        this.expireTime = expireTime;
+    }
+    public String getSignature() {
+        return signature;
+    }
+    public void setSignature(String signature) {
+        this.signature = signature;
     }
 
-    @Override
-    public String toString(){
-        return username+"\n"
-                +id+"\n"
-                +signTime+"\n"
-                +checkCode+"\n";
+    public Token(long id, int random, long expireTime, String signature) {
+        this.id = id;
+        this.random = random;
+        this.expireTime = expireTime;
+        this.signature = signature;
     }
+
+    public Token() {
+    }
+
 }

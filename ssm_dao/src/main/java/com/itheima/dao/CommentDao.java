@@ -28,11 +28,29 @@ public class CommentDao {
         }
     }
 
-    //从数据库根据评论ID删除评论
-    public static int deleteComment(Connection conn,long commentId)throws SQLException{
+    //删
+    //从数据库根据评论ID删除评论，管理员使用
+    public static int deleteCommentById(Connection conn,long commentId)throws SQLException{
         String sql="delete from comment where comment_id = ?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)){
             pstmt.setLong(1,commentId);
+            return pstmt.executeUpdate();
+        }
+    }
+    //从数据库根据视频ID删除评论，用于删除视频
+    public static int deleteCommentByVideo(Connection conn,long videoId) throws SQLException {
+        String sql="delete from comment where video_id = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)){
+            pstmt.setLong(1,videoId);
+            return pstmt.executeUpdate();
+        }
+    }
+
+    //从数据库根据用户删除评论，用于注销账号
+    public static int deleteCommentByUser(Connection conn,long userId) throws SQLException {
+        String sql="delete from comment where video_id = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)){
+            pstmt.setLong(1,userId);
             return pstmt.executeUpdate();
         }
     }
@@ -40,7 +58,7 @@ public class CommentDao {
     //查
     public static List<Comment> findCommentsByVideo(Connection conn,long videoId)throws SQLException{
         String sql="select * from comment where video_id = ?";
-        List<Comment> list=new ArrayList<Comment>();
+        List<Comment> list=new ArrayList<>();
         try (PreparedStatement pstmt = conn.prepareStatement(sql)){
             pstmt.setLong(1,videoId);
             ResultSet rs= pstmt.executeQuery();
@@ -51,7 +69,7 @@ public class CommentDao {
         }
     }
 
-    //没有改
+    //改（点赞暂时不做）
 
 
 
