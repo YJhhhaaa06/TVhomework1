@@ -3,12 +3,30 @@ package com.itheima.pojo;
 public class Video {
     private long videoId;
     private long uploadID;
+//    private String authorName;
     private String videoTitle;
     private String briefIntroduction;
 
-    public Video(long videoID, long uploadID, String videoTitle, String briefIntroduction) {
-        this.videoId = videoID;
+    public long getVideoId() {
+        return videoId;
+    }
+
+    public void setVideoId(long videoId) {
+        this.videoId = videoId;
+    }
+
+//    public String getAuthorName() {
+//        return authorName;
+//    }
+//
+//    public void setAuthorName(String authorName) {
+//        this.authorName = authorName;
+//    }
+
+    public Video(long videoId, long uploadID, String videoTitle, String briefIntroduction) {
+        this.videoId = videoId;
         this.uploadID = uploadID;
+//        this.authorName = authorName;
         this.videoTitle = videoTitle;
         this.briefIntroduction = briefIntroduction;
     }

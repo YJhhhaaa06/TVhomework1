@@ -2,8 +2,9 @@ package com.itheima.service;
 
 import com.itheima.dao.VideoDao;
 import com.itheima.pojo.LogInResult;
-import com.itheima.pojo.VideoResult;
-import com.itheima.util.TokenUtil;
+import com.itheima.pojo.Video;
+import com.itheima.pojo.VideoDetail;
+import com.itheima.util.MyConnectionPool;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -38,5 +39,13 @@ public class Test2 {
         LogInResult res= UserService.logInAsUserByID(2,"123");
         System.out.println(res.getToken());
         System.out.println(res.getUser().getUserName());
+        List<Video> list= VideoDao.searchVideoInfo(MyConnectionPool.getConnection(),"灯");
+        List<VideoDetail> list2=VideoDao.searchVideo(MyConnectionPool.getConnection(),"灯");
+        for (Video video:list){
+            System.out.println(video.toString());
+        }
+        for (VideoDetail vd:list2){
+            System.out.println(vd.toString());
+        }
     }
 }

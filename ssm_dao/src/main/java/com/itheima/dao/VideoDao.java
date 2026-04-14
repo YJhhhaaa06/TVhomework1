@@ -1,9 +1,10 @@
 package com.itheima.dao;
 
 import com.itheima.pojo.Video;
-import com.itheima.pojo.VideoResult;
+import com.itheima.pojo.VideoDetail;
 
 import java.sql.*;
+import com.itheima.util.MyConnectionPool;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -63,83 +64,107 @@ public class VideoDao {
 
     //查
     //根据视频ID查询视频基本信息
-    public static Video findVideoInfo(Connection conn,long videoID) throws SQLException{
+    public static Video findVideoInfo(long videoID) throws SQLException{
         String sql="select * from videoInfo where videoID=?";
-        try (PreparedStatement pstmt=conn.prepareStatement(sql)){
-            pstmt.setLong(1,videoID);
-            ResultSet rs=pstmt.executeQuery();
-            if (rs.next()){
-                return ResultMap.mapResultToVideoInfo(rs);
+        java.sql.Connection conn = null;
+        try {
+            conn = MyConnectionPool.getConnection();
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)){
+                pstmt.setLong(1, videoID);
+                try (ResultSet rs = pstmt.executeQuery()){
+                    if (rs.next()){
+                        return ResultMap.mapResultToVideoInfo(rs);
+                    } else {
+                        return null;
+                    }
+                }
             }
-            else{
-                return null;
-            }
+        } finally {
+            MyConnectionPool.release(conn);
         }
     }
 
     //根据视频ID查询视频内容（实际上只有视频url）
-    public static String findVideo(Connection conn,long VideoID) throws SQLException {
-        String sql = "select videoID,video_url from video where videoID=?";
-
-        PreparedStatement pstmt = conn.prepareStatement(sql);
-        pstmt.setLong(1, VideoID);
-
-        try (ResultSet res = pstmt.executeQuery(); ) {
-            if (res.next()) {//如果查得到结果
-                return res.getString("video_url");
-            } else {
-                return null;
-            }
-        } catch (SQLException e) {
-            e.printStackTrace();
-            return null;
-        }
-    }
-
-    //查询所有视频基本信息
-    public static List<Video> findAllVideoInfo(Connection conn) throws SQLException {
-        List<Video> VideoList = new ArrayList<>();
-        //面向接口：后续要改类型只用改new的类型
-        String sql = "select * from videoInfo";
-        try {
-            PreparedStatement pstmt = conn.prepareStatement(sql);
-            ResultSet res = pstmt.executeQuery();
-
-            while (res.next()) {
-                Video video = ResultMap.mapResultToVideoInfo(res);
-                VideoList.add(video);
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException(e);
-        }
-        return VideoList;
-    }
-
-    //根据创作者id获取视频基本信息
-    public static List<Video> findVideoInfoByUploadID(Connection conn, long uploadID) throws SQLException {
-        List<Video> videoList = new ArrayList<>();
-        String sql = "select * from videoInfo where uploadID = ?";
-        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setLong(1, uploadID);
-            try (ResultSet res = pstmt.executeQuery()) {
-                while (res.next()) {
-                    videoList.add(ResultMap.mapResultToVideoInfo(res));
-                }
-            }
-        }
-        return videoList;
-    }
-
-    //根据视频标题或作者名，模糊查询视频基本信息+视频内容
-    public static List<VideoResult> searchVideo(Connection conn,String keyword) {
+    public static VideoDetail findVideo(Connection conn,long VideoID) throws SQLException {
         String sql = """
         SELECT 
             vInfo.videoTitle,
             vInfo.briefIntroduction,
             v.video_url,
-            u.username
+            u.username,
+            u.id
         FROM videoInfo vInfo  
-        JOIN userTable u ON vInfo.uploadID = u.id
+        JOIN users u ON vInfo.uploadID = u.id
+        JOIN video v ON vInfo.videoID = v.videoID
+        WHERE 
+            vInfo.videoID=?
+          """;
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)){
+                pstmt.setLong(1, VideoID);
+                try (ResultSet rs = pstmt.executeQuery()){
+                    if (rs.next()) {//如果查得到结果
+                        return ResultMap.mapResultToVideoDetail(rs);
+                    } else {
+                        return null;
+                    }
+                }
+            }
+    }
+
+    //查询所有视频基本信息
+    public static List<Video> findAllVideoInfo() throws SQLException {
+        List<Video> VideoList = new ArrayList<>();
+        //面向接口：后续要改类型只用改new的类型
+        String sql = "select * from videoInfo";
+        java.sql.Connection conn = null;
+        try {
+            conn = MyConnectionPool.getConnection();
+            try (PreparedStatement pstmt = conn.prepareStatement(sql);
+                 ResultSet res = pstmt.executeQuery()){
+                while (res.next()) {
+                    Video video = ResultMap.mapResultToVideoInfo(res);
+                    VideoList.add(video);
+                }
+            }
+        } finally {
+            MyConnectionPool.release(conn);
+        }
+        return VideoList;
+    }
+
+    //根据创作者id获取视频基本信息
+    public static List<Video> findVideoInfoByUploadID(long uploadID) throws SQLException {
+        List<Video> videoList = new ArrayList<>();
+        String sql = "select * from videoInfo where uploadID = ?";
+        java.sql.Connection conn = null;
+        try {
+            conn = MyConnectionPool.getConnection();
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setLong(1, uploadID);
+                try (ResultSet res = pstmt.executeQuery()) {
+                    while (res.next()) {
+                        videoList.add(ResultMap.mapResultToVideoInfo(res));
+                    }
+                }
+            }
+        } finally {
+            MyConnectionPool.release(conn);
+        }
+        return videoList;
+    }
+
+    //根据视频标题或作者名，模糊查询视频基本信息+视频内容
+    public static List<VideoDetail> searchVideo(Connection conn,String keyword)throws SQLException {
+        String sql = """
+        SELECT 
+            vInfo.videoTitle,
+            vInfo.briefIntroduction,
+            vInfo.videoID,
+            v.video_url,
+            u.username,
+            u.id
+        FROM videoInfo vInfo  
+        JOIN users u ON vInfo.uploadID = u.id
         JOIN video v ON vInfo.videoID = v.videoID
         WHERE 
             vInfo.videoTitle LIKE ? 
@@ -147,22 +172,52 @@ public class VideoDao {
     """;//给videoInfo,userTable,video起了别名
         //三个双引号是java15的新特性：多行字符串
 
-        List<VideoResult> list = new ArrayList<>();
+        List<VideoDetail> list = new ArrayList<>();
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                String likeKeyword = "%"+keyword.trim() + "%";//trim()删除首尾的空格
+                //只有右边有百分号，支持索引查询，暂时没有在表中加索引，后面再升级
+                pstmt.setString(1, likeKeyword);
+                pstmt.setString(2, likeKeyword);
 
+                try (ResultSet rs = pstmt.executeQuery()){
+                    while (rs.next()) {
+                        VideoDetail vd = ResultMap.mapResultToVideoDetail(rs);
+                        list.add(vd);
+                    }
+                }
+            }
+        return list;
+    }
+
+    //模糊查询，只获取视频基本信息
+    //VideoDetail和Comment绑定，为了确保用的是同一个connection，conn由调用者发放
+    public static List<Video> searchVideoInfo(Connection conn,String keyword)throws SQLException{
+        String sql = """
+        SELECT 
+            vInfo.videoTitle,
+            vInfo.briefIntroduction,
+            vInfo.uploadID,
+            vInfo.videoID
+        FROM videoInfo vInfo  
+        JOIN users u ON vInfo.uploadID = u.id
+        JOIN video v ON vInfo.videoID = v.videoID
+        WHERE 
+            vInfo.videoTitle LIKE ? 
+            OR u.username LIKE ?;
+    """;
+        List<Video> list = new ArrayList<>();
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            String likeKeyword = keyword.trim() + "%";//trim()删除首尾的空格
+            String likeKeyword ="%"+ keyword.trim() + "%";//trim()删除首尾的空格
             //只有右边有百分号，支持索引查询，暂时没有在表中加索引，后面再升级
             pstmt.setString(1, likeKeyword);
             pstmt.setString(2, likeKeyword);
 
-            try(ResultSet rs = pstmt.executeQuery();){
+            try (ResultSet rs = pstmt.executeQuery()){
                 while (rs.next()) {
-                    VideoResult vr = ResultMap.mapResultToVideoResult(rs);
-                    list.add(vr);
+                    Video video = ResultMap.mapResultToVideoInfo(rs);
+                    list.add(video);
                 }
             }
-        } catch (Exception e) {
-            e.printStackTrace();
         }
         return list;
     }

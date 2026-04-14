@@ -8,6 +8,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import com.itheima.util.MyConnectionPool;
 
 public class CommentDao {
 
@@ -59,14 +60,16 @@ public class CommentDao {
     public static List<Comment> findCommentsByVideo(Connection conn,long videoId)throws SQLException{
         String sql="select * from comment where video_id = ?";
         List<Comment> list=new ArrayList<>();
-        try (PreparedStatement pstmt = conn.prepareStatement(sql)){
-            pstmt.setLong(1,videoId);
-            ResultSet rs= pstmt.executeQuery();
-            while (rs.next()){
-                Comment cm=ResultMap.mapResultToComment(rs);
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)){
+                pstmt.setLong(1, videoId);
+                try (ResultSet rs = pstmt.executeQuery()){
+                    while (rs.next()){
+                        Comment cm = ResultMap.mapResultToComment(rs);
+                        list.add(cm);
+                    }
+                }
             }
             return list;
-        }
     }
 
     //改（点赞暂时不做）

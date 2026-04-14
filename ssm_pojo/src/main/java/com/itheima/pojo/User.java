@@ -6,7 +6,6 @@ public class User {
     private String hashedPassword;
     private int followerCount;
     private int followCount;
-    private String token;
     private String phone;
 
 
@@ -16,7 +15,6 @@ public class User {
         this.hashedPassword = hashedPassword;
         this.followerCount = followerCount;
         this.followCount = followCount;
-        this.token = token;
         this.phone = phone;
     }
 
@@ -45,14 +43,6 @@ public class User {
         this.id = id;
     }
 
-
-    public String getToken() {
-        return token;
-    }
-
-    public void setToken(String token) {
-        this.token = token;
-    }
 
     public String getUserName() {
         return userName;
