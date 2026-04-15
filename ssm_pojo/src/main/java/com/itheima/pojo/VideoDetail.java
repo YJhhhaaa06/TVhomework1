@@ -1,5 +1,6 @@
 package com.itheima.pojo;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class VideoDetail {
@@ -19,6 +20,7 @@ public class VideoDetail {
     }
 
     public VideoDetail() {
+        commentList=new ArrayList<Comment>();
     }
 
     public String getTitle() {

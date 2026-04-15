@@ -2,10 +2,10 @@ package com.itheima.pojo;
 
 public class Video {
     private long videoId;
-    private long uploadID;
+    private long uploadId;
 //    private String authorName;
     private String videoTitle;
-    private String briefIntroduction;
+    private String briefIntroduction="-";
 
     public long getVideoId() {
         return videoId;
@@ -23,28 +23,25 @@ public class Video {
 //        this.authorName = authorName;
 //    }
 
-    public Video(long videoId, long uploadID, String videoTitle, String briefIntroduction) {
+    public Video(long videoId, long uploadId, String videoTitle, String briefIntroduction) {
         this.videoId = videoId;
-        this.uploadID = uploadID;
+        this.uploadId = uploadId;
 //        this.authorName = authorName;
         this.videoTitle = videoTitle;
         this.briefIntroduction = briefIntroduction;
     }
 
-    public long getVideoID() {
-        return videoId;
-    }
 
     public void setVideoID(long videoID) {
         this.videoId = videoID;
     }
 
-    public long getUploadID() {
-        return uploadID;
+    public long getUploadId() {
+        return uploadId;
     }
 
-    public void setUploadID(long uploadID) {
-        this.uploadID = uploadID;
+    public void setUploadId(long uploadId) {
+        this.uploadId = uploadId;
     }
 
     public String getVideoTitle() {
@@ -66,7 +63,7 @@ public class Video {
     public String toString() {
         return "Video{" +
                 "videoID=" + videoId +
-                ", uploadID=" + uploadID +
+                ", uploadID=" + uploadId +
                 ", videoTitle='" + videoTitle + '\'' +
                 ", briefIntroduction='" + briefIntroduction + '\'' +
                 '}';

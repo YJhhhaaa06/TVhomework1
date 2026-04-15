@@ -3,6 +3,7 @@ package com.itheima.service;
 import com.itheima.dao.CommentDao;
 import com.itheima.dao.VideoDao;
 import com.itheima.pojo.Comment;
+import com.itheima.pojo.User;
 import com.itheima.pojo.Video;
 import com.itheima.pojo.VideoDetail;
 import com.itheima.util.MyConnectionPool;
@@ -24,7 +25,7 @@ public class VideoService {
 
 
     // ===== 初始化 =====
-    public static void init() {
+    public void init() {
         try {
             refresh();
         } catch (Exception e) {
@@ -35,7 +36,7 @@ public class VideoService {
         startScheduler();   //开启定时刷新
     }
 
-    public static void refresh(){
+    public void refresh(){
         try {
             List<Video> newVideoList= VideoDao.findAllVideoInfo();
             videoInfoList=newVideoList;
@@ -43,7 +44,7 @@ public class VideoService {
             throw new RuntimeException("FAIL_TO_REFRESH",e);
         }
     }
-    public static void startScheduler() {
+    public void startScheduler() {
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
         // 参数：任务, 首次执行延迟, 连续执行间隔, 时间单位
@@ -58,21 +59,21 @@ public class VideoService {
 
 
 
-    public static List<Video> getVideoList() {
+    public List<Video> getVideoList() {
         return videoInfoList;
     }
 
     // ===== 查询 =====
-    public static Video getVideoById(long videoId) {
+    public Video getVideoById(long videoId) {
         for (Video video:videoInfoList){
-            if (video.getVideoID()==videoId){
+            if (video.getVideoId()==videoId){
                 return video;
             }
         }
         return null;
     }
 
-    public static VideoDetail getVideoDetail(long videoId) {
+    public  VideoDetail getVideoDetail(long videoId) {
         Connection conn=null;
         try {
             conn=MyConnectionPool.getConnection();
@@ -87,7 +88,7 @@ public class VideoService {
         }
     }
 
-    public static List<Video> search(String keyword) {
+    public List<Video> search(String keyword) {
         Connection conn=null;
         try {
             conn=MyConnectionPool.getConnection();
@@ -100,7 +101,7 @@ public class VideoService {
     }
 
     //推流
-    public static List<Video> getRecommendedVideos(int limit) {//推荐limit条视频
+    public List<Video> getRecommendedVideos(int limit) {//推荐limit条视频
 
         List<Video> list = new ArrayList<>(videoInfoList);
 
@@ -113,37 +114,73 @@ public class VideoService {
         return list.subList(0, size);
     }
 
-    public static Video getNextVideo(List<Video> list) {
+    public Video getNextVideo(List<Video> list) {
         int randomNum=r.nextInt(list.size());
         return list.get(randomNum);
     }
 
     // ===== 管理 =====
-    public static void addVideo(Video video) {
-        Connection conn=null;
-        try {
-            conn=MyConnectionPool.getConnection();
-            conn.setAutoCommit(false);
-        }catch (SQLException e){
-            try{
-                conn.rollback();
-            }catch (SQLException e1){
-                throw new RuntimeException("");
-            }
-        }
-        finally {
-            if(conn!=null){
-                try{
-                conn.setAutoCommit(true);
-                }catch (Exception ex){
-                    throw new RuntimeException("");
+    public void addVideo(VideoDetail video, User user) {
+        Connection conn = null;
+        String title = video.getTitle();
+        String intro = video.getIntro();
+        String url = video.getUrl();
+        if (videoCheck(title, intro, url)) {
+            try {
+                conn = MyConnectionPool.getConnection();
+                conn.setAutoCommit(false);
+
+                long videoId = VideoDao.addVideoInfo(conn, user.getId(), title, intro);//添加视频后获取id
+                VideoDao.addVideo(conn, url, videoId);
+                conn.commit();//提交提交提交提交
+
+
+            } catch (SQLException e) {
+                if(conn!=null){
+                    try {
+                        conn.rollback();
+                    } catch (SQLException ex) {
+                        throw new RuntimeException("DB_ERROR",ex);
+                    }
+                }
+            } finally {
+                if (conn != null) {
+                    try {
+                        conn.setAutoCommit(true);
+                    } catch (SQLException e) {
+                        //这里说明连接可能已经异常
+                        e.printStackTrace();
+                        //标记这个连接不可用
+                        conn = null;
+                    } finally {
+                        //无论如何都要执行
+                        MyConnectionPool.release(conn);
+                    }
                 }
             }
-            MyConnectionPool.release(conn);
+
+        }
+        else {
+            throw new IllegalArgumentException("VIDEO_INPUT_ILLEGAL");
         }
     }
 
-    public static void deleteVideo(long videoId) { }
+    public void deleteVideo(long videoId) { }
 
 
+    //输入的视频是否合法
+    public boolean videoCheck(String title,String intro,String url){
+        if(title==null||title.length()>50){
+            return false;
+        }
+        if (intro!=null&&intro.length()>500){
+            return false;
+        }
+        if(url==null||url.length()>500){
+            return false;
+        }
+
+        return !title.trim().isEmpty();
+
+    }
 }

@@ -10,7 +10,7 @@ public class UserDao {
 
     //增
     //添加用户
-    public static long addUser(Connection conn, String user, String hashedPassword, String phone) throws SQLException {
+    public long addUser(Connection conn, String user, String hashedPassword, String phone) throws SQLException {
         String sql = "insert into users(username,hashedPassword,phone) values(?,?,?)";
         try (PreparedStatement pstmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
             pstmt.setString(1, user);
@@ -37,7 +37,7 @@ public class UserDao {
 
     //删
     //删除用户
-    public static int deleteUser(Connection conn, String phone, long id) throws SQLException {
+    public int deleteUser(Connection conn, String phone, long id) throws SQLException {
         String sql = "delete from users where phone=? and id=?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, phone);
@@ -48,7 +48,7 @@ public class UserDao {
 
     //查
     //通过ID获取用户名
-    public static String findUsernameById(long id) throws SQLException {
+    public String findUsernameById(long id) throws SQLException {
         String sql = "select username from users where id=?";
         java.sql.Connection conn = null;
         try {
@@ -70,7 +70,7 @@ public class UserDao {
     }
 
     //通过ID获取用户
-    public static User findUserByID(long id) throws SQLException {
+    public User findUserByID(long id) throws SQLException {
         String sql = "select * from users where id=?";
         java.sql.Connection conn = null;
         try {
@@ -91,7 +91,7 @@ public class UserDao {
         }
     }
 
-    public static User findUserByID(Connection conn, long id) throws SQLException {
+    public User findUserByID(Connection conn, long id) throws SQLException {
         String sql = "select * from users where id=?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setLong(1, id);
@@ -107,7 +107,7 @@ public class UserDao {
     }
 
     //根据手机号获取用户
-    public static User findUserByPhone(String phone) throws SQLException {
+    public User findUserByPhone(String phone) throws SQLException {
         String sql = "select * from users where phone=?";
         java.sql.Connection conn = null;
         try {
@@ -129,7 +129,7 @@ public class UserDao {
         }
     }
 
-    public static User findUserByPhone(Connection conn, String phone) throws SQLException {
+    public User findUserByPhone(Connection conn, String phone) throws SQLException {
         String sql = "select * from users where phone=?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             // 设置参数（占位符从1开始）
@@ -146,7 +146,7 @@ public class UserDao {
     }
 
     //查看手机号是否已经被使用
-    public static boolean isPhoneUsed(String phone) throws SQLException {
+    public boolean isPhoneUsed(String phone) throws SQLException {
         String sql = "select hashedPassword from users where phone=?";
         Connection conn = null;
         try {
@@ -163,7 +163,7 @@ public class UserDao {
         }
     }
 
-    public static boolean isPhoneUsed(Connection conn, String phone) throws SQLException {
+    public boolean isPhoneUsed(Connection conn, String phone) throws SQLException {
         String sql = "select hashedPassword from users where phone=?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, phone);
@@ -175,7 +175,7 @@ public class UserDao {
     }
 
     //根据手机号查询id
-    public static long findIDbyPhone(String phone) throws SQLException {
+    public long findIDbyPhone(String phone) throws SQLException {
         String sql = "select id from users where phone=?";
         java.sql.Connection conn = null;
         try {
@@ -195,7 +195,7 @@ public class UserDao {
         }
     }
 
-    public static String findPhoneById(long id) throws SQLException {
+    public String findPhoneById(long id) throws SQLException {
         String sql = "select phone from users where id=?";
         Connection conn = null;
         try {
@@ -217,7 +217,7 @@ public class UserDao {
 
     //改
     //修改用户名
-    public static int updateUserName(Connection conn, String phone, long id, String newName) throws SQLException {
+    public int updateUserName(Connection conn, String phone, long id, String newName) throws SQLException {
         String sql = "update users set username=? where phone=? and id=?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, newName);
@@ -228,7 +228,7 @@ public class UserDao {
     }
 
     //修改手机号
-    public static int updateUserPhone(Connection conn, String phone, long id, String newPhone) throws SQLException {
+    public int updateUserPhone(Connection conn, String phone, long id, String newPhone) throws SQLException {
         String sql = "update users set phone=? where phone=? and id=?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, newPhone);
@@ -239,7 +239,7 @@ public class UserDao {
     }
 
     //修改密码
-    public static int updateUserPassword(Connection conn, String phone, long id, String newHashedPassword) throws SQLException {
+    public int updateUserPassword(Connection conn, String phone, long id, String newHashedPassword) throws SQLException {
         String sql = "update users set hashedPassword=? where phone=? and id=?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, newHashedPassword);

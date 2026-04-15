@@ -1,6 +1,7 @@
 package com.itheima.pojo;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 public class Comment {
     //为了可扩展，我把数据库里面所有字段都加进来
@@ -16,6 +17,15 @@ public class Comment {
     private LocalDateTime updateTime;
     private int likeCount;
     private boolean isDeleted;//false是未删除
+    private List<Comment> children;
+
+    public List<Comment> getChildren() {
+        return children;
+    }
+
+    public void setChildren(List<Comment> children) {
+        this.children = children;
+    }
 
     public Comment(String username, long commentId, long videoId, long userId, String content, Long parentId, LocalDateTime createTime, LocalDateTime updateTime, int likeCount, boolean isDeleted) {
         this.username = username;

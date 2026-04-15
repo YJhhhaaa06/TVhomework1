@@ -15,7 +15,7 @@ public class VideoDao {
 
     //增
     //添加视频基本信息
-    public static long addVideoInfo(Connection conn,long uploadID, String videoTitle, String intro) throws SQLException {
+    public long addVideoInfo(Connection conn,long uploadID, String videoTitle, String intro) throws SQLException {
         String sql = "insert into videoInfo (uploadID, videoTitle, briefIntroduction) values (?, ?, ?)";
         try(PreparedStatement pstmt=conn.prepareStatement(sql);) {//自动关闭pstmt
             pstmt.setLong(1, uploadID);
@@ -34,7 +34,7 @@ public class VideoDao {
     }
 
     //添加视频内容
-    public static void addVideo(Connection conn,String videoUrl,long videoID) throws SQLException {
+    public void addVideo(Connection conn,String videoUrl,long videoID) throws SQLException {
         String sql = "insert into video(videoID, video_url) VALUES (?, ?)";
         try (PreparedStatement pstmt=conn.prepareStatement(sql)){
             pstmt.setLong(1,videoID);
@@ -46,7 +46,7 @@ public class VideoDao {
 
     //删
     //根据视频ID删除视频基本信息
-    public static int deleteVideoInfo(Connection conn,long videoID) throws SQLException{
+    public int deleteVideoInfo(Connection conn,long videoID) throws SQLException{
         String sql = "delete from videoInfo where videoID=?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setLong(1, videoID);
@@ -54,7 +54,7 @@ public class VideoDao {
         }
     }
     //根据视频ID删除视频url
-    public static int deleteVideo(Connection conn,long videoID) throws SQLException{
+    public int deleteVideo(Connection conn,long videoID) throws SQLException{
         String sql = "delete from video where videoID=?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setLong(1, videoID);
@@ -64,7 +64,7 @@ public class VideoDao {
 
     //查
     //根据视频ID查询视频基本信息
-    public static Video findVideoInfo(long videoID) throws SQLException{
+    public Video findVideoInfo(long videoID) throws SQLException{
         String sql="select * from videoInfo where videoID=?";
         java.sql.Connection conn = null;
         try {
@@ -85,7 +85,7 @@ public class VideoDao {
     }
 
     //根据视频ID查询视频内容（实际上只有视频url）
-    public static VideoDetail findVideo(Connection conn,long VideoID) throws SQLException {
+    public VideoDetail findVideo(Connection conn,long VideoID) throws SQLException {
         String sql = """
         SELECT 
             vInfo.videoTitle,
@@ -112,7 +112,7 @@ public class VideoDao {
     }
 
     //查询所有视频基本信息
-    public static List<Video> findAllVideoInfo() throws SQLException {
+    public List<Video> findAllVideoInfo() throws SQLException {
         List<Video> VideoList = new ArrayList<>();
         //面向接口：后续要改类型只用改new的类型
         String sql = "select * from videoInfo";
@@ -133,7 +133,7 @@ public class VideoDao {
     }
 
     //根据创作者id获取视频基本信息
-    public static List<Video> findVideoInfoByUploadID(long uploadID) throws SQLException {
+    public List<Video> findVideoInfoByUploadID(long uploadID) throws SQLException {
         List<Video> videoList = new ArrayList<>();
         String sql = "select * from videoInfo where uploadID = ?";
         java.sql.Connection conn = null;
@@ -141,9 +141,9 @@ public class VideoDao {
             conn = MyConnectionPool.getConnection();
             try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
                 pstmt.setLong(1, uploadID);
-                try (ResultSet res = pstmt.executeQuery()) {
-                    while (res.next()) {
-                        videoList.add(ResultMap.mapResultToVideoInfo(res));
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    while (rs.next()) {
+                        videoList.add(ResultMap.mapResultToVideoInfo(rs));
                     }
                 }
             }
@@ -154,7 +154,7 @@ public class VideoDao {
     }
 
     //根据视频标题或作者名，模糊查询视频基本信息+视频内容
-    public static List<VideoDetail> searchVideo(Connection conn,String keyword)throws SQLException {
+    public List<VideoDetail> searchVideo(Connection conn,String keyword)throws SQLException {
         String sql = """
         SELECT 
             vInfo.videoTitle,
@@ -191,7 +191,7 @@ public class VideoDao {
 
     //模糊查询，只获取视频基本信息
     //VideoDetail和Comment绑定，为了确保用的是同一个connection，conn由调用者发放
-    public static List<Video> searchVideoInfo(Connection conn,String keyword)throws SQLException{
+    public List<Video> searchVideoInfo(Connection conn,String keyword)throws SQLException{
         String sql = """
         SELECT 
             vInfo.videoTitle,
@@ -223,7 +223,7 @@ public class VideoDao {
     }
 
     //更新视频标题或简介
-    public static int updateVideoInfo(Connection conn,long videoID, String videoTitle, String intro)throws SQLException{
+    public int updateVideoInfo(Connection conn,long videoID, String videoTitle, String intro)throws SQLException{
         String sql="update videoInfo set videoTitle=?,briefIntroduction=? where videoID=?";
         int rows;
         try(PreparedStatement pstmt=conn.prepareStatement(sql)){
@@ -236,7 +236,7 @@ public class VideoDao {
     }
 
     //视频换源
-    public static int updateVideo(Connection conn,long videoID,String videoUrl) throws SQLException {
+    public int updateVideo(Connection conn,long videoID,String videoUrl) throws SQLException {
         String sql="update video set video_url=? where videoID=?";
         int rows;
         try(PreparedStatement pstmt=conn.prepareStatement(sql)){
@@ -246,6 +246,8 @@ public class VideoDao {
         }
         return rows;
     }
+
+
     
 
 

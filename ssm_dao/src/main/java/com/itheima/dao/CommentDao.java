@@ -13,7 +13,7 @@ import com.itheima.util.MyConnectionPool;
 public class CommentDao {
 
     //增
-    public static int addComment(Connection conn,long videoId,long userId,String content,Long parentId)throws SQLException {
+    public int addComment(Connection conn,long videoId,long userId,String content,Long parentId)throws SQLException {
         String sql = "insert into comment (video_id, user_id, content, parent_id) values (?, ?, ?, ?)";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setLong(1, videoId);
@@ -31,7 +31,7 @@ public class CommentDao {
 
     //删
     //从数据库根据评论ID删除评论，管理员使用
-    public static int deleteCommentById(Connection conn,long commentId)throws SQLException{
+    public int deleteCommentById(Connection conn,long commentId)throws SQLException{
         String sql="delete from comment where comment_id = ?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)){
             pstmt.setLong(1,commentId);
@@ -39,7 +39,7 @@ public class CommentDao {
         }
     }
     //从数据库根据视频ID删除评论，用于删除视频
-    public static int deleteCommentByVideo(Connection conn,long videoId) throws SQLException {
+    public int deleteCommentByVideo(Connection conn,long videoId) throws SQLException {
         String sql="delete from comment where video_id = ?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)){
             pstmt.setLong(1,videoId);
@@ -48,7 +48,7 @@ public class CommentDao {
     }
 
     //从数据库根据用户删除评论，用于注销账号
-    public static int deleteCommentByUser(Connection conn,long userId) throws SQLException {
+    public int deleteCommentByUser(Connection conn,long userId) throws SQLException {
         String sql="delete from comment where video_id = ?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)){
             pstmt.setLong(1,userId);
@@ -57,8 +57,9 @@ public class CommentDao {
     }
 
     //查
-    public static List<Comment> findCommentsByVideo(Connection conn,long videoId)throws SQLException{
-        String sql="select * from comment where video_id = ?";
+    //根据视频id查评论，只能查没被隐藏的
+    public List<Comment> findCommentsByVideo(Connection conn,long videoId)throws SQLException{
+        String sql="select * from comment where video_id = ? and is_deleted=0";
         List<Comment> list=new ArrayList<>();
             try (PreparedStatement pstmt = conn.prepareStatement(sql)){
                 pstmt.setLong(1, videoId);
@@ -73,6 +74,28 @@ public class CommentDao {
     }
 
     //改（点赞暂时不做）
+    //关闭或开启评论区
+    //隐藏视频下的评论
+    public int hideCommentByVideo(Connection conn,long videoId)throws SQLException{
+        String sql="update comment set is_deleted =1 where video_id=?";
+        int rows;
+        try(PreparedStatement pstmt=conn.prepareStatement(sql)) {
+            pstmt.setLong(1,videoId);
+            rows=pstmt.executeUpdate();
+            return rows;
+        }
+    }
+
+    //显示视频下的评论
+    public int unhideCommentByVideo(Connection conn,long videoId)throws SQLException{
+        String sql="update comment set is_deleted =0 where video_id=?";
+        int rows;
+        try(PreparedStatement pstmt=conn.prepareStatement(sql)) {
+            pstmt.setLong(1,videoId);
+            rows=pstmt.executeUpdate();
+            return rows;
+        }
+    }
 
 
 
