@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 
 public class CommentService {
+private CommentDao commentDao=new CommentDao();
 
     //建立索引关系
     //返回一级评论列表
@@ -80,7 +81,7 @@ public class CommentService {
         try {
             conn= MyConnectionPool.getConnection();
             conn.setAutoCommit(false);
-            CommentDao.addComment(conn,videoId,userId,content,parentId);
+            commentDao.addComment(conn,videoId,userId,content,parentId);
             conn.commit();//
             //提交
         }catch (SQLException e) {
@@ -125,10 +126,10 @@ public class CommentService {
             conn= MyConnectionPool.getConnection();
             conn.setAutoCommit(false);
             if(choose){
-                CommentDao.hideCommentByVideo(conn,videoId);
+                commentDao.hideCommentByVideo(conn,videoId);
             }
             else {
-                CommentDao.unhideCommentByVideo(conn,videoId);
+                commentDao.unhideCommentByVideo(conn,videoId);
             }
 
             conn.commit();//

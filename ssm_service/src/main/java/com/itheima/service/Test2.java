@@ -36,16 +36,16 @@ public class Test2 {
 //        VideoDao.addVideo(3,"Anon Walker -妃大","","https://www.bilibili.com/video/BV1apwWzkEKQ?vd_source=e236423acb70982759c1f1496b893504");
 //        VideoDao.addVideo(3,"《阿侬小卖部》开团型要乐奈拷打恶霸丰川祥","-","https://www.bilibili.com/video/BV1cKz4BrEmd?vd_source=e236423acb70982759c1f1496b893504");
 //        VideoDao.addVideo(3,"高松灯经典战役三十块石头🐧","-","https://www.bilibili.com/video/BV11W8wz6ERa?vd_source=e236423acb70982759c1f1496b893504");
-        LogInResult res= UserService.logInAsUserByID(2,"123");
-        System.out.println(res.getToken());
-        System.out.println(res.getUser().getUserName());
-        List<Video> list= VideoDao.searchVideoInfo(MyConnectionPool.getConnection(),"灯");
-        List<VideoDetail> list2=VideoDao.searchVideo(MyConnectionPool.getConnection(),"灯");
-        for (Video video:list){
-            System.out.println(video.toString());
-        }
-        for (VideoDetail vd:list2){
-            System.out.println(vd.toString());
-        }
+//        LogInResult res= UserService.logInAsUserByID(2,"123");
+//        System.out.println(res.getToken());
+//        System.out.println(res.getUser().getUserName());
+//        List<Video> list= VideoDao.searchVideoInfo(MyConnectionPool.getConnection(),"灯");
+//        List<VideoDetail> list2=VideoDao.searchVideo(MyConnectionPool.getConnection(),"灯");
+//        for (Video video:list){
+//            System.out.println(video.toString());
+//        }
+//        for (VideoDetail vd:list2){
+//            System.out.println(vd.toString());
+//        }
     }
 }

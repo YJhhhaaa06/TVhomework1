@@ -19,6 +19,9 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 public class VideoService {
+    private VideoDao videoDao=new VideoDao();
+
+    private CommentDao commentDao=new CommentDao();
     private static List<Video> videoInfoList=new ArrayList<>();
     private static long size;
     private static Random r=new Random();
@@ -38,7 +41,7 @@ public class VideoService {
 
     public void refresh(){
         try {
-            List<Video> newVideoList= VideoDao.findAllVideoInfo();
+            List<Video> newVideoList= videoDao.findAllVideoInfo();
             videoInfoList=newVideoList;
         }catch (Exception e){
             throw new RuntimeException("FAIL_TO_REFRESH",e);
@@ -77,8 +80,8 @@ public class VideoService {
         Connection conn=null;
         try {
             conn=MyConnectionPool.getConnection();
-            VideoDetail vd=VideoDao.findVideo(conn,videoId);
-            List<Comment> commentList= CommentDao.findCommentsByVideo(conn,videoId);
+            VideoDetail vd=videoDao.findVideo(conn,videoId);
+            List<Comment> commentList= commentDao.findCommentsByVideo(conn,videoId);
             vd.setCommentList(commentList);
             return vd;
         }catch (SQLException e){
@@ -92,7 +95,7 @@ public class VideoService {
         Connection conn=null;
         try {
             conn=MyConnectionPool.getConnection();
-            return new ArrayList<>(VideoDao.searchVideoInfo(conn, keyword));
+            return new ArrayList<>(videoDao.searchVideoInfo(conn, keyword));
         }catch (SQLException e){
             throw new RuntimeException("FAIL_TO_GET_VIDEO_DETAIL", e);
         }finally {
@@ -130,8 +133,8 @@ public class VideoService {
                 conn = MyConnectionPool.getConnection();
                 conn.setAutoCommit(false);
 
-                long videoId = VideoDao.addVideoInfo(conn, user.getId(), title, intro);//添加视频后获取id
-                VideoDao.addVideo(conn, url, videoId);
+                long videoId = videoDao.addVideoInfo(conn, user.getId(), title, intro);//添加视频后获取id
+                videoDao.addVideo(conn, url, videoId);
                 conn.commit();//提交提交提交提交
 
 

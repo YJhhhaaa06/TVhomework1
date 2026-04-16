@@ -1,0 +1,11 @@
+### GET request to example server
+GET https://examples.http-client.intellij.net/get
+    ?generated-in=IntelliJ IDEA
+
+###
+
+### 测试登录接口
+POST http://localhost:8080/MyAPP/user/login
+Content-Type: application/x-www-form-urlencoded
+
+phone=10000000002&password=123

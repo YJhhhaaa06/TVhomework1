@@ -6,9 +6,19 @@ import java.sql.SQLException;
 import java.util.LinkedList;
 
 public class MyConnectionPool {
-    private static final String URL = "jdbc:mysql:///TVDatabase?useSSL=false";
+//    private static final String URL = "jdbc:mysql:///TVDatabase?useSSL=false";
+private static final String URL = "jdbc:mysql://localhost:3306/TVDatabase?useSSL=false&serverTimezone=UTC";
     private static final String USER = "root";
     private static final String PASSWORD = "MySQL";
+
+    //手动加载驱动
+    static {
+        try {
+            Class.forName("com.mysql.cj.jdbc.Driver");
+        } catch (ClassNotFoundException e) {
+            e.printStackTrace();
+        }
+    }
 
     // 池子
     private static final int INIT_SIZE = 5;
