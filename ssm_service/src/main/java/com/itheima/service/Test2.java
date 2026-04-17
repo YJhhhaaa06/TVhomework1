@@ -40,12 +40,20 @@ public class Test2 {
 //        System.out.println(res.getToken());
 //        System.out.println(res.getUser().getUserName());
 //        List<Video> list= VideoDao.searchVideoInfo(MyConnectionPool.getConnection(),"灯");
-//        List<VideoDetail> list2=VideoDao.searchVideo(MyConnectionPool.getConnection(),"灯");
+
+        VideoService vs=new VideoService();
+
+        List<Video> list2=vs.search("灯");
+        List<VideoDetail> list3=new ArrayList<>();
+        for (Video video:list2){
+            long videoId=video.getVideoId();
+            list3.add(vs.getVideoDetail(videoId));
+        }
 //        for (Video video:list){
 //            System.out.println(video.toString());
 //        }
-//        for (VideoDetail vd:list2){
-//            System.out.println(vd.toString());
-//        }
+        for (VideoDetail vd:list3){
+            System.out.println(vd.toString());
+        }
     }
 }

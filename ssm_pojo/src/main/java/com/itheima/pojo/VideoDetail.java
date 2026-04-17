@@ -84,7 +84,7 @@ public class VideoDetail {
         "videoID=" + videoId +
         ", uploadID=" + uploadID +
         ", videoTitle='" + title + '\'' +
-        ", briefIntroduction='" + intro + '\'' +
+        ", briefIntroduction='" + intro + '\'' +'\n'+
                ",url='"+url+'\''+
                ",authorName="+authorName+'\''+
         '}';

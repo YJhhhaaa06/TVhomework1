@@ -13,9 +13,18 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class CommentService {
+
+    static {
+        System.out.println("进入");
+
+    }
 private CommentDao commentDao=new CommentDao();
+
 
     //建立索引关系
     //返回一级评论列表
@@ -43,40 +52,18 @@ private CommentDao commentDao=new CommentDao();
                 }
             }
         }
+        System.out.println(roots.size()+"条评论");
 
         return roots;
     }
 
     //增
-    //打包评论
-    public  Comment packComment(User user,Video video,Comment parent,String content){
 
-        long userId=user.getId();
-        long videoId= video.getVideoId();
-        Long parentId;
+    //写入评论到数据库
+    public  void addComment(long userId,long videoId,Long parentId,String content){
         if(!isCommentLegal(userId,videoId,content)){
             throw new RuntimeException("WRONG_INPUT");
         }
-        if(parent==null){
-            parentId=null;
-        }
-        else {
-            parentId=parent.getCommentId();
-        }
-        Comment result=new Comment();
-        result.setUserId(userId);
-        result.setVideoId(videoId);
-        result.setParentId(parentId);
-        result.setContent(content);
-        return result;
-
-    }
-    //写入评论到数据库
-    public  void writeComment(Comment comment){
-        long userId=comment.getUserId();
-        long videoId=comment.getVideoId();
-        String content=comment.getContent();
-        Long parentId= comment.getParentId();
         Connection conn=null;
         try {
             conn= MyConnectionPool.getConnection();
@@ -96,11 +83,9 @@ private CommentDao commentDao=new CommentDao();
             if (conn != null) {
                 try {
                     conn.setAutoCommit(true);
-                } catch (SQLException e) {
-                    //这里说明连接可能已经异常
+                } catch (SQLException e) {//这里说明连接可能已经异常
                     e.printStackTrace();
-                    //标记这个连接不可用
-                    conn = null;
+                    conn = null;//标记这个连接不可用
                 } finally {
                     //无论如何都要执行
                     MyConnectionPool.release(conn);
@@ -160,10 +145,27 @@ private CommentDao commentDao=new CommentDao();
     }
 
     //查
-    //不需要了，videoService查询视频详细信息会自动获取评论区
-//    public static void findComment(Connection conn,long videoId) throws SQLException {
-//        List<Comment> commentList=CommentDao.findCommentsByVideo(conn,videoId);
-//    }
+    //查询视频的所有评论
+    //videoService查询视频详细信息会自动获取评论区
+    public  List<Comment> findComment(Connection conn,long videoId) throws SQLException {
+        List<Comment> commentList=commentDao.getCommentsByVideoId(conn,videoId);
+        return commentList;
+    }
+    public  List<Comment> findComment(long videoId) throws SQLException {
+        Connection conn=null;
+        try {
+            conn=MyConnectionPool.getConnection();
+            List<Comment> commentList=commentDao.getCommentsByVideoId(conn,videoId);
+            return commentList;
+
+        }catch (SQLException e){
+            conn=null;
+            throw e;
+        } finally {
+                MyConnectionPool.release(conn);
+        }
+
+    }
 
     //获取评论数量
     public  int getCommentCount(VideoDetail vd){
@@ -197,6 +199,21 @@ private CommentDao commentDao=new CommentDao();
         }
         return true;
     }
+
+    //获取评论并整理评论，返回一级评论
+    public List<Comment> getComment(long videoId){
+        try {
+            List<Comment> wholeList = findComment(videoId);
+            return buildCommentTree(wholeList);
+        }catch (SQLException e){
+            e.printStackTrace();
+            throw new RuntimeException("FAIL_TO_GET_COMMENT,VIDEO_ID="+videoId,e);
+        }
+    }
+
+
+
+
 
 
 }

@@ -92,7 +92,8 @@ public class VideoDao {
             vInfo.briefIntroduction,
             v.video_url,
             u.username,
-            u.id
+            u.id,
+            v.videoID
         FROM videoInfo vInfo  
         JOIN users u ON vInfo.uploadID = u.id
         JOIN video v ON vInfo.videoID = v.videoID
@@ -190,6 +191,7 @@ public class VideoDao {
     }
 
     //模糊查询，只获取视频基本信息
+    //JOIN video v ON vInfo.videoID = v.videoID
     //VideoDetail和Comment绑定，为了确保用的是同一个connection，conn由调用者发放
     public List<Video> searchVideoInfo(Connection conn,String keyword)throws SQLException{
         String sql = """
@@ -200,7 +202,6 @@ public class VideoDao {
             vInfo.videoID
         FROM videoInfo vInfo  
         JOIN users u ON vInfo.uploadID = u.id
-        JOIN video v ON vInfo.videoID = v.videoID
         WHERE 
             vInfo.videoTitle LIKE ? 
             OR u.username LIKE ?;

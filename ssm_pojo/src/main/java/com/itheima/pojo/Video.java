@@ -65,7 +65,7 @@ public class Video {
                 "videoID=" + videoId +
                 ", uploadID=" + uploadId +
                 ", videoTitle='" + videoTitle + '\'' +
-                ", briefIntroduction='" + briefIntroduction + '\'' +
-                '}';
+                ",\n briefIntroduction='" + briefIntroduction + '\'' +
+                '}'+'\n';
     }
 }

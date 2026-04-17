@@ -1,5 +1,6 @@
 package com.itheima.controller;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.itheima.pojo.LogInResult;
 import com.itheima.pojo.User;
 import com.itheima.service.UserService;
@@ -9,6 +10,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+
 //让url:http://localhost:8080/MyAPP/user/login映射到这个类
 //
 @WebServlet("/user/login")
@@ -20,19 +24,21 @@ public class UserLoginServlet extends HttpServlet {
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException {
 
         resp.setContentType("text/plain;charset=UTF-8");
-
-        String phone = req.getParameter("phone");
-        String password = req.getParameter("password");
-
-        //参数校验
-        if (phone == null || password == null || phone.isEmpty() || password.isEmpty()) {
-            resp.getWriter().write("参数不能为空");
-            return;
-        }
-
         try {
-            com.itheima.pojo.LogInResult res =
-                    userService.logInAsUserByPhone(phone, password);
+            String idStr=req.getParameter("id");
+            String phone = req.getParameter("phone");
+            String password = req.getParameter("password");
+            if(idStr==null&&phone==null&&password==null){
+                resp.getWriter().write("输入不能为空");
+            }
+            com.itheima.pojo.LogInResult res;
+            if(idStr==null){
+                res = userService.logInAsUserByPhone(phone, password);
+            }
+            else {
+                long id=Long.parseLong(req.getParameter("id"));
+                res=userService.logInAsUserByID(id,password);
+            }
 
             //打印结果（调试用）
             System.out.println("登录成功：" + res);
@@ -42,7 +48,6 @@ public class UserLoginServlet extends HttpServlet {
 
         } catch (Exception e) {
             e.printStackTrace(); // 打印错误到控制台
-
             resp.getWriter().write("登录失败：" + e.getMessage());
         }
     }

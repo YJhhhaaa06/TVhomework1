@@ -1,0 +1,41 @@
+### GET request to example server
+GET https://examples.http-client.intellij.net/get
+    ?generated-in=IntelliJ IDEA
+
+###
+
+#POST http://localhost:8080/MyAPP/comment/add
+#Content-Type: application/x-www-form-urlencoded
+#
+#videoId=9&userId=3&content=我去不早说
+
+#POST http://localhost:8080/MyAPP/comment/add
+#Content-Type: application/x-www-form-urlencoded
+#
+#videoId=19&userId=13&content=妈妈
+
+#POST http://localhost:8080/MyAPP/comment/add
+#Content-Type: application/x-www-form-urlencoded
+#
+#videoId=19&userId=5&content=能打败恶霸祥的人找到了
+
+#POST http://localhost:8080/MyAPP/comment/list
+#Content-Type: application/x-www-form-urlencoded
+#
+#videoId=19
+
+#POST http://localhost:8080/MyAPP/comment/add
+#Content-Type: application/x-www-form-urlencoded
+#
+#videoId=19&userId=7&content=祥子是数值怪，猫猫机制强&parentId=4
+
+#POST http://localhost:8080/MyAPP/comment/add
+#Content-Type: application/x-www-form-urlencoded
+#
+#videoId=19&userId=14&content=祥子>海玲>三角初华>>阿侬>偷摸零&parentId=5
+
+#POST http://localhost:8080/MyAPP/comment/add
+#Content-Type: application/x-www-form-urlencoded
+#
+#videoId=19&userId=14&content=数值这一块还得是祥子&parentId=5
+

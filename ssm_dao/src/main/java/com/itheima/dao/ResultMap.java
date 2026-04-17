@@ -30,11 +30,17 @@ public class ResultMap {
     }
     public static Comment mapResultToComment(ResultSet rs)throws SQLException{
         Comment cm=new Comment();
+        cm.setUsername(rs.getString("username"));
         cm.setCommentId(rs.getLong("comment_id"));
         cm.setVideoId(rs.getLong("video_id"));
         cm.setUserId(rs.getLong("user_id"));
         cm.setContent(rs.getString("content"));
-        cm.setParentId(rs.getObject("parent_id") == null ? null : rs.getLong("parent_id"));
+        if(rs.getObject("parent_id") == null){
+            cm.setParentId(null);
+        }
+        else {
+            cm.setParentId(rs.getLong("parent_id"));
+        }
         cm.setCreateTime(rs.getTimestamp("create_time").toLocalDateTime());
         cm.setUpdateTime(rs.getTimestamp("update_time").toLocalDateTime());
         cm.setLikeCount(rs.getInt("like_count"));

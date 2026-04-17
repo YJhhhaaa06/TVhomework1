@@ -73,6 +73,29 @@ public class CommentDao {
             return list;
     }
 
+    public static List<Comment> getCommentsByVideoId(Connection conn, Long videoId) throws SQLException {
+
+        String sql = "SELECT c.*, u.username " +
+                "FROM comment c LEFT JOIN users u ON c.user_id = u.id " +
+                "WHERE c.video_id=? AND c.is_deleted=0 ORDER BY c.comment_id";
+
+        List<Comment> list = new ArrayList<>();
+
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, videoId);
+
+            try(ResultSet rs = ps.executeQuery()){
+
+            while (rs.next()) {
+                Comment c = ResultMap.mapResultToComment(rs);
+                list.add(c);
+            }
+            }
+        }
+
+        return list;
+    }
+
     //改（点赞暂时不做）
     //关闭或开启评论区
     //隐藏视频下的评论

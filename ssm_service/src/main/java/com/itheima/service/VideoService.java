@@ -20,8 +20,8 @@ import java.util.concurrent.TimeUnit;
 
 public class VideoService {
     private VideoDao videoDao=new VideoDao();
-
     private CommentDao commentDao=new CommentDao();
+
     private static List<Video> videoInfoList=new ArrayList<>();
     private static long size;
     private static Random r=new Random();
@@ -81,8 +81,8 @@ public class VideoService {
         try {
             conn=MyConnectionPool.getConnection();
             VideoDetail vd=videoDao.findVideo(conn,videoId);
-            List<Comment> commentList= commentDao.findCommentsByVideo(conn,videoId);
-            vd.setCommentList(commentList);
+//            List<Comment> commentList= commentDao.findCommentsByVideo(conn,videoId);
+//            vd.setCommentList(commentList);
             return vd;
         }catch (SQLException e){
             throw new RuntimeException("FAIL_TO_GET_VIDEO_DETAIL", e);
