@@ -37,3 +37,10 @@ build/
 
 ### Mac OS ###
 .DS_Store
+out/artifacts/MyApp/com/itheima/controller/MenuController.class
+out/artifacts/ssm_controller_war_exploded/META-INF/MANIFEST.MF
+out/artifacts/MyApp/WEB-INF/classes/com/itheima/controller/TestServlet.class
+out/artifacts/MyApp/WEB-INF/classes/com/itheima/controller/Test3.class
+out/artifacts/MyApp/WEB-INF/classes/com/itheima/controller/MenuController.class
+out/artifacts/MyApp/com/itheima/controller/TestServlet.class
+out/artifacts/MyApp/com/itheima/controller/Test3.class
