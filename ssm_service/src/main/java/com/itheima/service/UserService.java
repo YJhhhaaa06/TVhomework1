@@ -14,28 +14,19 @@ import java.sql.SQLException;
 
 public class UserService {
     private UserDao userDao=new UserDao();
+    private TokenService tokenService=new TokenService();
 //执行登录，外部不调用
     private LogInResult doLogin(User user, String rawPassword) {
-        String tokenStr=null;
+
         if (user == null) {
             throw new RuntimeException("USER_NOT_FOUND");
         }
 
         if (!PasswordUtil.isPasswordCorrect(rawPassword, user.getHashedPassword())) {
-            throw new RuntimeException("PASSWORD_ERROR");
+            throw new RuntimeException("WRONG_PASSWORD");
         }
-
         user.clear();
-
-
-        Token token = TokenService.getNewToken(user.getId());
-        try {
-            tokenStr = TokenUtil.tokenToString(token);
-        }catch (Exception e){
-            throw new RuntimeException("TOKEN_ERROR",e);
-        }
-
-
+        String tokenStr = tokenService.getNewToken(user.getId());
         return new LogInResult(user, tokenStr);
     }
 

@@ -196,6 +196,7 @@ public class VideoDao {
     public List<Video> searchVideoInfo(Connection conn,String keyword)throws SQLException{
         String sql = """
         SELECT 
+            u.username,
             vInfo.videoTitle,
             vInfo.briefIntroduction,
             vInfo.uploadID,

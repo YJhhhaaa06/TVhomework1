@@ -1,8 +1,10 @@
 package com.itheima.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.itheima.pojo.Video;
 import com.itheima.pojo.VideoDetail;
 import com.itheima.service.VideoService;
+import com.itheima.util.ErrorCodeUtil;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
@@ -11,57 +13,61 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.sql.SQLException;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @WebServlet("/video")
 public class VideoServlet extends HttpServlet {
     private ObjectMapper mapper = new ObjectMapper();
-
     private VideoService vs=new VideoService();
+    private BaseServlet baseServlet=new BaseServlet();
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp)throws IOException{
-        Map<String, Object> result = new HashMap<>();
-        resp.setContentType("application/json;charset=UTF-8");
         try{
-            String idStr=req.getParameter("videoId");
-
-            if(idStr==null||idStr.trim().isEmpty()){//输入为空
-                result.put("code",1);
-                result.put("msg","EMPTY_INPUT");
-                mapper.writeValue(resp.getWriter(), result);
+            String action=req.getParameter("action");
+            if(action==null||action.trim().isEmpty()){
+                baseServlet.writeError(resp,ErrorCodeUtil.PARAM_ERROR,"输入不能为空");
                 return;
             }
-
-            Long videoId;
-            try {
-                videoId = Long.parseLong(idStr.trim());//将输入转为整数
-            } catch (NumberFormatException e) {
-                result.put("code",1);
-                result.put("msg","VIDEO_ID_INVALID");
-                mapper.writeValue(resp.getWriter(), result);
-                return;
+            switch (action){
+                case "IdSearch":
+                    getVideoDetailById(req,resp);
+                    break;
+                case "keywordSearch":
+                    search(req,resp);
+                    break;
+                default:
+                    baseServlet.writeError(resp,ErrorCodeUtil.PARAM_ERROR,"未识别功能");
             }
-            com.itheima.pojo.VideoDetail vd =vs.getVideoDetail(videoId);
-            if(vd==null){//找不到视频
-                result.put("code",1);
-                result.put("msg","FAIL_TO_FIND_VIDEO");
-                mapper.writeValue(resp.getWriter(),result);
-                return;
-            }
-
-            result.put("code",0);
-            result.put("msg","success");
-            result.put("data",vd);
-            mapper.writeValue(resp.getWriter(),result);
-
         } catch (RuntimeException e) {
             e.printStackTrace();
-            result.put("code",2);
-            result.put("msg",e.getMessage());
-            mapper.writeValue(resp.getWriter(),result);
+            baseServlet.writeError(resp,ErrorCodeUtil.BUSINESS_ERROR,e.getMessage());
+        }catch (Exception ex){
+            baseServlet.writeError(resp,ErrorCodeUtil.SYSTEM_ERROR,ex.getMessage());
         }
 
+
     }
+
+    protected void getVideoDetailById(HttpServletRequest req, HttpServletResponse resp)throws Exception{
+            Long videoId=baseServlet.getLong(req,"videoId");
+            com.itheima.pojo.VideoDetail vd =vs.getVideoDetail(videoId);
+            if(vd==null){//找不到视频
+                baseServlet.writeError(resp,1,"找不到对应视频");
+                return;
+            }
+            baseServlet.writeSuccess(resp,vd);
+    }
+    protected void search(HttpServletRequest req, HttpServletResponse resp)throws Exception{
+            String keyword=req.getParameter("keyword");
+            if(keyword==null||keyword.trim().isEmpty()){
+                baseServlet.writeError(resp, ErrorCodeUtil.PARAM_ERROR,"输入不能为空");
+                return;
+            }
+            List<Video> list=vs.search(keyword.trim());
+            baseServlet.writeSuccess(resp,list);
+    }
+
 
 }

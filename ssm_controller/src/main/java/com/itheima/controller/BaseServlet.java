@@ -1,19 +1,20 @@
-package com.itheima.util;
+package com.itheima.controller;
 
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.itheima.util.ResultUtil;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
 
-public class BaseServletUtil extends HttpServlet {
+public class BaseServlet extends HttpServlet {
 
     protected static final ObjectMapper mapper = new ObjectMapper();
 
     // 统一返回成功
-    protected void writeSuccess(HttpServletResponse resp, Object data) throws IOException {
+    protected  void writeSuccess(HttpServletResponse resp, Object data) throws IOException {
         resp.setContentType("application/json;charset=UTF-8");
         mapper.writeValue(resp.getWriter(), ResultUtil.success(data));
     }

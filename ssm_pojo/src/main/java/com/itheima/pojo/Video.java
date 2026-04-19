@@ -3,7 +3,7 @@ package com.itheima.pojo;
 public class Video {
     private long videoId;
     private long uploadId;
-//    private String authorName;
+    private String authorName;
     private String videoTitle;
     private String briefIntroduction="-";
 
@@ -23,10 +23,18 @@ public class Video {
 //        this.authorName = authorName;
 //    }
 
-    public Video(long videoId, long uploadId, String videoTitle, String briefIntroduction) {
+    public String getAuthorName() {
+        return authorName;
+    }
+
+    public void setAuthorName(String authorName) {
+        this.authorName = authorName;
+    }
+
+    public Video(long videoId, long uploadId, String videoTitle, String authorName, String briefIntroduction) {
         this.videoId = videoId;
         this.uploadId = uploadId;
-//        this.authorName = authorName;
+        this.authorName = authorName;
         this.videoTitle = videoTitle;
         this.briefIntroduction = briefIntroduction;
     }

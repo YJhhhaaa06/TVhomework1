@@ -1,0 +1,88 @@
+
+<head>
+    <meta charset="UTF-8">
+    <title>视频测试页面</title>
+</head>
+<body>
+
+<h2>🔍 按ID查询视频</h2>
+<input type="text" id="videoId" placeholder="输入videoId">
+<button onclick="getById()">查询</button>
+
+<pre id="videoResult"></pre>
+
+<hr>
+
+<h2>🔎 关键词搜索</h2>
+<input type="text" id="keyword" placeholder="输入关键词">
+<button onclick="search()">搜索</button>
+
+<pre id="searchResult"></pre>
+
+<div id="list"></div>
+
+<script>
+
+    const baseUrl = "video";
+
+    // 根据ID查询
+    function getById() {
+        let videoId = document.getElementById("videoId").value;
+
+        fetch(`${baseUrl}?action=IdSearch&videoId=${videoId}`)
+            .then(res => res.json())
+            .then(data => {
+                document.getElementById("videoResult").innerText =
+                    JSON.stringify(data, null, 2);
+            })
+            .catch(err => {
+                console.error(err);
+            });
+    }
+
+    // 关键词搜索
+    function search() {
+        let keyword = document.getElementById("keyword").value;
+        keyword = encodeURIComponent(keyword);
+
+        fetch(`/MyAPP/video?action=keywordSearch&keyword=${keyword}`)
+            .then(res => res.json())
+            .then(data => {
+
+                let listDiv = document.getElementById("list");
+
+                // 清空旧内容
+                listDiv.innerHTML = "";
+
+                if (data.code !== 0) {
+                    listDiv.innerText = data.msg;
+                    return;
+                }
+
+                let videos = data.data;
+
+                videos.forEach(video => {
+                    let div = document.createElement("div");
+
+                    div.innerHTML = `
+                    <h3>${video.videoTitle}</h3>
+                    <p>${video.authorName}</p>
+                    <p>${video.briefIntroduction}</p>
+                    <button onclick="goDetail(${video.videoId})">查看详情</button>
+                    <hr>
+                `;
+
+                    listDiv.appendChild(div);
+                });
+
+            });
+    }
+    //跳转
+    function goDetail(id) {
+        window.location.href = `/MyAPP/detail.html?videoId=${id}`;
+    }
+
+</script>
+
+</body>
+</html>

@@ -1,0 +1,182 @@
+
+<!DOCTYPE html>
+
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>视频详情</title>
+</head>
+<body>
+
+<h2>视频详情</h2>
+<div id="video"></div>
+<h3>评论区</h3>
+
+<div id="commentList"></div>
+
+<hr/>
+
+<textarea id="content" placeholder="输入评论"></textarea>
+<br/>
+<button onClick="sendComment()">发表评论</button>
+<script>
+    let currentParentId = 0;
+    let params = new URLSearchParams(window.location.search);
+    let videoId = params.get("videoId");
+
+    // 初始化加载
+    loadComments(videoId);
+    loadVideoDetail(videoId);
+
+    function loadVideoDetail(videoId) {
+        fetch(`/MyAPP/video?action=IdSearch&videoId=${videoId}`)
+            .then(res => res.json())
+            .then(data => {
+                if (data.code !== 0) {
+                    document.getElementById("video").innerText = data.msg;
+                    return;
+                }
+                let v = data.data;
+                document.getElementById("video").innerHTML = `
+                    <h3>${v.title}</h3>
+                    <p>ID: ${v.videoId}</p>
+                    <p>${v.intro}</p>
+                    <p>${v.authorName}</p>
+                    <a href="${v.url}" target="_blank">▶ 点击播放视频</a>
+                `;
+            });
+    }
+
+    // function loadComments(videoId) {
+    //     fetch(`/MyAPP/comment?action=showComment&videoId=${videoId}`)
+    //         .then(res => res.json())
+    //         .then(data => {
+    //             console.log("前端收到的树状数据：", data); // 在这里看数据
+    //             if(data.code !== 0){
+    //                 alert(data.msg);
+    //                 return;
+    //             }
+    //             renderComments(data.data);
+    //         });
+    // }
+
+    // function loadComments(videoId) {
+    //     console.log("准备请求评论，ID为:", videoId);
+    //     // 注意：这里的 action=list 必须和你 Servlet 里的方法名对应
+    //     fetch(`/MyAPP/comment?action=showComment&videoId=${videoId}`)
+    //         .then(res => {
+    //             console.log("收到服务器响应状态:", res.status);
+    //             return res.json();
+    //         })
+    //         .then(data => {
+    //             console.log("收到的完整 JSON:", data);
+    //             if(data.code !== 0){
+    //                 console.error("后端返回错误:", data.msg);
+    //                 return;
+    //             }
+    //             if(data.data && data.data.length > 0) {
+    //                 renderComments(data.data);
+    //             } else {
+    //                 document.getElementById("commentList").innerText = "暂无评论数据";
+    //             }
+    //         })
+    //         .catch(err => {
+    //             console.error("Fetch 请求崩溃了:", err);
+    //         });
+    // }
+
+    function loadComments(videoId) {
+        console.log("准备请求评论，ID为:", videoId);
+
+        // 把 fetch 改成 POST 模式
+        fetch(`/MyAPP/comment?action=showComment`, {
+            method: 'POST', // 显式指定为 POST
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            // 参数放在 body 里发给后端
+            body: `videoId=${videoId}`
+        })
+            .then(res => {
+                console.log("收到服务器响应状态:", res.status);
+                return res.json();
+            })
+            .then(data => {
+                console.log("收到的完整 JSON:", data);
+                if(data.code !== 0){
+                    console.error("后端返回错误:", data.msg);
+                    return;
+                }
+                renderComments(data.data);
+            })
+            .catch(err => {
+                console.error("Fetch 请求报错了（可能是解析JSON失败）:", err);
+            });
+    }
+
+    function renderComments(comments) {
+        let div = document.getElementById("commentList");
+        div.innerHTML = "";
+        if (!comments || comments.length === 0) {
+            div.innerText = "暂无评论";
+            return;
+        }
+        comments.forEach(c => {
+            let item = createCommentItem(c, 0);
+            div.appendChild(item);
+        });
+    }
+
+    function createCommentItem(comment, level) {
+        let div = document.createElement("div");
+        div.style.marginLeft = (level * 20) + "px";
+        div.style.borderBottom = "1px solid #eee";
+        div.style.padding = "5px";
+
+        // 构建当前评论的 HTML
+        div.innerHTML = `
+            <div>
+                <b style="color:blue">${comment.username}</b>: ${comment.content}
+                <button onclick="reply(${comment.commentId})">回复</button>
+            </div>
+        `;
+
+        // 递归处理子评论（重点：要把子评论 append 到当前的 div 里）
+        if (comment.children && comment.children.length > 0) {
+            comment.children.forEach(child => {
+                let childDiv = createCommentItem(child, level + 1);
+                div.appendChild(childDiv);
+            });
+        }
+        return div;
+    }
+
+    function reply(commentId) {
+        currentParentId = commentId;
+        document.getElementById("content").placeholder = "回复评论ID：" + commentId;
+        document.getElementById("content").focus();
+    }
+
+    function sendComment() {
+        let content = document.getElementById("content").value;
+        if(!content) { alert("内容不能为空"); return; }
+
+        fetch("/MyAPP/comment?action=add", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: `videoId=${videoId}&content=${content}&parentId=${currentParentId}`
+        })
+            .then(res => res.json())
+            .then(data => {
+                alert(data.msg);
+                currentParentId = 0;
+                document.getElementById("content").value = "";
+                document.getElementById("content").placeholder = "输入评论";
+                loadComments(videoId); // 重新刷新列表
+            });
+    }
+</script>
+
+</body>
+</html>
+

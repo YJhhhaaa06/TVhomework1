@@ -2,7 +2,7 @@ package com.itheima.pojo;
 
 public class Token {
     private long id;
-    private int random;
+    private String tokenStr;//交给前端的字符串
     private long expireTime;
     private String signature;
 
@@ -12,11 +12,12 @@ public class Token {
     public void setId(long id) {
         this.id = id;
     }
-    public int getRandom() {
-        return random;
+    public String getTokenStr() {
+
+        return tokenStr;
     }
-    public void setRandom(int random) {
-        this.random = random;
+    public void setTokenStr(String random) {
+        this.tokenStr = random;
     }
     public long getExpireTime() {
         return expireTime;
@@ -31,9 +32,9 @@ public class Token {
         this.signature = signature;
     }
 
-    public Token(long id, int random, long expireTime, String signature) {
+    public Token(long id, String tokenStr, long expireTime, String signature) {
         this.id = id;
-        this.random = random;
+        this.tokenStr = tokenStr;
         this.expireTime = expireTime;
         this.signature = signature;
     }

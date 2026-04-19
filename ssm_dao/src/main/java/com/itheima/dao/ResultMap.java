@@ -15,7 +15,8 @@ public class ResultMap {
         long uploadID = res.getLong("uploadID");
         String videoTitle = res.getString("videoTitle");
         String briefIntroduction = res.getString("briefIntroduction");
-        return new Video(videoID, uploadID, videoTitle, briefIntroduction);
+        String authorName=res.getString("username");
+        return new Video(videoID, uploadID, videoTitle,authorName,briefIntroduction);
     }
 
     public static VideoDetail mapResultToVideoDetail(ResultSet rs) throws SQLException {

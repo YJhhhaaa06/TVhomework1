@@ -1,6 +1,10 @@
 package com.itheima.pojo;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 public class Comment {
@@ -13,7 +17,12 @@ public class Comment {
     private String content;
     private Long parentId;//Long类似Integer,可以为NULL
     //父评论ID
+//    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "GMT+8")
+    @JsonIgnore
     private LocalDateTime createTime;
+
+//    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "GMT+8")
+    @JsonIgnore
     private LocalDateTime updateTime;
     private int likeCount;
     private boolean isDeleted;//false是未删除
@@ -27,7 +36,7 @@ public class Comment {
         this.children = children;
     }
 
-    public Comment(String username, long commentId, long videoId, long userId, String content, Long parentId, LocalDateTime createTime, LocalDateTime updateTime, int likeCount, boolean isDeleted) {
+    public Comment(String username, long commentId, long videoId, long userId, String content, Long parentId, LocalDateTime createTime,LocalDateTime updateTime, int likeCount, boolean isDeleted) {
         this.username = username;
         this.commentId = commentId;
         this.videoId = videoId;
