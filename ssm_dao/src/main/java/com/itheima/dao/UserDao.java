@@ -26,7 +26,7 @@ public class UserDao {
             else {
                 ResultSet rs = pstmt.getGeneratedKeys();
                 if (rs.next()) {
-                    return rs.getLong("id");
+                    return rs.getLong(1);//返回的是虚表，不通过字段名获取id
                 } else {
                     //获取不到ID也当异常处理
                     throw new SQLException("插入成功，但未获取到ID");
@@ -69,6 +69,27 @@ public class UserDao {
         }
     }
 
+    public String findUsernameByPhone(String phone) throws SQLException {
+        String sql = "select username from users where phone=?";
+        java.sql.Connection conn = null;
+        try {
+            conn = MyConnectionPool.getConnection();
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setString(1, phone);
+                // 获取结果集
+                try (ResultSet res = pstmt.executeQuery()) {
+                    if (res.next()) {
+                        return res.getString("username");
+                    } else {
+                        return null; // 用户不存在
+                    }
+                }
+            }
+        } finally {
+            MyConnectionPool.release(conn);
+        }
+    }
+
     //通过ID获取用户
     public User findUserByID(long id) throws SQLException {
         String sql = "select * from users where id=?";
@@ -90,6 +111,7 @@ public class UserDao {
             MyConnectionPool.release(conn);
         }
     }
+
 
     public User findUserByID(Connection conn, long id) throws SQLException {
         String sql = "select * from users where id=?";
@@ -128,6 +150,7 @@ public class UserDao {
             MyConnectionPool.release(conn);
         }
     }
+
 
     public User findUserByPhone(Connection conn, String phone) throws SQLException {
         String sql = "select * from users where phone=?";
@@ -248,6 +271,7 @@ public class UserDao {
             return pstmt.executeUpdate();
         }
     }
+
 }
 
 

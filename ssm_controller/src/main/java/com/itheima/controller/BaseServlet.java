@@ -18,6 +18,10 @@ public class BaseServlet extends HttpServlet {
         resp.setContentType("application/json;charset=UTF-8");
         mapper.writeValue(resp.getWriter(), ResultUtil.success(data));
     }
+    protected  void writeSuccess(HttpServletResponse resp, Object data,String username) throws IOException {
+        resp.setContentType("application/json;charset=UTF-8");
+        mapper.writeValue(resp.getWriter(), ResultUtil.success(data,username));
+    }
 
     // 统一返回错误
     protected void writeError(HttpServletResponse resp, int code, String msg) throws IOException {

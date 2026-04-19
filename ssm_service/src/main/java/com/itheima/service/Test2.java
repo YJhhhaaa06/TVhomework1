@@ -41,7 +41,7 @@ public class Test2 {
 //        System.out.println(res.getUser().getUserName());
 //        List<Video> list= VideoDao.searchVideoInfo(MyConnectionPool.getConnection(),"灯");
 
-        VideoService vs=new VideoService();
+        VideoService vs= VideoService.getInstance();
 
         List<Video> list2=vs.search("灯");
         List<VideoDetail> list3=new ArrayList<>();

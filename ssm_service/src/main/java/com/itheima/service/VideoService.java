@@ -26,6 +26,14 @@ public class VideoService {
     private static long size;
     private static Random r=new Random();
 
+    private static VideoService instance=new VideoService();
+    public static VideoService getInstance(){
+        return instance;
+    }
+
+    private VideoService(){
+        init();
+    }
 
     // ===== 初始化 =====
     public void init() {
@@ -182,8 +190,6 @@ public class VideoService {
         if(url==null||url.length()>500){
             return false;
         }
-
         return !title.trim().isEmpty();
-
     }
 }

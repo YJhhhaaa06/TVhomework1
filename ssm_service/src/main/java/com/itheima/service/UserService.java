@@ -6,6 +6,7 @@ import com.itheima.pojo.Token;
 import com.itheima.pojo.User;
 import com.itheima.util.MyConnectionPool;
 import com.itheima.util.PasswordUtil;
+import com.itheima.util.PasswordUtil;
 import com.itheima.util.StringUtil;
 import com.itheima.util.TokenUtil;
 
@@ -16,7 +17,7 @@ public class UserService {
     private UserDao userDao=new UserDao();
     private TokenService tokenService=new TokenService();
 //执行登录，外部不调用
-    private LogInResult doLogin(User user, String rawPassword) {
+    private String doLogin(User user, String rawPassword) {
 
         if (user == null) {
             throw new RuntimeException("USER_NOT_FOUND");
@@ -26,11 +27,10 @@ public class UserService {
             throw new RuntimeException("WRONG_PASSWORD");
         }
         user.clear();
-        String tokenStr = tokenService.getNewToken(user.getId());
-        return new LogInResult(user, tokenStr);
+        return tokenService.getNewToken(user.getId());
     }
 
-    public LogInResult logInAsUserByID(long id, String rawPassword) throws Exception {
+    public String logInAsUserByID(long id, String rawPassword) throws Exception {
         Connection conn = null;
         try {
             conn = MyConnectionPool.getConnection();
@@ -44,7 +44,7 @@ public class UserService {
     }
 
 
-    public LogInResult logInAsUserByPhone(String phone, String rawPassword) throws Exception {
+    public String logInAsUserByPhone(String phone, String rawPassword) throws Exception {
 
         if (phone == null || rawPassword == null || phone.isEmpty() || rawPassword.isEmpty()) {
             throw new RuntimeException("NULL_PARAMETER");
@@ -61,17 +61,19 @@ public class UserService {
     }
 
     //    用户注册
-    public void registerAsUser(String userName,String password,String phone){
+    public long registerAsUser(String userName,String password,String phone){
         Connection conn=null;
+        long userId;
         try {
             conn=MyConnectionPool.getConnection();
             conn.setAutoCommit(false);
             if (registerCheck(conn,userName, password, phone)) {
-                userDao.addUser(conn, userName, PasswordUtil.hashPassword(password), phone);
+                userId= userDao.addUser(conn, userName, PasswordUtil.hashPassword(password), phone);
             } else {
                 throw new RuntimeException("INPUT_ERROR");
             }
             conn.commit();//提交提交提交提交提交提交提交提交
+            return userId;
         }catch (Exception e){
             try{//rollback本身也可能报异常
                 conn.rollback();
@@ -108,7 +110,7 @@ public class UserService {
         if ((userName.length()>=50)){//名字太长
             return false;
         }
-        if(!userDao.isPhoneUsed(conn,phone)){//电话号码被用了
+        if(userDao.isPhoneUsed(conn,phone)){//电话号码被用了
             return false;
         }
         return true;
@@ -306,5 +308,14 @@ public class UserService {
         }
     }
 
+    //根据id查询用户名
+    public String findUsernameById(long id) throws SQLException {
+
+        return userDao.findUsernameById(id);
+    }
+
+    public String findUsernameByPhone(String phone) throws SQLException {
+        return userDao.findUsernameByPhone(phone);
+    }
 
 }

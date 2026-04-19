@@ -28,10 +28,10 @@ public class CommentServlet extends HttpServlet {
                 return;
             }
             switch (action){
-                case "addComment":
+                case "add":
                     addComment(req,resp);
                     break;
-                case "showComment":
+                case "show":
                     showComment(req,resp);
                     break;
                 default:
@@ -62,10 +62,9 @@ public class CommentServlet extends HttpServlet {
                 parentId = Long.parseLong(parentIdStr);
             }
             commentService.addComment(userId,videoId,parentId,content);
-            resp.getWriter().write("评论成功");
+            baseServlet.writeSuccess(resp,"评论成功");
         }catch (Exception e){
             e.printStackTrace();
-            resp.getWriter().write("评论失败");
             throw e;
         }
     }

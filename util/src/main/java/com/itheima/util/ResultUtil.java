@@ -11,6 +11,11 @@ public class ResultUtil {
         map.put("data", data);
         return map;
     }
+    public static Map<String, Object> success(Object data,String username) {
+        Map<String, Object> map = success(data);
+        map.put("username",username);
+        return map;
+    }
 
     public static Map<String, Object> error(int code, String msg) {
         Map<String, Object> map = new HashMap<>();

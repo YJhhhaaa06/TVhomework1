@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>用户系统</title>
+  <style>
+    .container { width: 300px; margin: 50px auto; border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
+    .tab-menu { display: flex; justify-content: space-around; margin-bottom: 20px; cursor: pointer; }
+    .active { color: blue; font-weight: bold; border-bottom: 2px solid blue; }
+    .form-group { margin-bottom: 15px; }
+    input { width: 100%; padding: 8px; box-sizing: border-box; }
+    button { width: 100%; padding: 10px; background-color: #007bff; color: white; border: none; cursor: pointer; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <div class="tab-menu">
+    <span id="loginTab" class="active" onclick="toggleTab('login')">登录</span>
+    <span id="regTab" onclick="toggleTab('register')">注册</span>
+  </div>
+
+  <div id="loginForm">
+    <div class="form-group">
+      <input type="text" id="loginIdOrPhone" placeholder="手机号 或 用户ID">
+    </div>
+    <div class="form-group">
+      <input type="password" id="loginPwd" placeholder="密码">
+    </div>
+    <button onclick="doLogin()">立即登录</button>
+  </div>
+
+  <div id="regForm" class="hidden">
+    <div class="form-group">
+      <input type="text" id="regUsername" placeholder="用户名">
+    </div>
+    <div class="form-group">
+      <input type="text" id="regPhone" placeholder="手机号">
+    </div>
+    <div class="form-group">
+      <input type="password" id="regPwd" placeholder="设置密码">
+    </div>
+    <div class="form-group">
+      <input type="password" id="regConfirmPwd" placeholder="确认密码">
+    </div>
+    <button onclick="doRegister()">提交注册</button>
+  </div>
+</div>
+
+<div>
+  <button onclick="goHome()">🏠 首页
+</button>
+</div>
+<script>
+  // 切换 登录/注册 界面
+  function toggleTab(type) {
+    if (type === 'login') {
+      document.getElementById('loginForm').classList.remove('hidden');
+      document.getElementById('regForm').classList.add('hidden');
+      document.getElementById('loginTab').classList.add('active');
+      document.getElementById('regTab').classList.remove('active');
+    } else {
+      document.getElementById('loginForm').classList.add('hidden');
+      document.getElementById('regForm').classList.remove('hidden');
+      document.getElementById('regTab').classList.add('active');
+      document.getElementById('loginTab').classList.remove('active');
+    }
+  }
+
+  // 登录逻辑
+  // function doLogin() {
+  //   let account = document.getElementById("loginIdOrPhone").value.trim();
+  //   let password = document.getElementById("loginPwd").value;
+  //
+  //   if (!account || !password) {
+  //     alert("账号和密码不能为空！");
+  //     return;
+  //   }
+  //
+  //   let body = `action=login&password=${password}`;
+  //   if (isNaN(account)) {
+  //     body += `&phone=${account}`;
+  //   } else {
+  //     body += `&id=${account}`;
+  //   }
+  //
+  //   sendRequest(body);
+  // }
+  function doLogin() {
+    let account = document.getElementById("loginIdOrPhone").value.trim();
+    let password = document.getElementById("loginPwd").value;
+
+    if (!account || !password) {
+      alert("账号和密码不能为空！");
+      return;
+    }
+
+    // 统一使用 action 和 password
+    let params = new URLSearchParams();
+    params.append("action", "login");
+    params.append("password", password);
+
+    // 严格判断：如果是 11 位数字且以 1 开头，视为手机号
+    let phoneRegex = /^1\d{10}$/;
+    if (phoneRegex.test(account)) {
+      params.append("phone", account);
+      // 手机号登录时，不添加 id 参数
+    } else {
+      params.append("id", account);
+      // ID 登录时，不添加 phone 参数
+    }
+
+    sendRequest(params.toString());
+  }
+
+  // 注册逻辑
+  function doRegister() {
+    let username = document.getElementById("regUsername").value.trim();
+    let phone = document.getElementById("regPhone").value.trim();
+    let password = document.getElementById("regPwd").value;
+    let confirmPassword = document.getElementById("regConfirmPwd").value;
+
+    // 1. 非空校验
+    if (!username || !phone || !password || !confirmPassword) {
+      alert("所有字段都必须填写！");
+      return; // 发现错误立即停止，不再往下执行 fetch
+    }
+
+    // 2. 手机号格式校验 (正则表达式)
+    let phoneRegex = /^1[3-9]\d{9}$/;
+    if (!phoneRegex.test(phone)) {
+      alert("请输入有效的11位手机号码！");
+      return;
+    }
+
+    // 3. 密码长度校验
+    if (password.length < 6) {
+      alert("密码长度不能少于6位！");
+      return;
+    }
+
+    // 4. 两次密码一致性校验
+    if (password !== confirmPassword) {
+      alert("两次输入的密码不一致！");
+      return;
+    }
+
+    // 全部通过后，才构造参数发送请求
+    let body = `action=register&username=${username}&phone=${phone}&password=${password}&confirmPassword=${confirmPassword}`;
+    sendRequest(body);
+  }
+
+  // 统一发送请求函数
+  function sendRequest(bodyContent) {
+    fetch("/MyAPP/user/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: bodyContent
+    })
+            .then(res => res.json())
+            .then(data => {
+              // 这里的 data 就是你后端 Map 转换过来的对象
+              if (data.code === 0) {
+                // 弹出后端传回来的 "success" 或者是自定义的成功信息
+                // alert("成功：" + data.msg);
+                //不弹窗了，影响用户体验
+
+                // 拿到 Map 里的 data 字段（比如 Token）
+                if (data.data) {
+                  console.log("获取到后端数据:", data.data);
+                  localStorage.setItem("userToken", data.data);
+                  localStorage.setItem("username",data.username);
+
+
+                  window.location.href="/MyAPP/start.html";//跳转
+                }
+
+              } else {
+                // 如果 code 不是 0，弹出报错信息
+                alert("操作失败：" + data.msg);
+              }
+            });
+  }
+
+  function goHome() {
+    window.location.href = "/MyAPP/start.html";
+  }
+</script>
+
+</body>
+</html>

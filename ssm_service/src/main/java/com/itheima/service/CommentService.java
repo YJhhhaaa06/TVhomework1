@@ -43,7 +43,7 @@ private CommentDao commentDao=new CommentDao();
         for (Comment c : list) {
             Long parentId = c.getParentId();
 
-            if (parentId == null) {
+            if (parentId == null||parentId==0) {
                 roots.add(c); // 一级评论
             } else {
                 Comment parent = map.get(parentId);

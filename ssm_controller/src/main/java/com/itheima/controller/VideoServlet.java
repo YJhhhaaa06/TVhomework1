@@ -19,7 +19,7 @@ import java.util.Map;
 @WebServlet("/video")
 public class VideoServlet extends HttpServlet {
     private ObjectMapper mapper = new ObjectMapper();
-    private VideoService vs=new VideoService();
+    private VideoService vs=VideoService.getInstance();
     private BaseServlet baseServlet=new BaseServlet();
 
     @Override

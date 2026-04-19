@@ -116,7 +116,7 @@ public class VideoDao {
     public List<Video> findAllVideoInfo() throws SQLException {
         List<Video> VideoList = new ArrayList<>();
         //面向接口：后续要改类型只用改new的类型
-        String sql = "select * from videoInfo";
+        String sql = "select * from videoInfo vInfo join users u on u.id=vInfo.uploadID";
         java.sql.Connection conn = null;
         try {
             conn = MyConnectionPool.getConnection();
