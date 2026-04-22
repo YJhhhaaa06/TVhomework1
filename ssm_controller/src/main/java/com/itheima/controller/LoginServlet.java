@@ -21,7 +21,7 @@ public class LoginServlet extends HttpServlet {
             String idStr=req.getParameter("id");
             String phone=req.getParameter("phone");
             String action=req.getParameter("action");
-            System.out.println("收到登录请求: id=" + idStr + ", phone=" + phone + ", action=" + action);
+            System.out.println("LoginServlet receive login request: id=" + idStr + ", phone=" + phone + ", action=" + action);
             if(action==null||action.trim().isEmpty()){
                 baseServlet.writeError(resp, ErrorCodeUtil.PARAM_ERROR,"输入不能为空");
                 return;
@@ -77,9 +77,11 @@ public class LoginServlet extends HttpServlet {
 
         if(phone==null||password==null||username==null){
             baseServlet.writeError(resp,ErrorCodeUtil.PARAM_ERROR,"输入不能为空");
+            return;
         }
         if(phone.trim().isEmpty()||password.trim().isEmpty()||username.trim().isEmpty()){
             baseServlet.writeError(resp,ErrorCodeUtil.PARAM_ERROR,"输入不能为空");
+            return;
         }
         long id= userService.registerAsUser(username,password,phone);
         String tokenStr=tokenService.getNewToken(id);

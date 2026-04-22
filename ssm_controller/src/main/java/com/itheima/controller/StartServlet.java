@@ -29,7 +29,7 @@ public class StartServlet extends HttpServlet {
             resp.setContentType("application/json;charset=utf-8");
 
             // 2. 获取推荐视频（例如取 10 条）
-            List<Video> recommendedVideos = videoService.getRecommendedVideos(10);
+            List<Video> recommendedVideos = videoService.getRecommendedVideos(12);
 
             // 输出
             baseServlet.writeSuccess(resp,recommendedVideos);
