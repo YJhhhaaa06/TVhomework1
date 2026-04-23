@@ -7,22 +7,9 @@
     <groupId>com.itheima</groupId>
     <artifactId>untitled</artifactId>
     <version>1.0-SNAPSHOT</version>
-    <packaging>pom</packaging>
-<!--    <modules>-->
-<!--        <module>ssm_dao</module>-->
-<!--        <module>ssm_pojo</module>-->
-<!--        <module>ssm_service</module>-->
-<!--        <module>ssm_controller</module>-->
-<!--        <module>util</module>-->
-<!--    </modules>-->
+    <packaging>war</packaging>
 
-    <modules>
-        <module>ssm_pojo</module>
-        <module>ssm_dao</module>
-        <module>ssm_service</module>
-        <module>ssm_controller</module>
-        <module>util</module>
-    </modules>
+
 
     <properties>
         <maven.compiler.source>25</maven.compiler.source>
@@ -30,7 +17,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
-    <dependencyManagement>
+
     <dependencies>
         <dependency>
             <groupId>com.mysql</groupId>
@@ -60,5 +47,5 @@
             <version>2.15.2</version>
         </dependency>
     </dependencies>
-    </dependencyManagement>
+
 </project>
