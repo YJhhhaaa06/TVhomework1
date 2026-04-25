@@ -1,6 +1,7 @@
 package com.itheima.service;
 
 import com.itheima.dao.UserDao;
+import com.itheima.pojo.LogInResult;
 import com.itheima.pojo.User;
 import com.itheima.util.MyConnectionPool;
 import com.itheima.util.PasswordUtil;
@@ -13,13 +14,27 @@ import java.sql.SQLException;
 public class UserService {
     private UserDao userDao=new UserDao();
     private TokenService tokenService=new TokenService();
+
+    public LogInResult login(long id,String rawPassword) throws Exception {
+        User user = userDao.getUserForLoginById(id);
+
+        String tokenStr=doLogin(user,rawPassword);
+        return new LogInResult(user,tokenStr);
+
+    }
+    public LogInResult login(String phone,String rawPassword) throws Exception {
+        User user = userDao.getUserForLoginByPhone(phone);
+        String tokenStr=doLogin(user,rawPassword);
+        return new LogInResult(user,tokenStr);
+    }
+
+
 //执行登录，外部不调用
     private String doLogin(User user, String rawPassword) {
 
         if (user == null) {
             throw new RuntimeException("USER_NOT_FOUND");
         }
-
         if (!PasswordUtil.isPasswordCorrect(rawPassword, user.getHashedPassword())) {
             throw new RuntimeException("WRONG_PASSWORD");
         }
@@ -27,37 +42,8 @@ public class UserService {
         return tokenService.getNewToken(user.getId());
     }
 
-    public String logInAsUserByID(long id, String rawPassword) throws Exception {
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            User user = userDao.findUserByID(conn, id);
 
-            return doLogin(user, rawPassword);
-
-        } finally {
-            MyConnectionPool.release(conn);
-        }
-    }
-
-
-    public String logInAsUserByPhone(String phone, String rawPassword) throws Exception {
-
-        if (phone == null || rawPassword == null || phone.isEmpty() || rawPassword.isEmpty()) {
-            throw new RuntimeException("NULL_PARAMETER");
-        }
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            User user = userDao.findUserByPhone(conn, phone);
-            return doLogin(user, rawPassword);
-
-        } finally {
-            MyConnectionPool.release(conn);
-        }
-    }
-
-    //    用户注册
+    //    用户注册,返回Id
     public long registerAsUser(String userName,String password,String phone){
         Connection conn=null;
         long userId;
@@ -71,31 +57,21 @@ public class UserService {
             }
             conn.commit();//提交提交提交提交提交提交提交提交
             return userId;
-        }catch (Exception e){
+        }catch (SQLException e){
             try{//rollback本身也可能报异常
                 conn.rollback();
             }catch (SQLException ex){
-                ex.printStackTrace();
+                e.addSuppressed(ex);
             }
             throw new RuntimeException("REGISTER_FAILED",e);
         }
-        finally {//之前开启了事务，还连接时要把自动提交打开
-            if(conn!=null){
-                try{
-                conn.setAutoCommit(true);
-                }catch (SQLException e){
-                    e.printStackTrace();
-                    conn=null;//坏连接不归还，归还空连接
-                }finally {
-                    MyConnectionPool.release(conn);
-                }
-            }
-
+        finally {//连接池自己会开启自动提交
+            MyConnectionPool.release(conn);
         }
     }
 //
-//
-//
+
+
 //没问题返回true
     public boolean registerCheck(Connection conn, String userName,String password,String phone) throws SQLException {
         if(!PasswordUtil.isPasswordLegal(password)){//密码太长
@@ -107,57 +83,39 @@ public class UserService {
         if ((userName.length()>=50)){//名字太长
             return false;
         }
-        if(userDao.isPhoneUsed(conn,phone)){//电话号码被用了
-            return false;
-        }
-        return true;
+        //电话号码被用了
+        return !userDao.isPhoneUsed(conn, phone);
     }
 
-    public void changePassword(User user, String phone, String oldPassword, String newPassword) {
-    if (user == null) {
-        throw new RuntimeException("NO_USER");
-    }
+    public void changePassword(long userId, String phone, String oldPassword, String newPassword) throws SQLException {
+
 
     if (!PasswordUtil.isPasswordLegal(newPassword)) {
         throw new RuntimeException("PASSWORD_ILLEGAL");
     }
 
     Connection conn = null;
-
     try {
         conn = MyConnectionPool.getConnection();
         conn.setAutoCommit(false);
-
-        doChangePassword(conn, user, phone, oldPassword, newPassword);
-
+        doChangePassword(conn, userId, phone, oldPassword, newPassword);
         conn.commit();
-
     } catch (Exception e) {
-
         if (conn != null) {
             try {
                 conn.rollback();
             } catch (SQLException ex) {
-                ex.printStackTrace();
+                e.addSuppressed(ex);
             }
         }
-        throw new RuntimeException("CHANGE_PASSWORD_FAILED", e);
+        throw e;
     } finally {
-        if(conn!=null){
-            try{
-                conn.setAutoCommit(true);
-            }catch (SQLException e){
-                e.printStackTrace();
-                conn=null;//坏连接不归还，归还空连接
-            }finally {
-                MyConnectionPool.release(conn);
-            }
+        MyConnectionPool.release(conn);
         }
-    }
 }
-    private void doChangePassword(Connection conn, User user, String phone, String oldPassword, String newPassword) throws SQLException {
+    private void doChangePassword(Connection conn,  long userId,String phone, String oldPassword, String newPassword) throws SQLException {
 
-        User dbUser = userDao.findUserByID(conn, user.getId());
+        User dbUser = userDao.getUserForLoginById(conn, userId);
 
         if (dbUser == null) {
             throw new RuntimeException("USER_NOT_FOUND");
@@ -175,17 +133,13 @@ public class UserService {
 
         // 更新密码
         String newHashedPassword = PasswordUtil.hashPassword(newPassword);
-        int rows=userDao.updateUserPassword(conn,phone,user.getId(), newHashedPassword);
+        int rows=userDao.updateUserPassword(conn,phone,userId, newHashedPassword);
         if (rows == 0) {
             throw new RuntimeException("UPDATE_FAILED");
         }
     }
     
-    public void changeUserName(User user,String newName){
-        if (user == null) {
-            throw new RuntimeException("NO_USER");
-        }
-
+    public void changeUserName(long userId,String newName) throws SQLException {
         if (newName == null || newName.length() >= 50) {
             throw new RuntimeException("NAME_ILLEGAL");
         }
@@ -194,125 +148,83 @@ public class UserService {
         try {
             conn = MyConnectionPool.getConnection();
             conn.setAutoCommit(false);
-
-            doChangeUserName(conn, user, newName);
-
+            doChangeUserName(conn,userId,newName);
             conn.commit();
         } catch (Exception e) {
             if (conn != null) {
                 try {
                     conn.rollback();
                 } catch (SQLException ex) {
-                    ex.printStackTrace();
+                    e.addSuppressed(ex);
                 }
             }
-            throw new RuntimeException("CHANGE_USERNAME_FAILED", e);
+           throw e;
         } finally {
-            if(conn!=null){
-                try{
-                    conn.setAutoCommit(true);
-                }catch (SQLException e){
-                    e.printStackTrace();
-                    conn=null;//坏连接不归还，归还空连接
-                }finally {
-                    MyConnectionPool.release(conn);
-                }
-            }
+            MyConnectionPool.release(conn);
         }
     }
-    public void changePhone(User user,String oldPhone,String newPhone){
-        if (user == null) {
-            throw new RuntimeException("NO_USER");
-        }
+    public void changePhone(long userId,String oldPhone,String newPhone) throws SQLException {
 
-        if (oldPhone == null || newPhone == null) {
-            throw new RuntimeException("INPUT_ERROR");
-        }
 
         Connection conn = null;
         try {
             conn = MyConnectionPool.getConnection();
             conn.setAutoCommit(false);
 
-            doChangePhone(conn, user, oldPhone, newPhone);
-
+            doChangePhone(conn, userId, oldPhone, newPhone);
             conn.commit();
         } catch (Exception e) {
             if (conn != null) {
                 try {
                     conn.rollback();
                 } catch (SQLException ex) {
-                    ex.printStackTrace();
+                    e.addSuppressed(ex);
                 }
             }
-            throw new RuntimeException("CHANGE_PHONE_FAILED", e);
+            throw e;
         } finally {
-            if(conn!=null){
-                try{
-                    conn.setAutoCommit(true);
-                }catch (SQLException e){
-                    e.printStackTrace();
-                    conn=null;//坏连接不归还，归还空连接
-                }finally {
-                    MyConnectionPool.release(conn);
-                }
-            }
+            MyConnectionPool.release(conn);
         }
     }
 
-    private void doChangeUserName(Connection conn, User user, String newName) throws SQLException {
-        User dbUser = userDao.findUserByID(conn, user.getId());
-        if (dbUser == null) {
+    private void doChangeUserName(Connection conn, long userId, String newName) throws SQLException {
+        if (userDao.isUserExist(conn,userId)) {
             throw new RuntimeException("USER_NOT_FOUND");
         }
-
-        // Use the current phone from DB to ensure we update the correct row
-        int rows = userDao.updateUserName(conn, dbUser.getPhone(), user.getId(), newName);
+        int rows = userDao.updateUserName(conn,userId, newName);
         if (rows == 0) {
             throw new RuntimeException("UPDATE_FAILED");
         }
     }
 
-    private void doChangePhone(Connection conn, User user, String oldPhone, String newPhone) throws SQLException {
-        User dbUser = userDao.findUserByID(conn, user.getId());
+    private void doChangePhone(Connection conn, long userId, String oldPhone, String newPhone) throws SQLException {
+        User dbUser = userDao.getUserForProfileById(conn, userId);
         if (dbUser == null) {
             throw new RuntimeException("USER_NOT_FOUND");
         }
-
         // 校验旧手机号是否匹配
         if (!oldPhone.equals(dbUser.getPhone())) {
             throw new RuntimeException("PHONE_INCORRECT");
         }
-
         // 校验新手机号格式
         if (!StringUtil.phoneCheck(newPhone)) {
             throw new RuntimeException("PHONE_ILLEGAL");
         }
-
         // 如果新手机号与旧手机号相同，不做任何修改
         if (newPhone.equals(oldPhone)) {
-            return;
+            throw new RuntimeException("PHONE_EQUAL");
         }
-
         // 检查新手机号是否被其他用户使用
         if (userDao.isPhoneUsed(conn, newPhone)) {
             throw new RuntimeException("PHONE_IN_USE");
         }
-
-        int rows = userDao.updateUserPhone(conn, oldPhone, user.getId(), newPhone);
+        int rows = userDao.updateUserPhone(conn, userId, newPhone);
         if (rows == 0) {
             throw new RuntimeException("UPDATE_FAILED");
         }
     }
 
     //根据id查询用户名
-    public String findUsernameById(long id) throws SQLException {
 
-        return userDao.findUsernameById(id);
-    }
-
-    public String findUsernameByPhone(String phone) throws SQLException {
-        return userDao.findUsernameByPhone(phone);
-    }
 
 }

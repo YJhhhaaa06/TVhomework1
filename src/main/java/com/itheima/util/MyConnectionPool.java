@@ -47,9 +47,34 @@ private static final String URL = "jdbc:mysql://localhost:3306/TVDatabase?useSSL
 
     // 归还连接
     public static synchronized void release(Connection conn) {
-        if (conn != null) {
-            //如果获取连接时不成功，conn就是null，不会报错
+        //synchronized 线程锁    保证同一时刻只有一个线程用这个方法
+        if (conn == null) return;
+
+        try {
+            // 1️⃣ 检查连接是否还活着（建议加）
+            if (conn.isClosed()) {
+                return; // 已经关了，直接丢弃
+            }
+
+            if (!conn.isValid(1)) {
+                conn.close();//等一秒钟还没确认conn是有效的，关闭后丢弃
+                return;
+            }
+
+            // 2️⃣ 重置状态
+            conn.setAutoCommit(true);
+
+            // 3️⃣ 归还连接池
             pool.addLast(conn);
+
+        } catch (SQLException e) {
+            // ❗ 只要出异常 → 直接销毁连接
+            try {
+                conn.close();
+            } catch (SQLException ex) {
+                e.addSuppressed(ex);
+            }
         }
     }
+
 }

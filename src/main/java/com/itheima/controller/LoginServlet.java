@@ -1,5 +1,6 @@
 package com.itheima.controller;
 
+import com.itheima.pojo.LogInResult;
 import com.itheima.service.TokenService;
 import com.itheima.service.UserService;
 import com.itheima.util.ErrorCodeUtil;
@@ -52,22 +53,31 @@ public class LoginServlet extends HttpServlet {
             String phone = req.getParameter("phone");
             String password = req.getParameter("password");
             if(idStr==null&&phone==null||password==null){
-                baseServlet.writeError(resp,1,"输入不能为空");
+                baseServlet.writeError(resp,ErrorCodeUtil.PARAM_ERROR,"输入不能为空");
                 return;
             }
+        try{
             String username;
             String tokenStr;
-            if(idStr==null||idStr.isEmpty()){//优先使用id登录，没有id就用手机号登录
-                tokenStr = userService.logInAsUserByPhone(phone, password);
-                username=userService.findUsernameByPhone(phone);
-                baseServlet.writeSuccess(resp,tokenStr,username);
+            LogInResult ls;
+            if(idStr==null||idStr.isEmpty()){//优先使用id登录，没有id就用手机号登录,这里用手机号
+                ls=userService.login(phone,password);
             }
             else {
                 long id=baseServlet.getLong(req,"id");
-                tokenStr=userService.logInAsUserByID(id,password);
-                username=userService.findUsernameById(id);
-                baseServlet.writeSuccess(resp,tokenStr,username);
+                ls=userService.login(id,password);
             }
+            tokenStr = ls.getToken();
+            username=ls.getUser().getUserName();
+            baseServlet.writeSuccess(resp,tokenStr,username);
+        }catch (RuntimeException e){
+            e.printStackTrace();
+            baseServlet.writeError(resp,ErrorCodeUtil.BUSINESS_ERROR,e.getMessage());
+        } catch (Exception ex) {
+            ex.printStackTrace();
+            baseServlet.writeError(resp,ErrorCodeUtil.SYSTEM_ERROR,ex.getMessage());
+        }
+
     }
 
     protected void register(HttpServletRequest req, HttpServletResponse resp) throws Exception {

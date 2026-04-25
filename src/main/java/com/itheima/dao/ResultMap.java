@@ -49,19 +49,24 @@ public class ResultMap {
         return cm;
     }
 
-    public static User mapResultToUser(ResultSet rs)throws SQLException{
+    public static User mapUserForProfile(ResultSet rs)throws SQLException{
 
         long id=rs.getLong("id");
         String userName=rs.getString("username");
-        String hashedPassword=rs.getString("hashedPassword");
         int followerCount=rs.getInt("follower_count");
         int followCount=rs.getInt("follow_count");
-        String phone=rs.getString("phone");
-        return new User(id,userName,hashedPassword,followerCount,followCount,phone);
+        return new User(id,userName,followCount,followerCount);
     }
-//    public static VideoDetail mapComment(VideoDetail vd,Comment comment){
-//
-//        vd.commentList.add(comment);
-//    }
+
+    public static User mapUserForLogin(ResultSet rs)throws SQLException{
+        long id=rs.getLong("id");
+        String username=rs.getString("username");
+        String hashedPassword=rs.getString("hashed_password");
+        String phone=rs.getString("phone");
+        return new User(id,hashedPassword,username,phone);
+    }
+
+
+
 
 }

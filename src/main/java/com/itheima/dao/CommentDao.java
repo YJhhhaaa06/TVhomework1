@@ -73,7 +73,7 @@ public class CommentDao {
             return list;
     }
 
-    public static List<Comment> getCommentsByVideoId(Connection conn, Long videoId) throws SQLException {
+    public  List<Comment> getCommentsByVideoId(Connection conn, Long videoId) throws SQLException {
 
         String sql = "SELECT c.*, u.username " +
                 "FROM comment c LEFT JOIN users u ON c.user_id = u.id " +

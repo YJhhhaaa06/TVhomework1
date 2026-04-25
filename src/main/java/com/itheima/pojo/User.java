@@ -2,7 +2,7 @@ package com.itheima.pojo;
 
 public class User {
     private long id;
-    private String userName;
+    private String username;
     private String hashedPassword;
     private int followerCount;
     private int followCount;
@@ -11,11 +11,27 @@ public class User {
 
     public User(long id, String userName, String hashedPassword, int followerCount, int followCount, String phone) {
         this.id = id;
-        this.userName = userName;
+        this.username = userName;
         this.hashedPassword = hashedPassword;
         this.followerCount = followerCount;
         this.followCount = followCount;
         this.phone = phone;
+    }
+
+    //为登录设计的构造，登录时只需要这些
+    public User(long id, String hashedPassword, String userName, String phone) {
+        this.id = id;
+        this.hashedPassword = hashedPassword;
+        this.username = userName;
+        this.phone = phone;
+    }
+
+    //为查询个人信息设计的构造，
+    public User(long id, String username, int followCount, int followerCount) {
+        this.id = id;
+        this.username = username;
+        this.followCount = followCount;
+        this.followerCount = followerCount;
     }
 
     public String getPhone() {
@@ -32,7 +48,7 @@ public class User {
 
 
     public void setName(String name) {
-        this.userName = name;
+        this.username = name;
     }
 
     public long getId() {
@@ -45,11 +61,11 @@ public class User {
 
 
     public String getUserName() {
-        return userName;
+        return username;
     }
 
     public void setUserName(String userName) {
-        this.userName = userName;
+        this.username = userName;
     }
 
     public String getHashedPassword() {
