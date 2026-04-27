@@ -150,7 +150,6 @@
     let body = `action=register&username=${username}&phone=${phone}&password=${password}&confirmPassword=${confirmPassword}`;
     sendRequest(body);
   }
-
   // 统一发送请求函数
   function sendRequest(bodyContent) {
     fetch("/MyAPP/user/login", {
@@ -161,7 +160,7 @@
             .then(res => res.json())
             .then(data => {
               // 这里的 data 就是你后端 Map 转换过来的对象
-              if (data.code === 0) {
+              if (data.code == 200) {
                 // 弹出后端传回来的 "success" 或者是自定义的成功信息
                 // alert("成功：" + data.msg);
                 //不弹窗了，影响用户体验
@@ -169,11 +168,11 @@
                 // 拿到 Map 里的 data 字段（比如 Token）
                 if (data.data) {
                   console.log("获取到后端数据:", data.data);
-                  localStorage.setItem("userToken", data.data);
-                  localStorage.setItem("username",data.username);
+                  localStorage.setItem("userToken", data.data.token);
+                  localStorage.setItem("username",data.data.username);
 
 
-                  window.location.href="/MyAPP/start.html";//跳转
+                 goHome();//跳转
                 }
 
               } else {

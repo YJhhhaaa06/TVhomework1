@@ -6,7 +6,7 @@ import java.util.Map;
 public class ResultUtil {
     public static Map<String, Object> success(Object data) {
         Map<String, Object> map = new HashMap<>();
-        map.put("code", 0);
+        map.put("code", 200);
         map.put("msg", "success");
         map.put("data", data);
         return map;

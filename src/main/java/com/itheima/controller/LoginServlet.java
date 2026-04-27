@@ -1,6 +1,8 @@
 package com.itheima.controller;
 
-import com.itheima.pojo.LogInResult;
+import com.itheima.exception.BusinessException;
+import com.itheima.exception.ErrorCode;
+import com.itheima.response.LogInResponse;
 import com.itheima.service.TokenService;
 import com.itheima.service.UserService;
 import com.itheima.util.ErrorCodeUtil;
@@ -37,12 +39,12 @@ public class LoginServlet extends HttpServlet {
                 default:
                     baseServlet.writeError(resp,ErrorCodeUtil.PARAM_ERROR,"未识别功能");
             }
-        } catch (RuntimeException e) {
+        }catch (BusinessException e){
             e.printStackTrace();
-            baseServlet.writeError(resp,ErrorCodeUtil.BUSINESS_ERROR,e.getMessage());
-        }catch (Exception ex){
-            ex.printStackTrace();
-            baseServlet.writeError(resp,ErrorCodeUtil.SYSTEM_ERROR,ex.getMessage());
+            baseServlet.writeError(resp,e.getCode(),e.getMessage());
+        } catch (Exception e) {
+            e.printStackTrace();
+            baseServlet.writeError(resp, ErrorCode.SERVER_ERROR,e.getMessage());
         }
     }
 
@@ -52,14 +54,8 @@ public class LoginServlet extends HttpServlet {
             String idStr=req.getParameter("id");
             String phone = req.getParameter("phone");
             String password = req.getParameter("password");
-            if(idStr==null&&phone==null||password==null){
-                baseServlet.writeError(resp,ErrorCodeUtil.PARAM_ERROR,"输入不能为空");
-                return;
-            }
-        try{
-            String username;
-            String tokenStr;
-            LogInResult ls;
+
+            LogInResponse ls;
             if(idStr==null||idStr.isEmpty()){//优先使用id登录，没有id就用手机号登录,这里用手机号
                 ls=userService.login(phone,password);
             }
@@ -67,34 +63,15 @@ public class LoginServlet extends HttpServlet {
                 long id=baseServlet.getLong(req,"id");
                 ls=userService.login(id,password);
             }
-            tokenStr = ls.getToken();
-            username=ls.getUser().getUserName();
-            baseServlet.writeSuccess(resp,tokenStr,username);
-        }catch (RuntimeException e){
-            e.printStackTrace();
-            baseServlet.writeError(resp,ErrorCodeUtil.BUSINESS_ERROR,e.getMessage());
-        } catch (Exception ex) {
-            ex.printStackTrace();
-            baseServlet.writeError(resp,ErrorCodeUtil.SYSTEM_ERROR,ex.getMessage());
-        }
-
+            baseServlet.writeSuccess(resp,ls);
     }
 
     protected void register(HttpServletRequest req, HttpServletResponse resp) throws Exception {
         String username=req.getParameter("username");
         String phone=req.getParameter("phone");
         String password=req.getParameter("password");//两次密码不一样会在前端拦截
-
-        if(phone==null||password==null||username==null){
-            baseServlet.writeError(resp,ErrorCodeUtil.PARAM_ERROR,"输入不能为空");
-            return;
-        }
-        if(phone.trim().isEmpty()||password.trim().isEmpty()||username.trim().isEmpty()){
-            baseServlet.writeError(resp,ErrorCodeUtil.PARAM_ERROR,"输入不能为空");
-            return;
-        }
         long id= userService.registerAsUser(username,password,phone);
-        String tokenStr=tokenService.getNewToken(id);
-        baseServlet.writeSuccess(resp,tokenStr,username);
+        LogInResponse ls=userService.login(id,password);
+        baseServlet.writeSuccess(resp,ls);
     }
 }

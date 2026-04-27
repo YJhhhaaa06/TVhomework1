@@ -1,12 +1,13 @@
 package com.itheima.service;
 
 import com.itheima.dao.UserDao;
-import com.itheima.pojo.LogInResult;
+import com.itheima.exception.AuthException;
+import com.itheima.exception.NotFoundException;
+import com.itheima.response.LogInResponse;
 import com.itheima.pojo.User;
 import com.itheima.util.MyConnectionPool;
 import com.itheima.util.PasswordUtil;
 import com.itheima.util.StringUtil;
-import com.itheima.util.TokenUtil;
 
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -15,17 +16,16 @@ public class UserService {
     private UserDao userDao=new UserDao();
     private TokenService tokenService=new TokenService();
 
-    public LogInResult login(long id,String rawPassword) throws Exception {
-        User user = userDao.getUserForLoginById(id);
-
-        String tokenStr=doLogin(user,rawPassword);
-        return new LogInResult(user,tokenStr);
+    public LogInResponse login(long id,String rawPassword) throws Exception {
+        User dbUser = userDao.getUserForLoginById(id);
+        String tokenStr=doLogin(dbUser,rawPassword);
+        return new LogInResponse(dbUser.getId(),dbUser.getUserName(),tokenStr);
 
     }
-    public LogInResult login(String phone,String rawPassword) throws Exception {
-        User user = userDao.getUserForLoginByPhone(phone);
-        String tokenStr=doLogin(user,rawPassword);
-        return new LogInResult(user,tokenStr);
+    public LogInResponse login(String phone, String rawPassword) throws Exception {
+        User dbUser = userDao.getUserForLoginByPhone(phone);
+        String tokenStr=doLogin(dbUser,rawPassword);
+        return new LogInResponse(dbUser.getId(),dbUser.getUserName(),tokenStr);
     }
 
 
@@ -33,10 +33,10 @@ public class UserService {
     private String doLogin(User user, String rawPassword) {
 
         if (user == null) {
-            throw new RuntimeException("USER_NOT_FOUND");
+            throw new NotFoundException("USER_NOT_FOUND");
         }
         if (!PasswordUtil.isPasswordCorrect(rawPassword, user.getHashedPassword())) {
-            throw new RuntimeException("WRONG_PASSWORD");
+            throw new AuthException("WRONG_PASSWORD");
         }
         user.clear();
         return tokenService.getNewToken(user.getId());
@@ -50,10 +50,12 @@ public class UserService {
         try {
             conn=MyConnectionPool.getConnection();
             conn.setAutoCommit(false);
-            if (registerCheck(conn,userName, password, phone)) {
-                userId= userDao.addUser(conn, userName, PasswordUtil.hashPassword(password), phone);
-            } else {
-                throw new RuntimeException("INPUT_ERROR");
+            User user=new User(userName,phone,password);
+            if(!userDao.isPhoneUsed(conn,phone)){
+                userId= userDao.addUser(conn, user.getUserName(), user.getHashedPassword(), user.getPhone());
+            }
+            else {
+                throw new AuthException("PHONE_IN_USE");
             }
             conn.commit();//提交提交提交提交提交提交提交提交
             return userId;
@@ -72,20 +74,7 @@ public class UserService {
 //
 
 
-//没问题返回true
-    public boolean registerCheck(Connection conn, String userName,String password,String phone) throws SQLException {
-        if(!PasswordUtil.isPasswordLegal(password)){//密码太长
-            return false;
-        }
-        if(!StringUtil.phoneCheck(phone)){//电话号码不对
-            return false;
-        }
-        if ((userName.length()>=50)){//名字太长
-            return false;
-        }
-        //电话号码被用了
-        return !userDao.isPhoneUsed(conn, phone);
-    }
+
 
     public void changePassword(long userId, String phone, String oldPassword, String newPassword) throws SQLException {
 
