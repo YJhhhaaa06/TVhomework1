@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>视频测试页面</title>
+</head>
+<body>
+
+<button onclick="goHome()">🏠 首页</button>
+
+
+<h2>🔍 按ID查询视频</h2>
+<label for="videoId" style="display:none">视频ID</label>
+<input type="text" id="videoId" placeholder="输入videoId">
+<button onclick="getById()">查询</button>
+
+<pre id="videoResult"></pre>
+
+<hr>
+
+<h2>🔎 关键词搜索</h2>
+<label for="keyword" style="display:none">关键词</label>
+<input type="text" id="keyword" placeholder="输入关键词">
+<button onclick="search()">搜索</button>
+
+<pre id="searchResult"></pre>
+
+<div id="list"></div>
+
+
+<script>
+
+    // 使用相对路径：与当前应用上下文一致
+
+    function getById() {
+        let videoId = document.getElementById("videoId").value.trim();
+
+        if (!videoId) {
+            alert("请输入视频ID");
+            return;
+        }
+
+        request(`./video?action=IdSearch&videoId=${videoId}`)
+            .then(data => {
+
+                // 查不到
+                if (!data || data.code !== 200 || !data.data) {
+                    alert("没有这个视频");
+                    return;
+                }
+
+                // 查到了 → 直接跳转详情页
+                goDetail(data.data.id || videoId);
+            })
+            .catch(err => {
+                console.error(err);
+                alert("请求失败");
+            });
+    }
+
+
+
+    function search() {
+        let keyword = document.getElementById("keyword").value.trim();
+        if (!keyword) { alert('请输入关键词'); return; }
+        const enc = encodeURIComponent(keyword);
+
+        request(`./video?action=keywordSearch&keyword=${enc}`)
+            .then(data => {
+
+                let listDiv = document.getElementById("list");
+                listDiv.innerHTML = "";
+
+                if (!data || data.code !== 200) {
+                    listDiv.innerText = data ? data.msg : '搜索失败';
+                    return;
+                }
+
+                let videos = data.data || [];
+
+                videos.forEach(video => {
+                    let div = document.createElement("div");
+
+                    // 安全渲染
+                    const h3 = document.createElement('h3');
+                    h3.textContent = video.title || video.videoTitle || '';
+                    const p1 = document.createElement('p');
+                    p1.textContent = video.authorName || '';
+                    const p2 = document.createElement('p');
+                    p2.textContent = video.description || video.briefIntroduction || '';
+                    const a = document.createElement('a');
+                    a.href = `detail.html?videoId=${video.id || video.videoId}`;
+                    a.textContent = '查看详情';
+                    a.target = '_self';
+
+                    div.appendChild(h3);
+                    div.appendChild(p1);
+                    div.appendChild(p2);
+                    div.appendChild(a);
+                    div.appendChild(document.createElement('hr'));
+
+                    listDiv.appendChild(div);
+                });
+            }).catch(err => {
+                console.error('搜索出错', err);
+                alert('搜索失败');
+            });
+    }
+
+    // 跳转
+    function goDetail(id) {
+        window.location.href = `detail.html?videoId=${id}`;
+    }
+
+
+    function request(url, options = {}) {
+        let token = localStorage.getItem("userToken");
+        options.headers = options.headers || {};
+
+        if (options.body && !options.headers['Content-Type']) {
+            options.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+        }
+        if (token) {
+            options.headers['token'] = token;
+        }
+
+        return fetch(url, options)
+            .then(async res => {
+                const ct = (res.headers.get('content-type') || '');
+                if (!res.ok) {
+                    if (res.status === 401 || res.status === 403) {
+                        localStorage.removeItem('userToken');
+                        alert('请先登录');
+                        window.location.href = 'login.html';
+                        throw new Error('Unauthorized');
+                    }
+                    if (ct.includes('application/json')) {
+                        const err = await res.json();
+                        throw err;
+                    }
+                    const txt = await res.text();
+                    throw {msg: txt, status: res.status};
+                }
+                if (ct.includes('application/json')) return res.json();
+                return {data: await res.text()};
+            });
+    }
+
+    // 跳转开始页面
+    function goHome() {
+        window.location.href = 'start.html';
+    }
+</script>
+
+</body>
+</html>

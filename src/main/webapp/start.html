@@ -2,6 +2,7 @@
 <html lang="zh">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>首页 - 推荐视频</title>
 
     <style>
@@ -93,86 +94,131 @@
     function request(url, options = {}) {
         let token = localStorage.getItem("userToken");
 
-        options.headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            ...options.headers
-        };
+        options.headers = options.headers || {};
+
+        // 仅当有 body 时设置 Content-Type，避免为 GET 请求强制添加
+        if (options.body && !options.headers['Content-Type']) {
+            options.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+        }
 
         if (token) {
             options.headers["token"] = token;
         }
 
         return fetch(url, options)
-            .then(res => res.json())
-            .then(data => {
-                if (data.code === 401) {
-                    alert("请先登录");
-                    window.location.href = "/MyAPP/login.html";
+            .then(async res => {
+                const contentType = (res.headers.get('content-type') || '');
+                // 处理未经授权的 HTTP 状态
+                if (!res.ok) {
+                    if (res.status === 401 || res.status === 403) {
+                        localStorage.removeItem('userToken');
+                        alert('请先登录');
+                        // 跳回登录页（相对路径）
+                        window.location.href = 'login.html';
+                        throw new Error('Unauthorized');
+                    }
+                    // 尝试解析错误信息
+                    if (contentType.includes('application/json')) {
+                        const err = await res.json();
+                        throw err;
+                    } else {
+                        const txt = await res.text();
+                        throw {msg: txt, status: res.status};
+                    }
                 }
-                return data;
+
+                // 成功响应
+                if (contentType.includes('application/json')) {
+                    return res.json();
+                }
+                return {data: await res.text()};
             });
     }
 
     // ========= 检查登录 =========
     function checkLogin() {
         let token = localStorage.getItem("userToken");
-        let username=localStorage.getItem("username");
+        let username = localStorage.getItem("username");
 
-        let userInfo=document.getElementById("userInfo")
+        let userInfo = document.getElementById("userInfo");
         if (!token) {
-            document.getElementById("userInfo").innerText = "未登录";
-            userInfo.innerText="未登录";
+            userInfo.innerText = "未登录";
         } else {
-            document.getElementById("userInfo").innerText = username;
-            userInfo.innerText="欢迎，"+(username || "用户");
+            userInfo.innerText = "欢迎，" + (username || "用户");
         }
     }
 
     // ========= 加载推荐视频 =========
     function loadVideos() {
-        request("/MyAPP/start")
+        // 使用相对路径请求当前应用下的 start servlet，避免依赖固定上下文路径
+        request('./start')
             .then(data => {
 
-                if (data.code !== 0) {
-                    alert(data.msg);
+                // ResultUtil.success 返回的 code 为 200（表示成功）
+                if (data.code !== 200) {
+                    alert(data.msg || '获取视频失败');
                     return;
                 }
 
-                let list = data.data;
+                let list = data.data || [];
                 let container = document.getElementById("videoList");
 
                 container.innerHTML = "";
 
-                list.forEach(video => {
+                list.forEach(content => {
                     let div = document.createElement("div");
                     div.className = "card";
+                    div.tabIndex = 0;
 
-                    div.onclick = function () {
-                        goDetail(video.videoId);
-                    };
+                    div.addEventListener('click', function () {
+                        goDetail(content.id);
+                    });
+                    div.addEventListener('keydown', function (e) {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            goDetail(content.id);
+                        }
+                    });
 
-                    div.innerHTML = `
-                        <div class="title">${video.videoTitle}</div>
-                        <div class="author">作者：${video.authorName}</div>
-                        <div>${video.briefIntroduction || ""}</div>
-                    `;
+                    // 安全渲染，避免直接 innerHTML 导致 XSS
+                    const titleEl = document.createElement('div');
+                    titleEl.className = 'title';
+                    titleEl.textContent = content.title || '';
+
+                    const authorEl = document.createElement('div');
+                    authorEl.className = 'author';
+                    authorEl.textContent = '作者：' + (content.authorName || '');
+
+                    const descEl = document.createElement('div');
+                    descEl.textContent = content.description || '';
+
+                    div.appendChild(titleEl);
+                    div.appendChild(authorEl);
+                    div.appendChild(descEl);
 
                     container.appendChild(div);
                 });
 
+            }).catch(err => {
+                console.error('加载视频出错', err);
+                // 如果 err 里有 msg，展示给用户
+                if (err && err.msg) {
+                    alert(err.msg);
+                }
             });
     }
 
     // ========= 跳转详情 =========
     function goDetail(id) {
-        window.location.href = `/MyAPP/detail.html?videoId=${id}`;
+        // 使用相对路径，保持和当前应用上下文一致
+        window.location.href = `detail.html?videoId=${id}`;
     }
 
     // ========= 退出登录 =========
     function logout() {
         localStorage.removeItem("userToken");
         alert("已退出登录");
-        window.location.href = "/MyAPP/login.html";
+        window.location.href = 'login.html';
     }
 
     //刷新
@@ -182,7 +228,7 @@
 
     //跳转搜索
     function goSearch() {
-    window.location.href = "/MyAPP/video.html";
+        window.location.href = 'search.html';
     }
 
 

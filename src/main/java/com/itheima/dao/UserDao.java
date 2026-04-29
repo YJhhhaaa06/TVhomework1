@@ -98,7 +98,7 @@ public class UserDao {
             // 获取结果集
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
-                    return ResultMap.mapUserForLogin(rs);
+                    return ResultMap.buildUserForLogin(rs);
                 } else {
                     return null; // 用户不存在
                 }
@@ -151,7 +151,7 @@ public class UserDao {
             // 获取结果集
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
-                    return ResultMap.mapUserForLogin(rs);
+                    return ResultMap.buildUserForLogin(rs);
                 } else {
                     return null; // 用户不存在
                 }
@@ -168,7 +168,7 @@ public class UserDao {
             // 获取结果集
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
-                    return ResultMap.mapUserForProfile(rs);
+                    return ResultMap.buildUserForProfile(rs);
                 } else {
                     return null; // 用户不存在
                 }
@@ -202,7 +202,7 @@ public class UserDao {
             // 获取结果集
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
-                    return ResultMap.mapUserForProfile(rs);
+                    return ResultMap.buildUserForProfile(rs);
                 } else {
                     return null; // 用户不存在
                 }

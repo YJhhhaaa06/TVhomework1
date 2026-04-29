@@ -1,8 +1,9 @@
 package com.itheima.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.itheima.pojo.Video;
-import com.itheima.service.VideoService;
+import com.itheima.exception.ErrorCode;
+import com.itheima.pojo.Content;
+import com.itheima.service.ContentService;
 import com.itheima.util.ErrorCodeUtil;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServlet;
@@ -15,7 +16,7 @@ import java.util.List;
 @WebServlet("/video")
 public class VideoServlet extends HttpServlet {
     private ObjectMapper mapper = new ObjectMapper();
-    private VideoService vs=VideoService.getInstance();
+    private ContentService contentService = ContentService.getInstance();
     private BaseServlet baseServlet=new BaseServlet();
 
     @Override
@@ -48,20 +49,20 @@ public class VideoServlet extends HttpServlet {
 
     protected void getVideoDetailById(HttpServletRequest req, HttpServletResponse resp)throws Exception{
             Long videoId=baseServlet.getLong(req,"videoId");
-            com.itheima.pojo.VideoDetail vd =vs.getVideoDetail(videoId);
-            if(vd==null){//找不到视频
+            com.itheima.pojo.Content content = contentService.getContentById(videoId);
+            if(content==null){//找不到视频
                 baseServlet.writeError(resp,1,"找不到对应视频");
                 return;
             }
-            baseServlet.writeSuccess(resp,vd);
+            baseServlet.writeSuccess(resp,content);
     }
     protected void search(HttpServletRequest req, HttpServletResponse resp)throws Exception{
             String keyword=req.getParameter("keyword");
             if(keyword==null||keyword.trim().isEmpty()){
-                baseServlet.writeError(resp, ErrorCodeUtil.PARAM_ERROR,"输入不能为空");
+                baseServlet.writeError(resp, ErrorCode.PARAM_ERROR,"输入不能为空");
                 return;
             }
-            List<Video> list=vs.search(keyword.trim());
+            List<Content> list= contentService.search(keyword.trim());
             baseServlet.writeSuccess(resp,list);
     }
 

@@ -4,6 +4,7 @@
 <html lang="zh">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>视频详情</title>
 </head>
 <body>
@@ -17,6 +18,7 @@
 
 <hr/>
 
+<label for="content" style="display:none">评论内容</label>
 <textarea id="content" placeholder="输入评论"></textarea>
 <br/>
 <button onClick="sendComment()">发表评论</button>
@@ -37,43 +39,40 @@
      * @param url 请求地址
      * @param options 配置项 (method, body, headers 等)
      */
+    // 统一请求：仅在有 body 时添加 Content-Type，自动带 token，处理 401/非 JSON
     async function request(url, options = {}) {
-        // 1. 自动获取本地存储的 Token
         const token = localStorage.getItem("userToken");
+        options.headers = options.headers || {};
 
-        // 2. 设置默认 Header
-        const defaultHeaders = {
-            "Content-Type": "application/x-www-form-urlencoded"
-        };
-
-        // 3. 如果有 Token，则带上 (这里建议放在 Header 的 'token' 字段，后端通过 req.getHeader("token") 获取)
+        if (options.body && !options.headers['Content-Type']) {
+            options.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+        }
         if (token) {
-            defaultHeaders["Token"] = token;
+            options.headers['token'] = token;
         }
 
-        // 合并用户传入的 options
-        const config = {
-            method: options.method || "GET", // 默认为 GET
-            headers: { ...defaultHeaders, ...options.headers },
-            ...options
-        };
-
-        try {
-            const response = await fetch(url, config);
-
-            // 如果后端返回 401 或特定的错误码，说明 Token 失效，直接跳登录页
-            if (response.status === 401) {
-                alert("登录已过期，请重新登录");
-                window.location.href = "login.html";
-                return;
+        const res = await fetch(url, options);
+        if (!res.ok) {
+            if (res.status === 401 || res.status === 403) {
+                localStorage.removeItem('userToken');
+                alert('登录已过期，请重新登录');
+                window.location.href = 'login.html';
+                throw new Error('Unauthorized');
             }
-
-            const data = await response.json();
-            return data;
-        } catch (error) {
-            console.error("请求失败:", error);
-            throw error;
+            const ct = (res.headers.get('content-type') || '');
+            if (ct.includes('application/json')) {
+                const err = await res.json();
+                throw err;
+            }
+            const txt = await res.text();
+            throw {msg: txt, status: res.status};
         }
+
+        const contentType = (res.headers.get('content-type') || '');
+        if (contentType.includes('application/json')) {
+            return res.json();
+        }
+        return {data: await res.text()};
     }
 
     // function loadVideoDetail(videoId) {
@@ -198,7 +197,7 @@
         let videoId = params.get("videoId");
 
         // 页面启动加载
-        if (!videoId) {
+    if (!videoId) {
         alert("未找到视频ID");
     } else {
         loadVideoDetail(videoId);
@@ -206,50 +205,65 @@
     }
 
         // --- 1. 加载视频详情 ---
-        async function loadVideoDetail(videoId) {
-        const data = await request(`/MyAPP/video?action=IdSearch&videoId=${videoId}`);
-        if (data && data.code === 0) {
-        let v = data.data;
-        document.getElementById("video").innerHTML = `
-                <h3>${v.title}</h3>
-                <p>ID: ${v.videoId} | 作者: ${v.authorName}</p>
-                <p>${v.intro}</p>
-                <a href="${v.url}" target="_blank">▶ 点击播放视频</a>
-            `;
-    } else {
-        document.getElementById("video").innerText = data ? data.msg : "加载失败";
-    }
+    async function loadVideoDetail(videoId) {
+        const data = await request(`./video?action=IdSearch&videoId=${videoId}`);
+                if (data && data.code === 200) {
+                    let v = data.data;
+                    const container = document.getElementById("video");
+                    container.innerHTML = '';
+
+                    const h3 = document.createElement('h3');
+                    h3.textContent = v.title || '';
+
+                    const meta = document.createElement('p');
+                    meta.textContent = `ID: ${v.id} | 作者: ${v.authorName || ''}`;
+
+                    const desc = document.createElement('p');
+                    desc.textContent = v.description || '';
+
+                    const a = document.createElement('a');
+                    a.href = v.videoUrl || '#';
+                    a.target = '_blank';
+                    a.textContent = '▶ 点击打开视频（新标签）';
+
+                    container.appendChild(h3);
+                    container.appendChild(meta);
+                    container.appendChild(desc);
+                    container.appendChild(a);
+                } else {
+                    document.getElementById("video").innerText = data ? data.msg : "加载失败";
+                }
     }
 
         // --- 2. 加载评论列表 ---
-        async function loadComments(videoId) {
-        const data = await request(`/MyAPP/comment?action=show`, {
-        method: 'POST',
-        body: `videoId=${videoId}`
-    });
+    async function loadComments(videoId) {
+        const data = await request(`./comment?action=show`, {
+            method: 'POST',
+            body: `videoId=${videoId}`
+        });
 
-        if (data && data.code === 0) {
-        renderComments(data.data);
-    }
+        if (data && data.code === 200) {
+            renderComments(data.data);
+        }
     }
 
         // --- 3. 发表评论 ---
-        async function sendComment() {
+    async function sendComment() {
         let content = document.getElementById("content").value.trim();
         if (!content) { alert("内容不能为空"); return; }
 
-        const data = await request("/MyAPP/comment?action=add", {
-        method: "POST",
-        body: `videoId=${videoId}&content=${encodeURIComponent(content)}&parentId=${currentParentId}`
-    });
+        const data = await request(`./comment?action=add`, {
+            method: "POST",
+            body: `videoId=${videoId}&content=${encodeURIComponent(content)}&parentId=${currentParentId}`
+        });
 
-        if (data && data.code === 0) {
-        alert("发表成功");
-        resetCommentInput();
-        loadComments(videoId); // 刷新列表
-    } else {
-        alert("发表失败: " + data.msg);
-    }
+        if (data && data.code === 200) {
+            alert("发表成功");
+            resetCommentInput();
+            loadComments(videoId); // 刷新列表
+        } else {
+            alert("发表失败: " + (data ? data.msg : '未知错误'));
+        }
     }
 
         // --- 辅助函数：渲染评论 ---
@@ -272,18 +286,32 @@
         div.style.borderBottom = "1px solid #eee";
         div.style.padding = "10px 5px";
 
-        div.innerHTML = `
-            <div>
-                <b style="color:blue">${comment.username}</b>: ${comment.content}
-                <button onclick="reply(${comment.commentId}, '${comment.username}')" style="font-size:12px">回复</button>
-            </div>
-        `;
+        const row = document.createElement('div');
+        const name = document.createElement('b');
+        name.style.color = 'blue';
+        name.textContent = comment.username || '匿名';
+
+        const text = document.createTextNode(': ' + (comment.content || ''));
+
+        const replyBtn = document.createElement('button');
+        replyBtn.style.fontSize = '12px';
+        replyBtn.textContent = '回复';
+        replyBtn.addEventListener('click', function () {
+            reply(comment.commentId, comment.username);
+        });
+
+        row.appendChild(name);
+        row.appendChild(text);
+        row.appendChild(document.createTextNode(' '));
+        row.appendChild(replyBtn);
+
+        div.appendChild(row);
 
         if (comment.children && comment.children.length > 0) {
-        comment.children.forEach(child => {
-        div.appendChild(createCommentItem(child, level + 1));
-    });
-    }
+            comment.children.forEach(child => {
+                div.appendChild(createCommentItem(child, level + 1));
+            });
+        }
         return div;
     }
 
@@ -305,7 +333,7 @@
     }
 
     function goHome() {
-        window.location.href = "/MyAPP/start.html";
+        window.location.href = "start.html";
     }
 </script>
 

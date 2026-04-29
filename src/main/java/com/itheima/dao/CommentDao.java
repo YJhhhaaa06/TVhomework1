@@ -8,15 +8,14 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
-import com.itheima.util.MyConnectionPool;
 
 public class CommentDao {
 
     //增
-    public int addComment(Connection conn,long videoId,long userId,String content,Long parentId)throws SQLException {
-        String sql = "insert into comment (video_id, user_id, content, parent_id) values (?, ?, ?, ?)";
+    public int addComment(Connection conn,long contentId,long userId,String content,Long parentId)throws SQLException {
+        String sql = "insert into comment (content_id, user_id, content, parent_id) values (?, ?, ?, ?)";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setLong(1, videoId);
+            pstmt.setLong(1, contentId);
             pstmt.setLong(2, userId);
             pstmt.setString(3, content);
             if (parentId == null) {
@@ -39,17 +38,17 @@ public class CommentDao {
         }
     }
     //从数据库根据视频ID删除评论，用于删除视频
-    public int deleteCommentByVideo(Connection conn,long videoId) throws SQLException {
-        String sql="delete from comment where video_id = ?";
+    public int deleteCommentByVideo(Connection conn,long contentId) throws SQLException {
+        String sql="delete from comment where content_id = ?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)){
-            pstmt.setLong(1,videoId);
+            pstmt.setLong(1,contentId);
             return pstmt.executeUpdate();
         }
     }
 
     //从数据库根据用户删除评论，用于注销账号
     public int deleteCommentByUser(Connection conn,long userId) throws SQLException {
-        String sql="delete from comment where video_id = ?";
+        String sql="delete from comment where user_id=?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)){
             pstmt.setLong(1,userId);
             return pstmt.executeUpdate();
@@ -58,36 +57,36 @@ public class CommentDao {
 
     //查
     //根据视频id查评论，只能查没被隐藏的
-    public List<Comment> findCommentsByVideo(Connection conn,long videoId)throws SQLException{
-        String sql="select * from comment where video_id = ? and is_deleted=0";
-        List<Comment> list=new ArrayList<>();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)){
-                pstmt.setLong(1, videoId);
-                try (ResultSet rs = pstmt.executeQuery()){
-                    while (rs.next()){
-                        Comment cm = ResultMap.mapResultToComment(rs);
-                        list.add(cm);
-                    }
-                }
-            }
-            return list;
-    }
+//    public List<Comment> findCommentsByVideo(Connection conn,long videoId)throws SQLException{
+//        String sql="select * from comment where video_id = ? and is_deleted=0";
+//        List<Comment> list=new ArrayList<>();
+//            try (PreparedStatement pstmt = conn.prepareStatement(sql)){
+//                pstmt.setLong(1, videoId);
+//                try (ResultSet rs = pstmt.executeQuery()){
+//                    while (rs.next()){
+//                        Comment cm = ResultMap.buildComment(rs);
+//                        list.add(cm);
+//                    }
+//                }
+//            }
+//            return list;
+//    }
 
-    public  List<Comment> getCommentsByVideoId(Connection conn, Long videoId) throws SQLException {
+    public  List<Comment> getComments(Connection conn, Long contentId) throws SQLException {
 
         String sql = "SELECT c.*, u.username " +
                 "FROM comment c LEFT JOIN users u ON c.user_id = u.id " +
-                "WHERE c.video_id=? AND c.is_deleted=0 ORDER BY c.comment_id";
+                "WHERE c.content_id=? AND c.is_deleted=0 ORDER BY c.comment_id";
 
         List<Comment> list = new ArrayList<>();
 
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setLong(1, videoId);
+            ps.setLong(1, contentId);
 
             try(ResultSet rs = ps.executeQuery()){
 
             while (rs.next()) {
-                Comment c = ResultMap.mapResultToComment(rs);
+                Comment c = ResultMap.buildComment(rs);
                 list.add(c);
             }
             }
@@ -99,22 +98,22 @@ public class CommentDao {
     //改（点赞暂时不做）
     //关闭或开启评论区
     //隐藏视频下的评论
-    public int hideCommentByVideo(Connection conn,long videoId)throws SQLException{
-        String sql="update comment set is_deleted =1 where video_id=?";
+    public int hideCommentByContent(Connection conn, long contentId)throws SQLException{
+        String sql="update comment set is_deleted =1 where content_id=?";
         int rows;
         try(PreparedStatement pstmt=conn.prepareStatement(sql)) {
-            pstmt.setLong(1,videoId);
+            pstmt.setLong(1,contentId);
             rows=pstmt.executeUpdate();
             return rows;
         }
     }
 
     //显示视频下的评论
-    public int unhideCommentByVideo(Connection conn,long videoId)throws SQLException{
-        String sql="update comment set is_deleted =0 where video_id=?";
+    public int unhideCommentByContent(Connection conn, long ContentId)throws SQLException{
+        String sql="update comment set is_deleted =0 where content_id=?";
         int rows;
         try(PreparedStatement pstmt=conn.prepareStatement(sql)) {
-            pstmt.setLong(1,videoId);
+            pstmt.setLong(1,ContentId);
             rows=pstmt.executeUpdate();
             return rows;
         }

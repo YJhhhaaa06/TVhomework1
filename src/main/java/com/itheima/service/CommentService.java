@@ -1,6 +1,7 @@
 package com.itheima.service;
 
 import com.itheima.dao.CommentDao;
+import com.itheima.exception.NotFoundException;
 import com.itheima.pojo.Comment;
 import com.itheima.pojo.VideoDetail;
 import com.itheima.util.MyConnectionPool;
@@ -14,10 +15,6 @@ import java.util.Map;
 
 public class CommentService {
 
-    static {
-        System.out.println("进入");
-
-    }
 private CommentDao commentDao=new CommentDao();
 
 
@@ -106,10 +103,10 @@ private CommentDao commentDao=new CommentDao();
             conn= MyConnectionPool.getConnection();
             conn.setAutoCommit(false);
             if(choose){
-                commentDao.hideCommentByVideo(conn,videoId);
+                commentDao.hideCommentByContent(conn,videoId);
             }
             else {
-                commentDao.unhideCommentByVideo(conn,videoId);
+                commentDao.unhideCommentByContent(conn,videoId);
             }
 
             conn.commit();//
@@ -123,34 +120,18 @@ private CommentDao commentDao=new CommentDao();
                 }
             }
         } finally {
-            if (conn != null) {
-                try {
-                    conn.setAutoCommit(true);
-                } catch (SQLException e) {
-                    //这里说明连接可能已经异常
-                    e.printStackTrace();
-                    //标记这个连接不可用
-                    conn = null;
-                } finally {
-                    //无论如何都要执行
-                    MyConnectionPool.release(conn);
-                }
-            }
+            MyConnectionPool.release(conn);
         }
     }
 
     //查
-    //查询视频的所有评论
-    //videoService查询视频详细信息会自动获取评论区
-    public  List<Comment> findComment(Connection conn,long videoId) throws SQLException {
-        List<Comment> commentList=commentDao.getCommentsByVideoId(conn,videoId);
-        return commentList;
-    }
-    public  List<Comment> findComment(long videoId) throws SQLException {
+
+
+    private   List<Comment> findComment(long videoId) throws SQLException {
         Connection conn=null;
         try {
             conn=MyConnectionPool.getConnection();
-            List<Comment> commentList=commentDao.getCommentsByVideoId(conn,videoId);
+            List<Comment> commentList=commentDao.getComments(conn,videoId);
             return commentList;
 
         }catch (SQLException e){
@@ -185,7 +166,7 @@ private CommentDao commentDao=new CommentDao();
     //改
 
     //写评论检查
-    public  boolean isCommentLegal(long userId,long videoId,String content){
+    private   boolean isCommentLegal(long userId,long videoId,String content){
         if(userId==0||videoId==0){
             return false;
         }
@@ -195,14 +176,16 @@ private CommentDao commentDao=new CommentDao();
         return true;
     }
 
+
+    //外界真正调用的
     //获取评论并整理评论，返回一级评论
-    public List<Comment> getComment(long videoId){
+    public List<Comment> getComment(long contentId){
         try {
-            List<Comment> wholeList = findComment(videoId);
+            List<Comment> wholeList = findComment(contentId);
             return buildCommentTree(wholeList);
         }catch (SQLException e){
             e.printStackTrace();
-            throw new RuntimeException("FAIL_TO_GET_COMMENT,VIDEO_ID="+videoId,e);
+            throw new NotFoundException("FAIL_TO_GET_COMMENT,VIDEO_ID="+contentId);
         }
     }
 

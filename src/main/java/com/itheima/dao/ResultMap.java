@@ -1,24 +1,15 @@
 package com.itheima.dao;
 
-import com.itheima.pojo.Comment;
-import com.itheima.pojo.User;
-import com.itheima.pojo.Video;
-import com.itheima.pojo.VideoDetail;
+import com.itheima.pojo.*;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Map;
 
 public class ResultMap {
-    //封装视频,一次只封装一个
-    public static Video mapResultToVideoInfo(ResultSet res) throws SQLException {
-        long videoID = res.getLong("videoID");
-        long uploadID = res.getLong("uploadID");
-        String videoTitle = res.getString("videoTitle");
-        String briefIntroduction = res.getString("briefIntroduction");
-        String authorName=res.getString("username");
-        return new Video(videoID, uploadID, videoTitle,authorName,briefIntroduction);
-    }
 
+
+    //封装视频/动态
     public static VideoDetail mapResultToVideoDetail(ResultSet rs) throws SQLException {
         VideoDetail vd=new VideoDetail();
         vd.setTitle(rs.getString("videoTitle"));
@@ -29,7 +20,38 @@ public class ResultMap {
         vd.setVideoId(rs.getLong("videoID"));
         return vd;
     }
-    public static Comment mapResultToComment(ResultSet rs)throws SQLException{
+
+    public static Content buildContent(ResultSet rs)throws SQLException{
+        Content content=new Content();
+        content.setId(rs.getLong("id"));
+        content.setAuthorId(rs.getLong("user_id"));
+        content.setType(rs.getInt("type"));
+        content.setTitle(rs.getString("title"));
+        content.setDescription(rs.getString("description"));
+        content.setCategoryId(rs.getInt("category_id"));
+        content.setCommentCount(rs.getInt("comment_count"));
+        content.setLikeCount(rs.getInt("like_count"));
+        content.setAuthorName(rs.getString("username"));
+//        content.setCrateTime(rs.getTimestamp("create_time").toLocalDateTime());
+        return content;
+    }
+
+    public static void buildContent(Map<Long,Content> contentMap, ResultSet rs)throws SQLException{
+        Content content=new Content();
+        long id= rs.getLong("id");
+        content.setId(rs.getLong("id"));
+        content.setAuthorId(rs.getLong("author_id"));
+        content.setType(rs.getInt("type"));
+        content.setTitle(rs.getString("title"));
+        content.setDescription(rs.getString("description"));
+        content.setCategoryId(rs.getInt("category_id"));
+        content.setCommentCount(rs.getInt("comment_count"));
+        content.setLikeCount(rs.getInt("like_count"));
+        content.setAuthorName(rs.getString("username"));
+//        content.setCrateTime(rs.getTimestamp("create_time").toLocalDateTime());
+        contentMap.put(id,content);
+    }
+    public static Comment buildComment(ResultSet rs)throws SQLException{
         Comment cm=new Comment();
         cm.setUsername(rs.getString("username"));
         cm.setCommentId(rs.getLong("comment_id"));
@@ -49,7 +71,7 @@ public class ResultMap {
         return cm;
     }
 
-    public static User mapUserForProfile(ResultSet rs)throws SQLException{
+    public static User buildUserForProfile(ResultSet rs)throws SQLException{
 
         long id=rs.getLong("id");
         String userName=rs.getString("username");
@@ -58,12 +80,22 @@ public class ResultMap {
         return new User(id,userName,followCount,followerCount);
     }
 
-    public static User mapUserForLogin(ResultSet rs)throws SQLException{
+    public static User buildUserForLogin(ResultSet rs)throws SQLException{
         long id=rs.getLong("id");
         String username=rs.getString("username");
         String hashedPassword=rs.getString("hashed_password");
         String phone=rs.getString("phone");
         return new User(id,hashedPassword,username,phone);
+    }
+
+    public static ContentMedia buildContentMedia(ResultSet rs ) throws SQLException {
+        long mediaId=rs.getLong("id");
+        long contentId=rs.getLong("content_id");
+        String url=rs.getString("url");
+        int type=rs.getInt("type");
+        int sort=rs.getInt("sort");
+        return new ContentMedia(mediaId,contentId,url,type,sort);
+
     }
 
 

@@ -4,14 +4,15 @@ import com.itheima.service.TokenService;
 import jakarta.servlet.*;
 import jakarta.servlet.annotation.WebFilter;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
 
 //@WebFilter("/*")
 //public class LoginFilter implements Filter {
-//
+////
 //    private TokenService tokenService = new TokenService();
-//
+
 //    @Override
 //    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)//FilterChain用于控制要不要往下执行
 //            throws IOException, ServletException {
@@ -51,37 +52,11 @@ import java.io.IOException;
 //                    resp.getWriter().write("{\"code\":401,\"msg\":\"NOT_LOGIN\"}");
 //                    return;
 //                }
+//                long userId=tokenService.getUserId(token);
+//                req.setAttribute("userId", userId);
 //
 //                chain.doFilter(req, resp);
-
-//        HttpServletRequest req = (HttpServletRequest) request;
-//        HttpServletResponse resp=(HttpServletResponse) response;
 //
-//        String path = req.getRequestURI();
-//
-//
-//
-//        if(path.contains("/video")||path.contains("/start")){
-//            chain.doFilter(request,response);
-//
-//                }
-//        // 放行不需要登录的接口
-//        if (path.contains("/user")|| path.contains("/login")
-//                || path.endsWith(".html")) {
-//            chain.doFilter(request, response);//放行
-//            return;
-//        }
-//
-//
-//        String token= req.getHeader("userToken");
-//        if(tokenService.isTokenLegal(token)){
-//            long userId=tokenService.getUserId(token);
-//            req.setAttribute("userId", userId);
-//            chain.doFilter(req, resp);
-//            return;
-//        }
-//        writeError(resp,"未登录或登录已过期");
-
 //            }
 
 
