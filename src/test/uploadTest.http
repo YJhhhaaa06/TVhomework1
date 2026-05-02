@@ -1,0 +1,13 @@
+### 上传视频
+### 上传视频
+POST http://localhost:8080/MyAPP/upload
+token: 53890bf4-5081-44d0-a0b5-2f23399b7e85
+Content-Type: multipart/form-data; boundary=----MyBoundary
+
+------MyBoundary
+Content-Disposition: form-data; name="video"; filename="test.mp4"
+Content-Type: video/mp4
+
+< C:/Users/ASUS/Downloads/AnonStore.mp4
+------MyBoundary--
+

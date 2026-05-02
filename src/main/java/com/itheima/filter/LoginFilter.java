@@ -163,6 +163,7 @@ public class LoginFilter implements Filter {
 
         // ===== 5. 下面必须登录 =====
         String token = req.getHeader("token");
+        System.out.println("get token");
 
         if (token == null || !tokenService.isTokenLegal(token)) {
             BaseServletUtil.writeError(resp, ErrorCode.UNAUTHORIZED,"未登录或登录已过期");
@@ -170,6 +171,7 @@ public class LoginFilter implements Filter {
         }
 
         long userId = tokenService.getUserId(token);
+        System.out.println("get id");
         req.setAttribute("userId", userId);
         chain.doFilter(request, response);
     }
