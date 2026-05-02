@@ -1,0 +1,197 @@
+### 1. 正常登录 — 使用 id（纯数字 account）
+POST http://localhost:8080/MyAPP/user/login
+Content-Type: application/json
+
+{
+  "account": "5",
+  "password": "123"
+}
+
+### 2. 正常登录 — 使用手机号
+POST http://localhost:8080/MyAPP/user/login
+Content-Type: application/json charset=UTF-8
+
+{
+  "account": "10000000001",
+  "password": "123"
+}
+
+### 3. 错误密码
+POST http://localhost:8080/MyAPP/user/login
+Content-Type: application/json
+
+{
+  "account": "5",
+  "password": "wrongpassword"
+}
+
+### 4. 用户不存在 — id 不存在
+POST http://localhost:8080/MyAPP/user/login
+Content-Type: application/json
+
+{
+  "account": "999999",
+  "password": "123456"
+}
+
+### 5. 用户不存在 — 手机号不存在
+POST http://localhost:8080/MyAPP/user/login
+Content-Type: application/json
+
+{
+  "account": "19900000000",
+  "password": "123456"
+}
+
+### 6. 缺少 account 字段
+POST http://localhost:8080/MyAPP/user/login
+Content-Type: application/json
+
+{
+  "password": "123456"
+}
+
+### 7. 缺少 password 字段
+POST http://localhost:8080/MyAPP/user/login
+Content-Type: application/json
+
+{
+  "account": "5"
+}
+
+### 8. 空请求体
+POST http://localhost:8080/MyAPP/user/login
+Content-Type: application/json
+
+{}
+
+### 9. account 格式错误 — 既不是手机号也不是纯数字
+POST http://localhost:8080/MyAPP/user/login
+Content-Type: application/json
+
+{
+  "account": "admin@abc",
+  "password": "123456"
+}
+
+### 10. account 为长度超过15的纯数字（不满足 <15 条件）
+POST http://localhost:8080/MyAPP/user/login
+Content-Type: application/json
+
+{
+  "account": "12345678901234567890",
+  "password": "123456"
+}
+
+### 11. password 为空字符串
+POST http://localhost:8080/MyAPP/user/login
+Content-Type: application/json
+
+{
+  "account": "5",
+  "password": ""
+}
+
+### 12. account 为空字符串
+POST http://localhost:8080/MyAPP/user/login
+Content-Type: application/json
+
+{
+  "account": "",
+  "password": "123456"
+}
+
+### ==================== 注册测试 (POST /user/register) ====================
+
+### 13. 正常注册
+POST http://localhost:8080/MyAPP/user/register
+Content-Type: application/json
+
+{
+  "username": "testuser01",
+  "phone": "13912345678",
+  "password": "abc123"
+}
+
+### 14. 注册 — 缺少 username
+POST http://localhost:8080/MyAPP/user/register
+Content-Type: application/json
+
+{
+  "phone": "13911112222",
+  "password": "abc123"
+}
+
+### 15. 注册 — 缺少 phone
+POST http://localhost:8080/MyAPP/user/register
+Content-Type: application/json
+
+{
+  "username": "testuser02",
+  "password": "abc123"
+}
+
+### 16. 注册 — 缺少 password
+POST http://localhost:8080/MyAPP/user/register
+Content-Type: application/json
+
+{
+  "username": "testuser03",
+  "phone": "13933334444"
+}
+
+### 17. 注册 — 空请求体
+POST http://localhost:8080/MyAPP/user/register
+Content-Type: application/json
+
+{}
+
+### 18. 注册 — 手机号格式不正确
+POST http://localhost:8080/MyAPP/user/register
+Content-Type: application/json
+
+{
+  "username": "testuser04",
+  "phone": "12345",
+  "password": "abc123"
+}
+
+### 19. 注册 — 密码格式不合法（太短）
+POST http://localhost:8080/MyAPP/user/register
+Content-Type: application/json
+
+{
+  "username": "testuser05",
+  "phone": "13955556666",
+  "password": "123"
+}
+
+### 20. 注册 — 手机号已被使用
+POST http://localhost:8080/MyAPP/user/register
+Content-Type: application/json
+
+{
+  "username": "dupuser",
+  "phone": "13800138000",
+  "password": "abc123"
+}
+
+### 21. 注册 — username 为空字符串
+POST http://localhost:8080/MyAPP/user/register
+Content-Type: application/json
+
+{
+  "username": "",
+  "phone": "13977778888",
+  "password": "abc123"
+}
+
+### 22. 注册 — phone 为空字符串
+POST http://localhost:8080/MyAPP/user/register
+Content-Type: application/json
+
+{
+  "username": "testuser06",
+  "phone": "",
+  "password": "abc123"
+}

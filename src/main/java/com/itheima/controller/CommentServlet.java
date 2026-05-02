@@ -16,14 +16,14 @@ import java.util.List;
 public class CommentServlet extends HttpServlet {
     private CommentService commentService = new CommentService();
 
-    private BaseServlet baseServlet=new BaseServlet();
+    private BaseServletUtil baseServletUtil =new BaseServletUtil();
 
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException  {
         try{
             String action=req.getParameter("action");
             if(action==null||action.trim().isEmpty()){
-                baseServlet.writeError(resp, ErrorCodeUtil.PARAM_ERROR,"输入不能为空");
+                baseServletUtil.writeError(resp, ErrorCodeUtil.PARAM_ERROR,"输入不能为空");
                 return;
             }
             switch (action){
@@ -34,13 +34,13 @@ public class CommentServlet extends HttpServlet {
                     showComment(req,resp);
                     break;
                 default:
-                    baseServlet.writeError(resp,ErrorCodeUtil.PARAM_ERROR,"未识别功能");
+                    baseServletUtil.writeError(resp,ErrorCodeUtil.PARAM_ERROR,"未识别功能");
             }
         } catch (RuntimeException e) {
             e.printStackTrace();
-            baseServlet.writeError(resp,ErrorCodeUtil.BUSINESS_ERROR,e.getMessage());
+            baseServletUtil.writeError(resp,ErrorCodeUtil.BUSINESS_ERROR,e.getMessage());
         }catch (Exception ex){
-            baseServlet.writeError(resp,ErrorCodeUtil.SYSTEM_ERROR,ex.getMessage());
+            baseServletUtil.writeError(resp,ErrorCodeUtil.SYSTEM_ERROR,ex.getMessage());
         }
 
 
@@ -61,7 +61,7 @@ public class CommentServlet extends HttpServlet {
                 parentId = Long.parseLong(parentIdStr);
             }
             commentService.addComment(userId,videoId,parentId,content);
-            baseServlet.writeSuccess(resp,"评论成功");
+            baseServletUtil.writeSuccess(resp,"评论成功");
         }catch (Exception e){
             e.printStackTrace();
             throw e;
@@ -75,7 +75,7 @@ public class CommentServlet extends HttpServlet {
 
         List<Comment> commentList;
         commentList=commentService.getComment(videoId);
-        baseServlet.writeSuccess(resp,commentList);
+        baseServletUtil.writeSuccess(resp,commentList);
 //        for (Comment comment : commentList) {
 //            printComment(comment, resp.getWriter(), 0);
 //        }

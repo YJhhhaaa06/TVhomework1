@@ -1,7 +1,6 @@
 package com.itheima.controller;
 
 import com.itheima.pojo.Content;
-import com.itheima.pojo.Video;
 import com.itheima.service.ContentService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
@@ -12,9 +11,9 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.List;
 
-@WebServlet("/start")
+@WebServlet("/start*")
 public class StartServlet extends HttpServlet {
-    private  BaseServlet baseServlet=new BaseServlet();
+    private BaseServletUtil baseServletUtil =new BaseServletUtil();
 
 
         private ContentService contentService = ContentService.getInstance();
@@ -27,7 +26,7 @@ public class StartServlet extends HttpServlet {
             List<Content> recommend = contentService.getRecommend(12);
 
             // 输出
-            baseServlet.writeSuccess(resp,recommend);
+            baseServletUtil.writeSuccess(resp,recommend);
 
         }
     }

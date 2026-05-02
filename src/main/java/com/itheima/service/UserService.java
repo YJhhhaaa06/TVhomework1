@@ -1,8 +1,12 @@
 package com.itheima.service;
 
+import com.itheima.command.LoginCommand;
+import com.itheima.command.LoginType;
+import com.itheima.command.RegisterCommand;
 import com.itheima.dao.UserDao;
 import com.itheima.exception.AuthException;
 import com.itheima.exception.NotFoundException;
+import com.itheima.exception.ServerException;
 import com.itheima.response.LogInResponse;
 import com.itheima.pojo.User;
 import com.itheima.util.MyConnectionPool;
@@ -15,6 +19,13 @@ import java.sql.SQLException;
 public class UserService {
     private UserDao userDao=new UserDao();
     private TokenService tokenService=new TokenService();
+
+    public LogInResponse login(LoginCommand loginCommand)throws Exception{
+        if(loginCommand.getType()== LoginType.BY_ID){
+            return login(loginCommand.getId(),loginCommand.getPassword());
+        }
+        return login(loginCommand.getPhone(),loginCommand.getPassword());
+    }
 
     public LogInResponse login(long id,String rawPassword) throws Exception {
         User dbUser = userDao.getUserForLoginById(id);
@@ -38,34 +49,37 @@ public class UserService {
         if (!PasswordUtil.isPasswordCorrect(rawPassword, user.getHashedPassword())) {
             throw new AuthException("WRONG_PASSWORD");
         }
-        user.clear();
         return tokenService.getNewToken(user.getId());
     }
 
 
     //    用户注册,返回Id
-    public long registerAsUser(String userName,String password,String phone){
+    public long registerAsUser(RegisterCommand rc){
+        String username=rc.getUsername();
+        String phone=rc.getPhone();
+        String password=rc.getPassword();
         Connection conn=null;
         long userId;
         try {
             conn=MyConnectionPool.getConnection();
             conn.setAutoCommit(false);
-            User user=new User(userName,phone,password);
+            User user=new User(username,phone,password);
             if(!userDao.isPhoneUsed(conn,phone)){
                 userId= userDao.addUser(conn, user.getUserName(), user.getHashedPassword(), user.getPhone());
             }
             else {
-                throw new AuthException("PHONE_IN_USE");
+                throw new AuthException("电话号码已被使用");
             }
             conn.commit();//提交提交提交提交提交提交提交提交
             return userId;
         }catch (SQLException e){
+            e.printStackTrace();
             try{//rollback本身也可能报异常
                 conn.rollback();
             }catch (SQLException ex){
                 e.addSuppressed(ex);
             }
-            throw new RuntimeException("REGISTER_FAILED",e);
+            throw new ServerException("服务器异常");
         }
         finally {//连接池自己会开启自动提交
             MyConnectionPool.release(conn);

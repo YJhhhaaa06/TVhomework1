@@ -1,5 +1,7 @@
 package com.itheima.filter;
 
+import com.itheima.controller.BaseServletUtil;
+import com.itheima.exception.ErrorCode;
 import com.itheima.service.TokenService;
 import jakarta.servlet.*;
 import jakarta.servlet.annotation.WebFilter;
@@ -119,13 +121,19 @@ public class LoginFilter implements Filter {
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
             throws IOException, ServletException {
 
-        HttpServletRequest req = (HttpServletRequest) request;
 
-        String uri = req.getRequestURI();
+
+        HttpServletRequest req = (HttpServletRequest) request;
+        HttpServletResponse resp=(HttpServletResponse) response;
+        if ("OPTIONS".equalsIgnoreCase(req.getMethod())) {
+            resp.setStatus(HttpServletResponse.SC_OK);
+            return;   // 或 chain.doFilter 但要确保后续支持
+        }
+        //以http://localhost:8080/MyAPP/user/login?id=1为例
+        String uri = req.getRequestURI();//MyAPP/user/login
         String contextPath = req.getContextPath(); // /MyAPP
-        String path = uri.substring(contextPath.length()); // /video
-        String action = req.getParameter("action");
-        System.out.println("request path: " + path + " | action: " + action);
+        String path = uri.substring(contextPath.length()); // /user/login
+        System.out.println("request path: " + path );
 
 
         // ===== 1. 静态资源直接放行 =====
@@ -135,19 +143,20 @@ public class LoginFilter implements Filter {
         }
 
         // ===== 2. 登录/注册接口 =====
-        if ("/user/login".equals(path) || "/user/register".equals(path)) {
+        if (path.startsWith("/user")) {
+            System.out.println("enter filter");
             chain.doFilter(request, response);
             return;
         }
 
         // ===== 3. 视频接口（全部放行）=====
-        if ("/video".equals(path) || "/start".equals(path)) {
+        if (path.startsWith("/search")||path.startsWith("/content")) {
             chain.doFilter(request, response);
             return;
         }
 
         // ===== 4. 评论查看（允许未登录）=====
-        if ("/comment".equals(path) && "show".equals(action)) {
+        if (path.startsWith("/comment/show") ) {
             chain.doFilter(request, response);
             return;
         }
@@ -156,19 +165,13 @@ public class LoginFilter implements Filter {
         String token = req.getHeader("token");
 
         if (token == null || !tokenService.isTokenLegal(token)) {
-            writeError(response, "未登录或登录已失效");
+            BaseServletUtil.writeError(resp, ErrorCode.UNAUTHORIZED,"未登录或登录已过期");
             return;
         }
 
         long userId = tokenService.getUserId(token);
         req.setAttribute("userId", userId);
-
         chain.doFilter(request, response);
-    }
-
-    private void writeError(ServletResponse response, String msg) throws IOException {
-        response.setContentType("application/json;charset=UTF-8");
-        response.getWriter().write("{\"code\":401,\"msg\":\"" + msg + "\"}");
     }
 }
 
