@@ -1,6 +1,7 @@
 package com.itheima.service;
 
 import com.itheima.controller.UploadType;
+import com.itheima.pojo.UploadResult;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.Part;
 
@@ -11,7 +12,7 @@ import java.util.UUID;
 
 public class FileUploadService {
 
-    public String saveFile(Part part, UploadType type) throws IOException {
+    public UploadResult saveFile(Part part, UploadType type) throws IOException {
         // 1. 校验
         validate(part, type);
 
@@ -27,12 +28,26 @@ public class FileUploadService {
 
         // 4. 写入
         File file = new File(dir, fileName);
-        part.write(file.getAbsolutePath());
+        part.write(file.getAbsolutePath());//绝对路径，dir目录+fileName文件名，dir=basePath+type.getPath
 
-        return "/upload/" + type.getDir() + "/" + fileName;
+        UploadResult result=new UploadResult();
+        result.setUrl("/upload/" + type.getDir() + "/" + fileName);
+        result.setAbsolutePath(file.getAbsolutePath().replace('\\', '/'));
+        return result;
     }
 
-    private void validate(Part part, UploadType type) {
+    public void deleteFileQuietly(String absolutePath) {
+        if (absolutePath == null) return;
+
+        try {
+            File file = new File(absolutePath);
+            if (file.exists()) file.delete();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void validate(Part part, UploadType type) {//校验
         String contentType = part.getContentType();
         String fileName = part.getSubmittedFileName();
 

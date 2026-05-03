@@ -1,9 +1,15 @@
 package com.itheima.service;
 
+import com.itheima.command.ContentType;
+import com.itheima.command.UploadCommand;
+import com.itheima.controller.UploadType;
 import com.itheima.dao.CommentDao;
 import com.itheima.dao.ContentDao;
 import com.itheima.dao.ContentMediaDao;
+import com.itheima.exception.BusinessException;
 import com.itheima.exception.ConflictException;
+import com.itheima.exception.ErrorCode;
+import com.itheima.exception.ServerException;
 import com.itheima.pojo.*;
 import com.itheima.util.MyConnectionPool;
 
@@ -131,38 +137,68 @@ public class ContentService {
     }
 
     // ===== 管理 =====
-//    public void addVideo(VideoDetail video, User user) {
-//        Connection conn = null;
-//        String title = video.getTitle();
-//        String intro = video.getIntro();
-//        String url = video.getUrl();
-//        if (videoCheck(title, intro, url)) {
-//            try {
-//                conn = MyConnectionPool.getConnection();
-//                conn.setAutoCommit(false);
-//
-//                long videoId = contentDao.addContent(conn, user.getId(), title, intro);//添加视频后获取id
-//                contentMediaDao.addMedia(conn, url, videoId);
-//                conn.commit();//提交提交提交提交
-//
-//
-//            } catch (SQLException e) {
-//                if(conn!=null){
-//                    try {
-//                        conn.rollback();
-//                    } catch (SQLException ex) {
-//                        throw new RuntimeException("DB_ERROR",ex);
-//                    }
-//                }
-//            } finally {
-//                MyConnectionPool.release(conn);
-//            }
-//
-//        }
-//        else {
-//            throw new IllegalArgumentException("VIDEO_INPUT_ILLEGAL");
-//        }
-//    }
+    public void addVideo(UploadCommand uc, String videoUrl, String coverUrl) {
+        Connection conn = null;
+
+        try {
+            conn = MyConnectionPool.getConnection();
+            conn.setAutoCommit(false);
+            long videoId =addContent(conn,uc);//添加视频后获取id
+            contentMediaDao.addMedia(conn,videoId, videoUrl, UploadType.VIDEO.getMediaType(),1);
+            contentMediaDao.addMedia(conn,videoId,coverUrl,UploadType.COVER.getMediaType(), 1);
+            conn.commit();//提交提交提交提交
+
+        } catch (SQLException e) {
+            if (conn != null) {
+                try {
+                    conn.rollback();
+                } catch (SQLException ex) {
+                    throw new BusinessException(ErrorCode.SERVER_ERROR, "回滚失败", ex);
+                }
+            }
+            throw new ServerException("数据库写入失败");
+        } finally {
+            MyConnectionPool.release(conn);
+        }
+    }
+
+
+
+    public void addPost(UploadCommand uc, String coverUrl, List<String> imageUrls) {
+        Connection conn = null;
+        try {
+            conn = MyConnectionPool.getConnection();
+            conn.setAutoCommit(false);
+            long contentId = addContent(conn, uc);
+            if (coverUrl != null) {
+                contentMediaDao.addMedia(conn, contentId, coverUrl, UploadType.COVER.getMediaType(), 1);
+            }
+            int sort = 1;
+            for (String imageUrl : imageUrls) {
+                contentMediaDao.addMedia(conn, contentId, imageUrl, UploadType.IMAGE.getMediaType(), sort++);
+            }
+            conn.commit();
+        } catch (SQLException e) {
+            if (conn != null) {
+                try {
+                    conn.rollback();
+                } catch (SQLException ex) {
+                    throw new BusinessException(ErrorCode.SERVER_ERROR, "回滚失败", ex);
+                }
+            }
+            throw new ServerException("数据库写入失败");
+        } finally {
+            MyConnectionPool.release(conn);
+        }
+    }
+
+    public long addContent(Connection conn, UploadCommand uc) throws SQLException {
+        long userId=uc.getUserId();
+        String title = uc.getTitle();
+        String description = uc.getDescription();
+        int categoryId =uc.getCategoryId();
+        return contentDao.addContent(conn, userId, uc.getType(), title,description,categoryId);
+    }
 
     public void deleteContent(long contentId,long userId) { }
 
@@ -171,7 +207,7 @@ public class ContentService {
 
         content.setCommentList(commentList);
         String coverUrl = null;
-        List<ContentMedia> coverList = mediaMap.get(0);
+        List<ContentMedia> coverList = mediaMap.get(3);
         if (coverList != null && !coverList.isEmpty()) {
             coverUrl = coverList.getFirst().getUrl();
         }
@@ -195,11 +231,11 @@ public class ContentService {
     }
 
     //输入的视频是否合法
-    public boolean videoCheck(String title,String intro,String url){
+    public boolean videoCheck(String title,String description,String url){
         if(title==null||title.length()>50){
             return false;
         }
-        if (intro!=null&&intro.length()>500){
+        if (description!=null&&description.length()>500){
             return false;
         }
         if(url==null||url.length()>500){

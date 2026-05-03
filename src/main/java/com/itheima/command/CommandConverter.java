@@ -42,4 +42,56 @@ public class CommandConverter {
         return RegisterCommand.getInstance(phone,password,username);
     }
 
+    public static UploadCommand uploadVideoToCommand(String title,String description,String categoryId, long userId){
+        if(title==null||title.isBlank()){
+            throw new ParamException("标题不能为空");
+        }
+        if(title.length()>50){
+            throw new ParamException("标题不得超过50字");
+        }
+        if (description==null||description.isBlank()){
+            description="-";
+        }
+        if(description.length()>1000){
+            throw new ParamException("简介不得超过1000字");
+        }
+        if(categoryId.length()>1||!StringUtil.isAllDigit(categoryId)){
+            //0其它
+            //1游戏
+            //2音乐
+            //3咨讯
+            //4动画
+            //5娱乐
+            //6动物
+            //7体育
+            //8鬼畜
+            //9绘画
+            throw new ParamException("暂时没有这个分区");
+        }
+        int category=Integer.parseInt(categoryId);
+        return UploadCommand.asVideo(title,description,userId,category);
+    }
+
+    public static UploadCommand uploadPostToCommand(String title,String description,String categoryId, long userId){
+        if(title==null||title.isBlank()){
+            throw new ParamException("标题不能为空");
+        }
+        if(title.length()>50){
+            throw new ParamException("标题不得超过50字");
+        }
+        if (description==null||description.isBlank()){
+            description="-";
+        }
+        if(description.length()>10000){
+            throw new ParamException("内容不得超过10000字");
+        }
+
+        if(categoryId.length()>1||!StringUtil.isAllDigit(categoryId)){
+            throw new ParamException("暂时没有这个分区");
+        }
+        int category=Integer.parseInt(categoryId);
+
+        return UploadCommand.asPost(title,description,userId,category);
+    }
+
 }

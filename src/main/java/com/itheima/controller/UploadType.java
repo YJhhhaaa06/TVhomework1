@@ -4,13 +4,14 @@ import java.util.Arrays;
 import java.util.List;
 
 public enum UploadType {
-    VIDEO("video", "video/", Arrays.asList(".mp4")),
-    IMAGE("image", "image/", Arrays.asList(".jpg", ".png", ".jpeg")),
-    COVER("cover", "image/", Arrays.asList(".jpg", ".png"));
+    VIDEO("video", "video/", Arrays.asList(".mp4"),1),
+    IMAGE("image", "image/", Arrays.asList(".jpg", ".png", ".jpeg"),2),
+    COVER("cover", "image/", Arrays.asList(".jpg", ".png"),3);
 
     private final String dir;
     private final String contentTypePrefix;
     private final List<String> suffixes;
+    private final int mediaType;
 
     public boolean isSuffixValid(String fileName) {
         if (fileName == null) {
@@ -26,10 +27,11 @@ public enum UploadType {
     }
 
 
-    UploadType(String dir, String contentTypePrefix, List<String> suffixes) {
+    UploadType(String dir, String contentTypePrefix, List<String> suffixes,int mediaType) {
         this.dir=dir;
         this.contentTypePrefix=contentTypePrefix;
         this.suffixes=suffixes;
+        this.mediaType=mediaType;
     }
 
     private UploadType fromFileName(String fileName){//根据文件名匹配类型
@@ -62,5 +64,9 @@ public enum UploadType {
 
     public List<String> getSuffixes() {
         return suffixes;
+    }
+
+    public int getMediaType() {
+        return mediaType;
     }
 }

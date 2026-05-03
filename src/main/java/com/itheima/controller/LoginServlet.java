@@ -24,7 +24,6 @@ public class LoginServlet extends HttpServlet {
     private ObjectMapper mapper=new ObjectMapper();
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException {
-        System.out.println("enter controller");
         String action=req.getPathInfo();//path去掉了/user的结果
         if(action==null){
             BaseServletUtil.writeError(resp,ErrorCode.SERVER_ERROR,"请求异常，请重试");

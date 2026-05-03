@@ -18,7 +18,7 @@ public class ContentMediaDao {
 
     //添加content的封面、视频、图片
     public void addMedia(Connection conn,long contentId,String url,int type,int sort) throws SQLException {
-        String sql = "insert into content(content_id,url,type,sort) VALUES (?, ?,?,?)";
+        String sql = "insert into content_media(content_id,url,type,sort) VALUES (?, ?,?,?)";
         try (PreparedStatement pstmt=conn.prepareStatement(sql)){
             pstmt.setLong(1,contentId);
             pstmt.setString(2,url);
