@@ -2,8 +2,6 @@ package com.itheima.service;
 
 import com.itheima.dao.VideoDao;
 import com.itheima.pojo.LogInResult;
-import com.itheima.pojo.Video;
-import com.itheima.pojo.VideoDetail;
 import com.itheima.util.MyConnectionPool;
 
 import java.util.ArrayList;

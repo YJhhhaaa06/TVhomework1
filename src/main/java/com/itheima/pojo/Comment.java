@@ -1,9 +1,5 @@
 package com.itheima.pojo;
 
-import com.fasterxml.jackson.annotation.JsonFormat;
-import com.fasterxml.jackson.annotation.JsonIgnore;
-
-import java.time.LocalDateTime;
 import java.util.List;
 
 public class Comment {
@@ -11,18 +7,11 @@ public class Comment {
 
     private String username;//这个不属comment表
     private long commentId;
-    private long videoId;
+    private long contentId;
     private long userId;
     private String content;
     private Long parentId;//Long类似Integer,可以为NULL
     //父评论ID
-//    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "GMT+8")
-    @JsonIgnore
-    private LocalDateTime createTime;
-
-//    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "GMT+8")
-    @JsonIgnore
-    private LocalDateTime updateTime;
     private int likeCount;
     private boolean isDeleted;//false是未删除
     private List<Comment> children;
@@ -35,15 +24,13 @@ public class Comment {
         this.children = children;
     }
 
-    public Comment(String username, long commentId, long videoId, long userId, String content, Long parentId, LocalDateTime createTime,LocalDateTime updateTime, int likeCount, boolean isDeleted) {
+    public Comment(String username, long commentId, long contentId, long userId, String content, Long parentId, int likeCount, boolean isDeleted) {
         this.username = username;
         this.commentId = commentId;
-        this.videoId = videoId;
+        this.contentId = contentId;
         this.userId = userId;
         this.content = content;
         this.parentId = parentId;
-        this.createTime = createTime;
-        this.updateTime = updateTime;
         this.likeCount = likeCount;
         this.isDeleted = isDeleted;
     }
@@ -67,12 +54,12 @@ public class Comment {
         this.commentId = commentId;
     }
 
-    public long getVideoId() {
-        return videoId;
+    public long getContentId() {
+        return contentId;
     }
 
-    public void setVideoId(long videoId) {
-        this.videoId = videoId;
+    public void setContentId(long contentId) {
+        this.contentId = contentId;
     }
 
     public long getUserId() {
@@ -97,22 +84,6 @@ public class Comment {
 
     public void setParentId(Long parentId) {
         this.parentId = parentId;
-    }
-
-    public LocalDateTime getCreateTime() {
-        return createTime;
-    }
-
-    public void setCreateTime(LocalDateTime createTime) {
-        this.createTime = createTime;
-    }
-
-    public LocalDateTime getUpdateTime() {
-        return updateTime;
-    }
-
-    public void setUpdateTime(LocalDateTime updateTime) {
-        this.updateTime = updateTime;
     }
 
     public int getLikeCount() {

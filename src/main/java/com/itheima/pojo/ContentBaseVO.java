@@ -1,41 +1,30 @@
 package com.itheima.pojo;
 
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
-
-public class Content {
+public class ContentBaseVO {
     private long id;//视频、动态id
     private long authorId;//作者Id
-    private int type;//内容类型
+    private int type;//内容类型1视频 2图文
     private String title;//标题
     private String description;//文本
     private int categoryId;//分区
     private int commentCount;//评论数
     private int likeCount;//点赞数
     private String authorName;//作者名
-//    private LocalDateTime crateTime=LocalDateTime.now();//时间
-    public List<Comment> commentList;//评论
 
-    private String videoUrl;
-    private String coverUrl;
-    private List<String> imageUrls;
-
-
-
-    public Content() {
+    public ContentBaseVO() {
     }
 
-    //为上传内容准备的构造，检查将在这里完成
-    public Content(long authorId, String description, int categoryId, String title, int type) {
+    public ContentBaseVO(long id, long authorId, int type, String title, String description, int categoryId, int commentCount, int likeCount, String authorName) {
+        this.id = id;
         this.authorId = authorId;
+        this.type = type;
+        this.title = title;
         this.description = description;
         this.categoryId = categoryId;
-        this.title = title;
-        this.type = type;
+        this.commentCount = commentCount;
+        this.likeCount = likeCount;
+        this.authorName = authorName;
     }
-
-
 
     public long getId() {
         return id;
@@ -107,45 +96,5 @@ public class Content {
 
     public void setAuthorName(String authorName) {
         this.authorName = authorName;
-    }
-
-//    public LocalDateTime getCrateTime() {
-//        return crateTime;
-//    }
-//
-//    public void setCrateTime(LocalDateTime crateTime) {
-//        this.crateTime = crateTime;
-//    }
-
-    public List<Comment> getCommentList() {
-        return commentList;
-    }
-
-    public void setCommentList(List<Comment> commentList) {
-        this.commentList = commentList;
-    }
-
-    public String getVideoUrl() {
-        return videoUrl;
-    }
-
-    public void setVideoUrl(String videoUrl) {
-        this.videoUrl = videoUrl;
-    }
-
-    public String getCoverUrl() {
-        return coverUrl;
-    }
-
-    public void setCoverUrl(String coverUrl) {
-        this.coverUrl = coverUrl;
-    }
-
-    public List<String> getImageUrls() {
-        return imageUrls;
-    }
-
-    public void setImageUrls(List<String> imageUrls) {
-        this.imageUrls = imageUrls;
     }
 }

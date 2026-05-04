@@ -1,8 +1,9 @@
 package com.itheima.controller;
 
+import com.itheima.exception.BusinessException;
+import com.itheima.exception.ErrorCode;
 import com.itheima.pojo.Comment;
 import com.itheima.service.CommentService;
-import com.itheima.util.ErrorCodeUtil;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
@@ -13,7 +14,7 @@ import java.io.PrintWriter;
 import java.util.List;
 
 @WebServlet("/comment")
-public class CommentServlet extends HttpServlet {
+public class CommentController extends HttpServlet {
     private CommentService commentService = new CommentService();
 
     private BaseServletUtil baseServletUtil =new BaseServletUtil();
@@ -23,7 +24,7 @@ public class CommentServlet extends HttpServlet {
         try{
             String action=req.getParameter("action");
             if(action==null||action.trim().isEmpty()){
-                baseServletUtil.writeError(resp, ErrorCodeUtil.PARAM_ERROR,"输入不能为空");
+                baseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR,"输入不能为空");
                 return;
             }
             switch (action){
@@ -34,13 +35,13 @@ public class CommentServlet extends HttpServlet {
                     showComment(req,resp);
                     break;
                 default:
-                    baseServletUtil.writeError(resp,ErrorCodeUtil.PARAM_ERROR,"未识别功能");
+                    baseServletUtil.writeError(resp,ErrorCode.PARAM_ERROR,"未识别功能");
             }
-        } catch (RuntimeException e) {
+        } catch (BusinessException e) {
             e.printStackTrace();
-            baseServletUtil.writeError(resp,ErrorCodeUtil.BUSINESS_ERROR,e.getMessage());
-        }catch (Exception ex){
-            baseServletUtil.writeError(resp,ErrorCodeUtil.SYSTEM_ERROR,ex.getMessage());
+            baseServletUtil.writeError(resp,e.getCode(),e.getMessage());
+        }catch (Exception e){
+            baseServletUtil.writeError(resp,ErrorCode.SERVER_ERROR,e.getMessage());
         }
 
 

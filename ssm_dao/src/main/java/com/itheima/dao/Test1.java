@@ -1,7 +1,5 @@
 package com.itheima.dao;
 
-import com.itheima.pojo.Video;
-
 import java.util.ArrayList;
 import java.util.List;
 

@@ -1,13 +1,5 @@
 package com.itheima.dao;
 
-import com.itheima.pojo.Video;
-import com.itheima.pojo.VideoDetail;
-
-import java.sql.*;
-import com.itheima.util.MyConnectionPool;
-import java.util.ArrayList;
-import java.util.List;
-
 public class VideoDao {
 //    //Dao层只关心如何执行sql，控制事务由Service进行
 //    //一个类只干一件事，比如这个类只操作数据库中的video、videoInfo表，如果干了别的事就要放到别的类里面解耦合

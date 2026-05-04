@@ -18,7 +18,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 
 @WebServlet("/user/*")
-public class LoginServlet extends HttpServlet {
+public class LoginController extends HttpServlet {
     private RequestParser requestParser=new RequestParser();
     private UserService userService = new UserService();
     private ObjectMapper mapper=new ObjectMapper();

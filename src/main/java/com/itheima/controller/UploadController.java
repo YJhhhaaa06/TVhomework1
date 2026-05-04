@@ -20,7 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 
-@WebServlet("/upload/*")
+@WebServlet("/api/upload/*")
 @MultipartConfig(
         maxFileSize = 50 * 1024 * 1024, // 50MB
         maxRequestSize = 100 * 1024 * 1024
@@ -36,6 +36,9 @@ public class UploadController extends HttpServlet {
     try {
         System.out.println("enter uploadController");
         String action=req.getPathInfo();
+        if(action==null){
+            BaseServletUtil.writeError(resp,ErrorCode.NOT_FOUND,"未识别功能");
+        }
         switch (action){
             case("/video"):
                 saveVideo(req,resp);

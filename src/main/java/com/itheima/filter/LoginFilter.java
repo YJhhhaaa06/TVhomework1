@@ -150,10 +150,15 @@ public class LoginFilter implements Filter {
         }
 
         // ===== 3. 视频接口（全部放行）=====
-        if (path.startsWith("/search")||path.startsWith("/content")) {
+        if (path.startsWith("/search")||path.startsWith("/start")) {
             chain.doFilter(request, response);
             return;
         }
+        if(path.startsWith("/upload")){
+            chain.doFilter(request, response);
+            return;
+        }
+
 
         // ===== 4. 评论查看（允许未登录）=====
         if (path.startsWith("/comment/show") ) {

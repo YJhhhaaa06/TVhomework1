@@ -1,5 +1,9 @@
-### GET request to example server
-GET https://examples.http-client.intellij.net/get
-    ?generated-in=IntelliJ IDEA
+### ==================== 首页推荐流测试 ====================
+# 不需要 token，LoginFilter 放行 /start
 
-###
+### 1. 正常获取推荐 — 返回最多 12 条随机内容
+GET http://localhost:8080/MyAPP/start
+
+
+### 2. 连续请求 — 验证每次结果可能不同（随机打乱）
+GET http://localhost:8080/MyAPP/start

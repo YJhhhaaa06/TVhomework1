@@ -1,11 +1,14 @@
 package com.itheima.dao;
 
-import com.itheima.pojo.Content;
+import com.itheima.pojo.ContentDetailVO;
+import com.itheima.pojo.RecommendVO;
 import com.itheima.util.MyConnectionPool;
 
 import java.sql.*;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class ContentDao {
     //Dao层只关心如何执行sql，控制事务由Service进行
@@ -64,7 +67,7 @@ public class ContentDao {
 
     //查
     //根据视频ID查询视频和动态
-    public Content findContent(Connection conn,long contentId) throws SQLException{
+    public ContentDetailVO findContent(Connection conn, long contentId) throws SQLException{
         String sql= """
 SELECT 
            c.id,
@@ -97,8 +100,8 @@ SELECT
 
 
     //查询所有视频基本信息
-    public List<Content> findAllContent(Connection conn) throws SQLException {
-        List<Content> list = new ArrayList<>();
+    public List<RecommendVO> findAllContent(Connection conn) throws SQLException {
+        List<RecommendVO> list = new ArrayList<>();
         //面向接口：后续要改类型只用改new的类型
         String sql = """
         SELECT 
@@ -121,14 +124,14 @@ SELECT
 
                  ResultSet res = pstmt.executeQuery()){
                 while (res.next()) {
-                    com.itheima.pojo.Content content = ResultMap.buildContent(res);
-                    list.add(content);
+                    com.itheima.pojo.RecommendVO recommendVO = ResultMap.buildRecommendVO(res);
+                    list.add(recommendVO);
                 }
             }
         return list;
     }
 
-    public List<Content> findAllContent() throws SQLException {
+    public List<RecommendVO> findAllContent() throws SQLException {
         Connection conn=null;
         try{
             conn = MyConnectionPool.getConnection();
@@ -137,13 +140,54 @@ SELECT
         }finally {
             MyConnectionPool.release(conn);
         }
+    }
 
+    public List<ContentDetailVO> findAllContentDetail() throws SQLException {
+        Connection conn=null;
+        try{
+            conn = MyConnectionPool.getConnection();
+            return findAllContentDetail(conn);
+
+        }finally {
+            MyConnectionPool.release(conn);
+        }
+    }
+
+    public List<ContentDetailVO> findAllContentDetail(Connection conn) throws SQLException {
+        List<ContentDetailVO> list = new ArrayList<>();
+        //面向接口：后续要改类型只用改new的类型
+        String sql = """
+        SELECT 
+           c.id,
+           c.title,
+           c.description,
+           c.type,
+           c.category_id,
+           c.comment_count,
+           c.like_count,
+           c.create_time,
+           u.username,
+           u.id AS user_id 
+       FROM content c 
+       JOIN users u ON c.user_id = u.id 
+       where is_deleted =0 
+       ORDER BY c.create_time DESC, c.id DESC  
+""";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql);
+
+             ResultSet rs = pstmt.executeQuery()){
+            while (rs.next()) {
+                list.add(ResultMap.buildContent(rs));
+            }
+        }
+        return list;
     }
 
 
+
     //根据创作者id查视频和动态
-    public List<Content> findContentByUser(Connection conn,long userId,int page, int pageSize) throws SQLException {
-        List<Content> list= new ArrayList<>();
+    public List<ContentDetailVO> findContentByUser(Connection conn, long userId, int page, int pageSize) throws SQLException {
+        List<ContentDetailVO> list= new ArrayList<>();
         String sql = """
         SELECT 
            c.id,
@@ -178,7 +222,7 @@ SELECT
     }
 
     //根据视频标题或描述，模糊查询内容(不含media),不支持用户名模糊查询，一次只查pageSize条
-    public List<Content> search(Connection conn, String keyword, int page, int pageSize)throws SQLException {
+    public List<ContentDetailVO> search(Connection conn, String keyword, int page, int pageSize)throws SQLException {
         String sql = """
        SELECT
            c.id,
@@ -201,7 +245,7 @@ SELECT
        
     """;
         //三个双引号是java15的新特性：多行字符串
-        List<Content> list = new ArrayList<>();
+        List<ContentDetailVO> list = new ArrayList<>();
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             String likeKeyword = keyword.trim() ;//trim()删除首尾的空格
             pstmt.setString(1, likeKeyword);
@@ -211,8 +255,8 @@ SELECT
             pstmt.setInt(4,pageSize);
             try (ResultSet rs = pstmt.executeQuery()){
                 while (rs.next()) {
-                    com.itheima.pojo.Content content = ResultMap.buildContent(rs);
-                    list.add(content);
+                    ContentDetailVO contentDetailVO = ResultMap.buildContent(rs);
+                    list.add(contentDetailVO);
                 }
             }
         }

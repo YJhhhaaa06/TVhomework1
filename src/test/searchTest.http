@@ -1,0 +1,133 @@
+### ==================== 搜索测试 ====================
+# 不需要 token，LoginFilter 放行 /search
+
+
+
+### ==================== IdSearch — 从数据库按 contentId 查 ====================
+
+### 1. IdSearch — 正常查询存在的 content
+GET http://localhost:8080/MyAPP/search?action=IdSearch
+Content-Type: application/json
+
+{
+  "contentId": 1
+}
+
+
+### 2. IdSearch — 查询不存在的 content
+GET http://localhost:8080/MyAPP/search?action=IdSearch
+Content-Type: application/json
+
+{
+  "contentId": 99999
+}
+
+
+### 3. IdSearch — contentId 为 0
+GET http://localhost:8080/MyAPP/search?action=IdSearch
+Content-Type: application/json
+
+{
+  "contentId": 0
+}
+
+
+### 4. IdSearch — JSON 中缺少 contentId 字段
+GET http://localhost:8080/MyAPP/search?action=IdSearch
+Content-Type: application/json
+
+{}
+
+
+### ==================== keywordSearch — 全文搜索 ====================
+
+### 5. keywordSearch — 正常搜索
+GET http://localhost:8080/MyAPP/search?action=keywordSearch
+Content-Type: application/json
+
+{
+  "keyword": "红烧肉"
+}
+
+
+### 6. keywordSearch — 搜索另一个关键词
+GET http://localhost:8080/MyAPP/search?action=keywordSearch
+Content-Type: application/json
+
+{
+  "keyword": "太刀"
+}
+
+
+### 7. keywordSearch — 搜索不存在的关键词（应返回空列表）
+GET http://localhost:8080/MyAPP/search?action=keywordSearch
+Content-Type: application/json
+
+{
+  "keyword": "xyz不存在的关键词123"
+}
+
+
+### 8. keywordSearch — keyword 为空字符串
+GET http://localhost:8080/MyAPP/search?action=keywordSearch
+Content-Type: application/json
+
+{
+  "keyword": ""
+}
+
+
+### 9. keywordSearch — keyword 全是空格
+GET http://localhost:8080/MyAPP/search?action=keywordSearch
+Content-Type: application/json
+
+{
+  "keyword": "   "
+}
+
+
+### 10. keywordSearch — 缺少 keyword 字段
+GET http://localhost:8080/MyAPP/search?action=keywordSearch
+Content-Type: application/json
+
+{}
+
+
+### ==================== getDetail — 从缓存按 contentId 取详情 ====================
+
+### 11. getDetail — 正常从缓存获取
+GET http://localhost:8080/MyAPP/search?action=getDetailRecommended
+Content-Type: application/json
+
+{
+  "contentId": 1
+}
+
+
+### 12. getDetail — 缓存中不存在的 contentId
+GET http://localhost:8080/MyAPP/search?action=getDetailRecommended
+Content-Type: application/json
+
+{
+  "contentId": 99999
+}
+
+
+### ==================== 异常路径 ====================
+
+### 13. 未识别的 action
+GET http://localhost:8080/MyAPP/search?action=unknownAction
+Content-Type: application/json
+
+{
+  "contentId": 1
+}
+
+
+### 14. 缺少 action 参数
+GET http://localhost:8080/MyAPP/search
+Content-Type: application/json
+
+{
+  "keyword": "test"
+}

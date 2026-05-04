@@ -1,9 +1,12 @@
 package com.itheima.service;
 
 import com.itheima.dao.CommentDao;
+import com.itheima.exception.BusinessException;
+import com.itheima.exception.ErrorCode;
 import com.itheima.exception.NotFoundException;
+import com.itheima.exception.ServerException;
 import com.itheima.pojo.Comment;
-import com.itheima.pojo.VideoDetail;
+import com.itheima.pojo.ContentDetailVO;
 import com.itheima.util.MyConnectionPool;
 
 import java.sql.Connection;
@@ -61,16 +64,16 @@ private CommentDao commentDao=new CommentDao();
             conn= MyConnectionPool.getConnection();
             conn.setAutoCommit(false);
             commentDao.addComment(conn,videoId,userId,content,parentId);
-            conn.commit();//
-            //提交
+            conn.commit();
         }catch (SQLException e) {
             if(conn!=null){
                 try {
                     conn.rollback();
                 } catch (SQLException ex) {
-                    throw new RuntimeException("DB_ERROR",ex);
+                    throw new BusinessException(ErrorCode.SERVER_ERROR, "回滚失败", ex);
                 }
             }
+            throw new ServerException("评论写入失败");
         } finally {
             if (conn != null) {
                 try {
@@ -109,16 +112,16 @@ private CommentDao commentDao=new CommentDao();
                 commentDao.unhideCommentByContent(conn,videoId);
             }
 
-            conn.commit();//
-            //提交
+            conn.commit();
         }catch (SQLException e) {
             if(conn!=null){
                 try {
                     conn.rollback();
                 } catch (SQLException ex) {
-                    throw new RuntimeException("DB_ERROR",ex);
+                    throw new BusinessException(ErrorCode.SERVER_ERROR, "回滚失败", ex);
                 }
             }
+            throw new ServerException("评论区操作失败");
         } finally {
             MyConnectionPool.release(conn);
         }
@@ -144,8 +147,8 @@ private CommentDao commentDao=new CommentDao();
     }
 
     //获取评论数量
-    public  int getCommentCount(VideoDetail vd){
-        List<Comment> wholeList=vd.getCommentList();
+    public  int getCommentCount(ContentDetailVO cdVO){
+        List<Comment> wholeList=cdVO.getCommentList();
         return wholeList.size();
     }
     //获取回复数量

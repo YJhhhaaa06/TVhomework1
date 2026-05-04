@@ -10,52 +10,56 @@ public class ResultMap {
 
 
     //封装视频/动态
-    public static VideoDetail mapResultToVideoDetail(ResultSet rs) throws SQLException {
-        VideoDetail vd=new VideoDetail();
-        vd.setTitle(rs.getString("videoTitle"));
-        vd.setIntro(rs.getString("briefIntroduction"));
-        vd.setUrl(rs.getString("video_url"));
-        vd.setAuthorName(rs.getString("username"));
-        vd.setUploadID(rs.getLong("id"));
-        vd.setVideoId(rs.getLong("videoID"));
-        return vd;
-    }
-
-    public static Content buildContent(ResultSet rs)throws SQLException{
-        Content content=new Content();
-        content.setId(rs.getLong("id"));
-        content.setAuthorId(rs.getLong("user_id"));
-        content.setType(rs.getInt("type"));
-        content.setTitle(rs.getString("title"));
-        content.setDescription(rs.getString("description"));
-        content.setCategoryId(rs.getInt("category_id"));
-        content.setCommentCount(rs.getInt("comment_count"));
-        content.setLikeCount(rs.getInt("like_count"));
-        content.setAuthorName(rs.getString("username"));
+    public static RecommendVO buildRecommendVO(ResultSet rs) throws SQLException {
+        RecommendVO recommendVO =new RecommendVO();
+        recommendVO.setId(rs.getLong("id"));
+        recommendVO.setAuthorId(rs.getLong("user_id"));
+        recommendVO.setType(rs.getInt("type"));
+        recommendVO.setTitle(rs.getString("title"));
+        recommendVO.setDescription(rs.getString("description"));
+        recommendVO.setCategoryId(rs.getInt("category_id"));
+        recommendVO.setCommentCount(rs.getInt("comment_count"));
+        recommendVO.setLikeCount(rs.getInt("like_count"));
+        recommendVO.setAuthorName(rs.getString("username"));
 //        content.setCrateTime(rs.getTimestamp("create_time").toLocalDateTime());
-        return content;
+        return recommendVO;
     }
 
-    public static void buildContent(Map<Long,Content> contentMap, ResultSet rs)throws SQLException{
-        Content content=new Content();
+    public static ContentDetailVO buildContent(ResultSet rs)throws SQLException{
+        ContentDetailVO contentDetailVO =new ContentDetailVO();
+        contentDetailVO.setId(rs.getLong("id"));
+        contentDetailVO.setAuthorId(rs.getLong("user_id"));
+        contentDetailVO.setType(rs.getInt("type"));
+        contentDetailVO.setTitle(rs.getString("title"));
+        contentDetailVO.setDescription(rs.getString("description"));
+        contentDetailVO.setCategoryId(rs.getInt("category_id"));
+        contentDetailVO.setCommentCount(rs.getInt("comment_count"));
+        contentDetailVO.setLikeCount(rs.getInt("like_count"));
+        contentDetailVO.setAuthorName(rs.getString("username"));
+//        content.setCrateTime(rs.getTimestamp("create_time").toLocalDateTime());
+        return contentDetailVO;
+    }
+
+    public static void buildContent(Map<Long, ContentDetailVO> contentMap, ResultSet rs)throws SQLException{
+        ContentDetailVO contentDetailVO =new ContentDetailVO();
         long id= rs.getLong("id");
-        content.setId(rs.getLong("id"));
-        content.setAuthorId(rs.getLong("author_id"));
-        content.setType(rs.getInt("type"));
-        content.setTitle(rs.getString("title"));
-        content.setDescription(rs.getString("description"));
-        content.setCategoryId(rs.getInt("category_id"));
-        content.setCommentCount(rs.getInt("comment_count"));
-        content.setLikeCount(rs.getInt("like_count"));
-        content.setAuthorName(rs.getString("username"));
+        contentDetailVO.setId(rs.getLong("id"));
+        contentDetailVO.setAuthorId(rs.getLong("author_id"));
+        contentDetailVO.setType(rs.getInt("type"));
+        contentDetailVO.setTitle(rs.getString("title"));
+        contentDetailVO.setDescription(rs.getString("description"));
+        contentDetailVO.setCategoryId(rs.getInt("category_id"));
+        contentDetailVO.setCommentCount(rs.getInt("comment_count"));
+        contentDetailVO.setLikeCount(rs.getInt("like_count"));
+        contentDetailVO.setAuthorName(rs.getString("username"));
 //        content.setCrateTime(rs.getTimestamp("create_time").toLocalDateTime());
-        contentMap.put(id,content);
+        contentMap.put(id, contentDetailVO);
     }
     public static Comment buildComment(ResultSet rs)throws SQLException{
         Comment cm=new Comment();
         cm.setUsername(rs.getString("username"));
         cm.setCommentId(rs.getLong("comment_id"));
-        cm.setVideoId(rs.getLong("video_id"));
+        cm.setContentId(rs.getLong("content_id"));
         cm.setUserId(rs.getLong("user_id"));
         cm.setContent(rs.getString("content"));
         if(rs.getObject("parent_id") == null){
@@ -64,8 +68,8 @@ public class ResultMap {
         else {
             cm.setParentId(rs.getLong("parent_id"));
         }
-        cm.setCreateTime(rs.getTimestamp("create_time").toLocalDateTime());
-        cm.setUpdateTime(rs.getTimestamp("update_time").toLocalDateTime());
+//        cm.setCreateTime(rs.getTimestamp("create_time").toLocalDateTime());
+//        cm.setUpdateTime(rs.getTimestamp("update_time").toLocalDateTime());
         cm.setLikeCount(rs.getInt("like_count"));
         cm.setIsDeleted(rs.getBoolean("is_deleted"));
         return cm;

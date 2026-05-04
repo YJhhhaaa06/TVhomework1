@@ -1,15 +1,11 @@
 package com.itheima.service;
 
-import com.itheima.command.ContentType;
 import com.itheima.command.UploadCommand;
 import com.itheima.controller.UploadType;
 import com.itheima.dao.CommentDao;
 import com.itheima.dao.ContentDao;
 import com.itheima.dao.ContentMediaDao;
-import com.itheima.exception.BusinessException;
-import com.itheima.exception.ConflictException;
-import com.itheima.exception.ErrorCode;
-import com.itheima.exception.ServerException;
+import com.itheima.exception.*;
 import com.itheima.pojo.*;
 import com.itheima.util.MyConnectionPool;
 
@@ -25,7 +21,8 @@ public class ContentService {
     private CommentDao commentDao=new CommentDao();
     private ContentMediaDao contentMediaDao=new ContentMediaDao();
 
-    private static List<Content> contentList=new ArrayList<>();
+    private static List<RecommendVO> recommendList =new ArrayList<>();
+    private static Map<Long,ContentDetailVO> detailVOMap=new HashMap<>();
     private static long size;
     private static Random r=new Random();
 
@@ -52,9 +49,19 @@ public class ContentService {
 
     public void refresh(){
         try {
-            List<Content> newContentList= contentDao.findAllContent();
-            contentList=newContentList;
+            List<RecommendVO> newRecommendList = contentDao.findAllContent();
+            Map<Long,ContentDetailVO> newDetailVOMap=getDetailVOMap();
+            for (RecommendVO rvo : newRecommendList) {
+                ContentDetailVO detail = newDetailVOMap.get(rvo.getId());//从detailMap中取出封面
+                if (detail != null && detail.getCoverUrl() != null) {
+                    rvo.setCoverUrl(detail.getCoverUrl());
+                }
+            }
+            recommendList = newRecommendList;
+            detailVOMap=newDetailVOMap;
+
         }catch (Exception e){
+            e.printStackTrace();
             throw new RuntimeException("FAIL_TO_REFRESH",e);
         }
     }
@@ -73,25 +80,31 @@ public class ContentService {
 
 
 
-    public List<Content> getContentList() {
-        return contentList;
+    public List<RecommendVO> getContentList() {
+        return recommendList;
     }
 
     // ===== 查询 =====
+    //从缓存取出视频和动态
+    public ContentDetailVO getRecommendedContent(long contentId){
+        return detailVOMap.get(contentId);
+    }
 
 
 
 
-
-    public  Content getContentById(long contentId) {
+    public ContentDetailVO getContentById(long contentId) {
         Connection conn=null;
         try {
             conn=MyConnectionPool.getConnection();
-            Content content=contentDao.findContent(conn,contentId);
-            List<Comment> commentList = commentDao.getComments(conn, content.getId());
-            Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, content.getId());
-            buildContent(content, mediaMap, commentList);
-            return content;
+            ContentDetailVO contentDetailVO =contentDao.findContent(conn,contentId);
+            if (contentDetailVO==null){
+                return null;
+            }
+            List<Comment> commentList = commentDao.getComments(conn, contentDetailVO.getId());
+            Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, contentDetailVO.getId());
+            buildContent(contentDetailVO, mediaMap, commentList);
+            return contentDetailVO;
         }catch (SQLException e){
             throw new ConflictException(e.getMessage());
         }finally {
@@ -99,28 +112,29 @@ public class ContentService {
         }
     }
 
-    public List<Content> search(String keyword) {
+    public List<ContentDetailVO> search(String keyword) {
         Connection conn=null;
         try {
             conn=MyConnectionPool.getConnection();
-            List<Content> list=contentDao.search(conn,keyword,1,20);
-            for (Content content : list) {
-                List<Comment> commentList = commentDao.getComments(conn, content.getId());
-                Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, content.getId());
-                buildContent(content, mediaMap, commentList);
+            List<ContentDetailVO> list=contentDao.search(conn,keyword,1,20);
+            for (ContentDetailVO contentDetailVO : list) {
+                List<Comment> commentList = commentDao.getComments(conn, contentDetailVO.getId());
+                Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, contentDetailVO.getId());
+                buildContent(contentDetailVO, mediaMap, commentList);
             }
             return list;
         }catch (SQLException e){
-            throw new RuntimeException("FAIL_TO_GET_VIDEO_DETAIL", e);
+            e.printStackTrace();
+            throw new ServerException("搜索失败，请重试");
         }finally {
             MyConnectionPool.release(conn);
         }
     }
 
     //推流
-    public List<Content> getRecommend(int limit) {//推荐limit条视频
+    public List<RecommendVO> getRecommend(int limit) {//推荐limit条视频
 
-        List<Content> list = new ArrayList<>(contentList);
+        List<RecommendVO> list = new ArrayList<>(recommendList);
 
         // 打乱顺序（随机）
         Collections.shuffle(list);
@@ -131,10 +145,10 @@ public class ContentService {
         return list.subList(0, size);
     }
 
-    public Video getNextVideo(List<Video> list) {
-        int randomNum=r.nextInt(list.size());
-        return list.get(randomNum);
-    }
+//    public Video getNextVideo(List<Video> list) {
+//        int randomNum=r.nextInt(list.size());
+//        return list.get(randomNum);
+//    }
 
     // ===== 管理 =====
     public void addVideo(UploadCommand uc, String videoUrl, String coverUrl) {
@@ -143,7 +157,7 @@ public class ContentService {
         try {
             conn = MyConnectionPool.getConnection();
             conn.setAutoCommit(false);
-            long videoId =addContent(conn,uc);//添加视频后获取id
+            long videoId = doAddContent(conn,uc);//添加视频后获取id
             contentMediaDao.addMedia(conn,videoId, videoUrl, UploadType.VIDEO.getMediaType(),1);
             contentMediaDao.addMedia(conn,videoId,coverUrl,UploadType.COVER.getMediaType(), 1);
             conn.commit();//提交提交提交提交
@@ -162,14 +176,12 @@ public class ContentService {
         }
     }
 
-
-
     public void addPost(UploadCommand uc, String coverUrl, List<String> imageUrls) {
         Connection conn = null;
         try {
             conn = MyConnectionPool.getConnection();
             conn.setAutoCommit(false);
-            long contentId = addContent(conn, uc);
+            long contentId = doAddContent(conn, uc);
             if (coverUrl != null) {
                 contentMediaDao.addMedia(conn, contentId, coverUrl, UploadType.COVER.getMediaType(), 1);
             }
@@ -192,7 +204,7 @@ public class ContentService {
         }
     }
 
-    public long addContent(Connection conn, UploadCommand uc) throws SQLException {
+    public long doAddContent(Connection conn, UploadCommand uc) throws SQLException {
         long userId=uc.getUserId();
         String title = uc.getTitle();
         String description = uc.getDescription();
@@ -203,44 +215,67 @@ public class ContentService {
     public void deleteContent(long contentId,long userId) { }
 
 
-    public void buildContent(Content content, Map<Integer, List<ContentMedia>> mediaMap,List<Comment> commentList) {
+    public void buildContent(ContentDetailVO contentDetailVO, Map<Integer, List<ContentMedia>> mediaMap, List<Comment> commentList) {
 
-        content.setCommentList(commentList);
-        String coverUrl = null;
+        contentDetailVO.setCommentList(commentList);
         List<ContentMedia> coverList = mediaMap.get(3);
         if (coverList != null && !coverList.isEmpty()) {
-            coverUrl = coverList.getFirst().getUrl();
+            contentDetailVO.setCoverUrl(jointUrl(coverList.getFirst().getUrl()));
         }
-        content.setCoverUrl(coverUrl);
-        if (content.getType() == 1) {
-            List<ContentMedia> videoList = mediaMap.get(1);
-            if (videoList != null && !videoList.isEmpty()) {
-                content.setVideoUrl(videoList.getFirst().getUrl());
-            }
-        } else if (content.getType() == 2) {
-            List<ContentMedia> imageList = mediaMap.get(2);
-            if (imageList != null && !imageList.isEmpty()) {
-                List<String> imageUrls = new ArrayList<>();
-                for (ContentMedia media : imageList) {
-                    imageUrls.add(media.getUrl());
+        int type= contentDetailVO.getType();
+        switch (type){
+            case 1:
+                List<ContentMedia> videoList = mediaMap.get(1);
+                if (videoList != null && !videoList.isEmpty()) {
+                    contentDetailVO.setVideoUrl(jointUrl(videoList.getFirst().getUrl()));
+                } else {
+                    throw new NotFoundException("资源已丢失");
                 }
-                content.setImageUrls(imageUrls);
+                break;
+            case 2:
+                List<ContentMedia> imageList = mediaMap.get(2);
+                if (imageList != null && !imageList.isEmpty()) {
+                    List<String> imageUrls = new ArrayList<>();
+                    for (ContentMedia media : imageList) {
+                        imageUrls.add(media.getUrl());
+                    }
+                    contentDetailVO.setImageUrls(imageUrls);
+                }
+                break;
+            default:
+                throw new ServerException("未知内容类型: " + type);
+        }
+
+
+
+
+    }
+
+    private Map<Long,ContentDetailVO> getDetailVOMap(){
+        Connection conn=null;
+        try {
+            conn=MyConnectionPool.getConnection();
+            List<ContentDetailVO> list=contentDao.findAllContentDetail(conn);
+            for (ContentDetailVO contentDetailVO : list) {
+                List<Comment> commentList = commentDao.getComments(conn, contentDetailVO.getId());
+                Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, contentDetailVO.getId());
+                buildContent(contentDetailVO, mediaMap, commentList);
             }
-            
+            Map<Long,ContentDetailVO> map=new HashMap<>();
+            for (ContentDetailVO cdVO:list){
+                map.put(cdVO.getId(),cdVO);
+            }
+            return map;
+        }catch (SQLException e){
+            e.printStackTrace();
+            throw new ServerException("缓存失败");
+        }finally {
+            MyConnectionPool.release(conn);
         }
     }
 
-    //输入的视频是否合法
-    public boolean videoCheck(String title,String description,String url){
-        if(title==null||title.length()>50){
-            return false;
-        }
-        if (description!=null&&description.length()>500){
-            return false;
-        }
-        if(url==null||url.length()>500){
-            return false;
-        }
-        return !title.trim().isEmpty();
+
+    private String jointUrl(String url){
+        return "http://localhost:8080/MyAPP"+url;
     }
 }
