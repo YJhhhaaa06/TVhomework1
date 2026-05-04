@@ -22,11 +22,15 @@ public class StartController extends HttpServlet {
             // 1. 设置响应格式
             resp.setContentType("application/json;charset=utf-8");
 
-            // 2. 获取推荐视频（例如取 12 条）
+            // 2. 获取推荐内容（例如取 12 条）
             List<RecommendVO> recommend = contentService.getRecommend(12);
 
+            // 3. 填充关注状态（不影响缓存）
+            Long userId = (Long) req.getAttribute("userId");
+            contentService.fillFollowStatus(recommend, userId);
+
             // 输出
-            baseServletUtil.writeSuccess(resp,recommend);
+            baseServletUtil.writeSuccess(resp, recommend);
 
         }
     }

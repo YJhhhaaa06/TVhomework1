@@ -1,4 +1,4 @@
 package com.itheima.service;
 
-public class VideoService {
+public class LikeService {
 }

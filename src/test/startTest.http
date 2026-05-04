@@ -1,9 +1,19 @@
+### ==================== 变量 ====================
+# 先用 loginTest.http 登录拿到 token，替换下面
+@token = your_token_here
+
+
 ### ==================== 首页推荐流测试 ====================
-# 不需要 token，LoginFilter 放行 /start
 
-### 1. 正常获取推荐 — 返回最多 12 条随机内容
+### 1. 登录用户获取推荐 — 应包含 isFollow 字段
 GET http://localhost:8080/MyAPP/start
+token: {{token}}
 
 
-### 2. 连续请求 — 验证每次结果可能不同（随机打乱）
+### 2. 连续请求 — 验证随机打乱
+GET http://localhost:8080/MyAPP/start
+token: {{token}}
+
+
+### 3. 不传 token — isFollow 应全为 false
 GET http://localhost:8080/MyAPP/start

@@ -10,6 +10,7 @@ public class ContentBaseVO {
     private int commentCount;//评论数
     private int likeCount;//点赞数
     private String authorName;//作者名
+    private boolean isFollow;//当前用户是否关注了该作者
 
     public ContentBaseVO() {
     }
@@ -96,5 +97,13 @@ public class ContentBaseVO {
 
     public void setAuthorName(String authorName) {
         this.authorName = authorName;
+    }
+
+    public boolean getIsFollow() {
+        return isFollow;
+    }
+
+    public void setIsFollow(boolean follow) {
+        isFollow = follow;
     }
 }

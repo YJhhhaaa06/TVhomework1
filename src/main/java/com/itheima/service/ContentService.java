@@ -5,6 +5,7 @@ import com.itheima.controller.UploadType;
 import com.itheima.dao.CommentDao;
 import com.itheima.dao.ContentDao;
 import com.itheima.dao.ContentMediaDao;
+import com.itheima.dao.FollowDao;
 import com.itheima.exception.*;
 import com.itheima.pojo.*;
 import com.itheima.util.MyConnectionPool;
@@ -20,6 +21,7 @@ public class ContentService {
     private ContentDao contentDao=new ContentDao();
     private CommentDao commentDao=new CommentDao();
     private ContentMediaDao contentMediaDao=new ContentMediaDao();
+    private FollowDao followDao=new FollowDao();
 
     private static List<RecommendVO> recommendList =new ArrayList<>();
     private static Map<Long,ContentDetailVO> detailVOMap=new HashMap<>();
@@ -143,6 +145,32 @@ public class ContentService {
         int size = Math.min(limit, list.size());
 
         return list.subList(0, size);
+    }
+
+    // 批量填充 isFollow，不污染缓存
+    public void fillFollowStatus(List<? extends ContentBaseVO> list, Long userId) {
+        if (userId == null || list == null || list.isEmpty()) return;
+
+        List<Long> authorIds = new ArrayList<>();
+        for (ContentBaseVO vo : list) {
+            if (vo.getAuthorId() > 0) {
+                authorIds.add(vo.getAuthorId());
+            }
+        }
+        if (authorIds.isEmpty()) return;
+
+        Connection conn = null;
+        try {
+            conn = MyConnectionPool.getConnection();
+            Set<Long> followedSet = followDao.getFollowedIds(conn, userId, authorIds);
+            for (ContentBaseVO vo : list) {
+                vo.setIsFollow(followedSet.contains(vo.getAuthorId()));
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        } finally {
+            MyConnectionPool.release(conn);
+        }
     }
 
 //    public Video getNextVideo(List<Video> list) {

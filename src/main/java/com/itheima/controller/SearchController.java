@@ -52,11 +52,13 @@ public class SearchController extends HttpServlet {
         SearchDTO dto=RequestParser.parse(req,SearchDTO.class);
 
             ContentDetailVO contentVO = contentService.getContentById(dto.getContentId());
-            if(contentVO==null){//找不到视频
-                BaseServletUtil.writeError(resp,ErrorCode.NOT_FOUND,"找不到对应内容");
+            if (contentVO == null) {
+                BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "找不到对应内容");
                 return;
             }
-            BaseServletUtil.writeSuccess(resp,contentVO);
+            Long userId = (Long) req.getAttribute("userId");
+            contentService.fillFollowStatus(List.of(contentVO), userId);
+            BaseServletUtil.writeSuccess(resp, contentVO);
     }
     protected void search(HttpServletRequest req, HttpServletResponse resp)throws Exception{
         SearchDTO dto=RequestParser.parse(req,SearchDTO.class);
@@ -65,18 +67,22 @@ public class SearchController extends HttpServlet {
             BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR,"输入不能为空");
             return;
         }
-        List<ContentDetailVO> list= contentService.search(dto.getKeyword().trim());
-        BaseServletUtil.writeSuccess(resp,list);
+        List<ContentDetailVO> list = contentService.search(dto.getKeyword().trim());
+        Long userId = (Long) req.getAttribute("userId");
+        contentService.fillFollowStatus(list, userId);
+        BaseServletUtil.writeSuccess(resp, list);
     }
 
     protected void getDetailRecommended(HttpServletRequest req, HttpServletResponse resp)throws Exception{
         SearchDTO dto=RequestParser.parse(req,SearchDTO.class);
         ContentDetailVO contentVO = contentService.getRecommendedContent(dto.getContentId());
-        if(contentVO==null){//找不到视频
-            BaseServletUtil.writeError(resp,ErrorCode.NOT_FOUND,"找不到对应视频");
+        if (contentVO == null) {
+            BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "找不到对应视频");
             return;
         }
-        BaseServletUtil.writeSuccess(resp,contentVO);
+        Long userId = (Long) req.getAttribute("userId");
+        contentService.fillFollowStatus(List.of(contentVO), userId);
+        BaseServletUtil.writeSuccess(resp, contentVO);
     }
 
 

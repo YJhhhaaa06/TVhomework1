@@ -1,6 +1,5 @@
 package com.itheima.service;
 
-import com.itheima.dao.VideoDao;
 import com.itheima.pojo.LogInResult;
 import com.itheima.util.MyConnectionPool;
 
