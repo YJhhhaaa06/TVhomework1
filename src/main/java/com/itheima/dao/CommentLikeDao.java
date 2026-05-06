@@ -38,7 +38,7 @@ public class CommentLikeDao {
      * @param commentId 评论ID
      * @return 受影响的行数
      */
-    public int deleteLike(Connection conn, long userId, long commentId) throws SQLException {
+    public int removeLike(Connection conn, long userId, long commentId) throws SQLException {
         String sql = "DELETE FROM comment_like WHERE user_id = ? AND comment_id = ?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setLong(1, userId);
@@ -47,6 +47,7 @@ public class CommentLikeDao {
         }
     }
 
+
     /**
      * 根据userId和commentId查看用户是否已经给评论点过赞
      * @param userId 用户ID
@@ -54,22 +55,28 @@ public class CommentLikeDao {
      * @return true表示已点赞，false表示未点赞
      */
     public boolean isLiked(long userId, long commentId) throws SQLException {
-        String sql = "SELECT COUNT(*) FROM comment_like WHERE user_id = ? AND comment_id = ?";
         Connection conn = null;
         try {
             conn = MyConnectionPool.getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setLong(1, userId);
-                pstmt.setLong(2, commentId);
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    if (rs.next()) {
-                        return rs.getInt(1) > 0;
-                    }
-                    return false;
-                }
-            }
+            return isLiked(conn,userId,commentId);
         } finally {
             MyConnectionPool.release(conn);
         }
+    }
+
+    public boolean isLiked(Connection conn,long userId, long commentId) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM comment_like WHERE user_id = ? AND comment_id = ?";
+
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, userId);
+            pstmt.setLong(2, commentId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1) > 0;
+                }
+                return false;
+            }
+        }
+
     }
 }

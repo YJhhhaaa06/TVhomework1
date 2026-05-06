@@ -1,0 +1,100 @@
+### ==================== 变量 ====================
+# 先用 loginTest.http 的用例1或2登录，拿到 token 替换下面
+# 关注者（自己）的 userId 由 token 决定，被关注者从下面 followedUserId 取
+@token = your_token_here
+
+
+
+### ==================== 关注测试 ====================
+
+### 1. 正常关注 — 关注另一个用户
+POST http://localhost:8080/MyAPP/follow/add
+token: {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+followedUserId=2
+
+
+### 2. 正常取关 — 取消关注
+POST http://localhost:8080/MyAPP/follow/remove
+token: {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+followedUserId=2
+
+
+### ==================== 异常 — 重复操作 ====================
+
+### 3. 重复关注 — 对已关注的用户再次关注
+POST http://localhost:8080/MyAPP/follow/add
+token: {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+followedUserId=3
+
+
+### 4. 重复取关 — 对未关注的用户取关
+POST http://localhost:8080/MyAPP/follow/remove
+token: {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+followedUserId=3
+
+
+### ==================== 异常 — 参数校验 ====================
+
+### 5. 关注自己
+POST http://localhost:8080/MyAPP/follow/add
+token: {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+followedUserId=1
+
+
+### 6. 取关自己
+POST http://localhost:8080/MyAPP/follow/remove
+token: {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+followedUserId=1
+
+
+### 7. 缺少 followedUserId
+POST http://localhost:8080/MyAPP/follow/add
+token: {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+
+### 8. followedUserId 不是数字
+POST http://localhost:8080/MyAPP/follow/add
+token: {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+followedUserId=abc
+
+
+### ==================== 异常 — 鉴权 ====================
+
+### 9. 不带 token — AuthFilter 拦截
+POST http://localhost:8080/MyAPP/follow/add
+Content-Type: application/x-www-form-urlencoded
+
+followedUserId=2
+
+
+### 10. 伪造 token — AuthFilter 拦截
+POST http://localhost:8080/MyAPP/follow/add
+token: fake-token-12345
+Content-Type: application/x-www-form-urlencoded
+
+followedUserId=2
+
+
+### ==================== 异常 — 路径 ====================
+
+### 11. 未识别的 action
+POST http://localhost:8080/MyAPP/follow/unknown
+token: {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+followedUserId=2

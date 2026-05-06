@@ -66,7 +66,26 @@ public class ContentDao {
 
 
     //查
-    //根据视频ID查询视频和动态
+    //content是否存在
+    public boolean isContentExist(Connection conn,long contentId)throws SQLException {
+        String sql = "SELECT COUNT(*) " +
+                "FROM content " +
+                "WHERE id = ? " +
+                "  AND is_deleted = 0";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, contentId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    int count = rs.getInt(1);
+                    // 数量>0：content存在
+                    return count > 0;
+                }
+            }
+            return false;
+        }
+    }
+
+    //根据ID查询视频和动态
     public ContentDetailVO findContent(Connection conn, long contentId) throws SQLException{
         String sql= """
 SELECT 
@@ -264,6 +283,8 @@ SELECT
     }
 
 
+    //改
+
     //更新视频标题或简介
     public int updateContentInfo(Connection conn,long contentId, String title, String description)throws SQLException{
         String sql="update content set title=?,description=? where id=?";
@@ -277,7 +298,28 @@ SELECT
         return rows;
     }
 
+    public int getLikeCount(Connection conn, long contentId) throws SQLException {
+        String sql = "SELECT like_count FROM content WHERE id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, contentId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1);
+                }
+                return 0;
+            }
+        }
+    }
 
+    //更新点赞数量
+    public void updateLikeCount(Connection conn, Long contentId, int delta) throws SQLException {
+        String sql = "UPDATE content SET like_count = like_count + ? WHERE id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, delta);
+            ps.setLong(2, contentId);
+            ps.executeUpdate();
+        }
+    }
 
 
 }

@@ -56,21 +56,23 @@ public class CommentDao {
     }
 
     //查
-    //根据视频id查评论，只能查没被隐藏的
-//    public List<Comment> findCommentsByVideo(Connection conn,long videoId)throws SQLException{
-//        String sql="select * from comment where video_id = ? and is_deleted=0";
-//        List<Comment> list=new ArrayList<>();
-//            try (PreparedStatement pstmt = conn.prepareStatement(sql)){
-//                pstmt.setLong(1, videoId);
-//                try (ResultSet rs = pstmt.executeQuery()){
-//                    while (rs.next()){
-//                        Comment cm = ResultMap.buildComment(rs);
-//                        list.add(cm);
-//                    }
-//                }
-//            }
-//            return list;
-//    }
+    public boolean isCommentExist(Connection conn,long commentId)throws SQLException {
+        String sql = "SELECT COUNT(*) " +
+                "FROM comment " +
+                "WHERE comment_id = ? " +
+                "  AND is_deleted = 0";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, commentId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    int count = rs.getInt(1);
+                    // 数量>0：评论存在
+                    return count > 0;
+                }
+            }
+            return false;
+        }
+    }
 
     public boolean isParentIdCorrect(Connection conn,long parentId,long contentId) throws SQLException {
         String sql="SELECT COUNT(*) " +
@@ -118,7 +120,9 @@ public class CommentDao {
         return list;
     }
 
-    //改（点赞暂时不做）
+
+
+    //改
     //关闭或开启评论区
     //隐藏视频下的评论
     public int hideCommentByContent(Connection conn, long contentId)throws SQLException{
@@ -139,6 +143,28 @@ public class CommentDao {
             pstmt.setLong(1,ContentId);
             rows=pstmt.executeUpdate();
             return rows;
+        }
+    }
+
+    public int getLikeCount(Connection conn, long commentId) throws SQLException {
+        String sql = "SELECT like_count FROM comment WHERE id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, commentId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1);
+                }
+                return 0;
+            }
+        }
+    }
+
+    public void updateLikeCount(Connection conn, Long commentId, int delta) throws SQLException {
+        String sql = "UPDATE comment SET like_count = like_count + ? WHERE id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, delta);
+            ps.setLong(2, commentId);
+            ps.executeUpdate();
         }
     }
 

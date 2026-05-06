@@ -20,14 +20,13 @@ import java.util.List;
 public class CommentController extends HttpServlet {
     private CommentService commentService = new CommentService();
 
-    private BaseServletUtil baseServletUtil =new BaseServletUtil();
 
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException  {
         try{
             String action = req.getPathInfo();
             if(action==null){
-                baseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR,"action不能为空");
+                BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR,"action不能为空");
                 return;
             }
             switch (action){
@@ -38,14 +37,14 @@ public class CommentController extends HttpServlet {
                     showComment(req,resp);
                     break;
                 default:
-                    baseServletUtil.writeError(resp,ErrorCode.PARAM_ERROR,"未识别功能");
+                    BaseServletUtil.writeError(resp,ErrorCode.PARAM_ERROR,"未识别功能");
             }
         } catch (BusinessException e) {
             e.printStackTrace();
-            baseServletUtil.writeError(resp,e.getCode(),e.getMessage());
+            BaseServletUtil.writeError(resp,e.getCode(),e.getMessage());
         }catch (Exception e){
             e.printStackTrace();
-            baseServletUtil.writeError(resp,ErrorCode.SERVER_ERROR,e.getMessage());
+            BaseServletUtil.writeError(resp,ErrorCode.SERVER_ERROR,e.getMessage());
         }
 
 
@@ -61,7 +60,7 @@ public class CommentController extends HttpServlet {
         dto.setUserId(userId);
         CommentCommand commentCommand= CommandConverter.commentToCommand(dto);
         commentService.addComment(commentCommand);
-        baseServletUtil.writeSuccess(resp,"评论成功");
+        BaseServletUtil.writeSuccess(resp,"评论成功");
 
     }
 
@@ -72,7 +71,7 @@ public class CommentController extends HttpServlet {
 
         List<CommentVO> commentVOList;
         commentVOList =commentService.getComment(videoId);
-        baseServletUtil.writeSuccess(resp, commentVOList);
+        BaseServletUtil.writeSuccess(resp, commentVOList);
 
     }
     private void printComment(CommentVO c, PrintWriter out, int level) {

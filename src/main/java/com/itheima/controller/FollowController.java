@@ -21,6 +21,10 @@ public class FollowController extends HttpServlet {
             throws ServletException, IOException {
         try {
             String action = req.getPathInfo();
+            if(action==null){
+                BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR,"action不能为空");
+                return;
+            }
             Long userId = (Long) req.getAttribute("userId");
             long followedUserId = parseFollowedUserId(req);
 

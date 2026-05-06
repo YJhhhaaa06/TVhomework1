@@ -49,18 +49,26 @@ public class ContentLikeDao {
         Connection conn = null;
         try {
             conn = MyConnectionPool.getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setLong(1, userId);
-                pstmt.setLong(2, contentId);
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    if (rs.next()) {
-                        return rs.getInt(1) > 0;
-                    }
-                    return false;
-                }
-            }
+            return isLiked(conn,userId,contentId);
         } finally {
             MyConnectionPool.release(conn);
         }
     }
+
+    public boolean isLiked(Connection conn,long userId, long contentId) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM content_like WHERE user_id = ? AND content_id = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, userId);
+            pstmt.setLong(2, contentId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1) > 0;
+                }
+                return false;
+            }
+        }
+
+    }
+
+
 }
