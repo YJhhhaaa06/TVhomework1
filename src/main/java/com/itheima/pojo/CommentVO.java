@@ -2,7 +2,7 @@ package com.itheima.pojo;
 
 import java.util.List;
 
-public class Comment {
+public class CommentVO {
     //为了可扩展，我把数据库里面所有字段都加进来
 
     private String username;//这个不属comment表
@@ -14,17 +14,17 @@ public class Comment {
     //父评论ID
     private int likeCount;
     private boolean isDeleted;//false是未删除
-    private List<Comment> children;
+    private List<CommentVO> children;
 
-    public List<Comment> getChildren() {
+    public List<CommentVO> getChildren() {
         return children;
     }
 
-    public void setChildren(List<Comment> children) {
+    public void setChildren(List<CommentVO> children) {
         this.children = children;
     }
 
-    public Comment(String username, long commentId, long contentId, long userId, String content, Long parentId, int likeCount, boolean isDeleted) {
+    public CommentVO(String username, long commentId, long contentId, long userId, String content, Long parentId, int likeCount, boolean isDeleted) {
         this.username = username;
         this.commentId = commentId;
         this.contentId = contentId;
@@ -35,7 +35,7 @@ public class Comment {
         this.isDeleted = isDeleted;
     }
 
-    public Comment() {
+    public CommentVO() {
     }
 
     public String getUsername() {

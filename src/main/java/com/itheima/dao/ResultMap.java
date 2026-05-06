@@ -55,8 +55,8 @@ public class ResultMap {
 //        content.setCrateTime(rs.getTimestamp("create_time").toLocalDateTime());
         contentMap.put(id, contentDetailVO);
     }
-    public static Comment buildComment(ResultSet rs)throws SQLException{
-        Comment cm=new Comment();
+    public static CommentVO buildComment(ResultSet rs)throws SQLException{
+        CommentVO cm=new CommentVO();
         cm.setUsername(rs.getString("username"));
         cm.setCommentId(rs.getLong("comment_id"));
         cm.setContentId(rs.getLong("content_id"));

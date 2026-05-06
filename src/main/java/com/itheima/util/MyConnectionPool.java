@@ -3,7 +3,9 @@ package com.itheima.util;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.util.HashSet;
 import java.util.LinkedList;
+import java.util.Set;
 
 public class MyConnectionPool {
 //    private static final String URL = "jdbc:mysql:///TVDatabase?useSSL=false";
@@ -23,24 +25,34 @@ private static final String URL = "jdbc:mysql://localhost:3306/TVDatabase?useSSL
     // 池子
     private static final int INIT_SIZE = 5;
     private static final LinkedList<Connection> pool = new LinkedList<>();
+    private static final Set<Connection> allConnections = new HashSet<>();
+    //连接池是否已关闭
+    private static volatile boolean isClosed = false;
 
     // 静态代码块初始化
     static {
         try {
             for (int i = 0; i < INIT_SIZE; i++) {
-                Connection conn = DriverManager.getConnection(URL, USER, PASSWORD);
-                pool.add(conn);
+                createConnection();
             }
         } catch (SQLException e) {
             e.printStackTrace();
         }
     }
+    private static void createConnection() throws SQLException {
+        Connection conn = DriverManager.getConnection(URL, USER, PASSWORD);
+        pool.add(conn);
+        allConnections.add(conn);
+    }
 
     // 获取连接
     public static synchronized Connection getConnection() throws SQLException {
+        if(isClosed){
+            throw new IllegalStateException("连接池已关闭");
+        }
         if (pool.isEmpty()) {
-            // 没有就新建（简单策略）
-            return DriverManager.getConnection(URL, USER, PASSWORD);
+            // 没有就新建
+            createConnection();
         }
         return pool.removeFirst();
     }
@@ -76,5 +88,22 @@ private static final String URL = "jdbc:mysql://localhost:3306/TVDatabase?useSSL
             }
         }
     }
+
+    public static synchronized void closePool() {
+        isClosed=true;
+        for (Connection conn : allConnections) {
+            try {
+                if (!conn.isClosed()) {
+                    conn.close();
+                }
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+        }
+        pool.clear();
+        allConnections.clear();
+    }
+
+
 
 }

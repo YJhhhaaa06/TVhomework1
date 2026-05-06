@@ -1,6 +1,7 @@
 
 package com.itheima.command;
 
+import com.itheima.DTO.CommentDTO;
 import com.itheima.DTO.LoginDTO;
 import com.itheima.DTO.RegisterDTO;
 import com.itheima.exception.ParamException;
@@ -94,4 +95,18 @@ public class CommandConverter {
         return UploadCommand.asPost(title,description,userId,category);
     }
 
+    public static CommentCommand commentToCommand(CommentDTO dto){
+        long contentId=dto.getContentId();
+        long userId=dto.getUserId();
+        String message=dto.getMessage();
+        Long parentId=dto.getParentId();
+        if(message==null||message.isBlank()){
+            throw new ParamException("输入不能为空");
+        }
+        if (message.length()>1000){
+            throw new ParamException("不可发送超过1000字的评论");
+        }
+        return new CommentCommand(contentId,userId,message,parentId);
+
+    }
 }

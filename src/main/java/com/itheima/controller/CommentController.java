@@ -1,8 +1,11 @@
 package com.itheima.controller;
 
+import com.itheima.DTO.CommentDTO;
+import com.itheima.command.CommandConverter;
+import com.itheima.command.CommentCommand;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
-import com.itheima.pojo.Comment;
+import com.itheima.pojo.CommentVO;
 import com.itheima.service.CommentService;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServlet;
@@ -13,7 +16,7 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.List;
 
-@WebServlet("/comment")
+@WebServlet("/comment/*")
 public class CommentController extends HttpServlet {
     private CommentService commentService = new CommentService();
 
@@ -22,13 +25,13 @@ public class CommentController extends HttpServlet {
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException  {
         try{
-            String action=req.getParameter("action");
-            if(action==null||action.trim().isEmpty()){
-                baseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR,"输入不能为空");
+            String action = req.getPathInfo();
+            if(action==null){
+                baseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR,"action不能为空");
                 return;
             }
             switch (action){
-                case "add":
+                case "/add":
                     addComment(req,resp);
                     break;
                 case "show":
@@ -41,6 +44,7 @@ public class CommentController extends HttpServlet {
             e.printStackTrace();
             baseServletUtil.writeError(resp,e.getCode(),e.getMessage());
         }catch (Exception e){
+            e.printStackTrace();
             baseServletUtil.writeError(resp,ErrorCode.SERVER_ERROR,e.getMessage());
         }
 
@@ -51,44 +55,33 @@ public class CommentController extends HttpServlet {
 
 
     protected void addComment(HttpServletRequest req, HttpServletResponse resp)throws Exception{
-        resp.setContentType("text/plain;charset=UTF-8");
-        try{
-            Long videoId=Long.parseLong(req.getParameter("videoId"));
-            Long userId = (Long) req.getAttribute("userId");
-            String content = req.getParameter("content");
-            String parentIdStr =req.getParameter("parentId");
-            Long parentId = null;
-            if (parentIdStr != null && !parentIdStr.isEmpty()) {
-                parentId = Long.parseLong(parentIdStr);
-            }
-            commentService.addComment(userId,videoId,parentId,content);
-            baseServletUtil.writeSuccess(resp,"评论成功");
-        }catch (Exception e){
-            e.printStackTrace();
-            throw e;
-        }
+
+        CommentDTO dto=RequestParser.parse(req,CommentDTO.class);
+        Long userId = (Long) req.getAttribute("userId");
+        dto.setUserId(userId);
+        CommentCommand commentCommand= CommandConverter.commentToCommand(dto);
+        commentService.addComment(commentCommand);
+        baseServletUtil.writeSuccess(resp,"评论成功");
+
     }
 
 
     protected void showComment(HttpServletRequest req, HttpServletResponse resp)throws Exception {
-        resp.setContentType("text/plain;charset=UTF-8");
+
         Long videoId=Long.parseLong(req.getParameter("videoId"));
 
-        List<Comment> commentList;
-        commentList=commentService.getComment(videoId);
-        baseServletUtil.writeSuccess(resp,commentList);
-//        for (Comment comment : commentList) {
-//            printComment(comment, resp.getWriter(), 0);
-//        }
+        List<CommentVO> commentVOList;
+        commentVOList =commentService.getComment(videoId);
+        baseServletUtil.writeSuccess(resp, commentVOList);
 
     }
-    private void printComment(Comment c, PrintWriter out, int level) {
+    private void printComment(CommentVO c, PrintWriter out, int level) {
         String indent = "  ".repeat(level);//缩进
 
         out.write(indent + "用户：" + c.getUsername() + " 内容：" + c.getContent() + "\n");
 
         if (c.getChildren() != null) {
-            for (Comment child : c.getChildren()) {
+            for (CommentVO child : c.getChildren()) {
                 printComment(child, out, level + 1);
             }
         }

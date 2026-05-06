@@ -1,6 +1,6 @@
 package com.itheima.dao;
 
-import com.itheima.pojo.Comment;
+import com.itheima.pojo.CommentVO;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -72,13 +72,36 @@ public class CommentDao {
 //            return list;
 //    }
 
-    public  List<Comment> getComments(Connection conn, Long contentId) throws SQLException {
+    public boolean isParentIdCorrect(Connection conn,long parentId,long contentId) throws SQLException {
+        String sql="SELECT COUNT(*) " +
+                "FROM comment " +
+                "WHERE comment_id = ? " +
+                "AND content_id = ? " +
+                "  AND is_deleted = 0";
+        try (PreparedStatement pstmt=conn.prepareStatement(sql)){
+            pstmt.setLong(1,parentId);
+            pstmt.setLong(2,contentId);
+
+            try (ResultSet rs= pstmt.executeQuery()){
+                if (rs.next()) {
+                    int count = rs.getInt(1);
+                    // 数量>0：父评论存在且归属正确
+                    return count > 0;
+                }
+            }
+            return false;
+
+        }
+
+    }
+
+    public  List<CommentVO> getComments(Connection conn, Long contentId) throws SQLException {
 
         String sql = "SELECT c.*, u.username " +
                 "FROM comment c LEFT JOIN users u ON c.user_id = u.id " +
                 "WHERE c.content_id=? AND c.is_deleted=0 ORDER BY c.comment_id";
 
-        List<Comment> list = new ArrayList<>();
+        List<CommentVO> list = new ArrayList<>();
 
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setLong(1, contentId);
@@ -86,7 +109,7 @@ public class CommentDao {
             try(ResultSet rs = ps.executeQuery()){
 
             while (rs.next()) {
-                Comment c = ResultMap.buildComment(rs);
+                CommentVO c = ResultMap.buildComment(rs);
                 list.add(c);
             }
             }

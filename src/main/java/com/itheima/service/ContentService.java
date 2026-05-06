@@ -103,9 +103,9 @@ public class ContentService {
             if (contentDetailVO==null){
                 return null;
             }
-            List<Comment> commentList = commentDao.getComments(conn, contentDetailVO.getId());
+            List<CommentVO> commentVOList = commentDao.getComments(conn, contentDetailVO.getId());
             Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, contentDetailVO.getId());
-            buildContent(contentDetailVO, mediaMap, commentList);
+            buildContent(contentDetailVO, mediaMap, commentVOList);
             return contentDetailVO;
         }catch (SQLException e){
             throw new ConflictException(e.getMessage());
@@ -120,9 +120,9 @@ public class ContentService {
             conn=MyConnectionPool.getConnection();
             List<ContentDetailVO> list=contentDao.search(conn,keyword,1,20);
             for (ContentDetailVO contentDetailVO : list) {
-                List<Comment> commentList = commentDao.getComments(conn, contentDetailVO.getId());
+                List<CommentVO> commentVOList = commentDao.getComments(conn, contentDetailVO.getId());
                 Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, contentDetailVO.getId());
-                buildContent(contentDetailVO, mediaMap, commentList);
+                buildContent(contentDetailVO, mediaMap, commentVOList);
             }
             return list;
         }catch (SQLException e){
@@ -243,9 +243,9 @@ public class ContentService {
     public void deleteContent(long contentId,long userId) { }
 
 
-    public void buildContent(ContentDetailVO contentDetailVO, Map<Integer, List<ContentMedia>> mediaMap, List<Comment> commentList) {
+    public void buildContent(ContentDetailVO contentDetailVO, Map<Integer, List<ContentMedia>> mediaMap, List<CommentVO> commentVOList) {
 
-        contentDetailVO.setCommentList(commentList);
+        contentDetailVO.setCommentList(commentVOList);
         List<ContentMedia> coverList = mediaMap.get(3);
         if (coverList != null && !coverList.isEmpty()) {
             contentDetailVO.setCoverUrl(jointUrl(coverList.getFirst().getUrl()));
@@ -285,9 +285,9 @@ public class ContentService {
             conn=MyConnectionPool.getConnection();
             List<ContentDetailVO> list=contentDao.findAllContentDetail(conn);
             for (ContentDetailVO contentDetailVO : list) {
-                List<Comment> commentList = commentDao.getComments(conn, contentDetailVO.getId());
+                List<CommentVO> commentVOList = commentDao.getComments(conn, contentDetailVO.getId());
                 Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, contentDetailVO.getId());
-                buildContent(contentDetailVO, mediaMap, commentList);
+                buildContent(contentDetailVO, mediaMap, commentVOList);
             }
             Map<Long,ContentDetailVO> map=new HashMap<>();
             for (ContentDetailVO cdVO:list){

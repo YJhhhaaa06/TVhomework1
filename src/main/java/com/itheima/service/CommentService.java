@@ -1,11 +1,9 @@
 package com.itheima.service;
 
+import com.itheima.command.CommentCommand;
 import com.itheima.dao.CommentDao;
-import com.itheima.exception.BusinessException;
-import com.itheima.exception.ErrorCode;
-import com.itheima.exception.NotFoundException;
-import com.itheima.exception.ServerException;
-import com.itheima.pojo.Comment;
+import com.itheima.exception.*;
+import com.itheima.pojo.CommentVO;
 import com.itheima.pojo.ContentDetailVO;
 import com.itheima.util.MyConnectionPool;
 
@@ -24,24 +22,24 @@ private CommentDao commentDao=new CommentDao();
     //建立索引关系
     //返回一级评论列表
     //map只用一次，就构建好了
-    public  List<Comment> buildCommentTree(List<Comment> list) {
-        Map<Long, Comment> map = new HashMap<>();
-        List<Comment> roots = new ArrayList<>();
+    public  List<CommentVO> buildCommentTree(List<CommentVO> list) {
+        Map<Long, CommentVO> map = new HashMap<>();
+        List<CommentVO> roots = new ArrayList<>();
 
         //先把所有评论放进 map，并初始化 children
-        for (Comment c : list) {
+        for (CommentVO c : list) {
             c.setChildren(new ArrayList<>());
             map.put(c.getCommentId(), c);
         }
 
         //建立父子关系
-        for (Comment c : list) {
+        for (CommentVO c : list) {
             Long parentId = c.getParentId();
 
             if (parentId == null||parentId==0) {
                 roots.add(c); // 一级评论
             } else {
-                Comment parent = map.get(parentId);
+                CommentVO parent = map.get(parentId);
                 if (parent != null) {
                     parent.getChildren().add(c);
                 }
@@ -55,17 +53,25 @@ private CommentDao commentDao=new CommentDao();
     //增
 
     //写入评论到数据库
-    public  void addComment(long userId,long videoId,Long parentId,String content){
-        if(!isCommentLegal(userId,videoId,content)){
-            throw new RuntimeException("WRONG_INPUT");
-        }
+    public  void addComment(CommentCommand commentCommand){
+        long userId=commentCommand.getUserId();
+        long contentId=commentCommand.getContentId();
+        Long parentId=commentCommand.getParentId();
+        String message=commentCommand.getMessage();
+
         Connection conn=null;
         try {
             conn= MyConnectionPool.getConnection();
             conn.setAutoCommit(false);
-            commentDao.addComment(conn,videoId,userId,content,parentId);
+            if(parentId!=null&&parentId!=0){
+                if(!commentDao.isParentIdCorrect(conn,parentId,contentId)){
+                    throw new ConflictException("被回复评论不属于该视频或动态");
+                }
+            }
+            commentDao.addComment(conn,contentId,userId,message,parentId);
             conn.commit();
         }catch (SQLException e) {
+            e.printStackTrace();
             if(conn!=null){
                 try {
                     conn.rollback();
@@ -75,17 +81,7 @@ private CommentDao commentDao=new CommentDao();
             }
             throw new ServerException("评论写入失败");
         } finally {
-            if (conn != null) {
-                try {
-                    conn.setAutoCommit(true);
-                } catch (SQLException e) {//这里说明连接可能已经异常
-                    e.printStackTrace();
-                    conn = null;//标记这个连接不可用
-                } finally {
-                    //无论如何都要执行
-                    MyConnectionPool.release(conn);
-                }
-            }
+            MyConnectionPool.release(conn);
         }
 
 
@@ -130,12 +126,12 @@ private CommentDao commentDao=new CommentDao();
     //查
 
 
-    private   List<Comment> findComment(long videoId) throws SQLException {
+    private   List<CommentVO> findComment(long videoId) throws SQLException {
         Connection conn=null;
         try {
             conn=MyConnectionPool.getConnection();
-            List<Comment> commentList=commentDao.getComments(conn,videoId);
-            return commentList;
+            List<CommentVO> commentVOList =commentDao.getComments(conn,videoId);
+            return commentVOList;
 
         }catch (SQLException e){
             conn=null;
@@ -148,17 +144,17 @@ private CommentDao commentDao=new CommentDao();
 
     //获取评论数量
     public  int getCommentCount(ContentDetailVO cdVO){
-        List<Comment> wholeList=cdVO.getCommentList();
+        List<CommentVO> wholeList=cdVO.getCommentList();
         return wholeList.size();
     }
     //获取回复数量
-    public  int countReplies(Comment comment) {
+    public  int countReplies(CommentVO commentVO) {
         int count = 0;
-        List<Comment> children = comment.getChildren();
+        List<CommentVO> children = commentVO.getChildren();
         if (children == null || children.isEmpty()) {
             return 0;
         }
-        for (Comment child : children) {
+        for (CommentVO child : children) {
             count += 1; // 当前子评论
             count += countReplies(child); // 子评论的子评论
         }
@@ -169,8 +165,8 @@ private CommentDao commentDao=new CommentDao();
     //改
 
     //写评论检查
-    private   boolean isCommentLegal(long userId,long videoId,String content){
-        if(userId==0||videoId==0){
+    private   boolean isCommentLegal(long userId,long contentId,String content){
+        if(userId==0||contentId==0){
             return false;
         }
         if(content.length()>2000){
@@ -182,9 +178,9 @@ private CommentDao commentDao=new CommentDao();
 
     //外界真正调用的
     //获取评论并整理评论，返回一级评论
-    public List<Comment> getComment(long contentId){
+    public List<CommentVO> getComment(long contentId){
         try {
-            List<Comment> wholeList = findComment(contentId);
+            List<CommentVO> wholeList = findComment(contentId);
             return buildCommentTree(wholeList);
         }catch (SQLException e){
             e.printStackTrace();
