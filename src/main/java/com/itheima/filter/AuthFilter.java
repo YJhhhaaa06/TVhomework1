@@ -16,7 +16,7 @@ import java.util.Set;
 public class AuthFilter implements Filter {
 
     private static final Set<String> PROTECTED_PREFIXES = Set.of(
-            "/upload",      // 上传视频/帖子
+            "/api/upload",      // 上传视频/帖子
             "/follow",      // 关注/取关
             "/like"         // 点赞/取消点赞
     );

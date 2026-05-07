@@ -12,20 +12,38 @@ import java.util.List;
 public class CommentDao {
 
     //增
-    public int addComment(Connection conn,long contentId,long userId,String content,Long parentId)throws SQLException {
+    public long addComment(Connection conn,long contentId,long userId,String content,Long parentId)throws SQLException {
         String sql = "insert into comment (content_id, user_id, content, parent_id) values (?, ?, ?, ?)";
-        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+        try (PreparedStatement pstmt = conn.prepareStatement(sql, PreparedStatement.RETURN_GENERATED_KEYS)) {
             pstmt.setLong(1, contentId);
             pstmt.setLong(2, userId);
             pstmt.setString(3, content);
             if (parentId == null) {
-                //如果没有父评论，就设为BIGINT类型的NULL
                 pstmt.setNull(4, java.sql.Types.BIGINT);
             } else {
                 pstmt.setLong(4, parentId);
             }
-            return pstmt.executeUpdate();
+            pstmt.executeUpdate();
+            try (ResultSet rs = pstmt.getGeneratedKeys()) {
+                if (rs.next()) {
+                    return rs.getLong(1);
+                }
+            }
+            throw new SQLException("获取评论ID失败");
         }
+    }
+
+    public CommentCacheDTO findCommentById(Connection conn, long commentId) throws SQLException {
+        String sql = "SELECT c.*, u.username FROM comment c LEFT JOIN users u ON c.user_id = u.id WHERE c.comment_id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, commentId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return ResultMap.buildComment(rs);
+                }
+            }
+        }
+        return null;
     }
 
     //删

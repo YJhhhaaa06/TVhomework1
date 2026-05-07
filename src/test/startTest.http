@@ -17,3 +17,13 @@ token: {{token}}
 
 ### 3. 不传 token — isFollow 应全为 false
 GET http://localhost:8080/MyAPP/start
+
+
+### 4. 验证返回格式 — 应包含 id/title/coverUrl/authorName/likeCount 等字段
+GET http://localhost:8080/MyAPP/start
+token: {{token}}
+
+
+### 5. 伪造 token — 应返回未登录用户的推荐（isFollow=false）
+GET http://localhost:8080/MyAPP/start
+token: invalid-token-0000

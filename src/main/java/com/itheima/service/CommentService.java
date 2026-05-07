@@ -2,9 +2,11 @@ package com.itheima.service;
 
 import com.itheima.command.CommentCommand;
 import com.itheima.dao.CommentDao;
+import com.itheima.dao.ContentDao;
 import com.itheima.exception.*;
 import com.itheima.pojo.CommentCacheDTO;
 import com.itheima.pojo.CommentVO;
+import com.itheima.pojo.ContentDetailVO;
 import com.itheima.util.LogUtil;
 import com.itheima.util.MyConnectionPool;
 
@@ -20,6 +22,7 @@ import java.util.logging.Logger;
 public class CommentService {
 
     private CommentDao commentDao = new CommentDao();
+    private ContentDao contentDao=new ContentDao();
     private LikeService likeService = new LikeService();
     private static final Logger LOGGER =
             LogUtil.getLogger(CommentService.class);
@@ -90,13 +93,22 @@ public class CommentService {
         try {
             conn = MyConnectionPool.getConnection();
             conn.setAutoCommit(false);
+
+            if(!contentDao.isContentExist(conn,contentId)){
+                throw new NotFoundException("被点赞的内容不存在");
+            }
             if (parentId != null && parentId != 0) {
                 if (!commentDao.isParentIdCorrect(conn, parentId, contentId)) {
                     throw new ConflictException("被回复评论不属于该视频或动态");
                 }
             }
-            commentDao.addComment(conn, contentId, userId, message, parentId);
+            long commentId = commentDao.addComment(conn, contentId, userId, message, parentId);
             conn.commit();
+            // 即时更新评论缓存
+            CommentCacheDTO newComment = commentDao.findCommentById(conn, commentId);
+            if (newComment != null) {
+                ContentService.addCommentToCache(contentId, newComment, parentId);
+            }
         } catch (SQLException e) {
             if (conn != null) {
                 try {

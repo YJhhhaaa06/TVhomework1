@@ -100,6 +100,9 @@ public class CommandConverter {
         long userId=dto.getUserId();
         String message=dto.getMessage();
         Long parentId=dto.getParentId();
+        if(contentId==0){
+            throw new ParamException("未指定被点赞内容");
+        }
         if(message==null||message.isBlank()){
             throw new ParamException("输入不能为空");
         }

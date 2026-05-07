@@ -1,6 +1,6 @@
 ### ==================== 变量 ====================
 # 先用 loginTest.http 登录拿到 token，替换下面
-@token = your_token_here
+@token = a1f95258-53f1-496d-b561-18191b49396c
 
 
 ### ==================== IdSearch — 从数据库按 contentId 查 ====================
@@ -105,4 +105,32 @@ token: {{token}}
 
 {
   "keyword": "test"
+}
+
+
+### 11. IdSearch — contentId 为非数字
+GET http://localhost:8080/MyAPP/search?action=IdSearch
+Content-Type: application/json
+token: {{token}}
+
+{
+  "contentId": "abc"
+}
+
+
+### 12. IdSearch — 缺少 contentId
+GET http://localhost:8080/MyAPP/search?action=IdSearch
+Content-Type: application/json
+token: {{token}}
+
+{
+}
+
+
+### 13. keywordSearch — 缺少 keyword 字段
+GET http://localhost:8080/MyAPP/search?action=keywordSearch
+Content-Type: application/json
+token: {{token}}
+
+{
 }

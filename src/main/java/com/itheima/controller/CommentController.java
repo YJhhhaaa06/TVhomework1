@@ -4,7 +4,6 @@ import com.itheima.command.CommandConverter;
 import com.itheima.command.CommentCommand;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
-import com.itheima.pojo.CommentVO;
 import com.itheima.service.CommentService;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServlet;
@@ -12,7 +11,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
-import java.util.List;
 
 @WebServlet("/comment/*")
 public class CommentController extends HttpServlet {
@@ -30,9 +28,6 @@ public class CommentController extends HttpServlet {
             switch (action){
                 case "/add":
                     addComment(req,resp);
-                    break;
-                case "show":
-                    showComment(req,resp);
                     break;
                 default:
                     BaseServletUtil.writeError(resp,ErrorCode.PARAM_ERROR,"未识别功能");
@@ -59,17 +54,6 @@ public class CommentController extends HttpServlet {
         CommentCommand commentCommand= CommandConverter.commentToCommand(dto);
         commentService.addComment(commentCommand);
         BaseServletUtil.writeSuccess(resp,"评论成功");
-
-    }
-
-
-    protected void showComment(HttpServletRequest req, HttpServletResponse resp)throws Exception {
-
-        Long videoId=Long.parseLong(req.getParameter("videoId"));
-
-        List<CommentVO> commentVOList;
-        commentVOList =commentService.getComment(videoId);
-        BaseServletUtil.writeSuccess(resp, commentVOList);
 
     }
 

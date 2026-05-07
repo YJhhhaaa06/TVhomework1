@@ -33,6 +33,8 @@ public class ContentService {
     private static List<RecommendVO> recommendList = new ArrayList<>();
     private static Map<Long, ContentDetailVO> contentCache = new HashMap<>();
     private static Map<Long, List<CommentCacheDTO>> commentCache = new HashMap<>();
+    private static Map<Long, Long> contentTimestamps = new HashMap<>();
+    private static final long CONTENT_TTL_MS = 10 * 60 * 1000;
     private static Random r = new Random();
 
     private static ContentService instance = new ContentService();
@@ -43,6 +45,30 @@ public class ContentService {
 
     private ContentService() {
         init();
+    }
+
+    // ===== 缓存 TTL 管理 =====
+
+    private boolean isContentExpired(long contentId) {
+        Long ts = contentTimestamps.get(contentId);
+        return ts == null || System.currentTimeMillis() - ts > CONTENT_TTL_MS;
+    }
+
+    private void evictContent(long contentId) {
+        contentCache.remove(contentId);
+        commentCache.remove(contentId);
+        contentTimestamps.remove(contentId);
+    }
+
+    private void cacheContent(long contentId, ContentDetailVO detail, List<CommentCacheDTO> comments) {
+        contentCache.put(contentId, detail);
+        commentCache.put(contentId, comments);
+        contentTimestamps.put(contentId, System.currentTimeMillis());
+    }
+
+    private void cacheContentBasic(long contentId, ContentDetailVO detail) {
+        contentCache.put(contentId, detail);
+        contentTimestamps.put(contentId, System.currentTimeMillis());
     }
 
     // ===== 初始化 =====
@@ -77,6 +103,11 @@ public class ContentService {
             recommendList = newRecommendList;
             contentCache = newContentCache;
             commentCache = newCommentCache;
+            contentTimestamps.clear();
+            long now = System.currentTimeMillis();
+            for (Long id : newContentCache.keySet()) {
+                contentTimestamps.put(id, now);
+            }
 
         } catch (Exception e) {
             LOGGER.log(Level.SEVERE, "内容缓存刷新失败", e);
@@ -92,7 +123,7 @@ public class ContentService {
             } catch (Exception e) {
                 LOGGER.log(Level.WARNING, "缓存定时刷新异常", e);
             }
-        }, 0, 1, TimeUnit.MINUTES);
+        }, 0, 10, TimeUnit.MINUTES);
     }
 
     // ===== 构建缓存 =====
@@ -179,6 +210,10 @@ public class ContentService {
             for (ContentDetailVO cdVO : list) {
                 Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, cdVO.getId());
                 buildContentMedia(cdVO, mediaMap);
+                // 回填缓存：搜索结果同步写入缓存
+                if (isContentExpired(cdVO.getId()) || !contentCache.containsKey(cdVO.getId())) {
+                    cacheContentBasic(cdVO.getId(), cdVO);
+                }
             }
             return list;
         } catch (SQLException e) {
@@ -191,8 +226,39 @@ public class ContentService {
 
     // ===== 组装响应 VO =====
 
-    public ContentVO getContentVO(long contentId, long userId) {
+    private ContentDetailVO getContentDetail(long contentId) {
+        if (isContentExpired(contentId)) {
+            evictContent(contentId);
+        }
         ContentDetailVO cdVO = contentCache.get(contentId);
+        if (cdVO == null) {
+            backfillContent(contentId);
+            cdVO = contentCache.get(contentId);
+        }
+        return cdVO;
+    }
+
+    //缓存回填
+    private void backfillContent(long contentId) {
+        Connection conn = null;
+        try {
+            conn = MyConnectionPool.getConnection();
+            ContentDetailVO cdVO = contentDao.findContent(conn, contentId);
+            if (cdVO == null) return;
+            Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, cdVO.getId());
+            buildContentMedia(cdVO, mediaMap);
+            List<CommentCacheDTO> comments = commentService.getCommentCacheVOList(contentId);
+            cacheContent(contentId, cdVO, comments);
+            LOGGER.info("缓存回填成功, contentId=" + contentId);
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "缓存回填失败, contentId=" + contentId, e);
+        } finally {
+            MyConnectionPool.release(conn);
+        }
+    }
+
+    public ContentVO getContentVO(long contentId, long userId) {
+        ContentDetailVO cdVO = getContentDetail(contentId);
         if (cdVO == null) {
             return null;
         }
@@ -348,6 +414,8 @@ public class ContentService {
             contentMediaDao.addMedia(conn, videoId, videoUrl, UploadType.VIDEO.getMediaType(), 1);
             contentMediaDao.addMedia(conn, videoId, coverUrl, UploadType.COVER.getMediaType(), 1);
             conn.commit();
+            // 即时更新缓存
+            updateCacheAfterAdd(conn, videoId);
         } catch (SQLException e) {
             LOGGER.log(Level.SEVERE, "添加视频失败, userId=" + uc.getUserId(), e);
             if (conn != null) {
@@ -377,6 +445,8 @@ public class ContentService {
                 contentMediaDao.addMedia(conn, contentId, imageUrl, UploadType.IMAGE.getMediaType(), sort++);
             }
             conn.commit();
+            // 即时更新缓存
+            updateCacheAfterAdd(conn, contentId);
         } catch (SQLException e) {
             LOGGER.log(Level.SEVERE, "添加动态失败, userId=" + uc.getUserId(), e);
             if (conn != null) {
@@ -392,6 +462,32 @@ public class ContentService {
         }
     }
 
+    private void updateCacheAfterAdd(Connection conn, long contentId) {
+        try {
+            ContentDetailVO detail = contentDao.findContent(conn, contentId);
+            if (detail == null) return;
+            Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, contentId);
+            buildContentMedia(detail, mediaMap);
+            cacheContentBasic(contentId, detail);
+            // 加入推荐列表最前面
+            RecommendVO rvo = new RecommendVO();
+            rvo.setId(detail.getId());
+            rvo.setAuthorId(detail.getAuthorId());
+            rvo.setType(detail.getType());
+            rvo.setTitle(detail.getTitle());
+            rvo.setDescription(detail.getDescription());
+            rvo.setCategoryId(detail.getCategoryId());
+            rvo.setCommentCount(detail.getCommentCount());
+            rvo.setLikeCount(detail.getLikeCount());
+            rvo.setAuthorName(detail.getAuthorName());
+            rvo.setCoverUrl(detail.getCoverUrl());
+            recommendList.add(0, rvo);
+            LOGGER.info("新内容已加入缓存, contentId=" + contentId);
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "新内容缓存更新失败, contentId=" + contentId, e);
+        }
+    }
+
     public long doAddContent(Connection conn, UploadCommand uc) throws SQLException {
         long userId = uc.getUserId();
         String title = uc.getTitle();
@@ -401,6 +497,37 @@ public class ContentService {
     }
 
     public void deleteContent(long contentId, long userId) {
+    }
+
+    // ===== 评论缓存实时更新 =====
+
+    public static void addCommentToCache(long contentId, CommentCacheDTO newComment, Long parentId) {
+        List<CommentCacheDTO> tree = commentCache.get(contentId);
+        if (tree == null) return;
+        newComment.setChildren(new ArrayList<>());
+        if (parentId == null || parentId == 0) {
+            tree.add(newComment);
+        } else {
+            insertChildToTree(tree, parentId, newComment);
+        }
+    }
+
+    private static boolean insertChildToTree(List<CommentCacheDTO> tree, long parentId, CommentCacheDTO child) {
+        for (CommentCacheDTO node : tree) {
+            if (node.getCommentId() == parentId) {
+                if (node.getChildren() == null) {
+                    node.setChildren(new ArrayList<>());
+                }
+                node.getChildren().add(child);
+                return true;
+            }
+            if (node.getChildren() != null && !node.getChildren().isEmpty()) {
+                if (insertChildToTree(node.getChildren(), parentId, child)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     // ===== 内存缓存实时同步 =====
