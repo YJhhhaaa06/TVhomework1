@@ -1,6 +1,6 @@
 package com.itheima.dao;
 
-import com.itheima.pojo.CommentVO;
+import com.itheima.pojo.CommentCacheDTO;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -97,13 +97,13 @@ public class CommentDao {
 
     }
 
-    public  List<CommentVO> getComments(Connection conn, Long contentId) throws SQLException {
+    public  List<CommentCacheDTO> getComments(Connection conn, Long contentId) throws SQLException {
 
         String sql = "SELECT c.*, u.username " +
                 "FROM comment c LEFT JOIN users u ON c.user_id = u.id " +
                 "WHERE c.content_id=? AND c.is_deleted=0 ORDER BY c.comment_id";
 
-        List<CommentVO> list = new ArrayList<>();
+        List<CommentCacheDTO> list = new ArrayList<>();
 
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setLong(1, contentId);
@@ -111,7 +111,7 @@ public class CommentDao {
             try(ResultSet rs = ps.executeQuery()){
 
             while (rs.next()) {
-                CommentVO c = ResultMap.buildComment(rs);
+                CommentCacheDTO c = ResultMap.buildComment(rs);
                 list.add(c);
             }
             }
@@ -147,7 +147,7 @@ public class CommentDao {
     }
 
     public int getLikeCount(Connection conn, long commentId) throws SQLException {
-        String sql = "SELECT like_count FROM comment WHERE id = ?";
+        String sql = "SELECT like_count FROM comment WHERE comment_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setLong(1, commentId);
             try (ResultSet rs = ps.executeQuery()) {
@@ -160,7 +160,7 @@ public class CommentDao {
     }
 
     public void updateLikeCount(Connection conn, Long commentId, int delta) throws SQLException {
-        String sql = "UPDATE comment SET like_count = like_count + ? WHERE id = ?";
+        String sql = "UPDATE comment SET like_count = like_count + ? WHERE comment_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setInt(1, delta);
             ps.setLong(2, commentId);

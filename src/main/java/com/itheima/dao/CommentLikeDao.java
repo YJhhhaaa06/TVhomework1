@@ -13,6 +13,7 @@ import java.sql.SQLException;
 import com.itheima.util.MyConnectionPool;
 
 import java.sql.*;
+import java.util.*;
 public class CommentLikeDao {
 
     /**
@@ -78,5 +79,52 @@ public class CommentLikeDao {
             }
         }
 
+    }
+
+    /**
+     * 批量查询用户对指定评论列表的点赞状态
+     * @return 已点赞的 commentId 集合
+     */
+    public Set<Long> findLikedCommentIds(Connection conn, long userId, List<Long> commentIds) throws SQLException {
+        if (commentIds == null || commentIds.isEmpty()) {
+            return Collections.emptySet();
+        }
+        StringBuilder sql = new StringBuilder("SELECT comment_id FROM comment_like WHERE user_id = ? AND comment_id IN (");
+        for (int i = 0; i < commentIds.size(); i++) {
+            if (i > 0) sql.append(", ");
+            sql.append("?");
+        }
+        sql.append(")");
+        try (PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+            pstmt.setLong(1, userId);
+            for (int i = 0; i < commentIds.size(); i++) {
+                pstmt.setLong(i + 2, commentIds.get(i));
+            }
+            Set<Long> result = new HashSet<>();
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    result.add(rs.getLong("comment_id"));
+                }
+            }
+            return result;
+        }
+    }
+
+    /**
+     * 查询某条评论的所有点赞者（comment 为中心，用于缓存回填）
+     * @return 所有点赞了该评论的 userId 集合
+     */
+    public Set<Long> findLikerIdsByCommentId(Connection conn, long commentId) throws SQLException {
+        String sql = "SELECT user_id FROM comment_like WHERE comment_id = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, commentId);
+            Set<Long> result = new HashSet<>();
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    result.add(rs.getLong("user_id"));
+                }
+            }
+            return result;
+        }
     }
 }

@@ -55,8 +55,8 @@ public class ResultMap {
 //        content.setCrateTime(rs.getTimestamp("create_time").toLocalDateTime());
         contentMap.put(id, contentDetailVO);
     }
-    public static CommentVO buildComment(ResultSet rs)throws SQLException{
-        CommentVO cm=new CommentVO();
+    public static CommentCacheDTO buildComment(ResultSet rs)throws SQLException{
+        CommentCacheDTO cm=new CommentCacheDTO();
         cm.setUsername(rs.getString("username"));
         cm.setCommentId(rs.getLong("comment_id"));
         cm.setContentId(rs.getLong("content_id"));
@@ -68,10 +68,7 @@ public class ResultMap {
         else {
             cm.setParentId(rs.getLong("parent_id"));
         }
-//        cm.setCreateTime(rs.getTimestamp("create_time").toLocalDateTime());
-//        cm.setUpdateTime(rs.getTimestamp("update_time").toLocalDateTime());
         cm.setLikeCount(rs.getInt("like_count"));
-        cm.setIsDeleted(rs.getBoolean("is_deleted"));
         return cm;
     }
 

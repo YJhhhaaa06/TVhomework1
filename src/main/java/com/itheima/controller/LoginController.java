@@ -8,7 +8,7 @@ import com.itheima.DTO.LoginDTO;
 import com.itheima.DTO.RegisterDTO;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
-import com.itheima.response.LogInResponse;
+import com.itheima.pojo.LogInVO;
 import com.itheima.service.UserService;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServlet;
@@ -56,7 +56,7 @@ public class LoginController extends HttpServlet {
         LoginDTO dto = RequestParser.parse(req,LoginDTO.class);
         System.out.println("finish parse");
         LoginCommand loginCommand= CommandConverter.loginToCommand(dto);
-        LogInResponse ls=userService.login(loginCommand);
+        LogInVO ls=userService.login(loginCommand);
         BaseServletUtil.writeSuccess(resp,ls);
     }
 
@@ -64,7 +64,7 @@ public class LoginController extends HttpServlet {
         RegisterDTO dto=RequestParser.parse(req,RegisterDTO.class);
         RegisterCommand rc= CommandConverter.registerToCommand(dto);
         long id= userService.registerAsUser(rc);
-        LogInResponse ls=userService.login(id,rc.getPassword());
+        LogInVO ls=userService.login(id,rc.getPassword());
         BaseServletUtil.writeSuccess(resp,ls);
     }
 }

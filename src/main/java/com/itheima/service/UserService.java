@@ -7,7 +7,7 @@ import com.itheima.dao.UserDao;
 import com.itheima.exception.AuthException;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
-import com.itheima.response.LogInResponse;
+import com.itheima.pojo.LogInVO;
 import com.itheima.pojo.User;
 import com.itheima.util.MyConnectionPool;
 import com.itheima.util.PasswordUtil;
@@ -20,23 +20,23 @@ public class UserService {
     private UserDao userDao=new UserDao();
     private TokenService tokenService=new TokenService();
 
-    public LogInResponse login(LoginCommand loginCommand)throws Exception{
+    public LogInVO login(LoginCommand loginCommand)throws Exception{
         if(loginCommand.getType()== LoginType.BY_ID){
             return login(loginCommand.getId(),loginCommand.getPassword());
         }
         return login(loginCommand.getPhone(),loginCommand.getPassword());
     }
 
-    public LogInResponse login(long id,String rawPassword) throws Exception {
+    public LogInVO login(long id, String rawPassword) throws Exception {
         User dbUser = userDao.getUserForLoginById(id);
         String tokenStr=doLogin(dbUser,rawPassword);
-        return new LogInResponse(dbUser.getId(),dbUser.getUserName(),tokenStr);
+        return new LogInVO(dbUser.getId(),dbUser.getUserName(),tokenStr);
 
     }
-    public LogInResponse login(String phone, String rawPassword) throws Exception {
+    public LogInVO login(String phone, String rawPassword) throws Exception {
         User dbUser = userDao.getUserForLoginByPhone(phone);
         String tokenStr=doLogin(dbUser,rawPassword);
-        return new LogInResponse(dbUser.getId(),dbUser.getUserName(),tokenStr);
+        return new LogInVO(dbUser.getId(),dbUser.getUserName(),tokenStr);
     }
 
 

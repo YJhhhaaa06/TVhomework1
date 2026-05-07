@@ -2,32 +2,19 @@ package com.itheima.pojo;
 
 import java.util.List;
 
-public class ContentDetailVO extends ContentBaseVO{
-
-//    private LocalDateTime crateTime=LocalDateTime.now();//时间
-    public List<CommentVO> commentVOList;//评论
+public class ContentDetailVO extends ContentCacheVO {
 
     private String videoUrl;
     private String coverUrl;
     private List<String> imageUrls;
 
-
-
     public ContentDetailVO() {
     }
 
-    public ContentDetailVO(long id, long authorId, int type, String title, String description, int categoryId, int commentCount, int likeCount, String authorName, List<CommentVO> commentVOList, String videoUrl, String coverUrl){
-       super(id,authorId,type,title,description,categoryId,commentCount,likeCount,authorName);
-    }
-
-
-
-    public List<CommentVO> getCommentList() {
-        return commentVOList;
-    }
-
-    public void setCommentList(List<CommentVO> commentVOList) {
-        this.commentVOList = commentVOList;
+    public ContentDetailVO(long id, long authorId, int type, String title, String description, int categoryId, int commentCount, int likeCount, String authorName, String videoUrl, String coverUrl) {
+        super(id, authorId, type, title, description, categoryId, commentCount, likeCount, authorName);
+        this.videoUrl = videoUrl;
+        this.coverUrl = coverUrl;
     }
 
     public String getVideoUrl() {

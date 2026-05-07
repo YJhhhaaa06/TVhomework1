@@ -1,6 +1,5 @@
 package com.itheima.controller;
 
-import com.itheima.DTO.CommentDTO;
 import com.itheima.command.CommandConverter;
 import com.itheima.command.CommentCommand;
 import com.itheima.exception.BusinessException;
@@ -13,7 +12,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
-import java.io.PrintWriter;
 import java.util.List;
 
 @WebServlet("/comment/*")
@@ -55,7 +53,7 @@ public class CommentController extends HttpServlet {
 
     protected void addComment(HttpServletRequest req, HttpServletResponse resp)throws Exception{
 
-        CommentDTO dto=RequestParser.parse(req,CommentDTO.class);
+        com.itheima.DTO.CommentDTO dto=RequestParser.parse(req, com.itheima.DTO.CommentDTO.class);
         Long userId = (Long) req.getAttribute("userId");
         dto.setUserId(userId);
         CommentCommand commentCommand= CommandConverter.commentToCommand(dto);
@@ -74,15 +72,5 @@ public class CommentController extends HttpServlet {
         BaseServletUtil.writeSuccess(resp, commentVOList);
 
     }
-    private void printComment(CommentVO c, PrintWriter out, int level) {
-        String indent = "  ".repeat(level);//缩进
 
-        out.write(indent + "用户：" + c.getUsername() + " 内容：" + c.getContent() + "\n");
-
-        if (c.getChildren() != null) {
-            for (CommentVO child : c.getChildren()) {
-                printComment(child, out, level + 1);
-            }
-        }
-    }
 }

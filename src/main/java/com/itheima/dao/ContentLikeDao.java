@@ -3,6 +3,7 @@ package com.itheima.dao;
 import com.itheima.util.MyConnectionPool;
 
 import java.sql.*;
+import java.util.*;
 
 public class ContentLikeDao {
 
@@ -70,5 +71,68 @@ public class ContentLikeDao {
 
     }
 
+    /**
+     * 批量查询用户对指定内容列表的点赞状态
+     * @return 已点赞的 contentId 集合
+     */
+    public Set<Long> findLikedContentIds(Connection conn, long userId, List<Long> contentIds) throws SQLException {
+        if (contentIds == null || contentIds.isEmpty()) {
+            return Collections.emptySet();
+        }
+        StringBuilder sql = new StringBuilder("SELECT content_id FROM content_like WHERE user_id = ? AND content_id IN (");
+        for (int i = 0; i < contentIds.size(); i++) {
+            if (i > 0) sql.append(", ");
+            sql.append("?");
+        }
+        sql.append(")");
+        try (PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+            pstmt.setLong(1, userId);
+            for (int i = 0; i < contentIds.size(); i++) {
+                pstmt.setLong(i + 2, contentIds.get(i));
+            }
+            Set<Long> result = new HashSet<>();
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    result.add(rs.getLong("content_id"));
+                }
+            }
+            return result;
+        }
+    }
+
+    /**
+     * 查询用户所有点赞过的内容 ID（用于缓存全量加载）
+     */
+    public Set<Long> findAllLikedContentIds(Connection conn, long userId) throws SQLException {
+        String sql = "SELECT content_id FROM content_like WHERE user_id = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, userId);
+            Set<Long> result = new HashSet<>();
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    result.add(rs.getLong("content_id"));
+                }
+            }
+            return result;
+        }
+    }
+
+    /**
+     * 查询某个内容的所有点赞者（content 为中心，用于缓存回填）
+     * @return 所有点赞了该内容的 userId 集合
+     */
+    public Set<Long> findLikerIdsByContentId(Connection conn, long contentId) throws SQLException {
+        String sql = "SELECT user_id FROM content_like WHERE content_id = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, contentId);
+            Set<Long> result = new HashSet<>();
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    result.add(rs.getLong("user_id"));
+                }
+            }
+            return result;
+        }
+    }
 
 }

@@ -1,105 +1,21 @@
 package com.itheima.pojo;
 
-import java.util.List;
-
-public class CommentVO {
-    //为了可扩展，我把数据库里面所有字段都加进来
-
-    private String username;//这个不属comment表
-    private long commentId;
-    private long contentId;
-    private long userId;
-    private String content;
-    private Long parentId;//Long类似Integer,可以为NULL
-    //父评论ID
-    private int likeCount;
-    private boolean isDeleted;//false是未删除
-    private List<CommentVO> children;
-
-    public List<CommentVO> getChildren() {
-        return children;
-    }
-
-    public void setChildren(List<CommentVO> children) {
-        this.children = children;
-    }
-
-    public CommentVO(String username, long commentId, long contentId, long userId, String content, Long parentId, int likeCount, boolean isDeleted) {
-        this.username = username;
-        this.commentId = commentId;
-        this.contentId = contentId;
-        this.userId = userId;
-        this.content = content;
-        this.parentId = parentId;
-        this.likeCount = likeCount;
-        this.isDeleted = isDeleted;
-    }
+public class CommentVO extends CommentCacheDTO {
+    private boolean isLiked;
 
     public CommentVO() {
+        super();
     }
 
-    public String getUsername() {
-        return username;
+    public CommentVO(String username, long commentId, long contentId, long userId, String content, Long parentId, int likeCount) {
+        super(username, commentId, contentId, userId, content, parentId, likeCount);
     }
 
-    public void setUsername(String username) {
-        this.username = username;
+    public boolean getIsLiked() {
+        return isLiked;
     }
 
-    public long getCommentId() {
-        return commentId;
+    public void setIsLiked(boolean isLiked) {
+        this.isLiked = isLiked;
     }
-
-    public void setCommentId(long commentId) {
-        this.commentId = commentId;
-    }
-
-    public long getContentId() {
-        return contentId;
-    }
-
-    public void setContentId(long contentId) {
-        this.contentId = contentId;
-    }
-
-    public long getUserId() {
-        return userId;
-    }
-
-    public void setUserId(long userId) {
-        this.userId = userId;
-    }
-
-    public String getContent() {
-        return content;
-    }
-
-    public void setContent(String content) {
-        this.content = content;
-    }
-
-    public Long getParentId() {
-        return parentId;
-    }
-
-    public void setParentId(Long parentId) {
-        this.parentId = parentId;
-    }
-
-    public int getLikeCount() {
-        return likeCount;
-    }
-
-    public void setLikeCount(int likeCount) {
-        this.likeCount = likeCount;
-    }
-
-    public boolean isDeleted() {
-        return isDeleted;
-    }
-
-    public void setIsDeleted(boolean isDeleted) {
-        this.isDeleted = isDeleted;
-    }
-
 }

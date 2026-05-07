@@ -1,21 +1,20 @@
 package com.itheima.pojo;
 
-public class ContentBaseVO {
-    private long id;//视频、动态id
-    private long authorId;//作者Id
-    private int type;//内容类型1视频 2图文
-    private String title;//标题
-    private String description;//文本
-    private int categoryId;//分区
-    private int commentCount;//评论数
-    private int likeCount;//点赞数
-    private String authorName;//作者名
-    private boolean isFollow;//当前用户是否关注了该作者
+public class ContentCacheVO {
+    private long id;
+    private long authorId;
+    private int type;
+    private String title;
+    private String description;
+    private int categoryId;
+    private int commentCount;
+    private int likeCount;
+    private String authorName;
 
-    public ContentBaseVO() {
+    public ContentCacheVO() {
     }
 
-    public ContentBaseVO(long id, long authorId, int type, String title, String description, int categoryId, int commentCount, int likeCount, String authorName) {
+    public ContentCacheVO(long id, long authorId, int type, String title, String description, int categoryId, int commentCount, int likeCount, String authorName) {
         this.id = id;
         this.authorId = authorId;
         this.type = type;
@@ -97,13 +96,5 @@ public class ContentBaseVO {
 
     public void setAuthorName(String authorName) {
         this.authorName = authorName;
-    }
-
-    public boolean getIsFollow() {
-        return isFollow;
-    }
-
-    public void setIsFollow(boolean follow) {
-        isFollow = follow;
     }
 }

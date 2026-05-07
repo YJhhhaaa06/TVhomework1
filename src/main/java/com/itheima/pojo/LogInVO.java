@@ -1,14 +1,14 @@
-package com.itheima.response;
+package com.itheima.pojo;
 
-public class LogInResponse {
+public class LogInVO {
 
     private String token;
     private String username;
     private long id;
 
-    public LogInResponse() {
+    public LogInVO() {
     }
-    public LogInResponse(long id,String username, String token) {
+    public LogInVO(long id, String username, String token) {
         this.id=id;
         this.token = token;
         this.username=username;

@@ -4,6 +4,7 @@ import com.itheima.DTO.SearchDTO;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
 import com.itheima.pojo.ContentDetailVO;
+import com.itheima.pojo.ContentVO;
 import com.itheima.service.ContentService;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServlet;
@@ -50,16 +51,15 @@ public class SearchController extends HttpServlet {
 
     protected void getContentDetailById(HttpServletRequest req, HttpServletResponse resp)throws Exception{
         SearchDTO dto=RequestParser.parse(req,SearchDTO.class);
-
-            ContentDetailVO contentVO = contentService.getContentById(dto.getContentId());
-            if (contentVO == null) {
-                BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "找不到对应内容");
-                return;
-            }
-            Long userId = (Long) req.getAttribute("userId");
-            contentService.fillFollowStatus(List.of(contentVO), userId);
-            BaseServletUtil.writeSuccess(resp, contentVO);
+        Long userId = (Long) req.getAttribute("userId");
+        ContentVO cVO = contentService.getContentVO(dto.getContentId(), userId);
+        if (cVO == null) {
+            BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "找不到对应内容");
+            return;
+        }
+        BaseServletUtil.writeSuccess(resp, cVO);
     }
+
     protected void search(HttpServletRequest req, HttpServletResponse resp)throws Exception{
         SearchDTO dto=RequestParser.parse(req,SearchDTO.class);
 
@@ -68,21 +68,18 @@ public class SearchController extends HttpServlet {
             return;
         }
         List<ContentDetailVO> list = contentService.search(dto.getKeyword().trim());
-        Long userId = (Long) req.getAttribute("userId");
-        contentService.fillFollowStatus(list, userId);
         BaseServletUtil.writeSuccess(resp, list);
     }
 
     protected void getDetailRecommended(HttpServletRequest req, HttpServletResponse resp)throws Exception{
         SearchDTO dto=RequestParser.parse(req,SearchDTO.class);
-        ContentDetailVO contentVO = contentService.getRecommendedContent(dto.getContentId());
-        if (contentVO == null) {
+        Long userId = (Long) req.getAttribute("userId");
+        ContentVO cVO = contentService.getContentVO(dto.getContentId(), userId);
+        if (cVO == null) {
             BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "找不到对应视频");
             return;
         }
-        Long userId = (Long) req.getAttribute("userId");
-        contentService.fillFollowStatus(List.of(contentVO), userId);
-        BaseServletUtil.writeSuccess(resp, contentVO);
+        BaseServletUtil.writeSuccess(resp, cVO);
     }
 
 
