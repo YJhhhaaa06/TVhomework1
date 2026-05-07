@@ -12,6 +12,9 @@ import com.itheima.util.MyConnectionPool;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.*;
+import com.itheima.util.LogUtil;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class LikeService {
     private final ContentDao contentDao = new ContentDao();
@@ -19,6 +22,8 @@ public class LikeService {
     private final ContentLikeDao contentLikeDao = new ContentLikeDao();
     private final CommentLikeDao commentLikeDao = new CommentLikeDao();
     private final LikeCacheService cache = new LikeCacheService();
+    private static final Logger LOGGER =
+            LogUtil.getLogger(LikeService.class);
 
     // ==================== 内容点赞 ====================
 
@@ -46,7 +51,7 @@ public class LikeService {
 
         } catch (SQLException e) {
             rollback(conn);
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE, "内容点赞失败, userId=" + userId + ", contentId=" + contentId, e);
             throw new ServerException("服务器异常，点赞失败");
         } finally {
             MyConnectionPool.release(conn);
@@ -77,7 +82,7 @@ public class LikeService {
 
         } catch (SQLException e) {
             rollback(conn);
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE, "取消内容点赞失败, userId=" + userId + ", contentId=" + contentId, e);
             throw new ServerException("服务器异常，取消点赞失败");
         } finally {
             MyConnectionPool.release(conn);
@@ -110,7 +115,7 @@ public class LikeService {
 
         } catch (SQLException e) {
             rollback(conn);
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE, "评论点赞失败, userId=" + userId + ", commentId=" + commentId, e);
             throw new ServerException("服务器异常，点赞失败");
         } finally {
             MyConnectionPool.release(conn);
@@ -145,7 +150,7 @@ public class LikeService {
             }catch (SQLException ex){
                 e.addSuppressed(ex);
             }
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE, "取消评论点赞失败, userId=" + userId + ", commentId=" + commentId, e);
             throw new ServerException("服务器异常，取消点赞失败");
         } finally {
             MyConnectionPool.release(conn);
@@ -172,7 +177,7 @@ public class LikeService {
             cache.syncContentLikers(contentId, allLikers);
             return allLikers.contains(userId);
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE, "查询内容点赞状态失败, userId=" + userId + ", contentId=" + contentId, e);
             throw new ServerException("服务器异常，查询点赞状态失败");
         } finally {
             MyConnectionPool.release(conn);
@@ -196,7 +201,7 @@ public class LikeService {
             cache.syncContentLikers(contentId, allLikers);
             return allLikers.size();
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE, "查询内容点赞数失败, contentId=" + contentId, e);
             throw new ServerException("服务器异常，查询点赞数失败");
         } finally {
             MyConnectionPool.release(conn);
@@ -222,7 +227,7 @@ public class LikeService {
             cache.syncCommentLikers(commentId, allLikers);
             return allLikers.contains(userId);
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE, "查询评论点赞状态失败, userId=" + userId + ", commentId=" + commentId, e);
             throw new ServerException("服务器异常，查询点赞状态失败");
         } finally {
             MyConnectionPool.release(conn);
@@ -245,7 +250,7 @@ public class LikeService {
             cache.syncCommentLikers(commentId, allLikers);
             return allLikers.size();
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE, "查询评论点赞数失败, commentId=" + commentId, e);
             throw new ServerException("服务器异常，查询点赞数失败");
         } finally {
             MyConnectionPool.release(conn);
@@ -294,7 +299,7 @@ public class LikeService {
                 cache.syncContentLikers(cid, allLikers);
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE, "批量查询内容点赞状态失败, userId=" + userId, e);
             throw new ServerException("服务器异常，批量查询点赞状态失败");
         } finally {
             MyConnectionPool.release(conn);
@@ -335,7 +340,7 @@ public class LikeService {
                 cache.syncCommentLikers(cid, allLikers);
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE, "批量查询评论点赞状态失败, userId=" + userId, e);
             throw new ServerException("服务器异常，批量查询点赞状态失败");
         } finally {
             MyConnectionPool.release(conn);
@@ -350,7 +355,7 @@ public class LikeService {
             try {
                 conn.rollback();
             } catch (SQLException ex) {
-                ex.printStackTrace();
+                LOGGER.log(Level.WARNING, "事务回滚失败", ex);
             }
         }
     }

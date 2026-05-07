@@ -9,16 +9,21 @@ import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
 import com.itheima.pojo.LogInVO;
 import com.itheima.pojo.User;
+import com.itheima.util.LogUtil;
 import com.itheima.util.MyConnectionPool;
 import com.itheima.util.PasswordUtil;
 import com.itheima.util.StringUtil;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class UserService {
     private UserDao userDao=new UserDao();
     private TokenService tokenService=new TokenService();
+    private static final Logger LOGGER =
+            LogUtil.getLogger(UserService.class);
 
     public LogInVO login(LoginCommand loginCommand)throws Exception{
         if(loginCommand.getType()== LoginType.BY_ID){
@@ -73,7 +78,7 @@ public class UserService {
             conn.commit();//提交提交提交提交提交提交提交提交
             return userId;
         }catch (SQLException e){
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE, "用户注册失败, phone=" + phone, e);
             try{//rollback本身也可能报异常
                 conn.rollback();
             }catch (SQLException ex){
@@ -104,6 +109,7 @@ public class UserService {
         doChangePassword(conn, userId, phone, oldPassword, newPassword);
         conn.commit();
     } catch (Exception e) {
+        LOGGER.log(Level.SEVERE, "修改密码失败, userId=" + userId, e);
         if (conn != null) {
             try {
                 conn.rollback();
@@ -154,6 +160,7 @@ public class UserService {
             doChangeUserName(conn,userId,newName);
             conn.commit();
         } catch (Exception e) {
+            LOGGER.log(Level.SEVERE, "修改用户名失败, userId=" + userId, e);
             if (conn != null) {
                 try {
                     conn.rollback();
@@ -177,6 +184,7 @@ public class UserService {
             doChangePhone(conn, userId, oldPhone, newPhone);
             conn.commit();
         } catch (Exception e) {
+            LOGGER.log(Level.SEVERE, "修改手机号失败, userId=" + userId, e);
             if (conn != null) {
                 try {
                     conn.rollback();

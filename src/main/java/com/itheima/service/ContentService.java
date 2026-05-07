@@ -8,6 +8,7 @@ import com.itheima.dao.ContentMediaDao;
 import com.itheima.dao.FollowDao;
 import com.itheima.exception.*;
 import com.itheima.pojo.*;
+import com.itheima.util.LogUtil;
 import com.itheima.util.MyConnectionPool;
 
 import java.sql.Connection;
@@ -16,6 +17,8 @@ import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class ContentService {
     private ContentDao contentDao = new ContentDao();
@@ -24,6 +27,8 @@ public class ContentService {
     private FollowDao followDao = new FollowDao();
     private CommentService commentService = new CommentService();
     private LikeService likeService = new LikeService();
+    private static final Logger LOGGER =
+            LogUtil.getLogger(ContentService.class);
 
     private static List<RecommendVO> recommendList = new ArrayList<>();
     private static Map<Long, ContentDetailVO> contentCache = new HashMap<>();
@@ -45,8 +50,7 @@ public class ContentService {
         try {
             refresh();
         } catch (Exception e) {
-            System.err.println("初始化视频缓存失败！");
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE, "内容缓存初始化失败", e);
             throw e;
         }
         startScheduler();
@@ -75,7 +79,7 @@ public class ContentService {
             commentCache = newCommentCache;
 
         } catch (Exception e) {
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE, "内容缓存刷新失败", e);
             throw new RuntimeException("FAIL_TO_REFRESH", e);
         }
     }
@@ -86,7 +90,7 @@ public class ContentService {
             try {
                 refresh();
             } catch (Exception e) {
-                e.printStackTrace();
+                LOGGER.log(Level.WARNING, "缓存定时刷新异常", e);
             }
         }, 0, 1, TimeUnit.MINUTES);
     }
@@ -108,7 +112,7 @@ public class ContentService {
             }
             return map;
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE, "查询内容缓存失败", e);
             throw new ServerException("缓存失败");
         } finally {
             MyConnectionPool.release(conn);
@@ -122,6 +126,7 @@ public class ContentService {
                 List<CommentCacheDTO> tree = commentService.getCommentCacheVOList(contentId);
                 map.put(contentId, tree);
             } catch (Exception e) {
+                LOGGER.warning("获取评论缓存失败，返回空列表, contentId=" + contentId);
                 map.put(contentId, new ArrayList<>());
             }
         }
@@ -159,6 +164,7 @@ public class ContentService {
             buildContentMedia(cdVO, mediaMap);
             return cdVO;
         } catch (SQLException e) {
+            LOGGER.log(Level.SEVERE, "查询内容失败, contentId=" + contentId, e);
             throw new ConflictException(e.getMessage());
         } finally {
             MyConnectionPool.release(conn);
@@ -176,7 +182,7 @@ public class ContentService {
             }
             return list;
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE, "搜索内容失败, keyword=" + keyword, e);
             throw new ServerException("搜索失败，请重试");
         } finally {
             MyConnectionPool.release(conn);
@@ -278,7 +284,7 @@ public class ContentService {
                 vo.setIsFollow(followedSet.contains(vo.getAuthorId()));
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "批量填充关注状态失败, userId=" + userId, e);
         } finally {
             MyConnectionPool.release(conn);
         }
@@ -293,7 +299,7 @@ public class ContentService {
             Set<Long> followedSet = followDao.getFollowedIds(conn, userId, List.of(vo.getAuthorId()));
             vo.setIsFollow(followedSet.contains(vo.getAuthorId()));
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "填充关注状态失败, userId=" + userId, e);
         } finally {
             MyConnectionPool.release(conn);
         }
@@ -343,6 +349,7 @@ public class ContentService {
             contentMediaDao.addMedia(conn, videoId, coverUrl, UploadType.COVER.getMediaType(), 1);
             conn.commit();
         } catch (SQLException e) {
+            LOGGER.log(Level.SEVERE, "添加视频失败, userId=" + uc.getUserId(), e);
             if (conn != null) {
                 try {
                     conn.rollback();
@@ -371,6 +378,7 @@ public class ContentService {
             }
             conn.commit();
         } catch (SQLException e) {
+            LOGGER.log(Level.SEVERE, "添加动态失败, userId=" + uc.getUserId(), e);
             if (conn != null) {
                 try {
                     conn.rollback();

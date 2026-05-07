@@ -9,8 +9,13 @@ import java.io.File;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.UUID;
+import com.itheima.util.LogUtil;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class FileUploadService {
+    private static final Logger LOGGER =
+            LogUtil.getLogger(FileUploadService.class);
 
     public UploadResult saveFile(Part part, UploadType type) throws IOException {
         // 1. 校验
@@ -18,11 +23,11 @@ public class FileUploadService {
 
         // 2. 生成文件名
         String fileName = UUID.randomUUID() + getSuffix(part);
-        System.out.println("get file name:"+fileName);
+        LOGGER.fine("文件保存, fileName=" + fileName);
 
         // 3. 目录
         String basePath = getBasePath();
-        System.out.println("get path:"+basePath);
+        LOGGER.fine("文件保存, path=" + basePath);
         File dir = new File(basePath, type.getDir());
         if (!dir.exists()) dir.mkdirs();
 
@@ -43,7 +48,7 @@ public class FileUploadService {
             File file = new File(absolutePath);
             if (file.exists()) file.delete();
         } catch (Exception e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "文件删除失败, path=" + absolutePath, e);
         }
     }
 

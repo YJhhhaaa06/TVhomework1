@@ -5,6 +5,7 @@ import com.itheima.dao.CommentDao;
 import com.itheima.exception.*;
 import com.itheima.pojo.CommentCacheDTO;
 import com.itheima.pojo.CommentVO;
+import com.itheima.util.LogUtil;
 import com.itheima.util.MyConnectionPool;
 
 import java.sql.Connection;
@@ -13,11 +14,15 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class CommentService {
 
     private CommentDao commentDao = new CommentDao();
     private LikeService likeService = new LikeService();
+    private static final Logger LOGGER =
+            LogUtil.getLogger(CommentService.class);
 
     // ===== 构建评论树（缓存用）=====
 
@@ -93,14 +98,16 @@ public class CommentService {
             commentDao.addComment(conn, contentId, userId, message, parentId);
             conn.commit();
         } catch (SQLException e) {
-            e.printStackTrace();
             if (conn != null) {
                 try {
                     conn.rollback();
+                    LOGGER.warning("添加评论时事务已回滚");
                 } catch (SQLException ex) {
-                    throw new BusinessException(ErrorCode.SERVER_ERROR, "回滚失败", ex);
+                    LOGGER.log(Level.SEVERE,"事务回滚失败",ex);
+                    throw new BusinessException(ErrorCode.SERVER_ERROR, "评论添加失败", ex);
                 }
             }
+            LOGGER.log(Level.SEVERE,"评论添加失败",e);
             throw new ServerException("评论写入失败");
         } finally {
             MyConnectionPool.release(conn);
@@ -132,10 +139,13 @@ public class CommentService {
             if (conn != null) {
                 try {
                     conn.rollback();
+                    LOGGER.warning("隐藏/显示评论时事务已回滚");
                 } catch (SQLException ex) {
+                    LOGGER.log(Level.SEVERE,"事务回滚失败",ex);
                     throw new BusinessException(ErrorCode.SERVER_ERROR, "回滚失败", ex);
                 }
             }
+            LOGGER.log(Level.SEVERE,"评论区操作失败", e);
             throw new ServerException("评论区操作失败");
         } finally {
             MyConnectionPool.release(conn);
@@ -150,7 +160,7 @@ public class CommentService {
             conn = MyConnectionPool.getConnection();
             return commentDao.getComments(conn, videoId);
         } catch (SQLException e) {
-            
+            LOGGER.log(Level.SEVERE,"查询评论失败",e);
             throw new ServerException("服务器异常，查询失败");
         } finally {
             MyConnectionPool.release(conn);
@@ -163,8 +173,8 @@ public class CommentService {
             List<CommentCacheDTO> tree = buildCommentTree(wholeList);
             return convertToCommentVOList(tree, new HashMap<>());
         } catch (SQLException e) {
-            e.printStackTrace();
-            throw new NotFoundException("FAIL_TO_GET_COMMENT,VIDEO_ID=" + contentId);
+            LOGGER.log(Level.SEVERE,"查询评论失败,contentId="+contentId,e);
+            throw new ServerException("无法查询到id为" + contentId+"的视频或动态");
         }
     }
 
@@ -177,8 +187,8 @@ public class CommentService {
             Map<Long, Boolean> likedMap = likeService.batchIsCommentLiked(userId, allCommentIds);
             return convertToCommentVOList(tree, likedMap != null ? likedMap : new HashMap<>());
         } catch (SQLException e) {
-            e.printStackTrace();
-            throw new NotFoundException("FAIL_TO_GET_COMMENT,VIDEO_ID=" + contentId);
+            LOGGER.log(Level.SEVERE,"查询评论失败,contentId="+contentId,e);
+            throw new NotFoundException("无法获取ID为" + contentId+"的视频或动态的评论");
         }
     }
 
@@ -211,7 +221,7 @@ public class CommentService {
             List<CommentCacheDTO> wholeList = findComment(contentId);
             return buildCommentTree(wholeList);
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE,"查询评论缓存失败, contentId=" + contentId, e);
             throw new NotFoundException("FAIL_TO_GET_COMMENT,VIDEO_ID=" + contentId);
         }
     }

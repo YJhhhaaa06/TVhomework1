@@ -9,11 +9,16 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import com.itheima.util.LogUtil;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class TokenService {
 
     private static final Map<String, Token> tokenMap = new ConcurrentHashMap<>();
     private static final Map<Long, Token> idMap = new ConcurrentHashMap<>();
+    private static final Logger LOGGER =
+            LogUtil.getLogger(TokenService.class);
 
     public void startScheduler() {
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
@@ -22,7 +27,7 @@ public class TokenService {
             try {
                 refresh();
             } catch (Exception e) {
-                e.printStackTrace(); // 防止异常导致调度终止
+                LOGGER.log(Level.WARNING, "Token 定时刷新异常", e);
             }
         }, 0, 1, TimeUnit.MINUTES);
     }
@@ -31,8 +36,7 @@ public class TokenService {
         try {
             refresh();
         } catch (Exception e) {
-            System.err.println("初始化视频缓存失败！");
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE, "Token 初始化加载失败", e);
             throw e;
         }         //启动时加载一次
         startScheduler();   //开启定时刷新

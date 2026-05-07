@@ -9,9 +9,14 @@ import com.itheima.util.MyConnectionPool;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import com.itheima.util.LogUtil;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class FollowService {
     private FollowDao followDao = new FollowDao();
+    private static final Logger LOGGER =
+            LogUtil.getLogger(FollowService.class);
 
     public void follow(long userId, long followedUserId) {
         if (userId == followedUserId) {
@@ -27,6 +32,7 @@ public class FollowService {
             }
             conn.commit();
         } catch (SQLException e) {
+            LOGGER.log(Level.SEVERE, "关注失败, userId=" + userId + ", followedUserId=" + followedUserId, e);
             if (conn != null) {
                 try {
                     conn.rollback();
@@ -54,6 +60,7 @@ public class FollowService {
             }
             conn.commit();
         } catch (SQLException e) {
+            LOGGER.log(Level.SEVERE, "取关失败, userId=" + userId + ", followedUserId=" + followedUserId, e);
             if (conn != null) {
                 try {
                     conn.rollback();

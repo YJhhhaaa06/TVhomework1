@@ -6,6 +6,8 @@ import redis.clients.jedis.Pipeline;
 import redis.clients.jedis.Response;
 
 import java.util.*;
+import com.itheima.util.LogUtil;
+import java.util.logging.Logger;
 
 /**
  * 点赞缓存服务（Redis）
@@ -17,6 +19,8 @@ import java.util.*;
  * 点赞数直接通过 SCARD 获取，不需要单独的计数 key
  */
 public class LikeCacheService {
+    private static final Logger LOGGER =
+            LogUtil.getLogger(LikeCacheService.class);
 
     // ==================== Redis key 生成 ====================
 
