@@ -1,10 +1,12 @@
 package com.itheima.pojo;
 
-//首页，非详情页的VO
-public class ContentVO extends ContentCacheVO {
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
+import java.util.List;
+
+public class ContentVO extends ContentCacheDTO {
     private boolean isLiked;
     private boolean isFollowed;
-    private String coverUrl;
 
     public ContentVO() {
     }
@@ -25,13 +27,15 @@ public class ContentVO extends ContentCacheVO {
         this.isFollowed = isFollow;
     }
 
-    public String getCoverUrl() {
-        return coverUrl;
+    @Override
+    @JsonIgnore
+    public String getVideoUrl() {
+        return super.getVideoUrl();
     }
 
-    public void setCoverUrl(String coverUrl) {
-        this.coverUrl = coverUrl;
+    @Override
+    @JsonIgnore
+    public List<String> getImageUrls() {
+        return super.getImageUrls();
     }
-
-
 }

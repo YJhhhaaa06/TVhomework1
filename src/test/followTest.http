@@ -1,7 +1,7 @@
 ### ==================== 变量 ====================
 # 先用 loginTest.http 的用例1或2登录，拿到 token 替换下面
 # 关注者（自己）的 userId 由 token 决定，被关注者从下面 followedUserId 取
-@token = your_token_here
+@token = 331509ef-0027-41c1-bab4-4e1e255dc4e0
 
 
 
@@ -48,7 +48,7 @@ POST http://localhost:8080/MyAPP/follow/add
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
-followedUserId=1
+followedUserId=5
 
 
 ### 6. 取关自己

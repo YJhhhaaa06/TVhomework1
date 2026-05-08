@@ -4,102 +4,61 @@ import com.itheima.pojo.*;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.Map;
 
 public class ResultMap {
 
-
-    //封装视频/动态
-    public static RecommendVO buildRecommendVO(ResultSet rs) throws SQLException {
-        RecommendVO recommendVO =new RecommendVO();
-        recommendVO.setId(rs.getLong("id"));
-        recommendVO.setAuthorId(rs.getLong("user_id"));
-        recommendVO.setType(rs.getInt("type"));
-        recommendVO.setTitle(rs.getString("title"));
-        recommendVO.setDescription(rs.getString("description"));
-        recommendVO.setCategoryId(rs.getInt("category_id"));
-        recommendVO.setCommentCount(rs.getInt("comment_count"));
-        recommendVO.setLikeCount(rs.getInt("like_count"));
-        recommendVO.setAuthorName(rs.getString("username"));
-//        content.setCrateTime(rs.getTimestamp("create_time").toLocalDateTime());
-        return recommendVO;
+    public static ContentCacheDTO buildContentCacheDTO(ResultSet rs) throws SQLException {
+        ContentCacheDTO dto = new ContentCacheDTO();
+        dto.setId(rs.getLong("id"));
+        dto.setAuthorId(rs.getLong("user_id"));
+        dto.setType(rs.getInt("type"));
+        dto.setTitle(rs.getString("title"));
+        dto.setDescription(rs.getString("description"));
+        dto.setCategoryId(rs.getInt("category_id"));
+        dto.setCommentCount(rs.getInt("comment_count"));
+        dto.setLikeCount(rs.getInt("like_count"));
+        dto.setAuthorName(rs.getString("username"));
+        return dto;
     }
 
-    public static ContentDetailVO buildContent(ResultSet rs)throws SQLException{
-        ContentDetailVO contentDetailVO =new ContentDetailVO();
-        contentDetailVO.setId(rs.getLong("id"));
-        contentDetailVO.setAuthorId(rs.getLong("user_id"));
-        contentDetailVO.setType(rs.getInt("type"));
-        contentDetailVO.setTitle(rs.getString("title"));
-        contentDetailVO.setDescription(rs.getString("description"));
-        contentDetailVO.setCategoryId(rs.getInt("category_id"));
-        contentDetailVO.setCommentCount(rs.getInt("comment_count"));
-        contentDetailVO.setLikeCount(rs.getInt("like_count"));
-        contentDetailVO.setAuthorName(rs.getString("username"));
-//        content.setCrateTime(rs.getTimestamp("create_time").toLocalDateTime());
-        return contentDetailVO;
-    }
-
-    public static void buildContent(Map<Long, ContentDetailVO> contentMap, ResultSet rs)throws SQLException{
-        ContentDetailVO contentDetailVO =new ContentDetailVO();
-        long id= rs.getLong("id");
-        contentDetailVO.setId(rs.getLong("id"));
-        contentDetailVO.setAuthorId(rs.getLong("author_id"));
-        contentDetailVO.setType(rs.getInt("type"));
-        contentDetailVO.setTitle(rs.getString("title"));
-        contentDetailVO.setDescription(rs.getString("description"));
-        contentDetailVO.setCategoryId(rs.getInt("category_id"));
-        contentDetailVO.setCommentCount(rs.getInt("comment_count"));
-        contentDetailVO.setLikeCount(rs.getInt("like_count"));
-        contentDetailVO.setAuthorName(rs.getString("username"));
-//        content.setCrateTime(rs.getTimestamp("create_time").toLocalDateTime());
-        contentMap.put(id, contentDetailVO);
-    }
-    public static CommentCacheDTO buildComment(ResultSet rs)throws SQLException{
-        CommentCacheDTO cm=new CommentCacheDTO();
+    public static CommentCacheDTO buildComment(ResultSet rs) throws SQLException {
+        CommentCacheDTO cm = new CommentCacheDTO();
         cm.setUsername(rs.getString("username"));
         cm.setCommentId(rs.getLong("comment_id"));
         cm.setContentId(rs.getLong("content_id"));
         cm.setUserId(rs.getLong("user_id"));
         cm.setContent(rs.getString("content"));
-        if(rs.getObject("parent_id") == null){
+        if (rs.getObject("parent_id") == null) {
             cm.setParentId(null);
-        }
-        else {
+        } else {
             cm.setParentId(rs.getLong("parent_id"));
         }
         cm.setLikeCount(rs.getInt("like_count"));
         return cm;
     }
 
-    public static User buildUserForProfile(ResultSet rs)throws SQLException{
-
-        long id=rs.getLong("id");
-        String userName=rs.getString("username");
-        int followerCount=rs.getInt("follower_count");
-        int followCount=rs.getInt("follow_count");
-        return new User(id,userName,followCount,followerCount);
+    public static User buildUserForProfile(ResultSet rs) throws SQLException {
+        long id = rs.getLong("id");
+        String userName = rs.getString("username");
+        int followerCount = rs.getInt("follower_count");
+        int followCount = rs.getInt("follow_count");
+        return new User(id, userName, followCount, followerCount);
     }
 
-    public static User buildUserForLogin(ResultSet rs)throws SQLException{
-        long id=rs.getLong("id");
-        String username=rs.getString("username");
-        String hashedPassword=rs.getString("hashed_password");
-        String phone=rs.getString("phone");
-        return new User(id,hashedPassword,username,phone);
+    public static User buildUserForLogin(ResultSet rs) throws SQLException {
+        long id = rs.getLong("id");
+        String username = rs.getString("username");
+        String hashedPassword = rs.getString("hashed_password");
+        String phone = rs.getString("phone");
+        return new User(id, hashedPassword, username, phone);
     }
 
-    public static ContentMedia buildContentMedia(ResultSet rs ) throws SQLException {
-        long mediaId=rs.getLong("id");
-        long contentId=rs.getLong("content_id");
-        String url=rs.getString("url");
-        int type=rs.getInt("type");
-        int sort=rs.getInt("sort");
-        return new ContentMedia(mediaId,contentId,url,type,sort);
-
+    public static ContentMedia buildContentMedia(ResultSet rs) throws SQLException {
+        long mediaId = rs.getLong("id");
+        long contentId = rs.getLong("content_id");
+        String url = rs.getString("url");
+        int type = rs.getInt("type");
+        int sort = rs.getInt("sort");
+        return new ContentMedia(mediaId, contentId, url, type, sort);
     }
-
-
-
-
 }

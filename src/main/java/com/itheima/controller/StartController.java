@@ -1,6 +1,6 @@
 package com.itheima.controller;
 
-import com.itheima.pojo.RecommendVO;
+import com.itheima.pojo.ContentVO;
 import com.itheima.service.ContentService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
@@ -13,25 +13,17 @@ import java.util.List;
 
 @WebServlet("/start")
 public class StartController extends HttpServlet {
-    private BaseServletUtil baseServletUtil =new BaseServletUtil();
+    private ContentService contentService = ContentService.getInstance();
 
+    @Override
+    protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        resp.setContentType("application/json;charset=utf-8");
 
-        private ContentService contentService = ContentService.getInstance();
-        @Override
-        protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
-            // 1. 设置响应格式
-            resp.setContentType("application/json;charset=utf-8");
+        List<ContentVO> recommend = contentService.getRecommend(12);
 
-            // 2. 获取推荐内容（例如取 12 条）
-            List<RecommendVO> recommend = contentService.getRecommend(12);
+        Long userId = (Long) req.getAttribute("userId");
+        contentService.fillLikeAndFollowBatch(recommend, userId);
 
-            // 3. 填充关注状态（不影响缓存）
-            Long userId = (Long) req.getAttribute("userId");
-            contentService.fillFollowStatus(recommend, userId);
-
-            // 输出
-            baseServletUtil.writeSuccess(resp, recommend);
-
-        }
+        BaseServletUtil.writeSuccess(resp, recommend);
     }
-
+}

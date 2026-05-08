@@ -2,42 +2,35 @@ package com.itheima.pojo;
 
 import java.util.List;
 
-public class ContentDetailVO extends ContentCacheVO {
-
-    private String videoUrl;
-    private String coverUrl;
-    private List<String> imageUrls;
+public class ContentDetailVO extends ContentCacheDTO {
+    private boolean isLiked;
+    private boolean isFollowed;
+    private List<CommentVO> comments;
 
     public ContentDetailVO() {
     }
 
-    public ContentDetailVO(long id, long authorId, int type, String title, String description, int categoryId, int commentCount, int likeCount, String authorName, String videoUrl, String coverUrl) {
-        super(id, authorId, type, title, description, categoryId, commentCount, likeCount, authorName);
-        this.videoUrl = videoUrl;
-        this.coverUrl = coverUrl;
+    public boolean getIsLiked() {
+        return isLiked;
     }
 
-    public String getVideoUrl() {
-        return videoUrl;
+    public void setIsLiked(boolean isLiked) {
+        this.isLiked = isLiked;
     }
 
-    public void setVideoUrl(String videoUrl) {
-        this.videoUrl = videoUrl;
+    public boolean getIsFollowed() {
+        return isFollowed;
     }
 
-    public String getCoverUrl() {
-        return coverUrl;
+    public void setIsFollowed(boolean isFollowed) {
+        this.isFollowed = isFollowed;
     }
 
-    public void setCoverUrl(String coverUrl) {
-        this.coverUrl = coverUrl;
+    public List<CommentVO> getComments() {
+        return comments;
     }
 
-    public List<String> getImageUrls() {
-        return imageUrls;
-    }
-
-    public void setImageUrls(List<String> imageUrls) {
-        this.imageUrls = imageUrls;
+    public void setComments(List<CommentVO> comments) {
+        this.comments = comments;
     }
 }

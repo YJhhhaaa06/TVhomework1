@@ -6,7 +6,6 @@ import com.itheima.dao.ContentDao;
 import com.itheima.exception.*;
 import com.itheima.pojo.CommentCacheDTO;
 import com.itheima.pojo.CommentVO;
-import com.itheima.pojo.ContentDetailVO;
 import com.itheima.util.LogUtil;
 import com.itheima.util.MyConnectionPool;
 

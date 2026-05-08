@@ -30,12 +30,11 @@ public class ContentService {
     private static final Logger LOGGER =
             LogUtil.getLogger(ContentService.class);
 
-    private static List<RecommendVO> recommendList = new ArrayList<>();
-    private static Map<Long, ContentDetailVO> contentCache = new HashMap<>();
+    private static List<ContentVO> recommendList = new ArrayList<>();
+    private static Map<Long, ContentCacheDTO> contentCache = new HashMap<>();
     private static Map<Long, List<CommentCacheDTO>> commentCache = new HashMap<>();
     private static Map<Long, Long> contentTimestamps = new HashMap<>();
     private static final long CONTENT_TTL_MS = 10 * 60 * 1000;
-    private static Random r = new Random();
 
     private static ContentService instance = new ContentService();
 
@@ -60,13 +59,13 @@ public class ContentService {
         contentTimestamps.remove(contentId);
     }
 
-    private void cacheContent(long contentId, ContentDetailVO detail, List<CommentCacheDTO> comments) {
+    private void cacheContent(long contentId, ContentCacheDTO detail, List<CommentCacheDTO> comments) {
         contentCache.put(contentId, detail);
         commentCache.put(contentId, comments);
         contentTimestamps.put(contentId, System.currentTimeMillis());
     }
 
-    private void cacheContentBasic(long contentId, ContentDetailVO detail) {
+    private void cacheContentBasic(long contentId, ContentCacheDTO detail) {
         contentCache.put(contentId, detail);
         contentTimestamps.put(contentId, System.currentTimeMillis());
     }
@@ -83,21 +82,25 @@ public class ContentService {
     }
 
     public void refresh() {
+        Connection conn = null;
         try {
-            List<RecommendVO> newRecommendList = contentDao.findAllContent();
+            conn = MyConnectionPool.getConnection();
+            List<ContentCacheDTO> allContent = contentDao.findAllContent(conn);
 
-            // 构建 content 缓存（不含评论）
-            Map<Long, ContentDetailVO> newContentCache = getContentCache();
-
-            // 把封面 URL 填到 recommendList
-            for (RecommendVO rvo : newRecommendList) {
-                ContentDetailVO detail = newContentCache.get(rvo.getId());
-                if (detail != null && detail.getCoverUrl() != null) {
-                    rvo.setCoverUrl(detail.getCoverUrl());
-                }
+            Map<Long, ContentCacheDTO> newContentCache = new HashMap<>();
+            for (ContentCacheDTO dto : allContent) {
+                Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, dto.getId());
+                buildContentMedia(dto, mediaMap);
+                newContentCache.put(dto.getId(), dto);
             }
 
-            // 构建 comment 缓存（独立，按 contentId 分组）
+            List<ContentVO> newRecommendList = new ArrayList<>();
+            for (ContentCacheDTO dto : allContent) {
+                ContentVO cVO = new ContentVO();
+                copyToContentVO(cVO, dto);
+                newRecommendList.add(cVO);
+            }
+
             Map<Long, List<CommentCacheDTO>> newCommentCache = getCommentCache(newContentCache.keySet());
 
             recommendList = newRecommendList;
@@ -112,6 +115,8 @@ public class ContentService {
         } catch (Exception e) {
             LOGGER.log(Level.SEVERE, "内容缓存刷新失败", e);
             throw new RuntimeException("FAIL_TO_REFRESH", e);
+        } finally {
+            MyConnectionPool.release(conn);
         }
     }
 
@@ -127,28 +132,6 @@ public class ContentService {
     }
 
     // ===== 构建缓存 =====
-
-    private Map<Long, ContentDetailVO> getContentCache() {
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            List<ContentDetailVO> list = contentDao.findAllContentDetail(conn);
-            for (ContentDetailVO cdVO : list) {
-                Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, cdVO.getId());
-                buildContentMedia(cdVO, mediaMap);
-            }
-            Map<Long, ContentDetailVO> map = new HashMap<>();
-            for (ContentDetailVO cdVO : list) {
-                map.put(cdVO.getId(), cdVO);
-            }
-            return map;
-        } catch (SQLException e) {
-            LOGGER.log(Level.SEVERE, "查询内容缓存失败", e);
-            throw new ServerException("缓存失败");
-        } finally {
-            MyConnectionPool.release(conn);
-        }
-    }
 
     private Map<Long, List<CommentCacheDTO>> getCommentCache(Set<Long> contentIds) {
         Map<Long, List<CommentCacheDTO>> map = new HashMap<>();
@@ -166,34 +149,42 @@ public class ContentService {
 
     // ===== 查询（缓存）=====
 
-    public List<RecommendVO> getContentList() {
+    public List<ContentVO> getContentList() {
         return recommendList;
     }
 
-    public ContentDetailVO getRecommendedContent(long contentId) {
-        return contentCache.get(contentId);
-    }
-
-    public List<RecommendVO> getRecommend(int limit) {
-        List<RecommendVO> list = new ArrayList<>(recommendList);
+    public List<ContentVO> getRecommend(int limit) {
+        List<ContentVO> list = new ArrayList<>(recommendList);
         Collections.shuffle(list);
         int size = Math.min(limit, list.size());
         return list.subList(0, size);
     }
 
+    public ContentCacheDTO getContentFromCache(long contentId) {
+        if (isContentExpired(contentId)) {
+            evictContent(contentId);
+        }
+        ContentCacheDTO dto = contentCache.get(contentId);
+        if (dto == null) {
+            backfillContent(contentId);
+            dto = contentCache.get(contentId);
+        }
+        return dto;
+    }
+
     // ===== 查询（DB，不走缓存）=====
 
-    public ContentDetailVO getContentById(long contentId) {
+    public ContentCacheDTO getContentById(long contentId) {
         Connection conn = null;
         try {
             conn = MyConnectionPool.getConnection();
-            ContentDetailVO cdVO = contentDao.findContent(conn, contentId);
-            if (cdVO == null) {
+            ContentCacheDTO dto = contentDao.findContent(conn, contentId);
+            if (dto == null) {
                 return null;
             }
-            Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, cdVO.getId());
-            buildContentMedia(cdVO, mediaMap);
-            return cdVO;
+            Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, dto.getId());
+            buildContentMedia(dto, mediaMap);
+            return dto;
         } catch (SQLException e) {
             LOGGER.log(Level.SEVERE, "查询内容失败, contentId=" + contentId, e);
             throw new ConflictException(e.getMessage());
@@ -202,20 +193,27 @@ public class ContentService {
         }
     }
 
-    public List<ContentDetailVO> search(String keyword) {
+    // ===== 搜索 =====
+
+    public List<ContentVO> search(String keyword, Long userId) {
         Connection conn = null;
         try {
             conn = MyConnectionPool.getConnection();
-            List<ContentDetailVO> list = contentDao.search(conn, keyword, 1, 20);
-            for (ContentDetailVO cdVO : list) {
-                Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, cdVO.getId());
-                buildContentMedia(cdVO, mediaMap);
-                // 回填缓存：搜索结果同步写入缓存
-                if (isContentExpired(cdVO.getId()) || !contentCache.containsKey(cdVO.getId())) {
-                    cacheContentBasic(cdVO.getId(), cdVO);
-                }
+            List<Long> contentIdList = contentDao.keywordSearchInBrief(conn, keyword, 1, 20);
+            List<ContentVO> result = new ArrayList<>();
+            for (Long contentId : contentIdList) {
+                ContentCacheDTO cacheDTO = getContentFromCache(contentId);
+                if (cacheDTO == null) continue;
+                ContentVO cVO = new ContentVO();
+                copyToContentVO(cVO, cacheDTO);
+                result.add(cVO);
             }
-            return list;
+
+            if (userId != null && !result.isEmpty()) {
+                fillLikeAndFollowBatch(result, userId);
+            }
+
+            return result;
         } catch (SQLException e) {
             LOGGER.log(Level.SEVERE, "搜索内容失败, keyword=" + keyword, e);
             throw new ServerException("搜索失败，请重试");
@@ -226,29 +224,65 @@ public class ContentService {
 
     // ===== 组装响应 VO =====
 
-    private ContentDetailVO getContentDetail(long contentId) {
-        if (isContentExpired(contentId)) {
-            evictContent(contentId);
+    public ContentVO getContentVO(long contentId, Long userId) {
+        ContentCacheDTO cacheDTO = getContentFromCache(contentId);
+        if (cacheDTO == null) {
+            return null;
         }
-        ContentDetailVO cdVO = contentCache.get(contentId);
-        if (cdVO == null) {
-            backfillContent(contentId);
-            cdVO = contentCache.get(contentId);
+
+        ContentVO cVO = new ContentVO();
+        copyToContentVO(cVO, cacheDTO);
+
+        if (userId != null) {
+            fillContentLikeStatus(cVO, contentId, userId);
+            fillFollowStatus(cVO, userId);
         }
+
+        return cVO;
+    }
+
+    public ContentDetailVO getContentDetailVO(long contentId, Long userId) {
+        ContentCacheDTO cacheDTO = getContentFromCache(contentId);
+        if (cacheDTO == null) {
+            return null;
+        }
+
+        ContentDetailVO cdVO = new ContentDetailVO();
+        copyToDetailVO(cdVO, cacheDTO);
+
+        // 组装评论树
+        List<CommentCacheDTO> commentTree = commentCache.getOrDefault(contentId, new ArrayList<>());
+        if (!commentTree.isEmpty() && userId != null) {
+            List<Long> allCommentIds = collectCommentIds(commentTree);
+            Map<Long, Boolean> likedMap = likeService.batchIsCommentLiked(userId, allCommentIds);
+            if (likedMap == null) likedMap = new HashMap<>();
+            cdVO.setComments(commentService.convertToCommentVOList(commentTree, likedMap));
+        } else if (!commentTree.isEmpty()) {
+            cdVO.setComments(commentService.convertToCommentVOList(commentTree, new HashMap<>()));
+        } else {
+            cdVO.setComments(new ArrayList<>());
+        }
+
+        if (userId != null) {
+            fillContentLikeStatus(cdVO, contentId, userId);
+            fillFollowStatus(cdVO, userId);
+        }
+
         return cdVO;
     }
 
-    //缓存回填
+    // ===== 缓存回填 =====
+
     private void backfillContent(long contentId) {
         Connection conn = null;
         try {
             conn = MyConnectionPool.getConnection();
-            ContentDetailVO cdVO = contentDao.findContent(conn, contentId);
-            if (cdVO == null) return;
-            Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, cdVO.getId());
-            buildContentMedia(cdVO, mediaMap);
+            ContentCacheDTO dto = contentDao.findContent(conn, contentId);
+            if (dto == null) return;
+            Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, dto.getId());
+            buildContentMedia(dto, mediaMap);
             List<CommentCacheDTO> comments = commentService.getCommentCacheVOList(contentId);
-            cacheContent(contentId, cdVO, comments);
+            cacheContent(contentId, dto, comments);
             LOGGER.info("缓存回填成功, contentId=" + contentId);
         } catch (Exception e) {
             LOGGER.log(Level.WARNING, "缓存回填失败, contentId=" + contentId, e);
@@ -257,60 +291,74 @@ public class ContentService {
         }
     }
 
-    public ContentVO getContentVO(long contentId, long userId) {
-        ContentDetailVO cdVO = getContentDetail(contentId);
-        if (cdVO == null) {
-            return null;
-        }
+    // ===== 复制方法 =====
 
-        ContentVO cVO = new ContentVO();
-        copyFromCache(cVO, cdVO);
-
-        // 获取评论树
-        List<CommentCacheDTO> commentTree = commentCache.getOrDefault(contentId, new ArrayList<>());
-
-        // 收集所有需要查点赞的 ID
-        List<Long> allCommentIds = collectCommentIds(commentTree);
-        List<Long> allContentIds = List.of(contentId);
-
-        // 批量查询点赞状态（Redis pipeline 优先，miss 的 ID 走 DB 兜底）
-        Map<Long, Boolean> likedMap = new HashMap<>();
-        // 查内容的点赞状态
-        Map<Long, Boolean> contentLikedMap = likeService.batchIsContentLiked(userId, allContentIds);
-        if (contentLikedMap != null) {
-            likedMap.putAll(contentLikedMap);
-        }
-        // 查所有评论的点赞状态
-        if (!allCommentIds.isEmpty()) {
-            Map<Long, Boolean> commentLikedMap = likeService.batchIsCommentLiked(userId, allCommentIds);
-            if (commentLikedMap != null) {
-                likedMap.putAll(commentLikedMap);
-            }
-        }
-
-
-        // 填充 isLiked
-        Boolean contentLiked = likedMap.get(contentId);
-        cVO.setIsLiked(contentLiked != null && contentLiked);
-
-        // 填充 isFollow
-        fillFollowStatus(cVO, userId);
-
-        return cVO;
+    private void copyToContentVO(ContentVO cVO, ContentCacheDTO dto) {
+        cVO.setId(dto.getId());
+        cVO.setAuthorId(dto.getAuthorId());
+        cVO.setType(dto.getType());
+        cVO.setTitle(dto.getTitle());
+        cVO.setDescription(dto.getDescription());
+        cVO.setCategoryId(dto.getCategoryId());
+        cVO.setCommentCount(dto.getCommentCount());
+        cVO.setLikeCount(dto.getLikeCount());
+        cVO.setAuthorName(dto.getAuthorName());
+        cVO.setCoverUrl(dto.getCoverUrl());
     }
 
-    private void copyFromCache(ContentVO cVO, ContentDetailVO cdVO) {
-        cVO.setId(cdVO.getId());
-        cVO.setAuthorId(cdVO.getAuthorId());
-        cVO.setType(cdVO.getType());
-        cVO.setTitle(cdVO.getTitle());
-        cVO.setDescription(cdVO.getDescription());
-        cVO.setCategoryId(cdVO.getCategoryId());
-        cVO.setCommentCount(cdVO.getCommentCount());
-        cVO.setLikeCount(cdVO.getLikeCount());
-        cVO.setAuthorName(cdVO.getAuthorName());
-        cVO.setCoverUrl(cdVO.getCoverUrl());
+    private void copyToDetailVO(ContentDetailVO cdVO, ContentCacheDTO dto) {
+        cdVO.setId(dto.getId());
+        cdVO.setAuthorId(dto.getAuthorId());
+        cdVO.setType(dto.getType());
+        cdVO.setTitle(dto.getTitle());
+        cdVO.setDescription(dto.getDescription());
+        cdVO.setCategoryId(dto.getCategoryId());
+        cdVO.setCommentCount(dto.getCommentCount());
+        cdVO.setLikeCount(dto.getLikeCount());
+        cdVO.setAuthorName(dto.getAuthorName());
+        cdVO.setCoverUrl(dto.getCoverUrl());
+        cdVO.setVideoUrl(dto.getVideoUrl());
+        cdVO.setImageUrls(dto.getImageUrls());
     }
+
+    // ===== 点赞状态填充 =====
+
+    private void fillContentLikeStatus(ContentVO cVO, long contentId, long userId) {
+        Map<Long, Boolean> likedMap = likeService.batchIsContentLiked(userId, List.of(contentId));
+        if (likedMap != null) {
+            Boolean liked = likedMap.get(contentId);
+            cVO.setIsLiked(liked != null && liked);
+        }
+    }
+
+    private void fillContentLikeStatus(ContentDetailVO cdVO, long contentId, long userId) {
+        Map<Long, Boolean> likedMap = likeService.batchIsContentLiked(userId, List.of(contentId));
+        if (likedMap != null) {
+            Boolean liked = likedMap.get(contentId);
+            cdVO.setIsLiked(liked != null && liked);
+        }
+    }
+
+    public void fillLikeAndFollowBatch(List<ContentVO> list, Long userId) {
+        if (userId == null || list.isEmpty()) return;
+
+        // 批量查点赞
+        List<Long> contentIds = new ArrayList<>();
+        for (ContentVO vo : list) {
+            contentIds.add(vo.getId());
+        }
+        Map<Long, Boolean> likedMap = likeService.batchIsContentLiked(userId, contentIds);
+        if (likedMap == null) likedMap = new HashMap<>();
+        for (ContentVO vo : list) {
+            Boolean liked = likedMap.get(vo.getId());
+            vo.setIsLiked(liked != null && liked);
+        }
+
+        // 批量查关注
+        fillFollowStatus(list, userId);
+    }
+
+    // ===== 收集评论 ID（递归）=====
 
     private List<Long> collectCommentIds(List<CommentCacheDTO> tree) {
         List<Long> ids = new ArrayList<>();
@@ -331,11 +379,11 @@ public class ContentService {
 
     // ===== 关注状态填充 =====
 
-    public void fillFollowStatus(List<RecommendVO> list, Long userId) {
+    public void fillFollowStatus(List<ContentVO> list, Long userId) {
         if (userId == null || list == null || list.isEmpty()) return;
 
         List<Long> authorIds = new ArrayList<>();
-        for (RecommendVO vo : list) {
+        for (ContentVO vo : list) {
             if (vo.getAuthorId() > 0) {
                 authorIds.add(vo.getAuthorId());
             }
@@ -346,7 +394,7 @@ public class ContentService {
         try {
             conn = MyConnectionPool.getConnection();
             Set<Long> followedSet = followDao.getFollowedIds(conn, userId, authorIds);
-            for (RecommendVO vo : list) {
+            for (ContentVO vo : list) {
                 vo.setIsFollow(followedSet.contains(vo.getAuthorId()));
             }
         } catch (SQLException e) {
@@ -371,19 +419,34 @@ public class ContentService {
         }
     }
 
+    private void fillFollowStatus(ContentDetailVO vo, Long userId) {
+        if (userId == null || vo == null) return;
+
+        Connection conn = null;
+        try {
+            conn = MyConnectionPool.getConnection();
+            Set<Long> followedSet = followDao.getFollowedIds(conn, userId, List.of(vo.getAuthorId()));
+            vo.setIsFollowed(followedSet.contains(vo.getAuthorId()));
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "填充关注状态失败, userId=" + userId, e);
+        } finally {
+            MyConnectionPool.release(conn);
+        }
+    }
+
     // ===== 媒体填充 =====
 
-    public void buildContentMedia(ContentDetailVO cdVO, Map<Integer, List<ContentMedia>> mediaMap) {
+    public void buildContentMedia(ContentCacheDTO dto, Map<Integer, List<ContentMedia>> mediaMap) {
         List<ContentMedia> coverList = mediaMap.get(3);
         if (coverList != null && !coverList.isEmpty()) {
-            cdVO.setCoverUrl(jointUrl(coverList.getFirst().getUrl()));
+            dto.setCoverUrl(jointUrl(coverList.getFirst().getUrl()));
         }
-        int type = cdVO.getType();
+        int type = dto.getType();
         switch (type) {
             case 1:
                 List<ContentMedia> videoList = mediaMap.get(1);
                 if (videoList != null && !videoList.isEmpty()) {
-                    cdVO.setVideoUrl(jointUrl(videoList.getFirst().getUrl()));
+                    dto.setVideoUrl(jointUrl(videoList.getFirst().getUrl()));
                 } else {
                     throw new NotFoundException("资源已丢失");
                 }
@@ -393,9 +456,9 @@ public class ContentService {
                 if (imageList != null && !imageList.isEmpty()) {
                     List<String> imageUrls = new ArrayList<>();
                     for (ContentMedia media : imageList) {
-                        imageUrls.add(media.getUrl());
+                        imageUrls.add(jointUrl(media.getUrl()));
                     }
-                    cdVO.setImageUrls(imageUrls);
+                    dto.setImageUrls(imageUrls);
                 }
                 break;
             default:
@@ -414,7 +477,6 @@ public class ContentService {
             contentMediaDao.addMedia(conn, videoId, videoUrl, UploadType.VIDEO.getMediaType(), 1);
             contentMediaDao.addMedia(conn, videoId, coverUrl, UploadType.COVER.getMediaType(), 1);
             conn.commit();
-            // 即时更新缓存
             updateCacheAfterAdd(conn, videoId);
         } catch (SQLException e) {
             LOGGER.log(Level.SEVERE, "添加视频失败, userId=" + uc.getUserId(), e);
@@ -445,7 +507,6 @@ public class ContentService {
                 contentMediaDao.addMedia(conn, contentId, imageUrl, UploadType.IMAGE.getMediaType(), sort++);
             }
             conn.commit();
-            // 即时更新缓存
             updateCacheAfterAdd(conn, contentId);
         } catch (SQLException e) {
             LOGGER.log(Level.SEVERE, "添加动态失败, userId=" + uc.getUserId(), e);
@@ -464,24 +525,15 @@ public class ContentService {
 
     private void updateCacheAfterAdd(Connection conn, long contentId) {
         try {
-            ContentDetailVO detail = contentDao.findContent(conn, contentId);
-            if (detail == null) return;
+            ContentCacheDTO dto = contentDao.findContent(conn, contentId);
+            if (dto == null) return;
             Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, contentId);
-            buildContentMedia(detail, mediaMap);
-            cacheContentBasic(contentId, detail);
-            // 加入推荐列表最前面
-            RecommendVO rvo = new RecommendVO();
-            rvo.setId(detail.getId());
-            rvo.setAuthorId(detail.getAuthorId());
-            rvo.setType(detail.getType());
-            rvo.setTitle(detail.getTitle());
-            rvo.setDescription(detail.getDescription());
-            rvo.setCategoryId(detail.getCategoryId());
-            rvo.setCommentCount(detail.getCommentCount());
-            rvo.setLikeCount(detail.getLikeCount());
-            rvo.setAuthorName(detail.getAuthorName());
-            rvo.setCoverUrl(detail.getCoverUrl());
-            recommendList.add(0, rvo);
+            buildContentMedia(dto, mediaMap);
+            cacheContentBasic(contentId, dto);
+
+            ContentVO cVO = new ContentVO();
+            copyToContentVO(cVO, dto);
+            recommendList.add(0, cVO);
             LOGGER.info("新内容已加入缓存, contentId=" + contentId);
         } catch (Exception e) {
             LOGGER.log(Level.WARNING, "新内容缓存更新失败, contentId=" + contentId, e);
@@ -537,16 +589,14 @@ public class ContentService {
      * 同时更新 contentCache 和 recommendList，避免等待 1 分钟定时刷新
      */
     public static void updateContentLikeCount(long contentId, int delta) {
-        // 更新 contentCache
-        ContentDetailVO cdvo = contentCache.get(contentId);
-        if (cdvo != null) {
-            cdvo.setLikeCount(cdvo.getLikeCount() + delta);
+        ContentCacheDTO dto = contentCache.get(contentId);
+        if (dto != null) {
+            dto.setLikeCount(dto.getLikeCount() + delta);
         }
-        // 同步更新 recommendList
         synchronized (recommendList) {
-            for (RecommendVO rvo : recommendList) {
-                if (rvo.getId() == contentId) {
-                    rvo.setLikeCount(rvo.getLikeCount() + delta);
+            for (ContentVO cvo : recommendList) {
+                if (cvo.getId() == contentId) {
+                    cvo.setLikeCount(cvo.getLikeCount() + delta);
                     break;
                 }
             }

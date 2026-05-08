@@ -19,4 +19,4 @@ id=6&phone=10000000005&password=123
 #GET http://localhost:8080/MyAPP/comment/list?videoId=19
 #Content-Type: application/x-www-form-urlencoded
 
-#GET http://localhost:8080/MyAPP/video/search?keyword=灯
+#GET http://localhost:8080/MyAPP/video/keywordSearchInDetail?keyword=灯
