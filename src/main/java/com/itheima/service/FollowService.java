@@ -5,6 +5,7 @@ import com.itheima.exception.BusinessException;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.ErrorCode;
 import com.itheima.exception.ServerException;
+import com.itheima.factory.BeanFactory;
 import com.itheima.util.MyConnectionPool;
 
 import java.sql.Connection;
@@ -14,7 +15,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class FollowService {
-    private FollowDao followDao = new FollowDao();
+    private FollowDao followDao = BeanFactory.getFollowDao();
     private static final Logger LOGGER =
             LogUtil.getLogger(FollowService.class);
 

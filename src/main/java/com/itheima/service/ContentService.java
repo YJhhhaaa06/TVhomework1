@@ -7,6 +7,7 @@ import com.itheima.dao.ContentDao;
 import com.itheima.dao.ContentMediaDao;
 import com.itheima.dao.FollowDao;
 import com.itheima.exception.*;
+import com.itheima.factory.BeanFactory;
 import com.itheima.pojo.*;
 import com.itheima.util.LogUtil;
 import com.itheima.util.MyConnectionPool;
@@ -21,12 +22,12 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class ContentService {
-    private ContentDao contentDao = new ContentDao();
-    private CommentDao commentDao = new CommentDao();
-    private ContentMediaDao contentMediaDao = new ContentMediaDao();
-    private FollowDao followDao = new FollowDao();
-    private CommentService commentService = new CommentService();
-    private LikeService likeService = new LikeService();
+    private ContentDao contentDao = BeanFactory.getContentDao();
+    private CommentDao commentDao = BeanFactory.getCommentDao();
+    private ContentMediaDao contentMediaDao = BeanFactory.getContentMediaDao();
+    private FollowDao followDao = BeanFactory.getFollowDao();
+    private CommentService commentService = BeanFactory.getCommentService();
+    private LikeService likeService = BeanFactory.getLikeService();
     private static final Logger LOGGER =
             LogUtil.getLogger(ContentService.class);
 
@@ -36,13 +37,7 @@ public class ContentService {
     private static Map<Long, Long> contentTimestamps = new HashMap<>();
     private static final long CONTENT_TTL_MS = 10 * 60 * 1000;
 
-    private static ContentService instance = new ContentService();
-
-    public static ContentService getInstance() {
-        return instance;
-    }
-
-    private ContentService() {
+    public ContentService() {
         init();
     }
 
@@ -114,6 +109,7 @@ public class ContentService {
 
         } catch (Exception e) {
             LOGGER.log(Level.SEVERE, "内容缓存刷新失败", e);
+
             throw new RuntimeException("FAIL_TO_REFRESH", e);
         } finally {
             MyConnectionPool.release(conn);

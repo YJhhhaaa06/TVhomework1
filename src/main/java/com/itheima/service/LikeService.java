@@ -7,6 +7,7 @@ import com.itheima.dao.ContentLikeDao;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
+import com.itheima.factory.BeanFactory;
 import com.itheima.util.MyConnectionPool;
 
 import java.sql.Connection;
@@ -17,11 +18,11 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class LikeService {
-    private final ContentDao contentDao = new ContentDao();
-    private final CommentDao commentDao = new CommentDao();
-    private final ContentLikeDao contentLikeDao = new ContentLikeDao();
-    private final CommentLikeDao commentLikeDao = new CommentLikeDao();
-    private final LikeCacheService cache = new LikeCacheService();
+    private final ContentDao contentDao = BeanFactory.getContentDao();
+    private final CommentDao commentDao = BeanFactory.getCommentDao();
+    private final ContentLikeDao contentLikeDao = BeanFactory.getContentLikeDao();
+    private final CommentLikeDao commentLikeDao = BeanFactory.getCommentLikeDao();
+    private final LikeCacheService cache = BeanFactory.getLikeCacheService();
     private static final Logger LOGGER =
             LogUtil.getLogger(LikeService.class);
 

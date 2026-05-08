@@ -7,6 +7,7 @@ import com.itheima.dao.UserDao;
 import com.itheima.exception.AuthException;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
+import com.itheima.factory.BeanFactory;
 import com.itheima.pojo.LogInVO;
 import com.itheima.pojo.User;
 import com.itheima.util.LogUtil;
@@ -20,8 +21,8 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class UserService {
-    private UserDao userDao=new UserDao();
-    private TokenService tokenService=new TokenService();
+    private UserDao userDao = BeanFactory.getUserDao();
+    private TokenService tokenService = BeanFactory.getTokenService();
     private static final Logger LOGGER =
             LogUtil.getLogger(UserService.class);
 

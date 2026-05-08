@@ -23,7 +23,7 @@ public class LogUtil {
             consoleHandler.setLevel(Level.INFO);
             rootLogger.addHandler(consoleHandler);
         } catch (Exception e) {
-            System.err.println("日志系统初始化失败: " + e.getMessage());
+            System.err.println("fail to log " + e.getMessage());
         }
     }
 

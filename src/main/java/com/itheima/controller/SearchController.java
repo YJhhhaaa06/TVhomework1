@@ -3,6 +3,7 @@ package com.itheima.controller;
 import com.itheima.DTO.SearchDTO;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
+import com.itheima.factory.BeanFactory;
 import com.itheima.pojo.ContentDetailVO;
 import com.itheima.pojo.ContentVO;
 import com.itheima.service.ContentService;
@@ -16,24 +17,24 @@ import java.util.List;
 
 @WebServlet("/search/*")
 public class SearchController extends HttpServlet {
-    private ContentService contentService = ContentService.getInstance();
+    private ContentService contentService = BeanFactory.getContentService();
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         try {
-            String action = req.getParameter("action");
+            String action = req.getPathInfo();
             if (action == null) {
                 BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "未识别功能");
                 return;
             }
             switch (action) {
-                case "IdSearch":
+                case "/IdSearch":
                     getContentDetailById(req, resp);
                     break;
-                case "keywordSearch":
+                case "/keywordSearch":
                     search(req, resp);
                     break;
-                case "getDetailRecommended":
+                case "/getDetailRecommended":
                     getDetail(req, resp);
                     break;
                 default:
@@ -50,6 +51,10 @@ public class SearchController extends HttpServlet {
     protected void getContentDetailById(HttpServletRequest req, HttpServletResponse resp) throws Exception {
         SearchDTO dto = RequestParser.parse(req, SearchDTO.class);
         Long userId = (Long) req.getAttribute("userId");
+        if(dto==null||(dto.getContentId()==null)){
+            BaseServletUtil.writeError(resp,ErrorCode.PARAM_ERROR,"contentId不能为空");
+            return;
+        }
         ContentDetailVO cdVO = contentService.getContentDetailVO(dto.getContentId(), userId);
         if (cdVO == null) {
             BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "找不到对应内容");
@@ -73,6 +78,11 @@ public class SearchController extends HttpServlet {
     protected void getDetail(HttpServletRequest req, HttpServletResponse resp) throws Exception {
         SearchDTO dto = RequestParser.parse(req, SearchDTO.class);
         Long userId = (Long) req.getAttribute("userId");
+
+        if(dto==null||(dto.getContentId()==null)){
+            BaseServletUtil.writeError(resp,ErrorCode.PARAM_ERROR,"contentId不能为空");
+            return;
+        }
         ContentDetailVO cdVO = contentService.getContentDetailVO(dto.getContentId(), userId);
         if (cdVO == null) {
             BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "找不到对应内容");

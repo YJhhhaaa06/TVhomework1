@@ -4,6 +4,7 @@ import com.itheima.command.CommentCommand;
 import com.itheima.dao.CommentDao;
 import com.itheima.dao.ContentDao;
 import com.itheima.exception.*;
+import com.itheima.factory.BeanFactory;
 import com.itheima.pojo.CommentCacheDTO;
 import com.itheima.pojo.CommentVO;
 import com.itheima.util.LogUtil;
@@ -20,9 +21,9 @@ import java.util.logging.Logger;
 
 public class CommentService {
 
-    private CommentDao commentDao = new CommentDao();
-    private ContentDao contentDao=new ContentDao();
-    private LikeService likeService = new LikeService();
+    private CommentDao commentDao = BeanFactory.getCommentDao();
+    private ContentDao contentDao = BeanFactory.getContentDao();
+    private LikeService likeService = BeanFactory.getLikeService();
     private static final Logger LOGGER =
             LogUtil.getLogger(CommentService.class);
 

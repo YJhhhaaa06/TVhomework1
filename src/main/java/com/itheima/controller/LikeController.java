@@ -3,6 +3,7 @@ package com.itheima.controller;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
 import com.itheima.exception.ParamException;
+import com.itheima.factory.BeanFactory;
 import com.itheima.service.LikeService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
@@ -14,7 +15,7 @@ import java.io.IOException;
 
 @WebServlet("/like/*")
 public class LikeController extends HttpServlet {
-    private final LikeService likeService = new LikeService();
+    private final LikeService likeService = BeanFactory.getLikeService();
 
     // ==================== 写操作 ====================
 

@@ -3,6 +3,7 @@ package com.itheima.controller;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
 import com.itheima.exception.ParamException;
+import com.itheima.factory.BeanFactory;
 import com.itheima.service.FollowService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
@@ -14,7 +15,7 @@ import java.io.IOException;
 
 @WebServlet("/follow/*")
 public class FollowController extends HttpServlet {
-    private FollowService followService = new FollowService();
+    private FollowService followService = BeanFactory.getFollowService();
 
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp)

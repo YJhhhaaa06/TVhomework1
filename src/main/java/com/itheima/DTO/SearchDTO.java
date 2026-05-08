@@ -2,7 +2,7 @@ package com.itheima.DTO;
 
 public class SearchDTO {
     private String keyword;
-    private long contentId;
+    private Long contentId;
 
     public SearchDTO() {
     }
@@ -11,7 +11,7 @@ public class SearchDTO {
         this.keyword = keyword;
     }
 
-    public SearchDTO(long contentId) {
+    public SearchDTO(Long contentId) {
         this.contentId = contentId;
     }
 
@@ -23,11 +23,11 @@ public class SearchDTO {
         this.keyword = keyword;
     }
 
-    public long getContentId() {
+    public Long getContentId() {
         return contentId;
     }
 
-    public void setContentId(long contentId) {
+    public void setContentId(Long contentId) {
         this.contentId = contentId;
     }
 }
