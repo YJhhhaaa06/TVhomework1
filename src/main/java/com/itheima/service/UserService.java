@@ -10,10 +10,7 @@ import com.itheima.exception.ServerException;
 import com.itheima.factory.BeanFactory;
 import com.itheima.pojo.LogInVO;
 import com.itheima.pojo.User;
-import com.itheima.util.LogUtil;
-import com.itheima.util.MyConnectionPool;
-import com.itheima.util.PasswordUtil;
-import com.itheima.util.StringUtil;
+import com.itheima.util.*;
 
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -55,7 +52,7 @@ public class UserService {
         if (!PasswordUtil.isPasswordCorrect(rawPassword, user.getHashedPassword())) {
             throw new AuthException("WRONG_PASSWORD");
         }
-        return tokenService.getNewToken(user.getId());
+        return JwtUtil.generateToken(user.getId());
     }
 
 

@@ -1,6 +1,6 @@
 ### ==================== 变量 ====================
 # 先用 loginTest.http 的用例1或2登录，拿到 token 替换下面
-@token = 2a663fda-0b58-4b90-96c6-1121b1e10d3b
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4MjM0MDk0LCJleHAiOjE3NzgyNDEyOTR9.bw_h890cadNqzyF0uRRY2hjrQFYrRZpXzcnXkI09pe8
 
 
 ### ==================== 正常发评论 ====================

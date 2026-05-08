@@ -111,19 +111,6 @@ public class TokenService {
         }
         //从token列表中根据id找token,找不到返回null
         public  Token searchToken ( long id){
-//            // 1. 获取 entrySet 的迭代器
-//            Iterator<Map.Entry<String,Token>> it = tokenMap.entrySet().iterator();
-//            //循环判断是否有下一个
-//            while (it.hasNext()) {
-//                // 3. 取出当前的键值对
-//                Map.Entry<String, Token> entry = it.next();
-//                com.itheima.pojo.Token token = entry.getValue();//取出token
-//                // 4. 如果找到对应Id的token就返回
-//                if (token.getId()==id) {
-//                    it.remove(); // 重点：必须调用 it.remove()，不能用 tokenMap.remove()
-//                    //不能连续使用，要用next让下一个元素出列，才能再次remove
-//                }
-//            }
             return idMap.get(id);
         }
         public  Long getUserId (String tokenStr){
@@ -131,24 +118,6 @@ public class TokenService {
             return token.getId();
         }
 
-        //验
-        //    比较token是否一致
-//        public static boolean isTokenEqual (Token token1, Token token2){
-//            if (!(token1.getId() == token2.getId())) {//id不一致
-//                return false;
-//            }
-//            if (!(token1.getTokenStr().equals(token2.getTokenStr()))) {//随机码不一致
-//                return false;
-//            }
-//            if (!(token1.getSignature().equals(token2.getSignature()))) {//签发时间不一致
-//                return false;
-//            }
-//            return token1.getExpireTime() == token2.getExpireTime();
-//        }
-        //用户是否和Token匹配
-        public  boolean isTokenMatchUser (Token token, User user){
-            return token.getId() == user.getId();
-        }
 
 
         //    高级

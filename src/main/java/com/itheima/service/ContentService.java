@@ -246,25 +246,31 @@ public class ContentService {
         ContentDetailVO cdVO = new ContentDetailVO();
         copyToDetailVO(cdVO, cacheDTO);
 
-        // 组装评论树
-        List<CommentCacheDTO> commentTree = commentCache.getOrDefault(contentId, new ArrayList<>());
-        if (!commentTree.isEmpty() && userId != null) {
-            List<Long> allCommentIds = collectCommentIds(commentTree);
-            Map<Long, Boolean> likedMap = likeService.batchIsCommentLiked(userId, allCommentIds);
-            if (likedMap == null) likedMap = new HashMap<>();
-            cdVO.setComments(commentService.convertToCommentVOList(commentTree, likedMap));
-        } else if (!commentTree.isEmpty()) {
-            cdVO.setComments(commentService.convertToCommentVOList(commentTree, new HashMap<>()));
-        } else {
-            cdVO.setComments(new ArrayList<>());
-        }
-
         if (userId != null) {
             fillContentLikeStatus(cdVO, contentId, userId);
             fillFollowStatus(cdVO, userId);
         }
 
         return cdVO;
+    }
+
+    // ===== 评论查询（独立接口用）=====
+
+    public List<CommentVO> getCommentsForContent(long contentId, Long userId) {
+        getContentFromCache(contentId);
+        List<CommentCacheDTO> commentTree = commentCache.getOrDefault(contentId, new ArrayList<>());
+        if (commentTree.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        if (userId != null) {
+            List<Long> allCommentIds = collectCommentIds(commentTree);
+            Map<Long, Boolean> likedMap = likeService.batchIsCommentLiked(userId, allCommentIds);
+            if (likedMap == null) likedMap = new HashMap<>();
+            return commentService.convertToCommentVOList(commentTree, likedMap);
+        } else {
+            return commentService.convertToCommentVOList(commentTree, new HashMap<>());
+        }
     }
 
     // ===== 缓存回填 =====

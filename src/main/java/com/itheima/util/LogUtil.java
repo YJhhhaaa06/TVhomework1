@@ -22,6 +22,7 @@ public class LogUtil {
             consoleHandler.setFormatter(new SimpleFormatter());
             consoleHandler.setLevel(Level.INFO);
             rootLogger.addHandler(consoleHandler);
+            System.out.println("successfully load logs");
         } catch (Exception e) {
             System.err.println("fail to log " + e.getMessage());
         }

@@ -1,7 +1,11 @@
 package com.itheima.filter;
 
+import com.auth0.jwt.exceptions.JWTVerificationException;
+import com.itheima.controller.BaseServletUtil;
+import com.itheima.exception.ErrorCode;
 import com.itheima.factory.BeanFactory;
 import com.itheima.service.TokenService;
+import com.itheima.util.JwtUtil;
 import jakarta.servlet.*;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -25,12 +29,17 @@ public class LoginFilter implements Filter {
         }
 
         String token = req.getHeader("token");
-        if (token != null && tokenService.isTokenLegal(token)) {
-            req.setAttribute("userId", tokenService.getUserId(token));
-        } else {
+        if(token==null){
             req.setAttribute("userId", null);
+        } else if (!JwtUtil.isTokenValid(token)) {
+            BaseServletUtil.writeError(resp, ErrorCode.UNAUTHORIZED,"token不存在或已过期");
+            return;
+        }else {
+            req.setAttribute("userId",JwtUtil.getUserId(token));
         }
+
 
         chain.doFilter(request, response);
     }
+
 }

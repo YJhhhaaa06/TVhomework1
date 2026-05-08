@@ -1,6 +1,6 @@
 ### ==================== 变量 ====================
 # 先用 loginTest.http 登录拿到 token，替换下面
-@token = 3ae255c2-5d11-4c0c-92d2-8b52ae9421f0
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4MjQwODMwLCJleHAiOjE3NzgyNDgwMzB9.ub5f-w_63wX_7YL00msKobnknplQsUd-aH2t1ChUi3c
 
 
 ### ==================== IdSearch — 从数据库按 contentId 查 ====================

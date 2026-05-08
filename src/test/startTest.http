@@ -1,6 +1,6 @@
 ### ==================== 变量 ====================
 # 先用 loginTest.http 登录拿到 token，替换下面
-@token = 331509ef-0027-41c1-bab4-4e1e255dc4e0
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4MjM0MDk0LCJleHAiOjE3NzgyNDEyOTR9.bw_h890cadNqzyF0uRRY2hjrQFYrRZpXzcnXkI09pe8
 
 
 ### ==================== 首页推荐流测试 ====================
