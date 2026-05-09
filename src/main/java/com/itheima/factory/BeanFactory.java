@@ -17,7 +17,6 @@ public class BeanFactory {
     //Service层对象（按依赖拓扑顺序声明）
     private final static LikeCacheService LIKE_CACHE_SERVICE = new LikeCacheService();
     private final static FileUploadService FILE_UPLOAD_SERVICE = new FileUploadService();
-    private final static TokenService TOKEN_SERVICE = new TokenService();
     private final static LikeService LIKE_SERVICE = new LikeService();
     private final static CommentService COMMENT_SERVICE = new CommentService();
     private final static ContentService CONTENT_SERVICE = new ContentService();
@@ -37,7 +36,6 @@ public class BeanFactory {
     //Service getters
     public static LikeCacheService getLikeCacheService() { return LIKE_CACHE_SERVICE; }
     public static FileUploadService getFileUploadService() { return FILE_UPLOAD_SERVICE; }
-    public static TokenService getTokenService() { return TOKEN_SERVICE; }
     public static LikeService getLikeService() { return LIKE_SERVICE; }
     public static CommentService getCommentService() { return COMMENT_SERVICE; }
     public static ContentService getContentService() { return CONTENT_SERVICE; }

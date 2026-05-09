@@ -123,7 +123,7 @@ Content-Type: application/json
 
 ### ==================== 异常 — 路由 ====================
 
-### 11. 未识别的 action
+### 11. 未识别的 action（POST）
 POST http://localhost:8080/MyAPP/comment/unknown
 token: {{token}}
 Content-Type: application/json
@@ -132,3 +132,41 @@ Content-Type: application/json
   "contentId": 1,
   "message": "test"
 }
+
+
+### ==================== 查询评论（GET /show）====================
+
+### 12. 登录用户查询评论
+GET http://localhost:8080/MyAPP/comment/show?contentId=1
+token: {{token}}
+
+
+### 13. 未登录用户查询评论
+GET http://localhost:8080/MyAPP/comment/show?contentId=1
+
+
+### 14. 查询不存在的内容的评论
+GET http://localhost:8080/MyAPP/comment/show?contentId=99999
+token: {{token}}
+
+
+### ==================== 查询评论 — 异常 ====================
+
+### 15. 缺少 contentId 参数
+GET http://localhost:8080/MyAPP/comment/show
+token: {{token}}
+
+
+### 16. contentId 为非数字
+GET http://localhost:8080/MyAPP/comment/show?contentId=abc
+token: {{token}}
+
+
+### 17. 缺少 action
+GET http://localhost:8080/MyAPP/comment
+token: {{token}}
+
+
+### 18. 未识别的 action（GET）
+GET http://localhost:8080/MyAPP/comment/unknown
+token: {{token}}

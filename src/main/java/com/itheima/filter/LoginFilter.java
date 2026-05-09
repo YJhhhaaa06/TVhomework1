@@ -1,10 +1,7 @@
 package com.itheima.filter;
 
-import com.auth0.jwt.exceptions.JWTVerificationException;
 import com.itheima.controller.BaseServletUtil;
 import com.itheima.exception.ErrorCode;
-import com.itheima.factory.BeanFactory;
-import com.itheima.service.TokenService;
 import com.itheima.util.JwtUtil;
 import jakarta.servlet.*;
 import jakarta.servlet.http.HttpServletRequest;
@@ -14,7 +11,6 @@ import java.io.IOException;
 
 public class LoginFilter implements Filter {
 
-    private TokenService tokenService = BeanFactory.getTokenService();
 
     @Override
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)

@@ -49,7 +49,16 @@ public class SearchController extends HttpServlet {
     }
 
     protected void getContentDetailById(HttpServletRequest req, HttpServletResponse resp) throws Exception {
-        SearchDTO dto = RequestParser.parse(req, SearchDTO.class);
+        SearchDTO dto;
+        if (req.getContentLength() <= 0) {
+            dto = new SearchDTO();
+            String contentIdStr = req.getParameter("contentId");
+            if (contentIdStr != null && !contentIdStr.isEmpty()) {
+                dto.setContentId(Long.parseLong(contentIdStr));
+            }
+        } else {
+            dto = RequestParser.parse(req, SearchDTO.class);
+        }
         Long userId = (Long) req.getAttribute("userId");
         if(dto==null||(dto.getContentId()==null)){
             BaseServletUtil.writeError(resp,ErrorCode.PARAM_ERROR,"contentId不能为空");
@@ -64,7 +73,13 @@ public class SearchController extends HttpServlet {
     }
 
     protected void search(HttpServletRequest req, HttpServletResponse resp) throws Exception {
-        SearchDTO dto = RequestParser.parse(req, SearchDTO.class);
+        SearchDTO dto;
+        if (req.getContentLength() <= 0) {
+            dto = new SearchDTO();
+            dto.setKeyword(req.getParameter("keyword"));
+        } else {
+            dto = RequestParser.parse(req, SearchDTO.class);
+        }
 
         if (dto == null || dto.getKeyword() == null || dto.getKeyword().isBlank()) {
             BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "输入不能为空");
@@ -76,7 +91,16 @@ public class SearchController extends HttpServlet {
     }
 
     protected void getDetail(HttpServletRequest req, HttpServletResponse resp) throws Exception {
-        SearchDTO dto = RequestParser.parse(req, SearchDTO.class);
+        SearchDTO dto;
+        if (req.getContentLength() <= 0) {
+            dto = new SearchDTO();
+            String contentIdStr = req.getParameter("contentId");
+            if (contentIdStr != null && !contentIdStr.isEmpty()) {
+                dto.setContentId(Long.parseLong(contentIdStr));
+            }
+        } else {
+            dto = RequestParser.parse(req, SearchDTO.class);
+        }
         Long userId = (Long) req.getAttribute("userId");
 
         if(dto==null||(dto.getContentId()==null)){

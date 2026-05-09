@@ -67,7 +67,7 @@ public class FileUploadService {
         return fileName.substring(dotIndex).toLowerCase();
     }
     private String getBasePath() {   // 需要把 req 传进来
-        return "D:/upload";
+        return "D:/stone";
     }
 }
 

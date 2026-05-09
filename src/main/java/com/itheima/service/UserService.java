@@ -19,7 +19,6 @@ import java.util.logging.Logger;
 
 public class UserService {
     private UserDao userDao = BeanFactory.getUserDao();
-    private TokenService tokenService = BeanFactory.getTokenService();
     private static final Logger LOGGER =
             LogUtil.getLogger(UserService.class);
 
