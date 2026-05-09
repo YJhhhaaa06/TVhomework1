@@ -11,6 +11,9 @@ public class AppShutDownListener implements ServletContextListener {
 
     @Override
     public void contextDestroyed(ServletContextEvent sce) {
+        // 清除 Redis 缓存数据
+        MyRedisPool.flushDb();
+
         // 关闭 Redis
         MyRedisPool.close();
 

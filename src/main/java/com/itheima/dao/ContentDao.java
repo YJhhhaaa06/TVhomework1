@@ -220,16 +220,27 @@ public class ContentDao {
     }
 
     public List<Long> keywordSearchInBrief(Connection conn, String keyword, int page, int pageSize) throws SQLException {
-        String sql = """
-                SELECT c.id FROM content c
-                WHERE MATCH(c.title, c.description) AGAINST (? IN NATURAL LANGUAGE MODE)
-                  AND c.is_deleted = 0
-                ORDER BY c.create_time DESC
-                LIMIT ?,?
-                """;
+        String kw = keyword.trim();
+        String sql;
+        boolean singleChar = kw.length() == 1;
+        if (singleChar) {
+            sql = "SELECT c.id FROM content c WHERE c.title LIKE ? AND c.is_deleted = 0 ORDER BY c.create_time DESC LIMIT ?,?";
+        } else {
+            sql = """
+                    SELECT c.id FROM content c
+                    WHERE MATCH(c.title, c.description) AGAINST (? IN NATURAL LANGUAGE MODE)
+                      AND c.is_deleted = 0
+                    ORDER BY c.create_time DESC
+                    LIMIT ?,?
+                    """;
+        }
         List<Long> contentIdList = new ArrayList<>();
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setString(1, keyword);
+            if (singleChar) {
+                pstmt.setString(1, "%" + kw + "%");
+            } else {
+                pstmt.setString(1, kw);
+            }
             int offset = (page - 1) * pageSize;
             pstmt.setInt(2, offset);
             pstmt.setInt(3, pageSize);
@@ -238,6 +249,30 @@ public class ContentDao {
                     contentIdList.add(rs.getLong(1));
                 }
                 return contentIdList;
+            }
+        }
+    }
+
+    public int countKeywordSearch(Connection conn, String keyword) throws SQLException {
+        String kw = keyword.trim();
+        String sql;
+        boolean singleChar = kw.length() == 1;
+        if (singleChar) {
+            sql = "SELECT COUNT(*) FROM content c WHERE c.title LIKE ? AND c.is_deleted = 0";
+        } else {
+            sql = "SELECT COUNT(*) FROM content c WHERE MATCH(c.title, c.description) AGAINST (? IN NATURAL LANGUAGE MODE) AND c.is_deleted = 0";
+        }
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            if (singleChar) {
+                pstmt.setString(1, "%" + kw + "%");
+            } else {
+                pstmt.setString(1, kw);
+            }
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1);
+                }
+                return 0;
             }
         }
     }

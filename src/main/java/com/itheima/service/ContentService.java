@@ -1,5 +1,6 @@
 package com.itheima.service;
 
+import com.itheima.DTO.PageResult;
 import com.itheima.command.UploadCommand;
 import com.itheima.controller.UploadType;
 import com.itheima.dao.CommentDao;
@@ -191,11 +192,12 @@ public class ContentService {
 
     // ===== 搜索 =====
 
-    public List<ContentVO> search(String keyword, Long userId) {
+    public PageResult<ContentVO> search(String keyword, Long userId, int page, int pageSize) {
         Connection conn = null;
         try {
             conn = MyConnectionPool.getConnection();
-            List<Long> contentIdList = contentDao.keywordSearchInBrief(conn, keyword, 1, 20);
+            int total = contentDao.countKeywordSearch(conn, keyword);
+            List<Long> contentIdList = contentDao.keywordSearchInBrief(conn, keyword, page, pageSize);
             List<ContentVO> result = new ArrayList<>();
             for (Long contentId : contentIdList) {
                 ContentCacheDTO cacheDTO = getContentFromCache(contentId);
@@ -209,7 +211,7 @@ public class ContentService {
                 fillLikeAndFollowBatch(result, userId);
             }
 
-            return result;
+            return new PageResult<>(result, total, page, pageSize);
         } catch (SQLException e) {
             LOGGER.log(Level.SEVERE, "搜索内容失败, keyword=" + keyword, e);
             throw new ServerException("搜索失败，请重试");

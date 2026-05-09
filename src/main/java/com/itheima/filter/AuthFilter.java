@@ -22,7 +22,8 @@ public class AuthFilter implements Filter {
     );
 
     private static final Set<String> PROTECTED_EXACT = Set.of(//精确的限制登录接口
-            "/comment/add"  // 发表评论
+            "/comment/add",  // 发表评论
+            "/user/changePassword"  // 修改密码
     );
 
     @Override

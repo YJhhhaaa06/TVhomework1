@@ -1,6 +1,7 @@
 
 package com.itheima.command;
 
+import com.itheima.DTO.ChangePasswordDTO;
 import com.itheima.DTO.CommentDTO;
 import com.itheima.DTO.LoginDTO;
 import com.itheima.DTO.RegisterDTO;
@@ -40,7 +41,7 @@ public class CommandConverter {
         if(!PasswordUtil.isPasswordLegal(password)){
             throw new ParamException("密码只能由6~16位大小写字母与数字组成");
         }
-        return RegisterCommand.getInstance(phone,password,username);
+        return RegisterCommand.getInstance(phone,password,username.trim());
     }
 
     public static UploadCommand uploadVideoToCommand(String title,String description,String categoryId, long userId){
@@ -111,5 +112,23 @@ public class CommandConverter {
         }
         return new CommentCommand(contentId,userId,message,parentId);
 
+    }
+
+    public static ChangePasswordCommand changePasswordToCommand(ChangePasswordDTO dto){
+        String phone = dto.getPhone();
+        String oldPassword = dto.getOldPassword();
+        String newPassword = dto.getNewPassword();
+        if (phone == null || phone.isBlank()
+                || oldPassword == null || oldPassword.isBlank()
+                || newPassword == null || newPassword.isBlank()) {
+            throw new ParamException("输入不能为空");
+        }
+        if (!StringUtil.phoneCheck(phone)) {
+            throw new ParamException("电话号码格式错误");
+        }
+        if (!PasswordUtil.isPasswordLegal(newPassword)) {
+            throw new ParamException("密码只能由6~16位大小写字母与数字组成");
+        }
+        return new ChangePasswordCommand(phone, oldPassword, newPassword);
     }
 }

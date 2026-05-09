@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>个人中心</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f5f7; color: #18191c; min-height: 100vh; }
+
+        .top-bar { position: sticky; top: 0; z-index: 10; background: #fff; height: 48px; display: flex; align-items: center; padding: 0 14px; border-bottom: 1px solid #e3e5e7; gap: 12px; }
+        .top-bar .back { font-size: 20px; cursor: pointer; color: #18191c; text-decoration: none; }
+        .top-bar .title { font-size: 16px; font-weight: 600; }
+
+        .main { max-width: 600px; margin: 0 auto; padding: 16px; }
+
+        /* 用户信息卡片 */
+        .user-card { background: linear-gradient(135deg, #fb7299, #f990b0); border-radius: 14px; padding: 24px 20px; color: #fff; margin-bottom: 14px; }
+        .user-card .top-row { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; }
+        .avatar { width: 56px; height: 56px; border-radius: 50%; background: rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 700; flex-shrink: 0; }
+        .user-info .uname { font-size: 18px; font-weight: 600; }
+        .user-info .uid { font-size: 13px; opacity: 0.8; margin-top: 4px; }
+
+        /* 统计行 */
+        .stats { display: flex; justify-content: space-around; }
+        .stat-item { text-align: center; }
+        .stat-item .num { font-size: 20px; font-weight: 700; }
+        .stat-item .label { font-size: 12px; opacity: 0.8; margin-top: 2px; }
+
+        /* 菜单 */
+        .menu { background: #fff; border-radius: 12px; overflow: hidden; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+        .menu-item { display: flex; align-items: center; justify-content: space-between; padding: 16px; border-bottom: 1px solid #f4f5f7; cursor: pointer; transition: background 0.1s; font-size: 15px; }
+        .menu-item:last-child { border-bottom: none; }
+        .menu-item:hover { background: #fafafa; }
+        .menu-item .left { display: flex; align-items: center; gap: 12px; }
+        .menu-item .arrow { color: #c0c0c0; font-size: 14px; }
+
+        /* 退出按钮 */
+        .logout-btn { width: 100%; padding: 14px; border: none; border-radius: 12px; font-size: 15px; cursor: pointer; background: #fff; color: #ff4d4f; transition: all 0.15s; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+        .logout-btn:active { background: #fff1f0; transform: scale(0.98); }
+
+        .toast { position: fixed; top: 60px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.75); color: #fff; padding: 10px 24px; border-radius: 20px; font-size: 14px; z-index: 99; pointer-events: none; animation: fadeInOut 2s forwards; }
+        @keyframes fadeInOut { 0% { opacity: 0; transform: translateX(-50%) translateY(-10px); } 15% { opacity: 1; transform: translateX(-50%) translateY(0); } 75% { opacity: 1; } 100% { opacity: 0; } }
+
+        /* 弹窗 */
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 200; display: flex; align-items: center; justify-content: center; }
+        .modal-overlay.hidden { display: none; }
+        .modal { background: #fff; border-radius: 14px; padding: 24px 20px; width: 90%; max-width: 360px; }
+        .modal .modal-title { font-size: 17px; font-weight: 600; margin-bottom: 20px; text-align: center; }
+        .modal input { width: 100%; padding: 12px; margin-bottom: 14px; border: 1px solid #e3e5e7; border-radius: 8px; font-size: 15px; outline: none; }
+        .modal input:focus { border-color: #fb7299; }
+        .modal .btn-row { display: flex; gap: 12px; margin-top: 6px; }
+        .modal .btn-row button { flex: 1; padding: 12px; border: none; border-radius: 8px; font-size: 15px; cursor: pointer; }
+        .modal .btn-cancel { background: #f4f5f7; color: #666; }
+        .modal .btn-confirm { background: #fb7299; color: #fff; }
+    </style>
+</head>
+<body>
+
+<div class="top-bar">
+    <a class="back" href="start.html">&#8592;</a>
+    <span class="title">个人中心</span>
+</div>
+
+<div class="main">
+    <!-- 用户卡片 -->
+    <div class="user-card">
+        <div class="top-row">
+            <div class="avatar" id="avatar"></div>
+            <div class="user-info">
+                <div class="uname" id="displayName"></div>
+                <div class="uid" id="displayId"></div>
+            </div>
+        </div>
+        <div class="stats">
+            <div class="stat-item">
+                <div class="num">0</div>
+                <div class="label">关注</div>
+            </div>
+            <div class="stat-item">
+                <div class="num">0</div>
+                <div class="label">粉丝</div>
+            </div>
+            <div class="stat-item">
+                <div class="num">0</div>
+                <div class="label">创作</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 菜单 -->
+    <div class="menu">
+        <div class="menu-item" onclick="showToast('功能开发中')">
+            <span class="left">👥 我的关注</span>
+            <span class="arrow">›</span>
+        </div>
+        <div class="menu-item" onclick="showToast('功能开发中')">
+            <span class="left">📝 我的创作</span>
+            <span class="arrow">›</span>
+        </div>
+        <div class="menu-item" onclick="showToast('功能开发中')">
+            <span class="left">👤 我的粉丝</span>
+            <span class="arrow">›</span>
+        </div>
+        <div class="menu-item" onclick="openModal()">
+            <span class="left">🔒 修改密码</span>
+            <span class="arrow">›</span>
+        </div>
+    </div>
+
+    <!-- 退出登录 -->
+    <button class="logout-btn" onclick="doLogout()">🚪 退出登录</button>
+</div>
+
+<!-- 修改密码弹窗 -->
+<div class="modal-overlay hidden" id="modalOverlay">
+    <div class="modal">
+        <div class="modal-title">修改密码</div>
+        <input type="text" id="cpPhone" placeholder="手机号" maxlength="11">
+        <input type="password" id="cpOldPwd" placeholder="旧密码">
+        <input type="password" id="cpNewPwd" placeholder="新密码（6-16位字母或数字）">
+        <div class="btn-row">
+            <button class="btn-cancel" onclick="closeModal()">取消</button>
+            <button class="btn-confirm" onclick="doChangePassword()">确认</button>
+        </div>
+    </div>
+</div>
+
+<script>
+const token = localStorage.getItem('userToken');
+const username = localStorage.getItem('username');
+
+if (!token) {
+    window.location.href = 'login.html';
+} else {
+    init();
+}
+
+function init() {
+    document.getElementById('displayName').textContent = username || '用户';
+    document.getElementById('avatar').textContent = (username || '?').charAt(0);
+    document.getElementById('displayId').textContent = 'ID: ' + parseUserId(token);
+}
+
+function parseUserId(t) {
+    try {
+        const payload = JSON.parse(atob(t.split('.')[1]));
+        return payload.sub || '?';
+    } catch (e) {
+        return '?';
+    }
+}
+
+function doLogout() {
+    localStorage.removeItem('userToken');
+    localStorage.removeItem('username');
+    window.location.href = 'login.html';
+}
+
+function openModal() {
+    document.getElementById('modalOverlay').classList.remove('hidden');
+}
+
+function closeModal() {
+    document.getElementById('modalOverlay').classList.add('hidden');
+    document.getElementById('cpPhone').value = '';
+    document.getElementById('cpOldPwd').value = '';
+    document.getElementById('cpNewPwd').value = '';
+}
+
+async function doChangePassword() {
+    const phone = document.getElementById('cpPhone').value.trim();
+    const oldPassword = document.getElementById('cpOldPwd').value;
+    const newPassword = document.getElementById('cpNewPwd').value;
+
+    if (!phone || !oldPassword || !newPassword) {
+        showToast('请填写所有字段');
+        return;
+    }
+
+    try {
+        const res = await fetch('./user/changePassword', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'token': token
+            },
+            body: JSON.stringify({ phone, oldPassword, newPassword })
+        });
+        const data = await res.json();
+        if (data.code === 200) {
+            showToast('密码修改成功');
+            closeModal();
+        } else {
+            showToast(data.msg || '修改失败');
+        }
+    } catch (e) {
+        showToast('网络错误，请重试');
+    }
+}
+
+function showToast(msg) {
+    const existing = document.querySelector('.toast');
+    if (existing) existing.remove();
+    const el = document.createElement('div');
+    el.className = 'toast';
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 2000);
+}
+</script>
+
+</body>
+</html>

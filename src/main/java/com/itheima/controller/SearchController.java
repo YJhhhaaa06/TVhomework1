@@ -1,5 +1,6 @@
 package com.itheima.controller;
 
+import com.itheima.DTO.PageResult;
 import com.itheima.DTO.SearchDTO;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
@@ -13,7 +14,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
-import java.util.List;
 
 @WebServlet("/search/*")
 public class SearchController extends HttpServlet {
@@ -77,6 +77,14 @@ public class SearchController extends HttpServlet {
         if (req.getContentLength() <= 0) {
             dto = new SearchDTO();
             dto.setKeyword(req.getParameter("keyword"));
+            String pageStr = req.getParameter("page");
+            String pageSizeStr = req.getParameter("pageSize");
+            if (pageStr != null && !pageStr.isEmpty()) {
+                dto.setPage(Integer.parseInt(pageStr));
+            }
+            if (pageSizeStr != null && !pageSizeStr.isEmpty()) {
+                dto.setPageSize(Integer.parseInt(pageSizeStr));
+            }
         } else {
             dto = RequestParser.parse(req, SearchDTO.class);
         }
@@ -85,9 +93,11 @@ public class SearchController extends HttpServlet {
             BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "输入不能为空");
             return;
         }
+        int page = dto.getPage() != null ? dto.getPage() : 1;
+        int pageSize = dto.getPageSize() != null ? dto.getPageSize() : 12;
         Long userId = (Long) req.getAttribute("userId");
-        List<ContentVO> list = contentService.search(dto.getKeyword().trim(), userId);
-        BaseServletUtil.writeSuccess(resp, list);
+        PageResult<ContentVO> result = contentService.search(dto.getKeyword().trim(), userId, page, pageSize);
+        BaseServletUtil.writeSuccess(resp, result);
     }
 
     protected void getDetail(HttpServletRequest req, HttpServletResponse resp) throws Exception {

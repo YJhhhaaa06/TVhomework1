@@ -11,28 +11,7 @@ public class User {
     private int followCount;
     private String phone;
 
-    //为注册设计的构造，如果输入不合法就会构造失败
-    public User(String username, String phone, String rawPassword) {
-        if (username == null || username.trim().isEmpty())
-            throw new IllegalArgumentException("用户名不能为空");
-        if (phone == null || phone.trim().isEmpty())
-            throw new IllegalArgumentException("手机号不能为空");
-        if (rawPassword == null || rawPassword.trim().isEmpty())
-            throw new IllegalArgumentException("密码不能为空");
 
-
-        if (!StringUtil.phoneCheck(phone))
-            throw new IllegalArgumentException("手机号格式不正确");
-        if (!PasswordUtil.isPasswordLegal(rawPassword))  // 只检查长度、字符类型等
-            throw new IllegalArgumentException("密码必须为6-16位字母数字组合"); //提示
-        if (username.length() > 50)
-            throw new IllegalArgumentException("用户名不能超过50个字符");
-
-
-        this.hashedPassword = PasswordUtil.hashPassword(rawPassword);
-        this.phone = phone;
-        this.username = username;
-    }
 
     //为登录设计的构造，登录时只需要这些
     public User(long id, String hashedPassword, String userName, String phone) {

@@ -1,9 +1,11 @@
 package com.itheima.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.itheima.command.ChangePasswordCommand;
 import com.itheima.command.CommandConverter;
 import com.itheima.command.LoginCommand;
 import com.itheima.command.RegisterCommand;
+import com.itheima.DTO.ChangePasswordDTO;
 import com.itheima.DTO.LoginDTO;
 import com.itheima.DTO.RegisterDTO;
 import com.itheima.exception.BusinessException;
@@ -36,7 +38,10 @@ public class LoginController extends HttpServlet {
                     login(req,resp);
                     break;
                 case ("/register"):
-                    register(req,resp);
+                    register(req, resp);
+                    break;
+                case ("/changePassword"):
+                    changePassword(req, resp);
                     break;
                 default:
                     BaseServletUtil.writeError(resp,ErrorCode.SERVER_ERROR,"请求异常，请重试");
@@ -62,10 +67,22 @@ public class LoginController extends HttpServlet {
     }
 
     protected void register(HttpServletRequest req, HttpServletResponse resp) throws Exception {
-        RegisterDTO dto=RequestParser.parse(req,RegisterDTO.class);
-        RegisterCommand rc= CommandConverter.registerToCommand(dto);
-        long id= userService.registerAsUser(rc);
-        LogInVO ls=userService.login(id,rc.getPassword());
-        BaseServletUtil.writeSuccess(resp,ls);
+        RegisterDTO dto = RequestParser.parse(req, RegisterDTO.class);
+        RegisterCommand rc = CommandConverter.registerToCommand(dto);
+        long id = userService.registerAsUser(rc);
+        LogInVO ls = userService.login(id, rc.getPassword());
+        BaseServletUtil.writeSuccess(resp, ls);
+    }
+
+    protected void changePassword(HttpServletRequest req, HttpServletResponse resp) throws Exception {
+        Long userId = (Long) req.getAttribute("userId");
+        if (userId == null) {
+            BaseServletUtil.writeError(resp, ErrorCode.UNAUTHORIZED, "请先登录");
+            return;
+        }
+        ChangePasswordDTO dto = RequestParser.parse(req, ChangePasswordDTO.class);
+        ChangePasswordCommand command = CommandConverter.changePasswordToCommand(dto);
+        userService.changePassword(userId, command);
+        BaseServletUtil.writeSuccess(resp, null);
     }
 }

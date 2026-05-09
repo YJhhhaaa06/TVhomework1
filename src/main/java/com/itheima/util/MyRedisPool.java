@@ -23,6 +23,12 @@ public class MyRedisPool {
         return pool.getResource();
     }
 
+    public static void flushDb() {
+        try (Jedis jedis = getJedis()) {
+            jedis.flushDB();
+        }
+    }
+
     public static void close() {
         if (pool != null) {
             pool.close();

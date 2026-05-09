@@ -1,6 +1,6 @@
 ### ==================== 变量 ====================
 # 先用 loginTest.http 登录拿到 token，替换下面
-@token =
+@token =eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4MzEyOTQ4LCJleHAiOjE3NzgzMjAxNDh9.ePJ-AqxVJ-C5OW9XIMCAuQz5UAj7Nn1YMUmrzdtd8XM
 
 
 ### ==================== IdSearch — 从数据库按 contentId 查 ====================
@@ -134,3 +134,32 @@ token: {{token}}
 
 {
 }
+
+### ==================== 单字搜索（LIKE 回退）====================
+
+### 14. keywordSearch — 单字搜索
+GET http://localhost:8080/MyAPP/search/keywordSearch
+Content-Type: application/json
+token: {{token}}
+
+{
+  "keyword": "火"
+}
+
+### 15. keywordSearch — 单字搜索（GET 参数）
+GET http://localhost:8080/MyAPP/search/keywordSearch?keyword=火
+token: {{token}}
+
+### ==================== 分页搜索 ====================
+
+### 16. keywordSearch — 分页第1页，每页5条
+GET http://localhost:8080/MyAPP/search/keywordSearch?keyword=游戏&page=1&pageSize=5
+token: {{token}}
+
+### 17. keywordSearch — 分页第2页，每页5条
+GET http://localhost:8080/MyAPP/search/keywordSearch?keyword=游戏&page=2&pageSize=5
+token: {{token}}
+
+### 18. keywordSearch — 默认分页（page=1, pageSize=12）
+GET http://localhost:8080/MyAPP/search/keywordSearch?keyword=美食
+token: {{token}}

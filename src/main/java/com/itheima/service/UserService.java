@@ -1,5 +1,6 @@
 package com.itheima.service;
 
+import com.itheima.command.ChangePasswordCommand;
 import com.itheima.command.LoginCommand;
 import com.itheima.command.LoginType;
 import com.itheima.command.RegisterCommand;
@@ -60,18 +61,19 @@ public class UserService {
         String username=rc.getUsername();
         String phone=rc.getPhone();
         String password=rc.getPassword();
+        String hashedPassword=PasswordUtil.hashPassword(password);
         Connection conn=null;
         long userId;
         try {
             conn=MyConnectionPool.getConnection();
             conn.setAutoCommit(false);
-            User user=new User(username,phone,password);
-            if(!userDao.isPhoneUsed(conn,phone)){
-                userId= userDao.addUser(conn, user.getUserName(), user.getHashedPassword(), user.getPhone());
-            }
-            else {
+            if(userDao.isPhoneUsed(conn,phone)){
                 throw new AuthException("电话号码已被使用");
             }
+            if(userDao.isUsernameUsed(conn,username)) {
+                throw new AuthException("用户名已被占用");
+            }
+            userId=userDao.addUser(conn,username,hashedPassword,phone);
             conn.commit();//提交提交提交提交提交提交提交提交
             return userId;
         }catch (SQLException e){
@@ -92,33 +94,31 @@ public class UserService {
 
 
 
-    public void changePassword(long userId, String phone, String oldPassword, String newPassword) throws SQLException {
+    public void changePassword(long userId, ChangePasswordCommand command) throws SQLException {
+        String phone = command.getPhone();
+        String oldPassword = command.getOldPassword();
+        String newPassword = command.getNewPassword();
 
-
-    if (!PasswordUtil.isPasswordLegal(newPassword)) {
-        throw new RuntimeException("PASSWORD_ILLEGAL");
-    }
-
-    Connection conn = null;
-    try {
-        conn = MyConnectionPool.getConnection();
-        conn.setAutoCommit(false);
-        doChangePassword(conn, userId, phone, oldPassword, newPassword);
-        conn.commit();
-    } catch (Exception e) {
-        LOGGER.log(Level.SEVERE, "修改密码失败, userId=" + userId, e);
-        if (conn != null) {
-            try {
-                conn.rollback();
-            } catch (SQLException ex) {
-                e.addSuppressed(ex);
+        Connection conn = null;
+        try {
+            conn = MyConnectionPool.getConnection();
+            conn.setAutoCommit(false);
+            doChangePassword(conn, userId, phone, oldPassword, newPassword);
+            conn.commit();
+        } catch (Exception e) {
+            LOGGER.log(Level.SEVERE, "修改密码失败, userId=" + userId, e);
+            if (conn != null) {
+                try {
+                    conn.rollback();
+                } catch (SQLException ex) {
+                    e.addSuppressed(ex);
+                }
             }
+            throw e;
+        } finally {
+            MyConnectionPool.release(conn);
         }
-        throw e;
-    } finally {
-        MyConnectionPool.release(conn);
-        }
-}
+    }
     private void doChangePassword(Connection conn,  long userId,String phone, String oldPassword, String newPassword) throws SQLException {
 
         User dbUser = userDao.getUserForLoginById(conn, userId);
@@ -139,7 +139,7 @@ public class UserService {
 
         // 更新密码
         String newHashedPassword = PasswordUtil.hashPassword(newPassword);
-        int rows=userDao.updateUserPassword(conn,phone,userId, newHashedPassword);
+        int rows = userDao.updateUserPassword(conn, userId, newHashedPassword);
         if (rows == 0) {
             throw new RuntimeException("UPDATE_FAILED");
         }
