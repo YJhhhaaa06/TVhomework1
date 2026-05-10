@@ -31,7 +31,7 @@
 
         /* 作者行 */
         .author-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-top: 1px solid #f0f0f0; }
-        .author-info { display: flex; align-items: center; gap: 10px; }
+        .author-info { display: flex; align-items: center; gap: 10px; cursor: pointer; }
         .author-avatar { width: 40px; height: 40px; border-radius: 50%; background: #fb7299; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 600; flex-shrink: 0; }
         .author-name { font-size: 15px; font-weight: 600; }
         .follow-btn { padding: 6px 18px; border-radius: 20px; font-size: 13px; cursor: pointer; border: 1px solid #fb7299; transition: all 0.2s; }
@@ -105,7 +105,7 @@
         <div class="content-title" id="contentTitle"></div>
         <div class="stats"><span id="statLike">❤ 0</span><span id="statComment">💬 0</span></div>
         <div class="author-row">
-            <div class="author-info">
+            <div class="author-info" onclick="goSpace()">
                 <div class="author-avatar" id="authorAvatar"></div>
                 <span class="author-name" id="authorName"></span>
             </div>
@@ -515,6 +515,12 @@ async function request(url, options = {}) {
         return data;
     }
     return { code: 200, data: await res.text() };
+}
+
+function goSpace() {
+    if (contentData && contentData.authorId) {
+        window.location.href = 'space.html?userId=' + contentData.authorId;
+    }
 }
 
 function showToast(msg) {

@@ -146,6 +146,33 @@ public class ContentDao {
         return findAllContent(conn);
     }
 
+    public List<Long> findContentIdsByUser(Connection conn, long userId) throws SQLException {
+        List<Long> ids = new ArrayList<>();
+        String sql = "SELECT c.id FROM content c WHERE c.user_id = ? AND c.is_deleted = 0 ORDER BY c.create_time DESC, c.id DESC";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, userId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    ids.add(rs.getLong("id"));
+                }
+            }
+        }
+        return ids;
+    }
+
+    public int countContentByUser(Connection conn, long userId) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM content WHERE user_id = ? AND is_deleted = 0";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, userId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1);
+                }
+                return 0;
+            }
+        }
+    }
+
     public List<ContentCacheDTO> findContentByUser(Connection conn, long userId, int page, int pageSize) throws SQLException {
         List<ContentCacheDTO> list = new ArrayList<>();
         String sql = """

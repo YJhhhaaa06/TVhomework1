@@ -44,7 +44,8 @@
         .card-body { padding: 8px 10px 10px; }
         .card-title { font-size: 13px; font-weight: 600; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-bottom: 6px; color: #18191c; }
         .card-meta { font-size: 11px; color: #9499a0; display: flex; align-items: center; justify-content: space-between; }
-        .card-author { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60px; }
+        .card-author { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60px; cursor: pointer; color: #61666d; }
+        .card-author:hover { color: #fb7299; }
         .card-stats { display: flex; gap: 10px; flex-shrink: 0; }
 
         /* 底部导航 */
@@ -250,7 +251,7 @@ function renderCards(list) {
 
         const meta = document.createElement('div');
         meta.className = 'card-meta';
-        meta.innerHTML = '<span class="card-author">' + escapeHtml(item.authorName || '') + '</span>'
+        meta.innerHTML = '<span class="card-author" onclick="event.stopPropagation();goSpace(' + item.authorId + ')">' + escapeHtml(item.authorName || '') + '</span>'
             + '<span class="card-stats">❤ ' + (item.likeCount || 0) + ' · 💬 ' + (item.commentCount || 0) + '</span>';
 
         body.appendChild(titleEl);
@@ -278,6 +279,10 @@ function onNav(btn, page) {
 
 function goDetail(id) {
     window.location.href = 'detail.html?contentId=' + id;
+}
+
+function goSpace(userId) {
+    window.location.href = 'space.html?userId=' + userId;
 }
 
 function goSearch() {

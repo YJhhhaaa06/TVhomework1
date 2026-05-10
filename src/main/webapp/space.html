@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>个人主页</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f5f7; color: #18191c; min-height: 100vh; padding-bottom: 24px; }
+
+        .top-bar { position: sticky; top: 0; z-index: 10; background: #fff; height: 48px; display: flex; align-items: center; padding: 0 14px; border-bottom: 1px solid #e3e5e7; gap: 12px; }
+        .top-bar .back { font-size: 20px; cursor: pointer; color: #18191c; text-decoration: none; }
+        .top-bar .title { font-size: 16px; font-weight: 600; }
+
+        .main { max-width: 900px; margin: 0 auto; padding: 16px; }
+
+        /* 用户信息卡片 */
+        .user-card { background: linear-gradient(135deg, #fb7299, #f990b0); border-radius: 14px; padding: 24px 20px; color: #fff; margin-bottom: 16px; }
+        .user-card .top-row { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; }
+        .avatar { width: 56px; height: 56px; border-radius: 50%; background: rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 700; flex-shrink: 0; }
+        .user-info .uname { font-size: 18px; font-weight: 600; }
+        .user-info .uid { font-size: 13px; opacity: 0.8; margin-top: 4px; }
+
+        .stats { display: flex; justify-content: space-around; margin-bottom: 18px; }
+        .stat-item { text-align: center; }
+        .stat-item .num { font-size: 20px; font-weight: 700; }
+        .stat-item .label { font-size: 12px; opacity: 0.8; margin-top: 2px; }
+
+        .follow-btn-wrap { text-align: center; }
+        .follow-btn { padding: 10px 48px; border-radius: 20px; border: none; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+        .follow-btn.follow { background: #fff; color: #fb7299; }
+        .follow-btn.follow:active { transform: scale(0.96); }
+        .follow-btn.followed { background: rgba(255,255,255,0.3); color: #fff; }
+        .follow-btn.followed:active { background: rgba(255,255,255,0.15); transform: scale(0.96); }
+
+        /* 内容网格 */
+        .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+
+        /* 卡片 */
+        .card { background: #fff; border-radius: 8px; overflow: hidden; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.06); transition: transform 0.15s; }
+        .card:active { transform: scale(0.97); }
+        .cover-wrap { position: relative; width: 100%; padding-top: 56.25%; background: #e3e5e7; overflow: hidden; }
+        .cover-wrap img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+        .cover-wrap .no-cover { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 40px; font-weight: 700; color: #fff; background: linear-gradient(135deg, #fb7299, #f990b0); }
+        .type-badge { position: absolute; top: 8px; left: 8px; font-size: 12px; padding: 3px 8px; border-radius: 4px; background: rgba(0,0,0,0.55); color: #fff; }
+        .card-body { padding: 12px 14px 14px; }
+        .card-title { font-size: 16px; font-weight: 600; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-bottom: 8px; color: #18191c; }
+        .card-meta { font-size: 13px; color: #9499a0; display: flex; align-items: center; justify-content: space-between; }
+        .card-time { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .card-stats { display: flex; gap: 10px; flex-shrink: 0; }
+
+        /* 加载更多 */
+        .load-more-wrap { text-align: center; margin-top: 18px; }
+        .load-more-btn { padding: 10px 40px; border: 1px solid #e3e5e7; border-radius: 20px; background: #fff; color: #61666d; font-size: 14px; cursor: pointer; transition: all 0.15s; }
+        .load-more-btn:active { background: #f4f5f7; transform: scale(0.97); }
+        .load-more-btn:disabled { color: #c0c0c0; cursor: default; }
+
+        /* 状态提示 */
+        .state-box { text-align: center; padding: 80px 20px; color: #9499a0; }
+        .state-box .icon { font-size: 48px; margin-bottom: 12px; }
+        .state-box .msg { font-size: 14px; }
+
+        /* toast */
+        .toast { position: fixed; top: 60px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.75); color: #fff; padding: 10px 24px; border-radius: 20px; font-size: 14px; z-index: 99; pointer-events: none; animation: fadeInOut 1.8s forwards; }
+        @keyframes fadeInOut { 0% { opacity: 0; transform: translateX(-50%) translateY(-10px); } 15% { opacity: 1; transform: translateX(-50%) translateY(0); } 75% { opacity: 1; } 100% { opacity: 0; } }
+    </style>
+</head>
+<body>
+
+<div class="top-bar">
+    <a class="back" href="javascript:history.back()">&#8592;</a>
+    <span class="title" id="pageTitle">个人主页</span>
+</div>
+
+<div class="main">
+    <!-- 用户信息卡片 -->
+    <div class="user-card">
+        <div class="top-row">
+            <div class="avatar" id="avatar"></div>
+            <div class="user-info">
+                <div class="uname" id="displayName"></div>
+                <div class="uid" id="displayId"></div>
+            </div>
+        </div>
+        <div class="stats">
+            <div class="stat-item">
+                <div class="num" id="followCount">-</div>
+                <div class="label">关注</div>
+            </div>
+            <div class="stat-item">
+                <div class="num" id="followerCount">-</div>
+                <div class="label">粉丝</div>
+            </div>
+            <div class="stat-item">
+                <div class="num" id="contentCount">-</div>
+                <div class="label">创作</div>
+            </div>
+        </div>
+        <div class="follow-btn-wrap" id="followBtnWrap"></div>
+    </div>
+
+    <!-- 内容列表 -->
+    <div class="grid" id="contentGrid"></div>
+    <div class="load-more-wrap" id="loadMoreWrap"></div>
+</div>
+
+<script>
+const token = localStorage.getItem('userToken');
+const currentUsername = localStorage.getItem('username');
+
+let profileUserId = null;
+let currentUserId = null;
+let isSelf = false;
+let isFollowed = null;
+let currentPage = 1;
+const pageSize = 10;
+let totalPages = 0;
+
+init();
+
+function init() {
+    const params = new URLSearchParams(window.location.search);
+    const userIdParam = params.get('userId');
+    if (!userIdParam) {
+        showError('缺少用户ID');
+        return;
+    }
+    profileUserId = parseInt(userIdParam);
+    if (isNaN(profileUserId)) {
+        showError('用户ID格式错误');
+        return;
+    }
+
+    if (token) {
+        currentUserId = parseUserIdFromToken(token);
+        isSelf = (currentUserId === profileUserId);
+    }
+
+    loadProfile(1);
+}
+
+function parseUserIdFromToken(t) {
+    try {
+        const payload = JSON.parse(atob(t.split('.')[1]));
+        return payload.sub ? parseInt(payload.sub) : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function loadProfile(page) {
+    const grid = document.getElementById('contentGrid');
+    const loadMoreWrap = document.getElementById('loadMoreWrap');
+
+    if (page === 1) {
+        grid.innerHTML = '<div class="state-box"><div class="icon">⏳</div><div class="msg">加载中...</div></div>';
+        loadMoreWrap.innerHTML = '';
+    } else {
+        document.getElementById('loadMoreWrap').innerHTML = '<div style="text-align:center;padding:12px;color:#9499a0;">加载中...</div>';
+    }
+
+    try {
+        const data = await request('GET', './profile?userId=' + profileUserId + '&page=' + page + '&pageSize=' + pageSize);
+        if (data.code !== 200) {
+            if (page === 1) grid.innerHTML = '<div class="state-box"><div class="icon">😞</div><div class="msg">' + (data.msg || '加载失败') + '</div></div>';
+            return;
+        }
+        renderProfile(data.data, page);
+    } catch (e) {
+        if (e.status === 401 || e.status === 403) return;
+        if (page === 1) grid.innerHTML = '<div class="state-box"><div class="icon">😞</div><div class="msg">加载失败，请刷新重试</div></div>';
+        loadMoreWrap.innerHTML = '';
+    }
+}
+
+function renderProfile(profile, page) {
+    const contentPage = profile.contentPage;
+
+    // 用户信息
+    document.getElementById('displayName').textContent = profile.username || '未知用户';
+    document.getElementById('avatar').textContent = (profile.username || '?').charAt(0);
+    document.getElementById('displayId').textContent = 'ID: ' + profile.userId;
+    document.getElementById('pageTitle').textContent = (profile.username || '用户') + ' 的主页';
+
+    document.getElementById('followCount').textContent = profile.followCount != null ? profile.followCount : '-';
+    document.getElementById('followerCount').textContent = profile.followerCount != null ? profile.followerCount : '-';
+    document.getElementById('contentCount').textContent = contentPage ? contentPage.total : '-';
+
+    // 关注按钮
+    isFollowed = profile.isFollowed;
+    renderFollowBtn();
+
+    // 内容列表
+    totalPages = contentPage ? contentPage.totalPages : 0;
+    if (page === 1) {
+        renderCards(contentPage ? (contentPage.list || []) : []);
+    } else {
+        appendCards(contentPage ? (contentPage.list || []) : []);
+    }
+
+    // 加载更多
+    const loadMoreWrap = document.getElementById('loadMoreWrap');
+    if (totalPages > page) {
+        loadMoreWrap.innerHTML = '<button class="load-more-btn" onclick="loadMore()">加载更多</button>';
+    } else {
+        loadMoreWrap.innerHTML = '';
+    }
+    currentPage = page;
+}
+
+function renderFollowBtn() {
+    const wrap = document.getElementById('followBtnWrap');
+    if (isSelf || !token) {
+        wrap.innerHTML = '';
+        return;
+    }
+    const btn = document.createElement('button');
+    btn.className = 'follow-btn ' + (isFollowed ? 'followed' : 'follow');
+    btn.textContent = isFollowed ? '已关注' : '+ 关注';
+    btn.addEventListener('click', toggleFollow);
+    wrap.innerHTML = '';
+    wrap.appendChild(btn);
+}
+
+async function toggleFollow(e) {
+    const btn = e.target;
+    btn.disabled = true;
+
+    const isCurrentlyFollowed = isFollowed;
+    const action = isCurrentlyFollowed ? 'remove' : 'add';
+    const url = './follow/' + action + '?followedUserId=' + profileUserId;
+
+    // 乐观更新
+    isFollowed = !isCurrentlyFollowed;
+    updateFollowerCountDisplay(isFollowed ? 1 : -1);
+    renderFollowBtn();
+
+    try {
+        const data = await request('POST', url);
+        if (data.code !== 200) {
+            // 回滚
+            isFollowed = isCurrentlyFollowed;
+            updateFollowerCountDisplay(isCurrentlyFollowed ? 0 : -1);
+            renderFollowBtn();
+            showToast(data.msg || '操作失败');
+        }
+    } catch (e) {
+        // 回滚
+        isFollowed = isCurrentlyFollowed;
+        updateFollowerCountDisplay(isCurrentlyFollowed ? 0 : -1);
+        renderFollowBtn();
+        showToast('网络错误，请重试');
+    }
+}
+
+function updateFollowerCountDisplay(delta) {
+    const el = document.getElementById('followerCount');
+    const current = parseInt(el.textContent);
+    if (!isNaN(current)) {
+        el.textContent = current + delta;
+    }
+}
+
+function renderCards(list) {
+    const grid = document.getElementById('contentGrid');
+    grid.innerHTML = '';
+    if (!list || list.length === 0) {
+        grid.innerHTML = '<div class="state-box"><div class="icon">📭</div><div class="msg">暂无内容</div></div>';
+        return;
+    }
+    list.forEach(item => appendCard(grid, item));
+}
+
+function appendCards(list) {
+    const grid = document.getElementById('contentGrid');
+    list.forEach(item => appendCard(grid, item));
+}
+
+function appendCard(grid, item) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.addEventListener('click', () => { window.location.href = 'detail.html?contentId=' + item.id; });
+
+    const wrap = document.createElement('div');
+    wrap.className = 'cover-wrap';
+    if (item.coverUrl) {
+        const img = document.createElement('img');
+        img.src = item.coverUrl;
+        img.alt = '';
+        img.loading = 'lazy';
+        img.addEventListener('error', () => {
+            img.style.display = 'none';
+            wrap.innerHTML = '<div class="no-cover">' + (item.title || '?').charAt(0) + '</div>';
+        });
+        wrap.appendChild(img);
+    } else {
+        wrap.innerHTML = '<div class="no-cover">' + (item.title || '?').charAt(0) + '</div>';
+    }
+
+    const badge = document.createElement('span');
+    badge.className = 'type-badge';
+    badge.textContent = item.type === 1 ? '视频' : '图文';
+    wrap.appendChild(badge);
+
+    const body = document.createElement('div');
+    body.className = 'card-body';
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'card-title';
+    titleEl.textContent = item.title || '';
+
+    const meta = document.createElement('div');
+    meta.className = 'card-meta';
+    meta.innerHTML = '<span class="card-time">' + formatTime(item.createTime) + '</span>'
+        + '<span class="card-stats">❤ ' + (item.likeCount || 0) + ' · 💬 ' + (item.commentCount || 0) + '</span>';
+
+    body.appendChild(titleEl);
+    body.appendChild(meta);
+    card.appendChild(wrap);
+    card.appendChild(body);
+    grid.appendChild(card);
+}
+
+function loadMore() {
+    loadProfile(currentPage + 1);
+}
+
+function showError(msg) {
+    document.getElementById('contentGrid').innerHTML = '<div class="state-box"><div class="icon">😞</div><div class="msg">' + escapeHtml(msg) + '</div></div>';
+}
+
+function formatTime(t) {
+    if (!t) return '';
+    const d = new Date(t);
+    if (isNaN(d.getTime())) return '';
+    const now = new Date();
+    const diff = now - d;
+    if (diff < 60000) return '刚刚';
+    if (diff < 3600000) return Math.floor(diff / 60000) + '分钟前';
+    if (diff < 86400000) return Math.floor(diff / 3600000) + '小时前';
+    if (diff < 604800000) return Math.floor(diff / 86400000) + '天前';
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+async function request(method, url, body) {
+    const options = { method: method, headers: {} };
+    if (body) {
+        options.headers['Content-Type'] = 'application/json';
+        options.body = JSON.stringify(body);
+    }
+    if (token) {
+        options.headers['token'] = token;
+    }
+    const res = await fetch(url, options);
+    if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+            localStorage.removeItem('userToken');
+            localStorage.removeItem('username');
+            alert('登录已过期，请重新登录');
+            window.location.href = 'login.html';
+            throw { status: res.status };
+        }
+    }
+    const ct = res.headers.get('content-type') || '';
+    if (ct.includes('application/json')) {
+        const data = await res.json();
+        if (data.code !== 200) throw { msg: data.msg, code: data.code };
+        return data;
+    }
+    return { code: 200, data: await res.text() };
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text || '';
+    return div.innerHTML;
+}
+
+function showToast(msg) {
+    const existing = document.querySelector('.toast');
+    if (existing) existing.remove();
+    const el = document.createElement('div');
+    el.className = 'toast';
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 1800);
+}
+</script>
+
+</body>
+</html>

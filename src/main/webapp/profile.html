@@ -74,15 +74,15 @@
         </div>
         <div class="stats">
             <div class="stat-item">
-                <div class="num">0</div>
+                <div class="num" id="followCount">-</div>
                 <div class="label">关注</div>
             </div>
             <div class="stat-item">
-                <div class="num">0</div>
+                <div class="num" id="followerCount">-</div>
                 <div class="label">粉丝</div>
             </div>
             <div class="stat-item">
-                <div class="num">0</div>
+                <div class="num" id="contentCount">-</div>
                 <div class="label">创作</div>
             </div>
         </div>
@@ -90,8 +90,8 @@
 
     <!-- 菜单 -->
     <div class="menu">
-        <div class="menu-item" onclick="showToast('功能开发中')">
-            <span class="left">👥 我的关注</span>
+        <div class="menu-item" onclick="goMySpace()">
+            <span class="left">🏠 我的主页</span>
             <span class="arrow">›</span>
         </div>
         <div class="menu-item" onclick="showToast('功能开发中')">
@@ -140,6 +140,22 @@ function init() {
     document.getElementById('displayName').textContent = username || '用户';
     document.getElementById('avatar').textContent = (username || '?').charAt(0);
     document.getElementById('displayId').textContent = 'ID: ' + parseUserId(token);
+    loadProfileStats();
+}
+
+async function loadProfileStats() {
+    const userId = parseUserId(token);
+    if (userId === '?') return;
+    try {
+        const data = await request('./profile?userId=' + userId);
+        if (data.code !== 200) return;
+        const p = data.data;
+        document.getElementById('followCount').textContent = p.followCount != null ? p.followCount : '-';
+        document.getElementById('followerCount').textContent = p.followerCount != null ? p.followerCount : '-';
+        document.getElementById('contentCount').textContent = p.contentPage ? p.contentPage.total : '-';
+    } catch (e) {
+        // 加载失败保持显示 -
+    }
 }
 
 function parseUserId(t) {
@@ -148,6 +164,13 @@ function parseUserId(t) {
         return payload.sub || '?';
     } catch (e) {
         return '?';
+    }
+}
+
+function goMySpace() {
+    const userId = parseUserId(token);
+    if (userId !== '?') {
+        window.location.href = 'space.html?userId=' + userId;
     }
 }
 
@@ -207,6 +230,20 @@ function showToast(msg) {
     el.textContent = msg;
     document.body.appendChild(el);
     setTimeout(() => el.remove(), 2000);
+}
+
+async function request(url, options = {}) {
+    options.headers = options.headers || {};
+    if (token) options.headers['token'] = token;
+    const res = await fetch(url, options);
+    if (!res.ok) throw { status: res.status };
+    const ct = res.headers.get('content-type') || '';
+    if (ct.includes('application/json')) {
+        const data = await res.json();
+        if (data.code !== 200) throw { msg: data.msg, code: data.code };
+        return data;
+    }
+    return { code: 200, data: await res.text() };
 }
 </script>
 

@@ -22,6 +22,7 @@ public class BeanFactory {
     private final static ContentService CONTENT_SERVICE = new ContentService();
     private final static UserService USER_SERVICE = new UserService();
     private final static FollowService FOLLOW_SERVICE = new FollowService();
+    private final static ProfileService PROFILE_SERVICE = new ProfileService();
 
     //DAO getters
     public static CommentDao getCommentDao() { return COMMENT_DAO; }
@@ -41,4 +42,5 @@ public class BeanFactory {
     public static ContentService getContentService() { return CONTENT_SERVICE; }
     public static UserService getUserService() { return USER_SERVICE; }
     public static FollowService getFollowService() { return FOLLOW_SERVICE; }
+    public static ProfileService getProfileService() { return PROFILE_SERVICE; }
 }
