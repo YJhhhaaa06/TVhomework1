@@ -3,6 +3,8 @@ package com.itheima.dao;
 import com.itheima.pojo.User;
 
 import java.sql.*;
+import java.util.List;
+
 import com.itheima.util.MyConnectionPool;
 
 public class UserDao {
@@ -351,6 +353,32 @@ public class UserDao {
         } finally {
             MyConnectionPool.release(conn);
         }
+    }
+
+    //批量查询用户（仅id和username，给关注/粉丝列表用）
+    public List<User> findUsersByIds(Connection conn, List<Long> ids) throws SQLException {
+        if (ids == null || ids.isEmpty()) return java.util.Collections.emptyList();
+        StringBuilder sql = new StringBuilder("SELECT id, username FROM users WHERE id IN (");
+        for (int i = 0; i < ids.size(); i++) {
+            if (i > 0) sql.append(", ");
+            sql.append("?");
+        }
+        sql.append(")");
+        List<User> result = new java.util.ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            for (int i = 0; i < ids.size(); i++) {
+                ps.setLong(i + 1, ids.get(i));
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    User u = new User();
+                    u.setId(rs.getLong("id"));
+                    u.setUserName(rs.getString("username"));
+                    result.add(u);
+                }
+            }
+        }
+        return result;
     }
 
     //改

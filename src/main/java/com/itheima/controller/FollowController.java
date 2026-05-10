@@ -18,6 +18,35 @@ public class FollowController extends HttpServlet {
     private FollowService followService = BeanFactory.getFollowService();
 
     @Override
+    protected void doGet(HttpServletRequest req, HttpServletResponse resp)
+            throws ServletException, IOException {
+        try {
+            String action = req.getPathInfo();
+            if (action == null) {
+                BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "action不能为空");
+                return;
+            }
+            Long currentUserId = (Long) req.getAttribute("userId");
+            long userId = parseUserId(req);
+
+            switch (action) {
+                case "/following":
+                    BaseServletUtil.writeSuccess(resp, followService.getFollowingList(userId, currentUserId));
+                    break;
+                case "/followers":
+                    BaseServletUtil.writeSuccess(resp, followService.getFollowerList(userId, currentUserId));
+                    break;
+                default:
+                    BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "未识别操作");
+            }
+        } catch (BusinessException e) {
+            BaseServletUtil.writeError(resp, e.getCode(), e.getMessage());
+        } catch (Exception e) {
+            BaseServletUtil.writeError(resp, ErrorCode.SERVER_ERROR, "服务器异常，请重试");
+        }
+    }
+
+    @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp)
             throws ServletException, IOException {
         try {
@@ -45,6 +74,18 @@ public class FollowController extends HttpServlet {
             BaseServletUtil.writeError(resp, e.getCode(), e.getMessage());
         } catch (Exception e) {
             BaseServletUtil.writeError(resp, ErrorCode.SERVER_ERROR, "服务器异常，请重试");
+        }
+    }
+
+    private long parseUserId(HttpServletRequest req) {
+        String param = req.getParameter("userId");
+        if (param == null || param.isBlank()) {
+            throw new ParamException("缺少 userId");
+        }
+        try {
+            return Long.parseLong(param);
+        } catch (NumberFormatException e) {
+            throw new ParamException("userId 格式错误");
         }
     }
 

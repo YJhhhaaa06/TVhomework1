@@ -56,7 +56,8 @@
         .comment-body.level-1 { background: #fafafa; }
         .comment-body.level-2 { background: #f5f5f5; }
         .comment-body.level-3 { background: #f0f0f0; }
-        .comment-username { color: #fb7299; font-weight: 600; font-size: 13px; margin-right: 6px; cursor: default; }
+        .comment-username { color: #fb7299; font-weight: 600; font-size: 13px; margin-right: 6px; cursor: pointer; }
+        .comment-avatar { width: 20px; height: 20px; border-radius: 50%; background: linear-gradient(135deg, #fb7299, #f990b0); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; margin-right: 4px; vertical-align: middle; flex-shrink: 0; }
         .comment-text { font-size: 14px; line-height: 1.5; color: #18191c; }
         .comment-meta { display: flex; align-items: center; gap: 14px; margin-top: 6px; font-size: 12px; color: #9499a0; }
         .comment-like { cursor: pointer; display: flex; align-items: center; gap: 4px; transition: color 0.15s; background: none; border: none; font-size: 12px; color: #9499a0; padding: 2px 0; }
@@ -103,7 +104,7 @@
     <!-- 信息区 -->
     <div class="info">
         <div class="content-title" id="contentTitle"></div>
-        <div class="stats"><span id="statLike">❤ 0</span><span id="statComment">💬 0</span></div>
+        <div class="stats"><span id="statLike">❤ 0</span><span id="statComment">💬 0</span><span id="statTime" style="margin-left:8px;font-size:13px;color:#9499a0"></span></div>
         <div class="author-row">
             <div class="author-info" onclick="goSpace()">
                 <div class="author-avatar" id="authorAvatar"></div>
@@ -231,6 +232,9 @@ function renderInfo() {
     document.getElementById('contentTitle').textContent = contentData.title || '';
     document.getElementById('statLike').textContent = '❤ ' + (contentData.likeCount || 0);
     document.getElementById('statComment').textContent = '💬 ' + (contentData.commentCount || 0);
+    if (contentData.createTime) {
+        document.getElementById('statTime').textContent = formatTime(contentData.createTime);
+    }
     document.getElementById('authorName').textContent = contentData.authorName || '未知作者';
     document.getElementById('contentDesc').textContent = contentData.description || '';
 
@@ -314,10 +318,26 @@ function createCommentItem(comment, level) {
         body.className += ' level-' + level;
     }
 
-    // 用户名
+    // 用户名 + 头像（可点击跳转个人主页）
+    const nameWrap = document.createElement('span');
+    nameWrap.style.cursor = 'pointer';
+    nameWrap.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (comment.userId) {
+            window.location.href = 'space.html?userId=' + comment.userId;
+        }
+    });
+
+    const avatar = document.createElement('span');
+    avatar.className = 'comment-avatar';
+    avatar.textContent = (comment.username || '?').charAt(0);
+
     const nameSpan = document.createElement('span');
     nameSpan.className = 'comment-username';
     nameSpan.textContent = comment.username || '匿名';
+
+    nameWrap.appendChild(avatar);
+    nameWrap.appendChild(nameSpan);
 
     // 内容
     const textSpan = document.createElement('span');
@@ -345,7 +365,7 @@ function createCommentItem(comment, level) {
     meta.appendChild(likeBtn);
     meta.appendChild(replyBtn);
 
-    body.appendChild(nameSpan);
+    body.appendChild(nameWrap);
     body.appendChild(textSpan);
     body.appendChild(meta);
     wrapper.appendChild(body);
@@ -521,6 +541,19 @@ function goSpace() {
     if (contentData && contentData.authorId) {
         window.location.href = 'space.html?userId=' + contentData.authorId;
     }
+}
+
+function formatTime(t) {
+    if (!t) return '';
+    const d = new Date(t);
+    if (isNaN(d.getTime())) return '';
+    const now = new Date();
+    const diff = now - d;
+    if (diff < 60000) return '刚刚';
+    if (diff < 3600000) return Math.floor(diff / 60000) + '分钟前';
+    if (diff < 86400000) return Math.floor(diff / 3600000) + '小时前';
+    if (diff < 604800000) return Math.floor(diff / 86400000) + '天前';
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 
 function showToast(msg) {

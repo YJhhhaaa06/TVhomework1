@@ -55,6 +55,21 @@ public class FollowDao {
         return result;
     }
 
+    // 获取用户的所有粉丝ID
+    public List<Long> getFollowerUserIds(Connection conn, long userId) throws SQLException {
+        List<Long> result = new ArrayList<>();
+        String sql = "SELECT user_id FROM follow WHERE followed_user_id = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, userId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    result.add(rs.getLong("user_id"));
+                }
+            }
+        }
+        return result;
+    }
+
     // 关注
     public int addFollow(Connection conn, long userId, long followedUserId) throws SQLException {
         String sql = "INSERT INTO follow (user_id, followed_user_id) VALUES (?, ?)";
