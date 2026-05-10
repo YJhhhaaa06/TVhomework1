@@ -5,6 +5,7 @@ import com.itheima.util.MyConnectionPool;
 
 import java.sql.*;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public class ContentDao {
@@ -158,6 +159,59 @@ public class ContentDao {
             }
         }
         return ids;
+    }
+
+    public List<Long> findContentIdsByUsers(Connection conn, List<Long> userIds, int offset, int pageSize) throws SQLException {
+        if (userIds == null || userIds.isEmpty()) {
+            return Collections.emptyList();
+        }
+        StringBuilder sql = new StringBuilder(
+                "SELECT c.id FROM content c WHERE c.user_id IN (");
+        for (int i = 0; i < userIds.size(); i++) {
+            if (i > 0) sql.append(", ");
+            sql.append("?");
+        }
+        sql.append(") AND c.is_deleted = 0 ORDER BY c.create_time DESC, c.id DESC LIMIT ?, ?");
+
+        List<Long> ids = new ArrayList<>();
+        try (PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+            for (int i = 0; i < userIds.size(); i++) {
+                pstmt.setLong(i + 1, userIds.get(i));
+            }
+            pstmt.setInt(userIds.size() + 1, offset);
+            pstmt.setInt(userIds.size() + 2, pageSize);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    ids.add(rs.getLong("id"));
+                }
+            }
+        }
+        return ids;
+    }
+
+    public int countContentByUsers(Connection conn, List<Long> userIds) throws SQLException {
+        if (userIds == null || userIds.isEmpty()) {
+            return 0;
+        }
+        StringBuilder sql = new StringBuilder(
+                "SELECT COUNT(*) FROM content WHERE user_id IN (");
+        for (int i = 0; i < userIds.size(); i++) {
+            if (i > 0) sql.append(", ");
+            sql.append("?");
+        }
+        sql.append(") AND is_deleted = 0");
+
+        try (PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+            for (int i = 0; i < userIds.size(); i++) {
+                pstmt.setLong(i + 1, userIds.get(i));
+            }
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1);
+                }
+                return 0;
+            }
+        }
     }
 
     public int countContentByUser(Connection conn, long userId) throws SQLException {

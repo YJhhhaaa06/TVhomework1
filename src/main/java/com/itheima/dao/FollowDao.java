@@ -4,6 +4,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -30,6 +31,21 @@ public class FollowDao {
             for (int i = 0; i < authorIds.size(); i++) {
                 pstmt.setLong(i + 2, authorIds.get(i));
             }
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    result.add(rs.getLong("followed_user_id"));
+                }
+            }
+        }
+        return result;
+    }
+
+    // 获取用户关注的所有博主ID
+    public List<Long> getAllFollowedUserIds(Connection conn, long userId) throws SQLException {
+        List<Long> result = new ArrayList<>();
+        String sql = "SELECT followed_user_id FROM follow WHERE user_id = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, userId);
             try (ResultSet rs = pstmt.executeQuery()) {
                 while (rs.next()) {
                     result.add(rs.getLong("followed_user_id"));

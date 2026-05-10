@@ -18,7 +18,8 @@ public class AuthFilter implements Filter {
     private static final Set<String> PROTECTED_PREFIXES = Set.of(
             "/api/upload",      // 上传视频/帖子
             "/follow",      // 关注/取关
-            "/like"         // 点赞/取消点赞
+            "/like",        // 点赞/取消点赞
+            "/feed"         // 关注动态
     );
 
     private static final Set<String> PROTECTED_EXACT = Set.of(//精确的限制登录接口

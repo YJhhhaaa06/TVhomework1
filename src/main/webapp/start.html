@@ -47,6 +47,10 @@
         .card-author { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60px; cursor: pointer; color: #61666d; }
         .card-author:hover { color: #fb7299; }
         .card-stats { display: flex; gap: 10px; flex-shrink: 0; }
+        .card-time { color: #b0b5bb; font-size: 10px; flex-shrink: 0; }
+
+        /* 关注动态单列 */
+        .grid-single { grid-template-columns: 1fr !important; max-width: 600px; margin: 0 auto; }
 
         /* 底部导航 */
         .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid #e3e5e7; display: flex; justify-content: space-around; padding: 6px 0 8px; z-index: 10; }
@@ -131,6 +135,11 @@ const CATEGORIES = [
 
 let activeCategory = -1;  // -1 = 推荐
 let activeType = 0;       // 0=全部, 1=视频, 2=图文
+let activeTab = 'home';   // 'home' 或 'follow'
+let feedPage = 1;
+let feedTotalPages = 0;
+let feedTotal = 0;
+const FEED_PAGE_SIZE = 10;
 
 // ==================== 初始化 ====================
 init();
@@ -138,7 +147,12 @@ init();
 function init() {
     updateUserDisplay();
     buildTabs();
-    loadContent();
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('tab') === 'follow') {
+        switchToFollowTab();
+    } else {
+        loadContent();
+    }
 }
 
 // ==================== 用户状态 ====================
@@ -252,7 +266,8 @@ function renderCards(list) {
         const meta = document.createElement('div');
         meta.className = 'card-meta';
         meta.innerHTML = '<span class="card-author" onclick="event.stopPropagation();goSpace(' + item.authorId + ')">' + escapeHtml(item.authorName || '') + '</span>'
-            + '<span class="card-stats">❤ ' + (item.likeCount || 0) + ' · 💬 ' + (item.commentCount || 0) + '</span>';
+            + '<span><span class="card-time">' + formatTime(item.createTime) + '</span>'
+            + '<span class="card-stats">❤ ' + (item.likeCount || 0) + ' · 💬 ' + (item.commentCount || 0) + '</span></span>';
 
         body.appendChild(titleEl);
         body.appendChild(meta);
@@ -262,9 +277,165 @@ function renderCards(list) {
     });
 }
 
+// ==================== 关注动态 ====================
+function toggleFollowMode(isFollow) {
+    const tabsRow = document.querySelector('.tabs');
+    const filterRow = document.querySelector('.filter-row');
+    const grid = document.getElementById('contentGrid');
+    if (isFollow) {
+        tabsRow.style.display = 'none';
+        filterRow.style.display = 'none';
+        grid.classList.add('grid-single');
+    } else {
+        tabsRow.style.display = '';
+        filterRow.style.display = '';
+        grid.classList.remove('grid-single');
+    }
+}
+
+function switchToFollowTab() {
+    toggleFollowMode(true);
+    const followBtn = document.querySelector('.nav-item:nth-child(2)');
+    if (followBtn) {
+        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+        followBtn.classList.add('active');
+    }
+    loadFeed(1);
+}
+
+async function loadFeed(page) {
+    const grid = document.getElementById('contentGrid');
+    removeLoadMore();
+
+    if (page === 1) {
+        grid.innerHTML = '<div class="state-box"><div class="icon">⏳</div><div class="msg">加载中...</div></div>';
+    } else {
+        showLoadMoreLoading();
+    }
+
+    try {
+        const data = await request('./feed?page=' + page + '&pageSize=' + FEED_PAGE_SIZE);
+        removeLoadMore(); // 移除loading或按钮
+        if (data.code !== 200) {
+            if (page === 1) {
+                grid.innerHTML = '<div class="state-box"><div class="icon">😞</div><div class="msg">' + (data.msg || '加载失败') + '</div></div>';
+            } else {
+                showToast('加载失败，请重试');
+            }
+            return;
+        }
+        const result = data.data;
+        feedPage = result.page;
+        feedTotalPages = result.totalPages;
+        feedTotal = result.total;
+
+        if (page === 1) {
+            renderCards(result.list || []);
+        } else {
+            appendCards(result.list || []);
+        }
+
+        if (result.list && result.list.length > 0 && feedTotalPages > feedPage) {
+            showLoadMore();
+        }
+    } catch (e) {
+        removeLoadMore();
+        if (e.status === 401 || e.status === 403) {
+            grid.innerHTML = '<div class="state-box"><div class="icon">🔒</div><div class="msg">请先登录</div></div>';
+            return;
+        }
+        if (page > 1) {
+            showToast('加载失败，请重试');
+        } else {
+            grid.innerHTML = '<div class="state-box"><div class="icon">😞</div><div class="msg">加载失败，请刷新重试</div></div>';
+        }
+    }
+}
+
+function appendCards(list) {
+    const grid = document.getElementById('contentGrid');
+    list.forEach(item => {
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.addEventListener('click', () => goDetail(item.id));
+
+        const wrap = document.createElement('div');
+        wrap.className = 'cover-wrap';
+        if (item.coverUrl) {
+            const img = document.createElement('img');
+            img.src = item.coverUrl;
+            img.alt = '';
+            img.loading = 'lazy';
+            img.addEventListener('error', () => {
+                img.style.display = 'none';
+                wrap.innerHTML = '<div class="no-cover">' + (item.title || '?').charAt(0) + '</div>';
+            });
+            wrap.appendChild(img);
+        } else {
+            wrap.innerHTML = '<div class="no-cover">' + (item.title || '?').charAt(0) + '</div>';
+        }
+
+        const badge = document.createElement('span');
+        badge.className = 'type-badge';
+        badge.textContent = item.type === 1 ? '📹 视频' : '🖼 图文';
+        wrap.appendChild(badge);
+
+        const body = document.createElement('div');
+        body.className = 'card-body';
+
+        const titleEl = document.createElement('div');
+        titleEl.className = 'card-title';
+        titleEl.textContent = item.title || '';
+
+        const meta = document.createElement('div');
+        meta.className = 'card-meta';
+        meta.innerHTML = '<span class="card-author" onclick="event.stopPropagation();goSpace(' + item.authorId + ')">' + escapeHtml(item.authorName || '') + '</span>'
+            + '<span><span class="card-time">' + formatTime(item.createTime) + '</span>'
+            + '<span class="card-stats">❤ ' + (item.likeCount || 0) + ' · 💬 ' + (item.commentCount || 0) + '</span></span>';
+
+        body.appendChild(titleEl);
+        body.appendChild(meta);
+        card.appendChild(wrap);
+        card.appendChild(body);
+        grid.appendChild(card);
+    });
+}
+
+function showLoadMore() {
+    removeLoadMore();
+    const btn = document.createElement('button');
+    btn.id = 'loadMoreBtn';
+    btn.textContent = '加载更多';
+    btn.style.cssText = 'display:block;width:calc(100% - 24px);margin:0 12px 12px;padding:10px 0;border:1px solid #e3e5e7;border-radius:8px;background:#fff;color:#61666d;font-size:14px;cursor:pointer;'
+    btn.addEventListener('click', () => loadFeed(feedPage + 1));
+    const grid = document.getElementById('contentGrid');
+    grid.parentNode.insertBefore(btn, grid.nextSibling);
+}
+
+function removeLoadMore() {
+    const btn = document.getElementById('loadMoreBtn');
+    if (btn) btn.remove();
+}
+
+function showLoadMoreLoading() {
+    removeLoadMore();
+    const el = document.createElement('div');
+    el.id = 'loadMoreBtn';
+    el.style.cssText = 'display:block;width:calc(100% - 24px);margin:0 12px 12px;padding:10px 0;text-align:center;border:1px solid #e3e5e7;border-radius:8px;background:#fff;color:#9499a0;font-size:14px;'
+    el.textContent = '加载中...';
+    const grid = document.getElementById('contentGrid');
+    grid.parentNode.insertBefore(el, grid.nextSibling);
+}
+
 // ==================== 导航 ====================
 function onNav(btn, page) {
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    btn.classList.add('active');
+
     if (page === 'home') {
+        activeTab = 'home';
+        toggleFollowMode(false);
+        removeLoadMore();
         activeCategory = -1;
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         const recBtn = document.querySelector('.tab-btn');
@@ -272,8 +443,22 @@ function onNav(btn, page) {
         loadContent();
         return;
     }
-    if (page === 'follow') { showToast('关注功能开发中'); return; }
-    if (page === 'publish') { goPublish(); return; }
+    if (page === 'follow') {
+        activeTab = 'follow';
+        if (!token) {
+            showToast('请先登录查看关注动态');
+            const grid = document.getElementById('contentGrid');
+            grid.innerHTML = '<div class="state-box"><div class="icon">🔒</div><div class="msg">请先登录</div></div>';
+            toggleFollowMode(true);
+            return;
+        }
+        switchToFollowTab();
+        return;
+    }
+    if (page === 'publish') {
+        if (!token) { window.location.href = 'login.html'; return; }
+        goPublish(); return;
+    }
     if (page === 'profile') { goProfile(); return; }
 }
 
@@ -337,6 +522,19 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text || '';
     return div.innerHTML;
+}
+
+function formatTime(t) {
+    if (!t) return '';
+    const d = new Date(t);
+    if (isNaN(d.getTime())) return '';
+    const now = new Date();
+    const diff = now - d;
+    if (diff < 60000) return '刚刚';
+    if (diff < 3600000) return Math.floor(diff / 60000) + '分钟前';
+    if (diff < 86400000) return Math.floor(diff / 3600000) + '小时前';
+    if (diff < 604800000) return Math.floor(diff / 86400000) + '天前';
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 
 function showToast(msg) {
