@@ -20,11 +20,24 @@ public class StartController extends HttpServlet {
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
         resp.setContentType("application/json;charset=utf-8");
 
-        List<ContentVO> recommend = contentService.getRecommend(12);
+        Integer type = parseParam(req.getParameter("type"));
+        Integer categoryId = parseParam(req.getParameter("categoryId"));
+
+        List<ContentVO> recommend = contentService.getRecommendByFilter(type, categoryId, 12);
 
         Long userId = (Long) req.getAttribute("userId");
         contentService.fillLikeAndFollowBatch(recommend, userId);
 
         BaseServletUtil.writeSuccess(resp, recommend);
+    }
+
+    private Integer parseParam(String value) {
+        if (value != null && !value.isEmpty()) {
+            try {
+                return Integer.parseInt(value);
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return null;
     }
 }

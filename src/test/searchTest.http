@@ -1,6 +1,6 @@
 ### ==================== 变量 ====================
 # 先用 loginTest.http 登录拿到 token，替换下面
-@token =eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4MzEyOTQ4LCJleHAiOjE3NzgzMjAxNDh9.ePJ-AqxVJ-C5OW9XIMCAuQz5UAj7Nn1YMUmrzdtd8XM
+@token =eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4MzQwMDA3LCJleHAiOjE3NzgzNDcyMDd9.uT7b67hGl6p0EFabVNF141uQBsm8hM50rinwUEFs6Ik
 
 
 ### ==================== IdSearch — 从数据库按 contentId 查 ====================
@@ -11,7 +11,7 @@ Content-Type: application/json
 token: {{token}}
 
 {
-  "contentId": 1
+  "contentId": 70
 }
 
 

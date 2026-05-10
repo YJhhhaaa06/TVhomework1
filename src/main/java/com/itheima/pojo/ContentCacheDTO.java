@@ -1,5 +1,6 @@
 package com.itheima.pojo;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 public class ContentCacheDTO {
@@ -15,6 +16,7 @@ public class ContentCacheDTO {
     private String coverUrl;
     private String videoUrl;
     private List<String> imageUrls;
+    private LocalDateTime createTime;
 
     public ContentCacheDTO() {
     }
@@ -113,5 +115,13 @@ public class ContentCacheDTO {
 
     public void setImageUrls(List<String> imageUrls) {
         this.imageUrls = imageUrls;
+    }
+
+    public LocalDateTime getCreateTime() {
+        return createTime;
+    }
+
+    public void setCreateTime(LocalDateTime createTime) {
+        this.createTime = createTime;
     }
 }

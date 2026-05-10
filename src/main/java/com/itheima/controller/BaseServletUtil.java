@@ -2,6 +2,8 @@ package com.itheima.controller;
 
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.itheima.util.ResultUtil;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletResponse;
@@ -10,7 +12,9 @@ import java.io.IOException;
 
 public class BaseServletUtil extends HttpServlet {
 
-    protected static final ObjectMapper mapper = new ObjectMapper();
+    protected static final ObjectMapper mapper = new ObjectMapper()
+            .registerModule(new JavaTimeModule())
+            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
     // 统一返回成功
     public  static void writeSuccess(HttpServletResponse resp, Object data) throws IOException {

@@ -1,6 +1,7 @@
 package com.itheima.dao;
 
 import com.itheima.pojo.*;
+import java.time.LocalDateTime;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -18,6 +19,7 @@ public class ResultMap {
         dto.setCommentCount(rs.getInt("comment_count"));
         dto.setLikeCount(rs.getInt("like_count"));
         dto.setAuthorName(rs.getString("username"));
+        dto.setCreateTime(rs.getObject("create_time", LocalDateTime.class));
         return dto;
     }
 

@@ -1,5 +1,6 @@
 package com.itheima.controller;
 
+import com.itheima.factory.BeanFactory;
 import com.itheima.util.MyConnectionPool;
 import com.itheima.util.MyRedisPool;
 import jakarta.servlet.ServletContextEvent;
@@ -11,6 +12,9 @@ public class AppShutDownListener implements ServletContextListener {
 
     @Override
     public void contextDestroyed(ServletContextEvent sce) {
+        // 关闭定时刷新任务
+        BeanFactory.getContentService().shutdown();
+
         // 清除 Redis 缓存数据
         MyRedisPool.flushDb();
 

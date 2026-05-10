@@ -1,6 +1,6 @@
 ### ==================== 变量 ====================
 # 先用 loginTest.http 登录拿到 token，替换下面
-@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4MjM0MDk0LCJleHAiOjE3NzgyNDEyOTR9.bw_h890cadNqzyF0uRRY2hjrQFYrRZpXzcnXkI09pe8
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4MzQxMTMwLCJleHAiOjE3NzgzNDgzMzB9.x59wtWm1VXKCSUxWEsgdiIOnLR4evifyZRh853KyO20
 
 
 ### ==================== 首页推荐流测试 ====================
@@ -27,3 +27,22 @@ token: {{token}}
 ### 5. 伪造 token — 应返回未登录用户的推荐（isFollow=false）
 GET http://localhost:8080/MyAPP/start
 token: invalid-token-0000
+
+
+### ==================== 筛选测试 ====================
+
+### 6. 筛选视频 — 只返回 type=1 的内容
+GET http://localhost:8080/MyAPP/start?type=1
+token: {{token}}
+
+### 7. 筛选游戏分区 — 只返回 categoryId=1
+GET http://localhost:8080/MyAPP/start?categoryId=1
+token: {{token}}
+
+### 8. 组合筛选 — 视频 + 游戏分区
+GET http://localhost:8080/MyAPP/start?type=1&categoryId=1
+token: {{token}}
+
+### 9. 不传参 — 保持兼容，返回全部
+GET http://localhost:8080/MyAPP/start
+token: {{token}}

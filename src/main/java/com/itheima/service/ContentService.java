@@ -37,6 +37,8 @@ public class ContentService {
     private static Map<Long, List<CommentCacheDTO>> commentCache = new HashMap<>();
     private static Map<Long, Long> contentTimestamps = new HashMap<>();
     private static final long CONTENT_TTL_MS = 10 * 60 * 1000;
+    private static Map<String, List<Long>> typeCategoryIndex = new HashMap<>();
+    private ScheduledExecutorService scheduler;
 
     public ContentService() {
         init();
@@ -64,6 +66,79 @@ public class ContentService {
     private void cacheContentBasic(long contentId, ContentCacheDTO detail) {
         contentCache.put(contentId, detail);
         contentTimestamps.put(contentId, System.currentTimeMillis());
+    }
+
+    // ===== 类型/分区索引 =====
+
+    private static String indexKey(int type, int categoryId) {
+        return type + ":" + categoryId;
+    }
+
+    private void addToIndex(long contentId, int type, int categoryId) {
+        String[] keys = {
+            indexKey(type, categoryId),
+            indexKey(type, 0),
+            indexKey(0, categoryId),
+            indexKey(0, 0)
+        };
+        for (String key : keys) {
+            List<Long> list = typeCategoryIndex.computeIfAbsent(key, k -> new ArrayList<>());
+            list.remove(contentId);
+            list.add(0, contentId);
+        }
+    }
+
+    private static void addToIndexInternal(Map<String, List<Long>> index, long contentId, int type, int categoryId) {
+        String[] keys = {
+            indexKey(type, categoryId),
+            indexKey(type, 0),
+            indexKey(0, categoryId),
+            indexKey(0, 0)
+        };
+        for (String key : keys) {
+            index.computeIfAbsent(key, k -> new ArrayList<>()).add(contentId);
+        }
+    }
+
+    private void removeFromIndex(long contentId, int type, int categoryId) {
+        String[] keys = {
+            indexKey(type, categoryId),
+            indexKey(type, 0),
+            indexKey(0, categoryId),
+            indexKey(0, 0)
+        };
+        for (String key : keys) {
+            List<Long> list = typeCategoryIndex.get(key);
+            if (list != null) {
+                list.remove(contentId);
+            }
+        }
+    }
+
+    private String buildQueryKey(Integer type, Integer categoryId) {
+        int t = (type != null) ? type : 0;
+        int c = (categoryId != null) ? categoryId : 0;
+        return indexKey(t, c);
+    }
+
+    public List<ContentVO> getRecommendByFilter(Integer type, Integer categoryId, int limit) {
+        String key = buildQueryKey(type, categoryId);
+        List<Long> idList = typeCategoryIndex.get(key);
+        if (idList == null || idList.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<Long> distinctIds = new ArrayList<>(new LinkedHashSet<>(idList));
+        Collections.shuffle(distinctIds);
+        List<ContentVO> result = new ArrayList<>();
+        for (Long contentId : distinctIds) {
+            ContentCacheDTO dto = getContentFromCache(contentId);
+            if (dto == null) continue;
+            ContentVO cVO = new ContentVO();
+            copyToContentVO(cVO, dto);
+            result.add(cVO);
+            if (result.size() >= limit) break;
+        }
+        return result;
     }
 
     // ===== 初始化 =====
@@ -99,9 +174,15 @@ public class ContentService {
 
             Map<Long, List<CommentCacheDTO>> newCommentCache = getCommentCache(newContentCache.keySet());
 
+            Map<String, List<Long>> newIndex = new HashMap<>();
+            for (ContentCacheDTO dto : allContent) {
+                addToIndexInternal(newIndex, dto.getId(), dto.getType(), dto.getCategoryId());
+            }
+
             recommendList = newRecommendList;
             contentCache = newContentCache;
             commentCache = newCommentCache;
+            typeCategoryIndex = newIndex;
             contentTimestamps.clear();
             long now = System.currentTimeMillis();
             for (Long id : newContentCache.keySet()) {
@@ -118,7 +199,7 @@ public class ContentService {
     }
 
     public void startScheduler() {
-        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        scheduler = Executors.newSingleThreadScheduledExecutor();
         scheduler.scheduleAtFixedRate(() -> {
             try {
                 refresh();
@@ -126,6 +207,12 @@ public class ContentService {
                 LOGGER.log(Level.WARNING, "缓存定时刷新异常", e);
             }
         }, 0, 10, TimeUnit.MINUTES);
+    }
+
+    public void shutdown() {
+        if (scheduler != null && !scheduler.isShutdown()) {
+            scheduler.shutdownNow();
+        }
     }
 
     // ===== 构建缓存 =====
@@ -308,6 +395,7 @@ public class ContentService {
         cVO.setLikeCount(dto.getLikeCount());
         cVO.setAuthorName(dto.getAuthorName());
         cVO.setCoverUrl(dto.getCoverUrl());
+        cVO.setCreateTime(dto.getCreateTime());
     }
 
     private void copyToDetailVO(ContentDetailVO cdVO, ContentCacheDTO dto) {
@@ -323,6 +411,7 @@ public class ContentService {
         cdVO.setCoverUrl(dto.getCoverUrl());
         cdVO.setVideoUrl(dto.getVideoUrl());
         cdVO.setImageUrls(dto.getImageUrls());
+        cdVO.setCreateTime(dto.getCreateTime());
     }
 
     // ===== 点赞状态填充 =====
@@ -538,6 +627,7 @@ public class ContentService {
             ContentVO cVO = new ContentVO();
             copyToContentVO(cVO, dto);
             recommendList.add(0, cVO);
+            addToIndex(contentId, dto.getType(), dto.getCategoryId());
             LOGGER.info("新内容已加入缓存, contentId=" + contentId);
         } catch (Exception e) {
             LOGGER.log(Level.WARNING, "新内容缓存更新失败, contentId=" + contentId, e);
@@ -553,6 +643,14 @@ public class ContentService {
     }
 
     public void deleteContent(long contentId, long userId) {
+        ContentCacheDTO dto = contentCache.get(contentId);
+        if (dto != null) {
+            removeFromIndex(contentId, dto.getType(), dto.getCategoryId());
+        }
+        evictContent(contentId);
+        synchronized (recommendList) {
+            recommendList.removeIf(cvo -> cvo.getId() == contentId);
+        }
     }
 
     // ===== 评论缓存实时更新 =====

@@ -120,7 +120,7 @@ const CATEGORIES = [
     { id: 1, name: '游戏' },
     { id: 2, name: '音乐' },
     { id: 3, name: '资讯' },
-    { id: 4, name: '动/画' },
+    { id: 4, name: '动画' },
     { id: 5, name: '娱乐' },
     { id: 6, name: '动物' },
     { id: 7, name: '体育' },
@@ -166,11 +166,6 @@ function buildTabs() {
 }
 
 function onCategoryTab(cat, btn) {
-    if (cat.id !== -1 && cat.id !== activeCategory) {
-        showToast('分区浏览功能开发中');
-        return;
-    }
-    // 推荐 — 刷新
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     activeCategory = cat.id;
@@ -178,10 +173,6 @@ function onCategoryTab(cat, btn) {
 }
 
 function onTypeFilter(btn, type) {
-    if (type !== 0) {
-        showToast('类型筛选功能开发中');
-        return;
-    }
     document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
     btn.classList.add('active');
     activeType = type;
@@ -194,7 +185,12 @@ async function loadContent() {
     grid.innerHTML = '<div class="state-box"><div class="icon">⏳</div><div class="msg">加载中...</div></div>';
 
     try {
-        const data = await request('./start');
+        let url = './start';
+        const params = [];
+        if (activeType !== 0) params.push('type=' + activeType);
+        if (activeCategory !== -1) params.push('categoryId=' + activeCategory);
+        if (params.length > 0) url += '?' + params.join('&');
+        const data = await request(url);
         if (data.code !== 200) {
             grid.innerHTML = '<div class="state-box"><div class="icon">😞</div><div class="msg">' + (data.msg || '加载失败') + '</div></div>';
             return;
