@@ -19,12 +19,15 @@ public class AuthFilter implements Filter {
             "/api/upload",      // 上传视频/帖子
             "/follow",      // 关注/取关
             "/like",        // 点赞/取消点赞
-            "/feed"         // 关注动态
+            "/feed"       // 关注动态
+
     );
 
     private static final Set<String> PROTECTED_EXACT = Set.of(//精确的限制登录接口
             "/comment/add",  // 发表评论
-            "/user/changePassword"  // 修改密码
+            "/user/changePassword",  // 修改密码
+            "/coupon/grab",      // 优惠券抢购
+            "/coupon/my"        // 我的优惠券
     );
 
     @Override

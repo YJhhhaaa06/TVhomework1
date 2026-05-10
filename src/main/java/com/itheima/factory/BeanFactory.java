@@ -13,6 +13,7 @@ public class BeanFactory {
     private final static ContentMediaDao CONTENT_MEDIA_DAO = new ContentMediaDao();
     private final static FollowDao FOLLOW_DAO = new FollowDao();
     private final static UserDao USER_DAO = new UserDao();
+    private final static CouponDao COUPON_DAO = new CouponDao();
 
     //Service层对象（按依赖拓扑顺序声明）
     private final static LikeCacheService LIKE_CACHE_SERVICE = new LikeCacheService();
@@ -24,6 +25,7 @@ public class BeanFactory {
     private final static FollowService FOLLOW_SERVICE = new FollowService();
     private final static ProfileService PROFILE_SERVICE = new ProfileService();
     private final static FeedService FEED_SERVICE = new FeedService();
+    private final static CouponService COUPON_SERVICE = new CouponService();
 
     //DAO getters
     public static CommentDao getCommentDao() { return COMMENT_DAO; }
@@ -34,6 +36,7 @@ public class BeanFactory {
     public static ContentMediaDao getContentMediaDao() { return CONTENT_MEDIA_DAO; }
     public static FollowDao getFollowDao() { return FOLLOW_DAO; }
     public static UserDao getUserDao() { return USER_DAO; }
+    public static CouponDao getCouponDao() { return COUPON_DAO; }
 
     //Service getters
     public static LikeCacheService getLikeCacheService() { return LIKE_CACHE_SERVICE; }
@@ -45,4 +48,5 @@ public class BeanFactory {
     public static FollowService getFollowService() { return FOLLOW_SERVICE; }
     public static ProfileService getProfileService() { return PROFILE_SERVICE; }
     public static FeedService getFeedService() { return FEED_SERVICE; }
+    public static CouponService getCouponService() { return COUPON_SERVICE; }
 }
