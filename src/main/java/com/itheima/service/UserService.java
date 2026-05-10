@@ -196,12 +196,12 @@ public class UserService {
     }
 
     private void doChangeUserName(Connection conn, long userId, String newName) throws SQLException {
-        if (userDao.isUserExist(conn,userId)) {
-            throw new RuntimeException("USER_NOT_FOUND");
+        if (!userDao.isUserExist(conn, userId)) {
+            throw new NotFoundException("USER_NOT_FOUND");
         }
-        int rows = userDao.updateUserName(conn,userId, newName);
+        int rows = userDao.updateUserName(conn, userId, newName);
         if (rows == 0) {
-            throw new RuntimeException("UPDATE_FAILED");
+            throw new ServerException("UPDATE_FAILED");
         }
     }
 

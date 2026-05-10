@@ -52,6 +52,10 @@ public class ContentService {
     }
 
     private void evictContent(long contentId) {
+        ContentCacheDTO dto = contentCache.get(contentId);
+        if (dto != null) {
+            removeFromIndex(contentId, dto.getType(), dto.getCategoryId());
+        }
         contentCache.remove(contentId);
         commentCache.remove(contentId);
         contentTimestamps.remove(contentId);
@@ -77,9 +81,9 @@ public class ContentService {
     private void addToIndex(long contentId, int type, int categoryId) {
         String[] keys = {
             indexKey(type, categoryId),
-            indexKey(type, 0),
-            indexKey(0, categoryId),
-            indexKey(0, 0)
+            indexKey(type, -1),
+            indexKey(-1, categoryId),
+            indexKey(-1, -1)
         };
         for (String key : keys) {
             List<Long> list = typeCategoryIndex.computeIfAbsent(key, k -> new ArrayList<>());
@@ -91,21 +95,23 @@ public class ContentService {
     private static void addToIndexInternal(Map<String, List<Long>> index, long contentId, int type, int categoryId) {
         String[] keys = {
             indexKey(type, categoryId),
-            indexKey(type, 0),
-            indexKey(0, categoryId),
-            indexKey(0, 0)
+            indexKey(type, -1),
+            indexKey(-1, categoryId),
+            indexKey(-1, -1)
         };
         for (String key : keys) {
-            index.computeIfAbsent(key, k -> new ArrayList<>()).add(contentId);
+            List<Long> list = index.computeIfAbsent(key, k -> new ArrayList<>());
+            list.remove(contentId);
+            list.add(contentId);
         }
     }
 
     private void removeFromIndex(long contentId, int type, int categoryId) {
         String[] keys = {
             indexKey(type, categoryId),
-            indexKey(type, 0),
-            indexKey(0, categoryId),
-            indexKey(0, 0)
+            indexKey(type, -1),
+            indexKey(-1, categoryId),
+            indexKey(-1, -1)
         };
         for (String key : keys) {
             List<Long> list = typeCategoryIndex.get(key);
@@ -116,8 +122,14 @@ public class ContentService {
     }
 
     private String buildQueryKey(Integer type, Integer categoryId) {
-        int t = (type != null) ? type : 0;
-        int c = (categoryId != null) ? categoryId : 0;
+        if (type != null && type != 0 && (type < 1 || type > 2)) {
+            throw new ParamException("不支持的内容类型: " + type);
+        }
+        if (categoryId != null && (categoryId < 0 || categoryId > 9)) {
+            throw new ParamException("不支持的分区: " + categoryId);
+        }
+        int t = (type != null && type != 0) ? type : -1;
+        int c = (categoryId != null) ? categoryId : -1;
         return indexKey(t, c);
     }
 
@@ -374,6 +386,7 @@ public class ContentService {
             buildContentMedia(dto, mediaMap);
             List<CommentCacheDTO> comments = commentService.getCommentCacheVOList(contentId);
             cacheContent(contentId, dto, comments);
+            addToIndex(contentId, dto.getType(), dto.getCategoryId());
             LOGGER.info("缓存回填成功, contentId=" + contentId);
         } catch (Exception e) {
             LOGGER.log(Level.WARNING, "缓存回填失败, contentId=" + contentId, e);
@@ -488,7 +501,7 @@ public class ContentService {
             conn = MyConnectionPool.getConnection();
             Set<Long> followedSet = followDao.getFollowedIds(conn, userId, authorIds);
             for (ContentVO vo : list) {
-                vo.setIsFollow(followedSet.contains(vo.getAuthorId()));
+                vo.setIsFollowed(followedSet.contains(vo.getAuthorId()));
             }
         } catch (SQLException e) {
             LOGGER.log(Level.WARNING, "批量填充关注状态失败, userId=" + userId, e);
@@ -504,7 +517,7 @@ public class ContentService {
         try {
             conn = MyConnectionPool.getConnection();
             Set<Long> followedSet = followDao.getFollowedIds(conn, userId, List.of(vo.getAuthorId()));
-            vo.setIsFollow(followedSet.contains(vo.getAuthorId()));
+            vo.setIsFollowed(followedSet.contains(vo.getAuthorId()));
         } catch (SQLException e) {
             LOGGER.log(Level.WARNING, "填充关注状态失败, userId=" + userId, e);
         } finally {
@@ -699,6 +712,21 @@ public class ContentService {
             for (ContentVO cvo : recommendList) {
                 if (cvo.getId() == contentId) {
                     cvo.setLikeCount(cvo.getLikeCount() + delta);
+                    break;
+                }
+            }
+        }
+    }
+
+    public static void updateContentCommentCount(long contentId, int delta) {
+        ContentCacheDTO dto = contentCache.get(contentId);
+        if (dto != null) {
+            dto.setCommentCount(dto.getCommentCount() + delta);
+        }
+        synchronized (recommendList) {
+            for (ContentVO cvo : recommendList) {
+                if (cvo.getId() == contentId) {
+                    cvo.setCommentCount(cvo.getCommentCount() + delta);
                     break;
                 }
             }

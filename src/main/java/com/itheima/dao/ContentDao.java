@@ -310,4 +310,13 @@ public class ContentDao {
             ps.executeUpdate();
         }
     }
+
+    public void updateCommentCount(Connection conn, Long contentId, int delta) throws SQLException {
+        String sql = "UPDATE content SET comment_count = comment_count + ? WHERE id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, delta);
+            ps.setLong(2, contentId);
+            ps.executeUpdate();
+        }
+    }
 }

@@ -61,7 +61,7 @@ public class CommandConverter {
             //0其它
             //1游戏
             //2音乐
-            //3咨讯
+            //3资讯
             //4动画
             //5娱乐
             //6动物

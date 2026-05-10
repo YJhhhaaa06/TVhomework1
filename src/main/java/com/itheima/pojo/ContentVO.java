@@ -19,12 +19,12 @@ public class ContentVO extends ContentCacheDTO {
         this.isLiked = isLiked;
     }
 
-    public boolean getIsFollow() {
+    public boolean getIsFollowed() {
         return isFollowed;
     }
 
-    public void setIsFollow(boolean isFollow) {
-        this.isFollowed = isFollow;
+    public void setIsFollowed(boolean isFollowed) {
+        this.isFollowed = isFollowed;
     }
 
     @Override

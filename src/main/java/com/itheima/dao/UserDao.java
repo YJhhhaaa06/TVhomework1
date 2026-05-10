@@ -162,7 +162,6 @@ public class UserDao {
     //为用户信息获取用户
     public User getUserForProfileById(Connection conn,long id) throws SQLException {
         String sql = "select * from users where id=?";
-        conn = MyConnectionPool.getConnection();
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setLong(1, id);
             // 获取结果集
@@ -195,8 +194,7 @@ public class UserDao {
         }
     }
     public User getUserForProfileByPhone(Connection conn,String phone)throws SQLException{
-        String sql = "select * from users where id=?";
-        conn = MyConnectionPool.getConnection();
+        String sql = "select * from users where phone=?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, phone);
             // 获取结果集
@@ -356,6 +354,26 @@ public class UserDao {
     }
 
     //改
+    //更新关注数（delta 为正表示+1关注，为负表示-1关注）
+    public int updateFollowCount(Connection conn, long userId, int delta) throws SQLException {
+        String sql = "update users set follow_count = follow_count + ? where id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setInt(1, delta);
+            pstmt.setLong(2, userId);
+            return pstmt.executeUpdate();
+        }
+    }
+
+    //更新粉丝数
+    public int updateFollowerCount(Connection conn, long userId, int delta) throws SQLException {
+        String sql = "update users set follower_count = follower_count + ? where id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setInt(1, delta);
+            pstmt.setLong(2, userId);
+            return pstmt.executeUpdate();
+        }
+    }
+
     //修改用户名
     public int updateUserName(Connection conn, long id, String newName) throws SQLException {
         String sql = "update users set username=? where id=?";

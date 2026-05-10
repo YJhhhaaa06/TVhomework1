@@ -103,6 +103,8 @@ public class CommentService {
                 }
             }
             long commentId = commentDao.addComment(conn, contentId, userId, message, parentId);
+            contentDao.updateCommentCount(conn, contentId, 1);
+            ContentService.updateContentCommentCount(contentId, 1);
             conn.commit();
             // 即时更新评论缓存
             CommentCacheDTO newComment = commentDao.findCommentById(conn, commentId);

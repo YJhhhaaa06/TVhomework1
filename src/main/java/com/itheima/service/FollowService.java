@@ -1,6 +1,7 @@
 package com.itheima.service;
 
 import com.itheima.dao.FollowDao;
+import com.itheima.dao.UserDao;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.ErrorCode;
@@ -16,6 +17,7 @@ import java.util.logging.Logger;
 
 public class FollowService {
     private FollowDao followDao = BeanFactory.getFollowDao();
+    private UserDao userDao = BeanFactory.getUserDao();
     private static final Logger LOGGER =
             LogUtil.getLogger(FollowService.class);
 
@@ -31,6 +33,8 @@ public class FollowService {
             if (rows == 0) {
                 throw new ConflictException("已关注，不可重复操作");
             }
+            userDao.updateFollowCount(conn, userId, 1);
+            userDao.updateFollowerCount(conn, followedUserId, 1);
             conn.commit();
         } catch (SQLException e) {
             LOGGER.log(Level.SEVERE, "关注失败, userId=" + userId + ", followedUserId=" + followedUserId, e);
@@ -59,6 +63,8 @@ public class FollowService {
             if (rows == 0) {
                 throw new ConflictException("未关注，不可取消");
             }
+            userDao.updateFollowCount(conn, userId, -1);
+            userDao.updateFollowerCount(conn, followedUserId, -1);
             conn.commit();
         } catch (SQLException e) {
             LOGGER.log(Level.SEVERE, "取关失败, userId=" + userId + ", followedUserId=" + followedUserId, e);
