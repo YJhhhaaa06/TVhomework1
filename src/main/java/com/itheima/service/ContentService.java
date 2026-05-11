@@ -763,6 +763,6 @@ public class ContentService {
     }
 
     private String jointUrl(String url) {
-        return "http://localhost:8080/MyAPP" + url;
+        return "/MyAPP" + url;
     }
 }
