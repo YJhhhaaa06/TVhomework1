@@ -1,5 +1,6 @@
 package com.itheima.service;
 
+import com.itheima.ioc.annotation.Component;
 import com.itheima.util.MyRedisPool;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.Pipeline;
@@ -18,7 +19,9 @@ import java.util.logging.Logger;
  *
  * 点赞数直接通过 SCARD 获取，不需要单独的计数 key
  */
+@Component
 public class LikeCacheService {
+
     private static final Logger LOGGER =
             LogUtil.getLogger(LikeCacheService.class);
 
@@ -243,6 +246,19 @@ public class LikeCacheService {
             }
             String[] members = userIds.stream().map(String::valueOf).toArray(String[]::new);
             jedis.sadd(key, members);
+        }
+    }
+
+    public void deleteContentLike(long contentId){
+        try (Jedis jedis = MyRedisPool.getJedis()) {
+            String key = contentLikeKey(contentId);
+            jedis.del(key);
+        }
+    }
+    public void deleteCommentLike(long commentId){
+        try (Jedis jedis = MyRedisPool.getJedis()) {
+            String key = contentLikeKey(commentId);
+            jedis.del(key);
         }
     }
 }

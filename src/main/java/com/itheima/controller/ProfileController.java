@@ -3,20 +3,20 @@ package com.itheima.controller;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
 import com.itheima.exception.ParamException;
-import com.itheima.factory.BeanFactory;
+import com.itheima.ioc.annotation.Inject;
 import com.itheima.pojo.ProfileVO;
 import com.itheima.service.ProfileService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
-import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
 
 @WebServlet("/profile")
-public class ProfileController extends HttpServlet {
-    private ProfileService profileService = BeanFactory.getProfileService();
+public class ProfileController extends BaseServlet {
+    @Inject
+    private ProfileService profileService;
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp)

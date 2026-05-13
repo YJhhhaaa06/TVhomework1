@@ -1,5 +1,7 @@
 package com.itheima.dao;
 
+import com.itheima.ioc.annotation.Component;
+
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -10,6 +12,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+@Component
 public class FollowDao {
 
     // 批量查询：userId 关注了 authorIds 中的哪些人

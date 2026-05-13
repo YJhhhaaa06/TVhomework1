@@ -4,20 +4,20 @@ import com.itheima.DTO.PageResult;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
 import com.itheima.exception.ParamException;
-import com.itheima.factory.BeanFactory;
+import com.itheima.ioc.annotation.Inject;
 import com.itheima.pojo.ContentVO;
 import com.itheima.service.FeedService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
-import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
 
 @WebServlet("/feed")
-public class FeedController extends HttpServlet {
-    private FeedService feedService = BeanFactory.getFeedService();
+public class FeedController extends BaseServlet {
+    @Inject
+    private FeedService feedService;
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp)

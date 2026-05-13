@@ -4,14 +4,13 @@ import com.itheima.command.CommandConverter;
 import com.itheima.command.UploadCommand;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
-import com.itheima.factory.BeanFactory;
+import com.itheima.ioc.annotation.Inject;
 import com.itheima.pojo.UploadResult;
 import com.itheima.service.ContentService;
 import com.itheima.service.FileUploadService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.MultipartConfig;
 import jakarta.servlet.annotation.WebServlet;
-import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.Part;
@@ -26,9 +25,11 @@ import java.util.List;
         maxFileSize = 50 * 1024 * 1024, // 50MB
         maxRequestSize = 100 * 1024 * 1024
 )
-public class UploadController extends HttpServlet {
-    private FileUploadService fileUploadService = BeanFactory.getFileUploadService();
-    private ContentService contentService = BeanFactory.getContentService();
+public class UploadController extends BaseServlet {
+    @Inject
+    private FileUploadService fileUploadService;
+    @Inject
+    private ContentService contentService;
 
 
 

@@ -57,11 +57,10 @@ public class RequestParser {
 
 
     public static <T> T parse(HttpServletRequest req, Class<T> clazz) {
-        System.out.println("start parse");
-        System.out.println("contentLength: " + req.getContentLength());
+
+
         try {
             String json = getBody(req);
-            System.out.println("start mapping");
             return mapper.readValue(json, clazz);
         } catch (Exception e) {
             throw new ParamException("请求格式错误");

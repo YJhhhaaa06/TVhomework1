@@ -4,7 +4,8 @@ import com.itheima.DTO.PageResult;
 import com.itheima.dao.ContentDao;
 import com.itheima.dao.FollowDao;
 import com.itheima.exception.ServerException;
-import com.itheima.factory.BeanFactory;
+import com.itheima.ioc.annotation.Component;
+import com.itheima.ioc.annotation.Inject;
 import com.itheima.pojo.ContentCacheDTO;
 import com.itheima.pojo.ContentVO;
 import com.itheima.util.LogUtil;
@@ -16,11 +17,17 @@ import java.util.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+@Component
 public class FeedService {
-    private FollowDao followDao = BeanFactory.getFollowDao();
-    private ContentDao contentDao = BeanFactory.getContentDao();
-    private ContentService contentService = BeanFactory.getContentService();
-    private LikeService likeService = BeanFactory.getLikeService();
+
+    @Inject
+    private FollowDao followDao;
+    @Inject
+    private ContentDao contentDao;
+    @Inject
+    private ContentService contentService;
+    @Inject
+    private LikeService likeService;
     private static final Logger LOGGER = LogUtil.getLogger(FeedService.class);
 
     public PageResult<ContentVO> getFeed(long currentUserId, int page, int pageSize) {

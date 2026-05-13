@@ -1,6 +1,6 @@
 ### ==================== 变量 ====================
 # 先用 loginTest.http 的用例1或2登录，拿到 token 替换下面
-@token = 331509ef-0027-41c1-bab4-4e1e255dc4e0
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4NTg3NjY2LCJleHAiOjE3Nzg1OTQ4NjZ9.S73BNb8WkLL77KqqjwS28HuGzd7QvclP-Gf5s-PYcrY
 
 
 
@@ -12,7 +12,7 @@ POST http://localhost:8080/MyAPP/like/content/add
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
-contentId=1
+contentId=70
 
 
 ### 2. 正常取消点赞内容
@@ -20,7 +20,7 @@ POST http://localhost:8080/MyAPP/like/content/remove
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
-contentId=1
+contentId=70
 
 
 ### ==================== 评论点赞 ====================

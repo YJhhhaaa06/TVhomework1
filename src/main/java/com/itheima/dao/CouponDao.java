@@ -1,5 +1,6 @@
 package com.itheima.dao;
 
+import com.itheima.ioc.annotation.Component;
 import com.itheima.util.MyConnectionPool;
 
 import java.sql.Connection;
@@ -11,6 +12,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+@Component
 public class CouponDao {
 
     //建表语句

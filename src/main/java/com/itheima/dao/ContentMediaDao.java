@@ -1,5 +1,6 @@
 package com.itheima.dao;
 
+import com.itheima.ioc.annotation.Component;
 import com.itheima.pojo.ContentMedia;
 
 import java.sql.Connection;
@@ -11,10 +12,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+@Component
 public class ContentMediaDao {
-
-
-
 
     //添加content的封面、视频、图片
     public void addMedia(Connection conn,long contentId,String url,int type,int sort) throws SQLException {

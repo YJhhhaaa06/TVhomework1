@@ -1,11 +1,10 @@
 package com.itheima.controller;
 
-import com.itheima.factory.BeanFactory;
+import com.itheima.ioc.annotation.Inject;
 import com.itheima.pojo.ContentVO;
 import com.itheima.service.ContentService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
-import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -13,8 +12,9 @@ import java.io.IOException;
 import java.util.List;
 
 @WebServlet("/start")
-public class StartController extends HttpServlet {
-    private ContentService contentService = BeanFactory.getContentService();
+public class StartController extends BaseServlet {
+    @Inject
+    private ContentService contentService;
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {

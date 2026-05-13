@@ -1,6 +1,7 @@
 package com.itheima.controller;
 
-import com.itheima.factory.BeanFactory;
+import com.itheima.ioc.IocContainer;
+import com.itheima.service.ContentService;
 import com.itheima.util.MyConnectionPool;
 import com.itheima.util.MyRedisPool;
 import jakarta.servlet.ServletContextEvent;
@@ -11,17 +12,17 @@ import jakarta.servlet.annotation.WebListener;
 public class AppShutDownListener implements ServletContextListener {
 
     @Override
+    public void contextInitialized(ServletContextEvent sce) {
+        IocContainer.getInstance().init();
+        System.out.println("IOC 容器初始化完成");
+    }
+
+    @Override
     public void contextDestroyed(ServletContextEvent sce) {
-        // 关闭定时刷新任务
-        BeanFactory.getContentService().shutdown();
+        IocContainer.getInstance().getBean(ContentService.class).shutdown();
 
-        // 清除 Redis 缓存数据
         MyRedisPool.flushDb();
-
-        // 关闭 Redis
         MyRedisPool.close();
-
-        // 关闭数据库
         MyConnectionPool.closePool();
 
         System.out.println("资源已释放");

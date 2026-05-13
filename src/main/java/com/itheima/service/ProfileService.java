@@ -6,7 +6,8 @@ import com.itheima.dao.FollowDao;
 import com.itheima.dao.UserDao;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
-import com.itheima.factory.BeanFactory;
+import com.itheima.ioc.annotation.Component;
+import com.itheima.ioc.annotation.Inject;
 import com.itheima.pojo.*;
 import com.itheima.util.LogUtil;
 import com.itheima.util.MyConnectionPool;
@@ -17,12 +18,19 @@ import java.util.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+@Component
 public class ProfileService {
-    private UserDao userDao = BeanFactory.getUserDao();
-    private ContentDao contentDao = BeanFactory.getContentDao();
-    private FollowDao followDao = BeanFactory.getFollowDao();
-    private ContentService contentService = BeanFactory.getContentService();
-    private LikeService likeService = BeanFactory.getLikeService();
+
+    @Inject
+    private UserDao userDao;
+    @Inject
+    private ContentDao contentDao;
+    @Inject
+    private FollowDao followDao;
+    @Inject
+    private ContentService contentService;
+    @Inject
+    private LikeService likeService;
     private static final Logger LOGGER = LogUtil.getLogger(ProfileService.class);
 
     public ProfileVO getProfile(long profileUserId, Long currentUserId, int page, int pageSize) {

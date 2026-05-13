@@ -1,5 +1,6 @@
 package com.itheima.dao;
 
+import com.itheima.ioc.annotation.Component;
 import com.itheima.pojo.ContentCacheDTO;
 import com.itheima.util.MyConnectionPool;
 
@@ -8,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+@Component
 public class ContentDao {
 
     public long addContent(Connection conn, long userId, int type, String title, String description, int categoryId) throws SQLException {

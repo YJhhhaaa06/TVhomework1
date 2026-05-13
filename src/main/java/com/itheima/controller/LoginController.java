@@ -10,20 +10,20 @@ import com.itheima.DTO.LoginDTO;
 import com.itheima.DTO.RegisterDTO;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
-import com.itheima.factory.BeanFactory;
+import com.itheima.ioc.annotation.Inject;
 import com.itheima.pojo.LogInVO;
 import com.itheima.service.UserService;
 import jakarta.servlet.annotation.WebServlet;
-import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
 
 @WebServlet("/user/*")
-public class LoginController extends HttpServlet {
+public class LoginController extends BaseServlet {
     private RequestParser requestParser=new RequestParser();
-    private UserService userService = BeanFactory.getUserService();
+    @Inject
+    private UserService userService;
     private ObjectMapper mapper=new ObjectMapper();
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException {

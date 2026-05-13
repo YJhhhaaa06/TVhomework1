@@ -8,7 +8,8 @@ import com.itheima.dao.UserDao;
 import com.itheima.exception.AuthException;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
-import com.itheima.factory.BeanFactory;
+import com.itheima.ioc.annotation.Component;
+import com.itheima.ioc.annotation.Inject;
 import com.itheima.pojo.LogInVO;
 import com.itheima.pojo.User;
 import com.itheima.util.*;
@@ -18,8 +19,11 @@ import java.sql.SQLException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+@Component
 public class UserService {
-    private UserDao userDao = BeanFactory.getUserDao();
+
+    @Inject
+    private UserDao userDao;
     private static final Logger LOGGER =
             LogUtil.getLogger(UserService.class);
 

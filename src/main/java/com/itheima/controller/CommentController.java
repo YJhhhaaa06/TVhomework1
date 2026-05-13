@@ -4,11 +4,10 @@ import com.itheima.command.CommandConverter;
 import com.itheima.command.CommentCommand;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
-import com.itheima.factory.BeanFactory;
+import com.itheima.ioc.annotation.Inject;
 import com.itheima.service.CommentService;
 import com.itheima.service.ContentService;
 import jakarta.servlet.annotation.WebServlet;
-import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -16,9 +15,11 @@ import java.io.IOException;
 import java.util.List;
 
 @WebServlet("/comment/*")
-public class CommentController extends HttpServlet {
-    private CommentService commentService = BeanFactory.getCommentService();
-    private ContentService contentService = BeanFactory.getContentService();
+public class CommentController extends BaseServlet {
+    @Inject
+    private CommentService commentService;
+    @Inject
+    private ContentService contentService;
 
 
     @Override

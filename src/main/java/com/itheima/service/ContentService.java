@@ -8,7 +8,9 @@ import com.itheima.dao.ContentDao;
 import com.itheima.dao.ContentMediaDao;
 import com.itheima.dao.FollowDao;
 import com.itheima.exception.*;
-import com.itheima.factory.BeanFactory;
+import com.itheima.ioc.annotation.Component;
+import com.itheima.ioc.annotation.Inject;
+import com.itheima.ioc.annotation.PostConstruct;
 import com.itheima.pojo.*;
 import com.itheima.util.LogUtil;
 import com.itheima.util.MyConnectionPool;
@@ -22,13 +24,22 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+@Component
 public class ContentService {
-    private ContentDao contentDao = BeanFactory.getContentDao();
-    private CommentDao commentDao = BeanFactory.getCommentDao();
-    private ContentMediaDao contentMediaDao = BeanFactory.getContentMediaDao();
-    private FollowDao followDao = BeanFactory.getFollowDao();
-    private CommentService commentService = BeanFactory.getCommentService();
-    private LikeService likeService = BeanFactory.getLikeService();
+    @Inject
+    private ContentDao contentDao;
+    @Inject
+    private CommentDao commentDao;
+    @Inject
+    private ContentMediaDao contentMediaDao;
+    @Inject
+    private FollowDao followDao;
+    @Inject
+    private CommentService commentService;
+    @Inject
+    private LikeService likeService;
+    @Inject
+    private LikeCacheService likeCacheService;
     private static final Logger LOGGER =
             LogUtil.getLogger(ContentService.class);
 
@@ -40,9 +51,7 @@ public class ContentService {
     private static Map<String, List<Long>> typeCategoryIndex = new HashMap<>();
     private ScheduledExecutorService scheduler;
 
-    public ContentService() {
-        init();
-    }
+    public ContentService() {}
 
     // ===== 缓存 TTL 管理 =====
 
@@ -59,6 +68,7 @@ public class ContentService {
         contentCache.remove(contentId);
         commentCache.remove(contentId);
         contentTimestamps.remove(contentId);
+        likeCacheService.deleteContentLike(contentId);
     }
 
     private void cacheContent(long contentId, ContentCacheDTO detail, List<CommentCacheDTO> comments) {
@@ -154,6 +164,7 @@ public class ContentService {
     }
 
     // ===== 初始化 =====
+    @PostConstruct
     public void init() {
         try {
             refresh();

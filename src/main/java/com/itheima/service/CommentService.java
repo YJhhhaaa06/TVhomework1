@@ -4,7 +4,8 @@ import com.itheima.command.CommentCommand;
 import com.itheima.dao.CommentDao;
 import com.itheima.dao.ContentDao;
 import com.itheima.exception.*;
-import com.itheima.factory.BeanFactory;
+import com.itheima.ioc.annotation.Component;
+import com.itheima.ioc.annotation.Inject;
 import com.itheima.pojo.CommentCacheDTO;
 import com.itheima.pojo.CommentVO;
 import com.itheima.util.LogUtil;
@@ -19,11 +20,15 @@ import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+@Component
 public class CommentService {
 
-    private CommentDao commentDao = BeanFactory.getCommentDao();
-    private ContentDao contentDao = BeanFactory.getContentDao();
-    private LikeService likeService = BeanFactory.getLikeService();
+    @Inject
+    private CommentDao commentDao;
+    @Inject
+    private ContentDao contentDao;
+    @Inject
+    private LikeService likeService;
     private static final Logger LOGGER =
             LogUtil.getLogger(CommentService.class);
 

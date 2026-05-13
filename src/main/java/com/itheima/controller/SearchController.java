@@ -4,20 +4,20 @@ import com.itheima.DTO.PageResult;
 import com.itheima.DTO.SearchDTO;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
-import com.itheima.factory.BeanFactory;
+import com.itheima.ioc.annotation.Inject;
 import com.itheima.pojo.ContentDetailVO;
 import com.itheima.pojo.ContentVO;
 import com.itheima.service.ContentService;
 import jakarta.servlet.annotation.WebServlet;
-import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
 
 @WebServlet("/search/*")
-public class SearchController extends HttpServlet {
-    private ContentService contentService = BeanFactory.getContentService();
+public class SearchController extends BaseServlet {
+    @Inject
+    private ContentService contentService;
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {

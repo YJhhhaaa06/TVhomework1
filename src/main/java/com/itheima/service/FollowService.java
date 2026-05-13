@@ -6,7 +6,8 @@ import com.itheima.exception.BusinessException;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.ErrorCode;
 import com.itheima.exception.ServerException;
-import com.itheima.factory.BeanFactory;
+import com.itheima.ioc.annotation.Component;
+import com.itheima.ioc.annotation.Inject;
 import com.itheima.pojo.User;
 import com.itheima.util.MyConnectionPool;
 
@@ -20,9 +21,13 @@ import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+@Component
 public class FollowService {
-    private FollowDao followDao = BeanFactory.getFollowDao();
-    private UserDao userDao = BeanFactory.getUserDao();
+
+    @Inject
+    private FollowDao followDao;
+    @Inject
+    private UserDao userDao;
     private static final Logger LOGGER =
             LogUtil.getLogger(FollowService.class);
 

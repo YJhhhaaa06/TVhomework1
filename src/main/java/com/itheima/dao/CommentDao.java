@@ -1,5 +1,6 @@
 package com.itheima.dao;
 
+import com.itheima.ioc.annotation.Component;
 import com.itheima.pojo.CommentCacheDTO;
 
 import java.sql.Connection;
@@ -9,6 +10,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 
+@Component
 public class CommentDao {
 
     //增

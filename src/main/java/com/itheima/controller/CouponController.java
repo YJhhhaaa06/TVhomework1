@@ -3,18 +3,18 @@ package com.itheima.controller;
 import com.itheima.DTO.GrabCouponRequest;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
-import com.itheima.factory.BeanFactory;
+import com.itheima.ioc.annotation.Inject;
 import com.itheima.service.CouponService;
 import jakarta.servlet.annotation.WebServlet;
-import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
 
 @WebServlet("/coupon/*")
-public class CouponController extends HttpServlet {
-    private final CouponService couponService = BeanFactory.getCouponService();
+public class CouponController extends BaseServlet {
+    @Inject
+    private CouponService couponService;
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {

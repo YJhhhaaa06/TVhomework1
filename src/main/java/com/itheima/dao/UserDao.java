@@ -1,5 +1,6 @@
 package com.itheima.dao;
 
+import com.itheima.ioc.annotation.Component;
 import com.itheima.pojo.User;
 
 import java.sql.*;
@@ -7,8 +8,8 @@ import java.util.List;
 
 import com.itheima.util.MyConnectionPool;
 
+@Component
 public class UserDao {
-
 
     //增
     //添加用户

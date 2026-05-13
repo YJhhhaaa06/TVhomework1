@@ -3,7 +3,8 @@ package com.itheima.service;
 import com.itheima.dao.CouponDao;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.ServerException;
-import com.itheima.factory.BeanFactory;
+import com.itheima.ioc.annotation.Component;
+import com.itheima.ioc.annotation.Inject;
 import com.itheima.util.MyConnectionPool;
 
 import java.sql.Connection;
@@ -12,8 +13,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+@Component
 public class CouponService {
-    private final CouponDao couponDao = BeanFactory.getCouponDao();
+
+    @Inject
+    private CouponDao couponDao;
 
     public String grabCoupon(long couponId, long userId) {
         Connection conn = null;

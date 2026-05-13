@@ -1,5 +1,6 @@
 package com.itheima.service;
 
+import com.itheima.ioc.annotation.Component;
 import com.itheima.controller.UploadType;
 import com.itheima.pojo.UploadResult;
 import jakarta.servlet.http.HttpServletRequest;
@@ -13,7 +14,9 @@ import com.itheima.util.LogUtil;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+@Component
 public class FileUploadService {
+
     private static final Logger LOGGER =
             LogUtil.getLogger(FileUploadService.class);
 
