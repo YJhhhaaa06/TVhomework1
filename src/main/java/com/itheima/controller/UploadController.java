@@ -18,6 +18,7 @@ import jakarta.servlet.http.Part;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 
 @WebServlet("/api/upload/*")
@@ -77,8 +78,8 @@ public class UploadController extends BaseServlet {
             UploadCommand uc= CommandConverter.uploadVideoToCommand(title,description,categoryId,userId);
             videoResult= fileUploadService.saveFile(videoPart,UploadType.VIDEO);//"/upload/video/fileName"
             coverResult= fileUploadService.saveFile(coverPart,UploadType.COVER);//"/upload/cover/fileName"
-            contentService.addVideo(uc,videoResult.getUrl(),coverResult.getUrl());
-            BaseServletUtil.writeSuccess(resp,"上传成功");
+            long contentId = contentService.addVideo(uc,videoResult.getUrl(),coverResult.getUrl());
+            BaseServletUtil.writeSuccess(resp, Map.of("contentId", contentId));
 
         }catch (BusinessException e){
             BaseServletUtil.writeError(resp,e.getCode(),e.getMessage());
@@ -135,8 +136,8 @@ public class UploadController extends BaseServlet {
                 savedPaths.add(imageResult.getAbsolutePath());
             }
 
-            contentService.addPost(uc, coverUrl, imageUrls);
-            BaseServletUtil.writeSuccess(resp, "上传成功");
+            long contentId = contentService.addPost(uc, coverUrl, imageUrls);
+            BaseServletUtil.writeSuccess(resp, Map.of("contentId", contentId));
 
         } catch (BusinessException e) {
             e.printStackTrace();

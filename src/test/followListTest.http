@@ -1,0 +1,229 @@
+### ==================== 关注列表/粉丝列表测试 ====================
+# 测试查看关注列表、粉丝列表功能
+
+### ==================== 变量 ====================
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4NTg3NjY2LCJleHAiOjE3Nzg1OTQ4NjZ9.S73BNb8WkLL77KqqjwS28HuGzd7QvclP-Gf5s-PYcrY
+
+# 当前用户 ID
+@currentUserId = 5
+
+# 另一个用户 ID
+@otherUserId = 6
+
+
+### ==================== 关注列表测试 ====================
+
+### 1. 查看自己的关注列表（登录状态）
+GET http://localhost:8080/MyAPP/follow/following?userId={{currentUserId}}
+token: {{token}}
+
+> {%
+    client.test("返回关注列表", function() {
+        client.expect(response.status).to.eql(200);
+        client.expect(response.body.code).to.eql(200);
+        client.expect(response.body.data).to.be.an('array');
+    });
+%}
+
+
+### 2. 查看他人的关注列表（登录状态）
+GET http://localhost:8080/MyAPP/follow/following?userId={{otherUserId}}
+token: {{token}}
+
+> {%
+    client.test("返回他人关注列表", function() {
+        client.expect(response.status).to.eql(200);
+        client.expect(response.body.data).to.be.an('array');
+    });
+%}
+
+
+### 3. 查看关注列表（未登录）
+GET http://localhost:8080/MyAPP/follow/following?userId={{currentUserId}}
+
+
+### 4. 查看关注列表 — 缺少 userId 参数
+GET http://localhost:8080/MyAPP/follow/following
+token: {{token}}
+
+> {%
+    client.test("缺少 userId 应返回参数错误", function() {
+        client.expect(response.body.code).to.eql(400);
+    });
+%}
+
+
+### 5. 查看关注列表 — userId 为空字符串
+GET http://localhost:8080/MyAPP/follow/following?userId=
+token: {{token}}
+
+> {%
+    client.test("userId 为空应返回参数错误", function() {
+        client.expect(response.body.code).to.eql(400);
+    });
+%}
+
+
+### 6. 查看关注列表 — userId 非数字
+GET http://localhost:8080/MyAPP/follow/following?userId=abc
+token: {{token}}
+
+> {%
+    client.test("userId 非数字应返回参数错误", function() {
+        client.expect(response.body.code).to.eql(400);
+    });
+%}
+
+
+### 7. 查看关注列表 — 验证列表项结构
+GET http://localhost:8080/MyAPP/follow/following?userId={{currentUserId}}
+token: {{token}}
+
+> {%
+    client.test("关注列表项应包含必要字段", function() {
+        if (response.body.data.length > 0) {
+            var item = response.body.data[0];
+            client.expect(item).to.have.property('userId');
+            client.expect(item).to.have.property('username');
+            client.expect(item).to.have.property('isFollowed');
+            client.expect(item).to.have.property('isSelf');
+        }
+    });
+%}
+
+
+### 8. 关注列表 — 验证 isSelf 字段
+GET http://localhost:8080/MyAPP/follow/following?userId={{currentUserId}}
+token: {{token}}
+
+> {%
+    client.test("自己的关注列表中自己应标记为 isSelf=true", function() {
+        var selfItem = response.body.data.find(item => item.userId === {{currentUserId}});
+        if (selfItem) {
+            client.expect(selfItem.isSelf).to.eql(true);
+        }
+    });
+%}
+
+
+### ==================== 粉丝列表测试 ====================
+
+### 9. 查看自己的粉丝列表（登录状态）
+GET http://localhost:8080/MyAPP/follow/followers?userId={{currentUserId}}
+token: {{token}}
+
+> {%
+    client.test("返回粉丝列表", function() {
+        client.expect(response.status).to.eql(200);
+        client.expect(response.body.code).to.eql(200);
+        client.expect(response.body.data).to.be.an('array');
+    });
+%}
+
+
+### 10. 查看他人的粉丝列表（登录状态）
+GET http://localhost:8080/MyAPP/follow/followers?userId={{otherUserId}}
+token: {{token}}
+
+> {%
+    client.test("返回他人粉丝列表", function() {
+        client.expect(response.status).to.eql(200);
+        client.expect(response.body.data).to.be.an('array');
+    });
+%}
+
+
+### 11. 查看粉丝列表（未登录）
+GET http://localhost:8080/MyAPP/follow/followers?userId={{currentUserId}}
+
+
+### 12. 查看粉丝列表 — 缺少 userId 参数
+GET http://localhost:8080/MyAPP/follow/followers
+token: {{token}}
+
+> {%
+    client.test("缺少 userId 应返回参数错误", function() {
+        client.expect(response.body.code).to.eql(400);
+    });
+%}
+
+
+### 13. 查看粉丝列表 — userId 非数字
+GET http://localhost:8080/MyAPP/follow/followers?userId=abc
+token: {{token}}
+
+> {%
+    client.test("userId 非数字应返回参数错误", function() {
+        client.expect(response.body.code).to.eql(400);
+    });
+%}
+
+
+### 14. 查看粉丝列表 — 验证列表项结构
+GET http://localhost:8080/MyAPP/follow/followers?userId={{currentUserId}}
+token: {{token}}
+
+> {%
+    client.test("粉丝列表项应包含必要字段", function() {
+        if (response.body.data.length > 0) {
+            var item = response.body.data[0];
+            client.expect(item).to.have.property('userId');
+            client.expect(item).to.have.property('username');
+            client.expect(item).to.have.property('isFollowed');
+            client.expect(item).to.have.property('isSelf');
+        }
+    });
+%}
+
+
+### ==================== 关注/取关后列表变化验证 ====================
+
+### 15. 记录关注前的关注列表长度
+GET http://localhost:8080/MyAPP/follow/following?userId={{currentUserId}}
+token: {{token}}
+
+> {%
+    client.test("记录关注前的关注数", function() {
+        client.global.set("followingCountBefore", response.body.data.length);
+    });
+%}
+
+
+### 16. userB 关注 userA（userId=5）
+POST http://localhost:8080/MyAPP/follow/add
+token: {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+followedUserId=5
+
+
+### 17. 验证 userA 的粉丝列表中出现 userB
+GET http://localhost:8080/MyAPP/follow/followers?userId=5
+token: {{token}}
+
+> {%
+    client.test("userA 的粉丝列表中应包含 userB", function() {
+        var found = response.body.data.find(item => item.userId === {{currentUserId}});
+        client.expect(found).to.exist;
+    });
+%}
+
+
+### 18. userB 取消关注 userA
+POST http://localhost:8080/MyAPP/follow/remove
+token: {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+followedUserId=5
+
+
+### 19. 验证 userA 的粉丝列表中不再有 userB
+GET http://localhost:8080/MyAPP/follow/followers?userId=5
+token: {{token}}
+
+> {%
+    client.test("取消关注后 userA 的粉丝列表中不应包含 userB", function() {
+        var found = response.body.data.find(item => item.userId === {{currentUserId}});
+        client.expect(found).to.not.exist;
+    });
+%}

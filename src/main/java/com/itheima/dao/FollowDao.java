@@ -73,6 +73,18 @@ public class FollowDao {
         return result;
     }
 
+    // 检查是否已关注
+    public boolean isFollowing(Connection conn, long userId, long followedUserId) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM follow WHERE user_id = ? AND followed_user_id = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, userId);
+            pstmt.setLong(2, followedUserId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                return rs.next() && rs.getInt(1) > 0;
+            }
+        }
+    }
+
     // 关注
     public int addFollow(Connection conn, long userId, long followedUserId) throws SQLException {
         String sql = "INSERT INTO follow (user_id, followed_user_id) VALUES (?, ?)";

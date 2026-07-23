@@ -39,13 +39,20 @@ public class FollowService {
         try {
             conn = MyConnectionPool.getConnection();
             conn.setAutoCommit(false);
-            int rows = followDao.addFollow(conn, userId, followedUserId);
-            if (rows == 0) {
+
+            // 先检查是否已关注
+            boolean alreadyFollowed = followDao.isFollowing(conn, userId, followedUserId);
+            if (alreadyFollowed) {
                 throw new ConflictException("已关注，不可重复操作");
             }
+
+            followDao.addFollow(conn, userId, followedUserId);
             userDao.updateFollowCount(conn, userId, 1);
             userDao.updateFollowerCount(conn, followedUserId, 1);
             conn.commit();
+        } catch (ConflictException e) {
+            // 重复关注，直接抛出，不需要回滚
+            throw e;
         } catch (SQLException e) {
             LOGGER.log(Level.SEVERE, "关注失败, userId=" + userId + ", followedUserId=" + followedUserId, e);
             if (conn != null) {
@@ -114,13 +121,20 @@ public class FollowService {
         try {
             conn = MyConnectionPool.getConnection();
             conn.setAutoCommit(false);
-            int rows = followDao.deleteFollow(conn, userId, followedUserId);
-            if (rows == 0) {
+
+            // 先检查是否已关注
+            boolean isFollowing = followDao.isFollowing(conn, userId, followedUserId);
+            if (!isFollowing) {
                 throw new ConflictException("未关注，不可取消");
             }
+
+            followDao.deleteFollow(conn, userId, followedUserId);
             userDao.updateFollowCount(conn, userId, -1);
             userDao.updateFollowerCount(conn, followedUserId, -1);
             conn.commit();
+        } catch (ConflictException e) {
+            // 未关注，直接抛出，不需要回滚
+            throw e;
         } catch (SQLException e) {
             LOGGER.log(Level.SEVERE, "取关失败, userId=" + userId + ", followedUserId=" + followedUserId, e);
             if (conn != null) {

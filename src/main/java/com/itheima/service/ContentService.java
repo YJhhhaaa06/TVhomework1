@@ -585,7 +585,7 @@ public class ContentService {
 
     // ===== 管理 =====
 
-    public void addVideo(UploadCommand uc, String videoUrl, String coverUrl) {
+    public long addVideo(UploadCommand uc, String videoUrl, String coverUrl) {
         Connection conn = null;
         try {
             conn = MyConnectionPool.getConnection();
@@ -595,6 +595,7 @@ public class ContentService {
             contentMediaDao.addMedia(conn, videoId, coverUrl, UploadType.COVER.getMediaType(), 1);
             conn.commit();
             updateCacheAfterAdd(conn, videoId);
+            return videoId;
         } catch (SQLException e) {
             LOGGER.log(Level.SEVERE, "添加视频失败, userId=" + uc.getUserId(), e);
             if (conn != null) {
@@ -610,7 +611,7 @@ public class ContentService {
         }
     }
 
-    public void addPost(UploadCommand uc, String coverUrl, List<String> imageUrls) {
+    public long addPost(UploadCommand uc, String coverUrl, List<String> imageUrls) {
         Connection conn = null;
         try {
             conn = MyConnectionPool.getConnection();
@@ -625,6 +626,7 @@ public class ContentService {
             }
             conn.commit();
             updateCacheAfterAdd(conn, contentId);
+            return contentId;
         } catch (SQLException e) {
             LOGGER.log(Level.SEVERE, "添加动态失败, userId=" + uc.getUserId(), e);
             if (conn != null) {

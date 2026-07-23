@@ -1,0 +1,191 @@
+### ==================== 首页推荐完整测试 ====================
+# 测试首页推荐功能
+
+### ==================== 变量 ====================
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4NTg3NjY2LCJleHAiOjE3Nzg1OTQ4NjZ9.S73BNb8WkLL77KqqjwS28HuGzd7QvclP-Gf5s-PYcrY
+
+
+### ==================== 正常获取推荐 ====================
+
+### 1. 正常获取首页推荐（登录状态）
+GET http://localhost:8080/MyAPP/start?limit=10
+token: {{token}}
+
+> {%
+    client.test("返回推荐列表", function() {
+        client.expect(response.status).to.eql(200);
+        client.expect(response.body.code).to.eql(200);
+        client.expect(response.body.data).to.be.an('array');
+    });
+%}
+
+
+### 2. 正常获取首页推荐（未登录）
+GET http://localhost:8080/MyAPP/start?limit=10
+
+> {%
+    client.test("未登录也可以获取推荐", function() {
+        client.expect(response.status).to.eql(200);
+        client.expect(response.body.code).to.eql(200);
+        client.expect(response.body.data).to.be.an('array');
+    });
+%}
+
+
+### ==================== 数量限制测试 ====================
+
+### 3. 获取 5 条推荐
+GET http://localhost:8080/MyAPP/start?limit=5
+token: {{token}}
+
+> {%
+    client.test("返回不超过 5 条", function() {
+        client.expect(response.body.data.length).to.be.at.most(5);
+    });
+%}
+
+
+### 4. 获取 20 条推荐
+GET http://localhost:8080/MyAPP/start?limit=20
+token: {{token}}
+
+> {%
+    client.test("返回不超过 20 条", function() {
+        client.expect(response.body.data.length).to.be.at.most(20);
+    });
+%}
+
+
+### 5. 获取 1 条推荐
+GET http://localhost:8080/MyAPP/start?limit=1
+token: {{token}}
+
+> {%
+    client.test("返回不超过 1 条", function() {
+        client.expect(response.body.data.length).to.be.at.most(1);
+    });
+%}
+
+
+### 6. 缺少 limit 参数（应使用默认值）
+GET http://localhost:8080/MyAPP/start
+token: {{token}}
+
+> {%
+    client.test("缺少 limit 应使用默认值", function() {
+        client.expect(response.body.data).to.be.an('array');
+    });
+%}
+
+
+### 7. limit 为 0
+GET http://localhost:8080/MyAPP/start?limit=0
+token: {{token}}
+
+> {%
+    client.test("limit 为 0 应返回空数组", function() {
+        client.expect(response.body.data).to.be.an('array');
+    });
+%}
+
+
+### 8. limit 为负数
+GET http://localhost:8080/MyAPP/start?limit=-1
+token: {{token}}
+
+> {%
+    client.test("limit 为负数应返回空数组或默认值", function() {
+        client.expect(response.body.data).to.be.an('array');
+    });
+%}
+
+
+### ==================== 结果结构验证 ====================
+
+### 9. 推荐列表 — 验证列表项结构
+GET http://localhost:8080/MyAPP/start?limit=10
+token: {{token}}
+
+> {%
+    client.test("推荐项应包含必要字段", function() {
+        if (response.body.data.length > 0) {
+            var item = response.body.data[0];
+            client.expect(item).to.have.property('id');
+            client.expect(item).to.have.property('authorId');
+            client.expect(item).to.have.property('authorName');
+            client.expect(item).to.have.property('type');
+            client.expect(item).to.have.property('title');
+            client.expect(item).to.have.property('coverUrl');
+            client.expect(item).to.have.property('likeCount');
+            client.expect(item).to.have.property('commentCount');
+            client.expect(item).to.have.property('createTime');
+        }
+    });
+%}
+
+
+### 10. 推荐列表 — 验证点赞状态（登录状态）
+GET http://localhost:8080/MyAPP/start?limit=10
+token: {{token}}
+
+> {%
+    client.test("登录状态应有 isLiked 字段", function() {
+        if (response.body.data.length > 0) {
+            var item = response.body.data[0];
+            client.expect(item.isLiked).to.be.a('boolean');
+        }
+    });
+%}
+
+
+### 11. 推荐列表 — 验证关注状态（登录状态）
+GET http://localhost:8080/MyAPP/start?limit=10
+token: {{token}}
+
+> {%
+    client.test("登录状态应有 isFollowed 字段", function() {
+        if (response.body.data.length > 0) {
+            var item = response.body.data[0];
+            client.expect(item.isFollowed).to.be.a('boolean');
+        }
+    });
+%}
+
+
+### 12. 推荐列表 — 未登录状态
+GET http://localhost:8080/MyAPP/start?limit=10
+
+> {%
+    client.test("未登录应返回内容列表", function() {
+        client.expect(response.body.data).to.be.an('array');
+    });
+%}
+
+
+### ==================== 内容类型验证 ====================
+
+### 13. 推荐列表 — 验证 type 字段值
+GET http://localhost:8080/MyAPP/start?limit=10
+token: {{token}}
+
+> {%
+    client.test("type 字段应为 1(视频) 或 2(图片)", function() {
+        response.body.data.forEach(function(item) {
+            client.expect(item.type).to.be.oneOf([1, 2]);
+        });
+    });
+%}
+
+
+### 14. 视频类型 — 应有 coverUrl
+GET http://localhost:8080/MyAPP/start?limit=10
+token: {{token}}
+
+> {%
+    client.test("视频类型应有 coverUrl", function() {
+        var videoItems = response.body.data.filter(item => item.type === 1);
+        videoItems.forEach(function(item) {
+            client.expect(item.coverUrl).to.be.a('string');
+        });
+    });
+%}

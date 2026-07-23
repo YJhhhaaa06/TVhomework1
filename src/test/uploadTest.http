@@ -1,13 +1,13 @@
 ### ==================== 变量 ====================
 # 先用 loginTest.http 的用例1或2登录，拿到 token 替换下面
-@token = 59528c03-96e1-4fd2-989d-c1cbf84f86d9
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzg0Nzk0MjkxLCJleHAiOjE3ODQ4MDE0OTF9.EIfzMxYJA9F6q6cb9ZdeZUKKXSdF6X9zSHEJ0wgoowY
 
 
 
 ### ==================== 视频上传测试 ====================
 
 ### 1. 正常上传 — 视频 + 封面 + 标题 + 简介
-POST http://localhost:8080/MyAPP/upload/video
+POST http://localhost:8080/MyAPP/api/upload/video
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
 token: {{token}}
 
@@ -32,12 +32,12 @@ Content-Type: video/mp4
 Content-Disposition: form-data; name="cover"; filename="Snipaste_2026-04-09_14-57-54.png"
 Content-Type: image/png
 
-< D:/upload/fakecover/Snipaste_2026-04-09_14-57-54.png
+< D:/stone/fakecover/Snipaste_2026-04-09_14-57-54.png
 ------WebKitFormBoundary--
 
 
 ### 2. 正常上传 — 换个封面和视频
-POST http://localhost:8080/MyAPP/upload/video
+POST http://localhost:8080/MyAPP/api/upload/video
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
 token: {{token}}
 
@@ -67,7 +67,7 @@ Content-Type: image/png
 
 
 ### 3. 缺少封面（只传视频和标题）
-POST http://localhost:8080/MyAPP/upload/video
+POST http://localhost:8080/MyAPP/api/upload/video
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
 token: {{token}}
 
@@ -92,7 +92,7 @@ Content-Type: video/mp4
 
 
 ### 4. 缺少视频 — 只传封面和标题
-POST http://localhost:8080/MyAPP/upload/video
+POST http://localhost:8080/MyAPP/api/upload/video
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
 token: {{token}}
 
@@ -117,7 +117,7 @@ Content-Type: image/png
 
 
 ### 5. 视频类型错误 — 把图片当视频传
-POST http://localhost:8080/MyAPP/upload/video
+POST http://localhost:8080/MyAPP/api/upload/video
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
 token: {{token}}
 
@@ -147,7 +147,7 @@ Content-Type: image/png
 
 
 ### 6. 标题为空
-POST http://localhost:8080/MyAPP/upload/video
+POST http://localhost:8080/MyAPP/api/upload/video
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
 token: {{token}}
 
@@ -177,7 +177,7 @@ Content-Type: image/png
 
 
 ### 7. 不传 token
-POST http://localhost:8080/MyAPP/upload/video
+POST http://localhost:8080/MyAPP/api/upload/video
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
 
 ------WebKitFormBoundary
@@ -208,7 +208,7 @@ Content-Type: image/png
 ### ==================== 帖子上传测试 ====================
 
 ### 8. 正常上传帖子 — 封面 + 多张图片 + 标题 + 内容
-POST http://localhost:8080/MyAPP/upload/post
+POST http://localhost:8080/MyAPP/api/upload/post
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
 token: {{token}}
 
@@ -243,7 +243,7 @@ Content-Type: image/png
 
 
 ### 9. 帖子 — 只有图片没有封面
-POST http://localhost:8080/MyAPP/upload/post
+POST http://localhost:8080/MyAPP/api/upload/post
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
 token: {{token}}
 
@@ -268,7 +268,7 @@ Content-Type: image/png
 
 
 ### 10. 帖子 — 只有封面没有图片
-POST http://localhost:8080/MyAPP/upload/post
+POST http://localhost:8080/MyAPP/api/upload/post
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
 token: {{token}}
 
@@ -293,7 +293,7 @@ Content-Type: image/png
 
 
 ### 11. 帖子 — 既无封面也无图片（纯文字帖）
-POST http://localhost:8080/MyAPP/upload/post
+POST http://localhost:8080/MyAPP/api/upload/post
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
 token: {{token}}
 
@@ -313,7 +313,7 @@ Content-Disposition: form-data; name="categoryId"
 
 
 ### 12. 帖子 — 标题为空
-POST http://localhost:8080/MyAPP/upload/post
+POST http://localhost:8080/MyAPP/api/upload/post
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
 token: {{token}}
 
@@ -338,7 +338,7 @@ Content-Type: image/png
 
 
 ### 13. 帖子 — 不传 token
-POST http://localhost:8080/MyAPP/upload/post
+POST http://localhost:8080/MyAPP/api/upload/post
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
 
 ------WebKitFormBoundary
@@ -362,7 +362,7 @@ Content-Type: image/png
 
 
 ### 14. 帖子 — 传了视频文件到 image 字段（类型错误）
-POST http://localhost:8080/MyAPP/upload/post
+POST http://localhost:8080/MyAPP/api/upload/post
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
 token: {{token}}
 

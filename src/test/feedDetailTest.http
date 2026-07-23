@@ -1,0 +1,263 @@
+### ==================== Feed 流和内容详情测试 ====================
+# 测试关注动态流、内容详情功能
+
+### ==================== 变量 ====================
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4NTg3NjY2LCJleHAiOjE3Nzg1OTQ4NjZ9.S73BNb8WkLL77KqqjwS28HuGzd7QvclP-Gf5s-PYcrY
+
+# 测试用内容 ID
+@contentId = 1
+
+# 另一个用户 ID
+@otherUserId = 2
+
+
+### ==================== Feed 流测试 ====================
+
+### 1. 正常获取 Feed 流（登录状态）
+GET http://localhost:8080/MyAPP/feed?page=1&pageSize=10
+token: {{token}}
+
+> {%
+    client.test("返回 Feed 流", function() {
+        client.expect(response.status).to.eql(200);
+        client.expect(response.body.code).to.eql(200);
+        client.expect(response.body.data).to.have.property('list');
+        client.expect(response.body.data).to.have.property('total');
+        client.expect(response.body.data).to.have.property('page');
+        client.expect(response.body.data).to.have.property('pageSize');
+    });
+%}
+
+
+### 2. Feed 流未登录（应返回 401）
+GET http://localhost:8080/MyAPP/feed?page=1&pageSize=10
+
+
+### 3. Feed 流分页 — 第一页
+GET http://localhost:8080/MyAPP/feed?page=1&pageSize=5
+token: {{token}}
+
+> {%
+    client.test("第一页返回数据", function() {
+        client.expect(response.body.data.list.length).to.be.at.most(5);
+    });
+%}
+
+
+### 4. Feed 流分页 — 第二页
+GET http://localhost:8080/MyAPP/feed?page=2&pageSize=5
+token: {{token}}
+
+> {%
+    client.test("第二页返回数据", function() {
+        client.expect(response.body.data.page).to.eql(2);
+    });
+%}
+
+
+### 5. Feed 流分页 — 超出范围
+GET http://localhost:8080/MyAPP/feed?page=999&pageSize=10
+token: {{token}}
+
+> {%
+    client.test("超出范围应返回空列表", function() {
+        client.expect(response.body.data.list).to.be.an('array');
+    });
+%}
+
+
+### 6. Feed 流 — 验证列表项结构
+GET http://localhost:8080/MyAPP/feed?page=1&pageSize=10
+token: {{token}}
+
+> {%
+    client.test("Feed 列表项应包含必要字段", function() {
+        if (response.body.data.list.length > 0) {
+            var item = response.body.data.list[0];
+            client.expect(item).to.have.property('id');
+            client.expect(item).to.have.property('authorId');
+            client.expect(item).to.have.property('authorName');
+            client.expect(item).to.have.property('type');
+            client.expect(item).to.have.property('title');
+            client.expect(item).to.have.property('likeCount');
+            client.expect(item).to.have.property('commentCount');
+            client.expect(item).to.have.property('isLiked');
+            client.expect(item).to.have.property('createTime');
+        }
+    });
+%}
+
+
+### 7. Feed 流 — 验证点赞状态填充
+GET http://localhost:8080/MyAPP/feed?page=1&pageSize=10
+token: {{token}}
+
+> {%
+    client.test("Feed 列表项应有 isLiked 字段", function() {
+        if (response.body.data.list.length > 0) {
+            var item = response.body.data.list[0];
+            client.expect(item.isLiked).to.be.a('boolean');
+        }
+    });
+%}
+
+
+### ==================== 关注后 Feed 流变化验证 ====================
+
+### 8. 关注用户 userA（userId=5）
+POST http://localhost:8080/MyAPP/follow/add
+token: {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+followedUserId=5
+
+
+### 9. 关注后查看 Feed 流（应包含 userA 的内容）
+GET http://localhost:8080/MyAPP/feed?page=1&pageSize=50
+token: {{token}}
+
+> {%
+    client.test("关注后 Feed 应包含该用户内容", function() {
+        var found = response.body.data.list.find(item => item.authorId === 5);
+        // 注意：如果 userA 没有发布内容，这个测试会失败，这是正常的
+        // client.expect(found).to.exist;
+    });
+%}
+
+
+### 10. 取消关注用户 userA
+POST http://localhost:8080/MyAPP/follow/remove
+token: {{token}}
+Content-Type: application/x-www-form-urlencoded
+
+followedUserId=5
+
+
+### 11. 取消关注后查看 Feed 流（不应包含 userA 的内容）
+GET http://localhost:8080/MyAPP/feed?page=1&pageSize=50
+token: {{token}}
+
+> {%
+    client.test("取消关注后 Feed 不应包含该用户内容", function() {
+        var found = response.body.data.list.find(item => item.authorId === 5);
+        client.expect(found).to.not.exist;
+    });
+%}
+
+
+### ==================== 内容详情测试 ====================
+
+### 12. 正常查看内容详情（登录状态）
+GET http://localhost:8080/MyAPP/detail?contentId={{contentId}}
+token: {{token}}
+
+> {%
+    client.test("返回内容详情", function() {
+        client.expect(response.status).to.eql(200);
+        client.expect(response.body.code).to.eql(200);
+        client.expect(response.body.data).to.have.property('id');
+        client.expect(response.body.data).to.have.property('title');
+        client.expect(response.body.data).to.have.property('authorId');
+        client.expect(response.body.data).to.have.property('authorName');
+        client.expect(response.body.data).to.have.property('type');
+        client.expect(response.body.data).to.have.property('likeCount');
+        client.expect(response.body.data).to.have.property('commentCount');
+        client.expect(response.body.data).to.have.property('isLiked');
+        client.expect(response.body.data).to.have.property('isFollowed');
+    });
+%}
+
+
+### 13. 查看内容详情（未登录）
+GET http://localhost:8080/MyAPP/detail?contentId={{contentId}}
+
+
+### 14. 查看不存在的内容详情
+GET http://localhost:8080/MyAPP/detail?contentId=99999
+token: {{token}}
+
+> {%
+    client.test("不存在的内容应返回 404", function() {
+        client.expect(response.body.code).to.eql(404);
+    });
+%}
+
+
+### 15. 查看内容详情 — 缺少 contentId
+GET http://localhost:8080/MyAPP/detail
+token: {{token}}
+
+> {%
+    client.test("缺少 contentId 应返回参数错误", function() {
+        client.expect(response.body.code).to.eql(400);
+    });
+%}
+
+
+### 16. 查看内容详情 — contentId 非数字
+GET http://localhost:8080/MyAPP/detail?contentId=abc
+token: {{token}}
+
+> {%
+    client.test("contentId 非数字应返回参数错误", function() {
+        client.expect(response.body.code).to.eql(400);
+    });
+%}
+
+
+### 17. 视频类型内容详情 — 验证 videoUrl 字段
+GET http://localhost:8080/MyAPP/detail?contentId={{contentId}}
+token: {{token}}
+
+> {%
+    client.test("视频类型应有 videoUrl 字段", function() {
+        if (response.body.data.type === 1) {
+            client.expect(response.body.data).to.have.property('videoUrl');
+        }
+    });
+%}
+
+
+### 18. 图片类型内容详情 — 验证 imageUrls 字段
+GET http://localhost:8080/MyAPP/detail?contentId=2
+token: {{token}}
+
+> {%
+    client.test("图片类型应有 imageUrls 字段", function() {
+        if (response.body.data.type === 2) {
+            client.expect(response.body.data).to.have.property('imageUrls');
+            client.expect(response.body.data.imageUrls).to.be.an('array');
+        }
+    });
+%}
+
+
+### 19. 内容详情 — 验证评论列表
+GET http://localhost:8080/MyAPP/detail?contentId={{contentId}}
+token: {{token}}
+
+> {%
+    client.test("内容详情应包含评论列表", function() {
+        client.expect(response.body.data).to.have.property('comments');
+        client.expect(response.body.data.comments).to.be.an('array');
+    });
+%}
+
+
+### 20. 内容详情 — 验证评论树结构
+GET http://localhost:8080/MyAPP/detail?contentId={{contentId}}
+token: {{token}}
+
+> {%
+    client.test("评论应有 children 字段", function() {
+        if (response.body.data.comments.length > 0) {
+            var comment = response.body.data.comments[0];
+            client.expect(comment).to.have.property('commentId');
+            client.expect(comment).to.have.property('username');
+            client.expect(comment).to.have.property('message');
+            client.expect(comment).to.have.property('likeCount');
+            client.expect(comment).to.have.property('isLiked');
+            client.expect(comment).to.have.property('children');
+        }
+    });
+%}

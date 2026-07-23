@@ -1,0 +1,202 @@
+### ==================== 搜索功能完整测试 ====================
+# 测试搜索功能的各种场景
+
+### ==================== 变量 ====================
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4NTg3NjY2LCJleHAiOjE3Nzg1OTQ4NjZ9.S73BNb8WkLL77KqqjwS28HuGzd7QvclP-Gf5s-PYcrY
+
+
+### ==================== 正常搜索 ====================
+
+### 1. 正常搜索（登录状态）
+GET http://localhost:8080/MyAPP/search?keyword=test&page=1&pageSize=10
+token: {{token}}
+
+> {%
+    client.test("返回搜索结果", function() {
+        client.expect(response.status).to.eql(200);
+        client.expect(response.body.code).to.eql(200);
+        client.expect(response.body.data).to.have.property('list');
+        client.expect(response.body.data).to.have.property('total');
+        client.expect(response.body.data).to.have.property('page');
+        client.expect(response.body.data).to.have.property('pageSize');
+    });
+%}
+
+
+### 2. 正常搜索（未登录）
+GET http://localhost:8080/MyAPP/search?keyword=test&page=1&pageSize=10
+
+> {%
+    client.test("未登录也可以搜索", function() {
+        client.expect(response.status).to.eql(200);
+        client.expect(response.body.code).to.eql(200);
+    });
+%}
+
+
+### 3. 搜索中文关键词
+GET http://localhost:8080/MyAPP/search?keyword=测试&page=1&pageSize=10
+token: {{token}}
+
+> {%
+    client.test("中文搜索正常返回", function() {
+        client.expect(response.status).to.eql(200);
+        client.expect(response.body.data).to.have.property('list');
+    });
+%}
+
+
+### ==================== 分页测试 ====================
+
+### 4. 搜索分页 — 第一页
+GET http://localhost:8080/MyAPP/search?keyword=test&page=1&pageSize=5
+token: {{token}}
+
+> {%
+    client.test("第一页返回数据", function() {
+        client.expect(response.body.data.list.length).to.be.at.most(5);
+        client.expect(response.body.data.page).to.eql(1);
+    });
+%}
+
+
+### 5. 搜索分页 — 第二页
+GET http://localhost:8080/MyAPP/search?keyword=test&page=2&pageSize=5
+token: {{token}}
+
+> {%
+    client.test("第二页返回数据", function() {
+        client.expect(response.body.data.page).to.eql(2);
+    });
+%}
+
+
+### 6. 搜索分页 — 超出范围
+GET http://localhost:8080/MyAPP/search?keyword=test&page=999&pageSize=10
+token: {{token}}
+
+> {%
+    client.test("超出范围应返回空列表", function() {
+        client.expect(response.body.data.list).to.be.an('array');
+    });
+%}
+
+
+### ==================== 结果结构验证 ====================
+
+### 7. 搜索结果 — 验证列表项结构
+GET http://localhost:8080/MyAPP/search?keyword=test&page=1&pageSize=10
+token: {{token}}
+
+> {%
+    client.test("搜索结果项应包含必要字段", function() {
+        if (response.body.data.list.length > 0) {
+            var item = response.body.data.list[0];
+            client.expect(item).to.have.property('id');
+            client.expect(item).to.have.property('authorId');
+            client.expect(item).to.have.property('authorName');
+            client.expect(item).to.have.property('type');
+            client.expect(item).to.have.property('title');
+            client.expect(item).to.have.property('likeCount');
+            client.expect(item).to.have.property('commentCount');
+            client.expect(item).to.have.property('isLiked');
+        }
+    });
+%}
+
+
+### 8. 搜索结果 — 验证点赞状态填充（登录状态）
+GET http://localhost:8080/MyAPP/search?keyword=test&page=1&pageSize=10
+token: {{token}}
+
+> {%
+    client.test("登录状态应填充 isLiked 字段", function() {
+        if (response.body.data.list.length > 0) {
+            var item = response.body.data.list[0];
+            client.expect(item.isLiked).to.be.a('boolean');
+        }
+    });
+%}
+
+
+### 9. 搜索结果 — 验证关注状态填充（登录状态）
+GET http://localhost:8080/MyAPP/search?keyword=test&page=1&pageSize=10
+token: {{token}}
+
+> {%
+    client.test("登录状态应填充 isFollowed 字段", function() {
+        if (response.body.data.list.length > 0) {
+            var item = response.body.data.list[0];
+            client.expect(item.isFollowed).to.be.a('boolean');
+        }
+    });
+%}
+
+
+### ==================== 边界条件 ====================
+
+### 10. 搜索 — 空关键词
+GET http://localhost:8080/MyAPP/search?keyword=&page=1&pageSize=10
+token: {{token}}
+
+> {%
+    client.test("空关键词应返回空结果或参数错误", function() {
+        // 根据业务逻辑，可能返回空结果或 400
+        client.expect(response.status).to.be.oneOf([200, 400]);
+    });
+%}
+
+
+### 11. 搜索 — 缺少 keyword 参数
+GET http://localhost:8080/MyAPP/search?page=1&pageSize=10
+token: {{token}}
+
+> {%
+    client.test("缺少 keyword 应返回参数错误", function() {
+        client.expect(response.body.code).to.eql(400);
+    });
+%}
+
+
+### 12. 搜索 — 缺少 page 参数（应使用默认值）
+GET http://localhost:8080/MyAPP/search?keyword=test&pageSize=10
+token: {{token}}
+
+> {%
+    client.test("缺少 page 应使用默认值", function() {
+        client.expect(response.body.data.page).to.eql(1);
+    });
+%}
+
+
+### 13. 搜索 — 缺少 pageSize 参数（应使用默认值）
+GET http://localhost:8080/MyAPP/search?keyword=test&page=1
+token: {{token}}
+
+> {%
+    client.test("缺少 pageSize 应使用默认值", function() {
+        client.expect(response.body.data.pageSize).to.be.a('number');
+    });
+%}
+
+
+### 14. 搜索 — 特殊字符关键词
+GET http://localhost:8080/MyAPP/search?keyword=%3Cscript%3Ealert(1)%3C/script%3E&page=1&pageSize=10
+token: {{token}}
+
+> {%
+    client.test("特殊字符关键词不应导致错误", function() {
+        client.expect(response.status).to.eql(200);
+    });
+%}
+
+
+### 15. 搜索 — 超长关键词
+GET http://localhost:8080/MyAPP/search?keyword=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&page=1&pageSize=10
+token: {{token}}
+
+> {%
+    client.test("超长关键词不应导致错误", function() {
+        client.expect(response.status).to.be.oneOf([200, 400]);
+    });
+%}
