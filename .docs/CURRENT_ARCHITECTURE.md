@@ -112,7 +112,7 @@ com.itheima/
 **执行顺序**：EncodingFilter → LoginFilter → AuthFilter
 
 **AuthFilter 保护路径**：
-- 前缀：`/api/upload`、`/follow`、`/like`、`/feed`
+- 前缀：`/api/upload`、`/api/admin`、`/follow`、`/like`、`/feed`
 - 精确：`/comment/add`、`/user/changePassword`、`/coupon/grab`、`/coupon/my`
 
 #### controller 包 — 控制器
@@ -129,6 +129,7 @@ com.itheima/
 | FeedController | /feed | 63 | 关注动态流 |
 | ProfileController | /profile | 75 | 用户主页 |
 | UploadController | /api/upload/* | 162 | 上传视频/动态 |
+| MediaAdminController | /api/admin/media/* | 76 | 媒体运维：扫描/恢复 |
 | FollowController | /follow/* | 103 | 关注/取关 |
 | LikeController | /like/* | 126 | 点赞 |
 | CommentController | /comment/* | 98 | 评论 |
@@ -151,6 +152,7 @@ com.itheima/
 | ProfileService | 103 | 用户主页 | UserDao, ContentService, FollowService, LikeService |
 | FeedService | 95 | 关注动态流 | FollowDao, ContentDao, ContentService, LikeService |
 | FileUploadService | 76 | 文件上传 | - |
+| MediaAuditService | 235 | 媒体完整性扫描与恢复 | ContentDao, ContentMediaDao |
 | CouponService | 75 | 优惠券抢购 | CouponDao |
 | MenuService | 7 | 空壳（待删除） | - |
 | ImageService | 7 | 空壳（待删除） | - |
@@ -160,12 +162,12 @@ com.itheima/
 | 类 | 行数 | 对应表 | 职责 |
 |----|------|--------|------|
 | UserDao | 438 | users | 用户 CRUD |
-| ContentDao | 404 | content | 内容 CRUD + 全文搜索 |
+| ContentDao | 400 | content | 内容 CRUD + 全文搜索 + 媒体状态更新 |
 | CommentDao | 193 | comment | 评论 CRUD |
 | CouponDao | 157 | coupon, coupon_order | 优惠券 CRUD |
 | ContentLikeDao | 140 | content_like | 内容点赞 |
 | CommentLikeDao | 132 | comment_like | 评论点赞 |
-| ContentMediaDao | 100 | content_media | 内容媒体 |
+| ContentMediaDao | 117 | content_media | 内容媒体 + 媒体状态更新 |
 | FollowDao | 95 | follow | 关注关系 |
 | ResultMap | 65 | - | ResultSet → 对象映射 |
 | CommentMediaDao | 8 | comment_media | 空壳 |
@@ -234,6 +236,7 @@ com.itheima/
 | JwtUtil | 39 | JWT 生成/校验 |
 | MyRedisPool | 37 | Redis 连接池 |
 | LogUtil | 33 | 日志工具 |
+| RequestContext | 24 | 请求上下文路径（动态拼接媒体 URL） |
 | StringUtil | 27 | 字符串校验 |
 | ResultUtil | 26 | 响应格式构建 |
 | CountRepairTool | 59 | 数据修复工具 |
@@ -258,12 +261,12 @@ com.itheima/
 | 表名 | 说明 | 关键字段 |
 |------|------|----------|
 | users | 用户表 | id, username, hashed_password, phone, follow_count, follower_count |
-| content | 内容表 | id, user_id, title, description, type, category_id, comment_count, like_count, is_deleted, create_time |
+| content | 内容表 | id, user_id, title, description, type, category_id, comment_count, like_count, is_deleted, create_time, file_exists, last_verify_time |
 | comment | 评论表 | id, content_id, user_id, message, parent_id, like_count, is_deleted |
 | follow | 关注关系表 | user_id, followed_user_id |
 | content_like | 内容点赞表 | user_id, content_id |
 | comment_like | 评论点赞表 | user_id, comment_id |
-| content_media | 内容媒体表 | content_id, url, media_type(1=视频,2=图片,3=封面), sort |
+| content_media | 内容媒体表 | content_id, url, media_type(1=视频,2=图片,3=封面), sort, file_exists, last_verify_time |
 | coupon | 优惠券表 | id, title, stock, begin_time, end_time |
 | coupon_order | 优惠券领取表 | coupon_id, user_id, coupon_code（唯一索引） |
 
@@ -345,6 +348,14 @@ com.itheima/
 | GET | /coupon/my | 我的优惠券 | ✓ |
 | POST | /coupon/grab | 抢购优惠券 | ✓ |
 
+### 7.5 媒体运维模块（当前仅要求登录，无管理员角色）
+
+| 方法 | 路径 | 说明 | 需要登录 |
+|------|------|------|----------|
+| GET | /api/admin/media/list | 扫描并返回媒体资源状态 | ✓ |
+| POST | /api/admin/media/scan | 重新扫描并回写状态 | ✓ |
+| POST | /api/admin/media/restore | 按数据库原文件名重新上传写回 | ✓ |
+
 ---
 
 ## 八、前端页面
@@ -359,6 +370,7 @@ com.itheima/
 | space.html | 499 | 个人主页 | /space.html |
 | profile.html | 360 | 个人资料 | /profile.html |
 | coupon.html | 231 | 优惠券中心 | /coupon.html |
+| recovery.html | - | 媒体资源运维（扫描/恢复） | /recovery.html |
 
 ---
 
@@ -465,6 +477,7 @@ com.itheima/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-08-08 | 1.1 | 新增媒体运维：content/content_media 增加 file_exists、last_verify_time；新增 MediaAuditService、MediaAdminController、recovery.html；jointUrl 改为动态 context path |
 | 2026-07-23 | 1.0 | 初始版本 |
 
 ---

@@ -14,6 +14,7 @@ import com.itheima.ioc.annotation.PostConstruct;
 import com.itheima.pojo.*;
 import com.itheima.util.LogUtil;
 import com.itheima.util.MyConnectionPool;
+import com.itheima.util.RequestContext;
 
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -776,6 +777,6 @@ public class ContentService {
     }
 
     private String jointUrl(String url) {
-        return "/MyAPP" + url;
+        return RequestContext.getContextPath() + url;
     }
 }

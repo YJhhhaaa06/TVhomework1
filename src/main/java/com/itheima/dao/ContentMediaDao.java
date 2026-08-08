@@ -7,6 +7,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -76,6 +77,45 @@ public class ContentMediaDao {
     }
 
 
+
+
+    // 查询全部媒体（运维扫描用）
+    public List<ContentMedia> findAllMedia(Connection conn) throws SQLException {
+        String sql = "select id,content_id,url,type,sort from content_media order by id";
+        List<ContentMedia> list = new ArrayList<>();
+        try (PreparedStatement pstmt = conn.prepareStatement(sql);
+             ResultSet rs = pstmt.executeQuery()) {
+            while (rs.next()) {
+                list.add(ResultMap.buildContentMedia(rs));
+            }
+        }
+        return list;
+    }
+
+    // 按 media id 查询单条媒体（运维恢复用）
+    public ContentMedia findMediaById(Connection conn, long mediaId) throws SQLException {
+        String sql = "select id,content_id,url,type,sort from content_media where id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, mediaId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return ResultMap.buildContentMedia(rs);
+                }
+                return null;
+            }
+        }
+    }
+
+    // 更新单条媒体的文件存在状态
+    public int updateFileExists(Connection conn, long mediaId, boolean exists, Timestamp lastVerifyTime) throws SQLException {
+        String sql = "update content_media set file_exists=?, last_verify_time=? where id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setInt(1, exists ? 1 : 0);
+            pstmt.setTimestamp(2, lastVerifyTime);
+            pstmt.setLong(3, mediaId);
+            return pstmt.executeUpdate();
+        }
+    }
 
 
     //换源

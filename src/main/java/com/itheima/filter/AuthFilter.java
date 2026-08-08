@@ -17,6 +17,7 @@ public class AuthFilter implements Filter {
 
     private static final Set<String> PROTECTED_PREFIXES = Set.of(
             "/api/upload",      // 上传视频/帖子
+            "/api/admin",       // 媒体运维（当前仅要求登录，无管理员角色）
             "/follow",      // 关注/取关
             "/like",        // 点赞/取消点赞
             "/feed"       // 关注动态

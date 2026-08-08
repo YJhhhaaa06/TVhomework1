@@ -3,7 +3,7 @@
     <Resources>
         <PostResources
             className="org.apache.catalina.webresources.DirResourceSet"
-            base="D:/stone"
+            base="D:/data/projects/VideoPlatform/stone"
             webAppMount="/upload"/>
     </Resources>
 </Context>

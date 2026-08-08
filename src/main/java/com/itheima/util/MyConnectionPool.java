@@ -63,7 +63,7 @@ private static final String URL = "jdbc:mysql://localhost:3306/TVDatabase?useSSL
         if (conn == null) return;
 
         try {
-            // 1️⃣ 检查连接是否还活着（建议加）
+            // 检查连接是否还活着（建议加）
             if (conn.isClosed()) {
                 return; // 已经关了，直接丢弃
             }
@@ -73,14 +73,14 @@ private static final String URL = "jdbc:mysql://localhost:3306/TVDatabase?useSSL
                 return;
             }
 
-            // 2️⃣ 重置状态
+            //  重置状态
             conn.setAutoCommit(true);
 
-            // 3️⃣ 归还连接池
+            //  归还连接池
             pool.addLast(conn);
 
         } catch (SQLException e) {
-            // ❗ 只要出异常 → 直接销毁连接
+            // 只要出异常 → 直接销毁连接
             try {
                 conn.close();
             } catch (SQLException ex) {

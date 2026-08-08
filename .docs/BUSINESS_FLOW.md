@@ -371,7 +371,7 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 | 1 | 解析 multipart 请求 | 文件过大返回 400 |
 | 2 | 校验文件类型（视频/图片） | 类型不支持返回 400 |
 | 3 | 生成 UUID 文件名 | - |
-| 4 | 保存文件到 D:/stone | IO 异常返回 500 |
+| 4 | 保存文件到 D:/data/projects/VideoPlatform/stone | IO 异常返回 500 |
 | 5 | 开启事务 | - |
 | 6 | 插入 content 表 | SQLException 回滚 |
 | 7 | 插入 content_media 表（视频+封面） | SQLException 回滚 |
@@ -565,6 +565,33 @@ ContentDetailVO 包含：
 - 当前用户是否点赞
 - 当前用户是否关注作者
 ```
+
+---
+
+### 3.7 媒体资源运维流程（扫描/恢复）
+
+**背景**：灾后检查发现历史上传文件大量丢失，新增媒体运维能力用于持续扫描与人工恢复。
+
+#### 扫描流程
+
+1. 运维页面 `recovery.html` 加载或点击“重新扫描”。
+2. 调用 `GET/POST /api/admin/media/*`，进入 `MediaAuditService.scanAll()`。
+3. 遍历 `content_media` 全部记录，将 `/upload/<type>/<文件名>` 映射为 `stone/<type>/<文件名>`。
+4. 用 `Files.exists()` 判断文件是否存在，回写 `content_media.file_exists`、`last_verify_time`。
+5. 按 content 聚合：任一媒体缺失则 `content.file_exists=0`，全部存在或无媒体的纯文字帖为 1。
+6. 返回统计：总数、存在、缺失、URL 异常、孤儿 media、无媒体内容。
+
+#### 恢复流程
+
+1. 页面针对缺失资源选择本地文件并提交 `POST /api/admin/media/restore`。
+2. 校验 mediaId 存在、URL 合法、上传文件扩展名与目标一致。
+3. 文件写入 `stone/<type>/<数据库原文件名>`，覆盖同名文件。
+4. 更新 `content_media.file_exists=1`，并重新计算该 content 的聚合状态。
+
+#### 权限
+
+- 当前：`/api/admin/*` 仅要求登录，无管理员角色。
+- 后续：上线管理员身份，并允许作者对自己的帖子和视频换源。
 
 ---
 
@@ -1000,6 +1027,7 @@ GET /feed?page=1&pageSize=10&token=xxx
 | `/follow/*` | 前缀 | ✓ |
 | `/like/*` | 前缀 | ✓ |
 | `/feed` | 前缀 | ✓ |
+| `/api/admin/*` | 前缀 | ✓ |
 | `/comment/add` | 精确 | ✓ |
 | `/user/changePassword` | 精确 | ✓ |
 | `/coupon/grab` | 精确 | ✓ |
@@ -1311,10 +1339,19 @@ return buildUserList(conn, ids, currentUserId);
 | GET | /coupon/my | 我的优惠券 | ✓ |
 | POST | /coupon/grab | 抢购优惠券 | ✓ |
 
+### 10.6 媒体运维相关
+
+| 方法 | 路径 | 说明 | 需要登录 |
+|------|------|------|----------|
+| GET | /api/admin/media/list | 扫描并返回媒体资源状态 | ✓ |
+| POST | /api/admin/media/scan | 重新扫描并回写状态 | ✓ |
+| POST | /api/admin/media/restore | 按数据库原文件名重新上传写回 | ✓ |
+
 ---
 
 ## 文档历史
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| 1.1 | 2026-08-08 | 新增媒体运维流程（扫描/恢复）；上传路径更新为 D:/data/projects/VideoPlatform/stone；媒体 URL 改为动态 context path |
 | 1.0 | 2026-07-23 | 初始版本 |

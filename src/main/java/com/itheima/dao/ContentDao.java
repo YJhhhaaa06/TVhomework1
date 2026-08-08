@@ -125,6 +125,30 @@ public class ContentDao {
         return list;
     }
 
+    // 查询全部未删除内容 id（运维扫描用）
+    public List<Long> findAllContentIds(Connection conn) throws SQLException {
+        List<Long> ids = new ArrayList<>();
+        String sql = "select id from content where is_deleted = 0 order by id";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql);
+             ResultSet rs = pstmt.executeQuery()) {
+            while (rs.next()) {
+                ids.add(rs.getLong("id"));
+            }
+        }
+        return ids;
+    }
+
+    // 更新内容的媒体完整性聚合状态
+    public int updateFileExists(Connection conn, long contentId, boolean exists, Timestamp lastVerifyTime) throws SQLException {
+        String sql = "update content set file_exists=?, last_verify_time=? where id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setInt(1, exists ? 1 : 0);
+            pstmt.setTimestamp(2, lastVerifyTime);
+            pstmt.setLong(3, contentId);
+            return pstmt.executeUpdate();
+        }
+    }
+
     public List<ContentCacheDTO> findAllContent() throws SQLException {
         Connection conn = null;
         try {

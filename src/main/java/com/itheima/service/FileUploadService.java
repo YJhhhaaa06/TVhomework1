@@ -17,6 +17,8 @@ import java.util.logging.Logger;
 @Component
 public class FileUploadService {
 
+    public static final String BASE_PATH = "D:/data/projects/VideoPlatform/stone";
+
     private static final Logger LOGGER =
             LogUtil.getLogger(FileUploadService.class);
 
@@ -70,7 +72,7 @@ public class FileUploadService {
         return fileName.substring(dotIndex).toLowerCase();
     }
     private String getBasePath() {   // 需要把 req 传进来
-        return "D:/stone";
+        return BASE_PATH;
     }
 }
 

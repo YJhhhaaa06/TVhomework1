@@ -44,3 +44,12 @@ out/artifacts/MyApp/WEB-INF/classes/com/itheima/controller/Test3.class
 out/artifacts/MyApp/WEB-INF/classes/com/itheima/controller/MenuController.class
 out/artifacts/MyApp/com/itheima/controller/TestServlet.class
 out/artifacts/MyApp/com/itheima/controller/Test3.class
+
+### 本地/临时文档（不提交） ###
+.docs/ARCHITECTURE_PLAN.md
+.docs/CURRENT_TASK.md
+.docs/*.sql
+.docs/DATABASE.md
+.docs/AVAILABLE_TOOLS.md
+.docs/DISASTER_CHECK_REPORT_2026-08-08.md
+.docs/DISASTER_RECOVERY_PLAN.md
