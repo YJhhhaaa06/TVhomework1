@@ -133,51 +133,14 @@ public class CommentService {
         }
     }
 
-    // ===== 删 =====
-
-    public void hideComment(long videoId) {
-        hideOrUnhideComment(videoId, true);
-    }
-
-    public void unhideComment(long videoId) {
-        hideOrUnhideComment(videoId, false);
-    }
-
-    public void hideOrUnhideComment(long videoId, boolean choose) {
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            conn.setAutoCommit(false);
-            if (choose) {
-                commentDao.hideCommentByContent(conn, videoId);
-            } else {
-                commentDao.unhideCommentByContent(conn, videoId);
-            }
-            conn.commit();
-        } catch (SQLException e) {
-            if (conn != null) {
-                try {
-                    conn.rollback();
-                    LOGGER.warning("隐藏/显示评论时事务已回滚");
-                } catch (SQLException ex) {
-                    LOGGER.log(Level.SEVERE,"事务回滚失败",ex);
-                    throw new BusinessException(ErrorCode.SERVER_ERROR, "回滚失败", ex);
-                }
-            }
-            LOGGER.log(Level.SEVERE,"评论区操作失败", e);
-            throw new ServerException("评论区操作失败");
-        } finally {
-            MyConnectionPool.release(conn);
-        }
-    }
 
     // ===== 查 =====
 
-    private List<CommentCacheDTO> findComment(long videoId) throws SQLException {
+    private List<CommentCacheDTO> findComment(long contentId) throws SQLException {
         Connection conn = null;
         try {
             conn = MyConnectionPool.getConnection();
-            return commentDao.getComments(conn, videoId);
+            return commentDao.getComments(conn, contentId);
         } catch (SQLException e) {
             LOGGER.log(Level.SEVERE,"查询评论失败",e);
             throw new ServerException("服务器异常，查询失败");
@@ -186,30 +149,7 @@ public class CommentService {
         }
     }
 
-    public List<CommentVO> getComment(long contentId) {
-        try {
-            List<CommentCacheDTO> wholeList = findComment(contentId);
-            List<CommentCacheDTO> tree = buildCommentTree(wholeList);
-            return convertToCommentVOList(tree, new HashMap<>());
-        } catch (SQLException e) {
-            LOGGER.log(Level.SEVERE,"查询评论失败,contentId="+contentId,e);
-            throw new ServerException("无法查询到id为" + contentId+"的视频或动态");
-        }
-    }
 
-    public List<CommentVO> getComment(long contentId, long userId) {
-        try {
-            List<CommentCacheDTO> wholeList = findComment(contentId);
-            List<CommentCacheDTO> tree = buildCommentTree(wholeList);
-            // 收集所有评论 ID，批量查点赞状态
-            List<Long> allCommentIds = collectAllCommentIds(tree);
-            Map<Long, Boolean> likedMap = likeService.batchIsCommentLiked(userId, allCommentIds);
-            return convertToCommentVOList(tree, likedMap != null ? likedMap : new HashMap<>());
-        } catch (SQLException e) {
-            LOGGER.log(Level.SEVERE,"查询评论失败,contentId="+contentId,e);
-            throw new NotFoundException("无法获取ID为" + contentId+"的视频或动态的评论");
-        }
-    }
 
     // ===== 收集评论 ID（递归）=====
 
@@ -245,18 +185,4 @@ public class CommentService {
         }
     }
 
-    // ===== 统计 =====
-
-    public int countReplies(CommentCacheDTO ccVO) {
-        int count = 0;
-        List<CommentCacheDTO> children = ccVO.getChildren();
-        if (children == null || children.isEmpty()) {
-            return 0;
-        }
-        for (CommentCacheDTO child : children) {
-            count += 1;
-            count += countReplies(child);
-        }
-        return count;
-    }
 }

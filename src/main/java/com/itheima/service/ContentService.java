@@ -257,20 +257,11 @@ public class ContentService {
 
     // ===== 查询（缓存）=====
 
-    public List<ContentVO> getContentList() {
-        return recommendList;
-    }
 
-    public List<ContentVO> getRecommend(int limit) {
-        List<ContentVO> list = new ArrayList<>(recommendList);
-        Collections.shuffle(list);
-        int size = Math.min(limit, list.size());
-        return list.subList(0, size);
-    }
 
     public ContentCacheDTO getContentFromCache(long contentId) {
-        if (isContentExpired(contentId)) {
-            evictContent(contentId);
+        if (isContentExpired(contentId)) {//如果content在缓存中已经过期或不存在
+            evictContent(contentId);//那就把这个ID的content从缓存中清除
         }
         ContentCacheDTO dto = contentCache.get(contentId);
         if (dto == null) {
@@ -280,26 +271,6 @@ public class ContentService {
         return dto;
     }
 
-    // ===== 查询（DB，不走缓存）=====
-
-    public ContentCacheDTO getContentById(long contentId) {
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            ContentCacheDTO dto = contentDao.findContent(conn, contentId);
-            if (dto == null) {
-                return null;
-            }
-            Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, dto.getId());
-            buildContentMedia(dto, mediaMap);
-            return dto;
-        } catch (SQLException e) {
-            LOGGER.log(Level.SEVERE, "查询内容失败, contentId=" + contentId, e);
-            throw new ConflictException(e.getMessage());
-        } finally {
-            MyConnectionPool.release(conn);
-        }
-    }
 
     // ===== 搜索 =====
 
@@ -332,23 +303,6 @@ public class ContentService {
     }
 
     // ===== 组装响应 VO =====
-
-    public ContentVO getContentVO(long contentId, Long userId) {
-        ContentCacheDTO cacheDTO = getContentFromCache(contentId);
-        if (cacheDTO == null) {
-            return null;
-        }
-
-        ContentVO cVO = new ContentVO();
-        copyToContentVO(cVO, cacheDTO);
-
-        if (userId != null) {
-            fillContentLikeStatus(cVO, contentId, userId);
-            fillFollowStatus(cVO, userId);
-        }
-
-        return cVO;
-    }
 
     public ContentDetailVO getContentDetailVO(long contentId, Long userId) {
         ContentCacheDTO cacheDTO = getContentFromCache(contentId);
@@ -441,13 +395,6 @@ public class ContentService {
 
     // ===== 点赞状态填充 =====
 
-    private void fillContentLikeStatus(ContentVO cVO, long contentId, long userId) {
-        Map<Long, Boolean> likedMap = likeService.batchIsContentLiked(userId, List.of(contentId));
-        if (likedMap != null) {
-            Boolean liked = likedMap.get(contentId);
-            cVO.setIsLiked(liked != null && liked);
-        }
-    }
 
     private void fillContentLikeStatus(ContentDetailVO cdVO, long contentId, long userId) {
         Map<Long, Boolean> likedMap = likeService.batchIsContentLiked(userId, List.of(contentId));
@@ -522,20 +469,7 @@ public class ContentService {
         }
     }
 
-    private void fillFollowStatus(ContentVO vo, Long userId) {
-        if (userId == null || vo == null) return;
 
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            Set<Long> followedSet = followDao.getFollowedIds(conn, userId, List.of(vo.getAuthorId()));
-            vo.setIsFollowed(followedSet.contains(vo.getAuthorId()));
-        } catch (SQLException e) {
-            LOGGER.log(Level.WARNING, "填充关注状态失败, userId=" + userId, e);
-        } finally {
-            MyConnectionPool.release(conn);
-        }
-    }
 
     private void fillFollowStatus(ContentDetailVO vo, Long userId) {
         if (userId == null || vo == null) return;
@@ -672,16 +606,6 @@ public class ContentService {
         return contentDao.addContent(conn, userId, uc.getType(), title, description, categoryId);
     }
 
-    public void deleteContent(long contentId, long userId) {
-        ContentCacheDTO dto = contentCache.get(contentId);
-        if (dto != null) {
-            removeFromIndex(contentId, dto.getType(), dto.getCategoryId());
-        }
-        evictContent(contentId);
-        synchronized (recommendList) {
-            recommendList.removeIf(cvo -> cvo.getId() == contentId);
-        }
-    }
 
     // ===== 评论缓存实时更新 =====
 

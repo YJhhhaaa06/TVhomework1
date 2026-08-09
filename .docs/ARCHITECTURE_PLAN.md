@@ -57,8 +57,8 @@
 | 层级/包 | 文件数 | 代码行数 | 说明 |
 |---------|-------:|---------:|------|
 | controller | 18 | 1,205 | 含 1 个遗留测试类 Test3 与遗留 UploadServlet |
-| service | 13 | 2,377 | 含 2 个空壳（MenuService、ImageService） |
-| dao | 10 | 1,634 | 含 1 个空壳（CommentMediaDao） |
+| service | 13 | 2,236 | 含 2 个空壳（MenuService、ImageService） |
+| dao | 10 | 1,160 | 含 1 个空壳（CommentMediaDao） |
 | pojo | 13 | 614 | 含灾后新增 MediaAuditItem/MediaAuditResult/RestoreResult |
 | DTO | 7 | 206 | 包名大写，不符合 Java 规范 |
 | command | 8 | 327 | 与 DTO/pojo 职责重叠，待合并 |
@@ -67,18 +67,18 @@
 | ioc | 5 | 226 | 仅支持字段注入 |
 | util | 11 | 370 | 含 RequestContext（灾后新增） |
 | 根包 CouponAdmin | 1 | 55 | 运维工具类混在主代码 |
-| **合计** | **97** | **7,174** | |
+| **合计** | **97** | **6,559** | |
 
 关键大类的实测行数：
 
 | 类 | 行数 | 说明 |
 |----|-----:|------|
-| ContentService | 785 | 缓存 + 查询 + 发布 + 状态填充混合 |
-| UserDao | 438 | 含大量自取连接的包装方法 |
-| ContentDao | 429 | 含全文搜索、媒体状态更新 |
+| ContentService | 709 | 缓存 + 查询 + 发布 + 状态填充混合 |
+| UserDao | 250 | 含自取连接的包装方法（部分已随清理删除） |
+| ContentDao | 290 | 含全文搜索、媒体状态更新 |
 | LikeService | 371 | 点赞业务 |
 | LikeCacheService | 264 | Redis 点赞缓存 |
-| CommentService | 262 | 评论业务 |
+| CommentService | 188 | 评论业务（已清理未接线方法） |
 | MediaAuditService | 259 | 灾后新增媒体审计 |
 | UserService | 242 | 认证 + 资料 |
 
@@ -87,8 +87,8 @@
 | 维度 | 问题 | 严重程度 |
 |------|------|----------|
 | **灾备** | 无自动备份机制；8/8 事故暴露数据库行丢失与上传文件全丢风险 | **极高** |
-| **分层** | ContentService 785 行，职责过厚；Service 与 DAO 连接管理方式混用 | 高 |
-| **安全** | `/api/admin/media/*` 对所有登录用户开放（无管理员角色）；ContentDao 删除/隐藏 SQL 列名错误（`content_id` → `id`）；UploadController `action==null` 分支缺 `return` 会 NPE | 高 |
+| **分层** | ContentService 709 行，职责过厚；Service 与 DAO 连接管理方式混用 | 高 |
+| **安全** | `/api/admin/media/*` 对所有登录用户开放（无管理员角色）；UploadController `action==null` 分支缺 `return` 会 NPE；内容删除功能已确认不做，相关代码已清理 | 高 |
 | **异常** | 业务代码混用 `RuntimeException("USER_NOT_FOUND")` 等英文常量；Controller 各自 catch 并 `printStackTrace()` | 高 |
 | **配置** | 数据库/Redis/JWT/上传路径/日志路径全部硬编码 | 高 |
 | **日志** | `e.printStackTrace()` 约 20 处；`logs/` 目录缺失导致文件日志实际不可用 | 中 |
@@ -106,6 +106,7 @@
 - RedisTest.java、dao/daotest.java、exception/Test.java 已删除；`web/` 空壳目录已不存在。
 - 灾后重建已完成：`RequestContext` 动态 context path（替换 `/MyAPP` 硬编码）、DB 新增 `file_exists`/`last_verify_time` 列、MediaAuditService/MediaAdminController/recovery.html、34 个视频文件写回。
 - 一键测试脚本 `tools/run_tests.py`（Maven 打包 → 独立 Tomcat 18080 → pytest → 关停）已可用，8/8 验证 35/35 通过。
+- 2026-08-09：手动清理未引用/未接线方法（记录见 `.docs/REMOVE_CODE.md`），Service 12 个、DAO 31 个方法移除；`deleteContent`/隐藏/删除类功能确认不做。
 
 ---
 
@@ -121,7 +122,7 @@
 
 | 指标 | 当前（2026-08-09） | 目标 |
 |------|--------------------|------|
-| 最大类行数 | ContentService 785 行 | 所有类 < 300 行（含 UserDao 438、ContentDao 429、LikeService 371） |
+| 最大类行数 | ContentService 709 行 | 所有类 < 300 行（当前最大 ContentService 709、LikeService 371） |
 | 代码重复率 | ~15%（估计） | < 5% |
 | 圈复杂度 | 部分方法 > 15（估计） | 所有方法 < 10 |
 | 单元测试 | 0 个 JUnit 用例 | 核心 Service（用户/内容/点赞/评论）关键路径有单测 |
@@ -135,7 +136,7 @@
 ### 3.1 当前问题
 
 ```
-问题1：ContentService（785行）= 缓存管理 + 业务查询 + 内容发布 + 状态填充 + 缓存同步
+问题1：ContentService（709行）= 缓存管理 + 业务查询 + 内容发布 + 状态填充 + 缓存同步
 问题2：事务连接在多个 Service 内手工 setAutoCommit(false)/commit/rollback，重复且易漏
 问题3：DAO 连接管理方式不统一
        - 部分 DAO（UserDao/ContentDao 等）自己 getConnection/release
@@ -164,10 +165,10 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 3.3 ContentService 拆分（785 行 → 4 个类）
+### 3.3 ContentService 拆分（709 行 → 4 个类）
 
 ```
-ContentService (785行)
+ContentService (709行)
 │
 ├──→ ContentCacheManager（@Component 实例 Bean）
 │    - 迁移 recommendList/contentCache/commentCache/contentTimestamps/typeCategoryIndex
@@ -176,10 +177,10 @@ ContentService (785行)
 │    - 所有共享 Map 保持现有 synchronized 语义并补线程安全注释
 │
 ├──→ ContentQueryService
-│    - getRecommend() / getRecommendByFilter() / search() / getContentVO() / getContentDetailVO()
+│    - getRecommendByFilter() / search() / getContentDetailVO() / getCommentsForContent()
 │
 ├──→ ContentPublishService
-│    - addVideo() / addPost() / deleteContent()（语义见 TASK-004）
+│    - addVideo() / addPost()（删除功能已确认不做，相关方法已移除）
 │
 └──→ ContentStatusFiller
      - fillLikeAndFollowBatch() / fillFollowStatus() / fillContentLikeStatus()
@@ -477,7 +478,6 @@ System.out.println("Business"+e.getMessage()); // ✗ 控制台杂音
 | 风险 | 位置 | 严重程度 |
 |------|------|----------|
 | 运维接口无管理员权限 | `/api/admin/media/*` 仅要求登录，任何登录用户可扫描/恢复任意媒体 | 高 |
-| 删除 SQL 列名错误 | ContentDao deleteContent/hideContent/unhideContent 用 `content_id`，实际列 `id` | 高 |
 | UploadController NPE | `action == null` 分支写错误响应后未 `return`，继续执行 switch | 高 |
 | 密钥/路径硬编码 | JWT 密钥、DB 密码、上传路径 | 高 |
 | SQL 注入 | 已复查：全部参数化，风险已排除，保留复查任务 | 低 |
@@ -497,11 +497,10 @@ System.out.println("Business"+e.getMessage()); // ✗ 控制台杂音
 
 | 接口/方法 | 校验逻辑 |
 |-----------|----------|
-| 内容删除（TASK-004 实现后） | userId == authorId 或 role == 1 |
 | /user/changePassword | 已使用 token 中的 userId，无需二次校验 |
 | /api/admin/media/restore | 仅管理员 |
 
-> v1.0 中"DELETE /content/{id}、DELETE /comment/{id}"权限表基于不存在的接口，v2.0 已删除；评论暂无删除接口。
+> v1.0 中"DELETE /content/{id}、DELETE /comment/{id}"权限表基于不存在的接口，v2.0 已删除；2026-08-09 起内容删除功能确认不做，相关 Service/DAO 方法已清理；评论暂无删除接口。
 
 ### 8.5 XSS / CSRF（P2，可选）
 
@@ -660,3 +659,4 @@ webapp/
 |------|------|------|
 | 1.0 | 2026-07-23 | 初始版本 |
 | 2.0 | 2026-08-09 | 基于 8/8 灾后状态全面修订：取消 Application 层、DAO 事务方案改为 TransactionTemplate、补齐灾后收尾/备份/清理/运维权限、测试策略去掉 H2/MockMvc、代码规模与硬编码清单刷新 |
+| 2.1 | 2026-08-09 | 同步清理结果：删除功能确认不做，风险清单/拆分方案/权限表更新；代码规模按清理后实测刷新 |

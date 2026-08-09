@@ -37,6 +37,7 @@
 - `web/` 空壳目录已不存在。
 - 灾后重建：RequestContext 动态 context path；DB 新增 `file_exists`/`last_verify_time`；MediaAuditService/MediaAdminController/recovery.html；34 个视频文件写回。
 - 一键测试脚本 tools/run_tests.py 可用，8/8 验证 35/35 pytest 通过。
+- 2026-08-09：手动清理完成（记录见 `.docs/REMOVE_CODE.md`）：移除 Service 12 个方法、DAO 31 个方法及 CouponDao 注释 DDL；`deleteContent`/隐藏/删除类功能确认不做。
 
 ---
 
@@ -51,7 +52,7 @@
 - **优先级**: P0
 - **预估工时**: 1-2 天（用户人工）
 - **前置依赖**: 无
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-09 完成，清理记录见 `.docs/REMOVE_CODE.md`）
 
 #### 任务描述
 
@@ -70,26 +71,16 @@
 
 ---
 
-### TASK-002: 修复 ContentDao 删除/隐藏 SQL 列名 bug
+### TASK-002: 【已取消】修复 ContentDao 删除/隐藏 SQL 列名 bug
 
 - **优先级**: P0
 - **预估工时**: 15 分钟
 - **前置依赖**: 无
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-09 取消：`deleteContent/hideContent/unhideContent` 已随清理删除，无需修复列名）
 
 #### 任务描述
 
-`ContentDao.deleteContent/hideContent/unhideContent` 使用了不存在的列 `content_id`，实际列名为 `id`，调用会抛 SQL 异常。
-
-#### 涉及文件
-
-`src/main/java/com/itheima/dao/ContentDao.java`（约 34/42/50 行）
-
-#### 验证标准
-
-- [ ] 三处 SQL 改为 `WHERE id = ?`
-- [ ] `mvn compile` 通过
-- [ ] 简单调用验证不抛 SQL 异常
+原任务为修复 `ContentDao.deleteContent/hideContent/unhideContent` 的 `content_id` 列名错误。2026-08-09 决策：删除/隐藏内容功能不做，三个方法随清理一并删除，本任务不再需要。
 
 ---
 
@@ -115,27 +106,16 @@
 
 ---
 
-### TASK-004: 补齐 ContentService.deleteContent 语义
+### TASK-004: 【已取消】补齐 ContentService.deleteContent 语义
 
 - **优先级**: P0
 - **预估工时**: 1 小时
-- **前置依赖**: TASK-002
-- **状态**: `[ ]`
+- **前置依赖**: 无
+- **状态**: `[x]`（2026-08-09 取消：删除功能确认不做，相关方法已删除）
 
 #### 任务描述
 
-当前 `deleteContent` 只清缓存，不删数据库、不删文件、不校验作者。v2.0 决策：实现为"作者校验 → 逻辑删除（is_deleted=1，可审计可恢复）→ 删除关联媒体文件 → 清缓存/索引/点赞缓存"。**本次不暴露 HTTP 接口**，暴露与否由后续安全阶段决定。
-
-#### 涉及文件
-
-`src/main/java/com/itheima/service/ContentService.java`、`src/main/java/com/itheima/service/FileUploadService.java`
-
-#### 验证标准
-
-- [ ] 非作者调用返回 403
-- [ ] DB 中该行 `is_deleted=1`
-- [ ] 对应 media 文件被删除，点赞缓存被清除
-- [ ] `python tools/run_tests.py all` 全绿
+原任务为补全 `ContentService.deleteContent`（作者校验 + 逻辑删除 + 文件删除 + 缓存清理）。2026-08-09 决策：删除视频/帖子功能暂不做，Service 与 DAO 相关方法已随清理删除；`FileUploadService.deleteFileQuietly` 仍由上传失败回滚使用，保留。
 
 ---
 
@@ -831,16 +811,16 @@ ContentService 注入 ContentCacheManager/ContentStatusFiller，保留查询与�
 
 - **优先级**: P1
 - **预估工时**: 1 小时
-- **前置依赖**: TASK-004
+- **前置依赖**: TASK-037
 - **状态**: `[ ]`
 
 #### 任务描述
 
-内容删除（若后续暴露接口）校验作者或管理员；确认修改密码使用 token userId；运维恢复仅管理员（依赖 TASK-037）。
+确认修改密码使用 token 中的 userId；运维恢复仅管理员（依赖 TASK-037）。内容删除功能已取消，无删除接口需要校验。
 
 #### 验证标准
 
-- [ ] 非作者/非管理员无法删除他人内容
+- [ ] 普通用户无法执行运维扫描/恢复
 - [ ] 越权返回 403
 
 ---
@@ -937,7 +917,7 @@ MyConnectionPool 增加 MAX_SIZE（配置 `db.pool.maxSize`，默认 20）与获
 
 #### 任务描述
 
-添加 JUnit Jupiter 5.x 与 Mockito 5.x（scope=test）。**具体版本以离线 m2-repo（D:/data/projects/VideoPlatform/stone/temp/m2-repo）中可用且兼容 JDK 25 为准**；若无对应包，暂停本任务并请用户补充离线仓库。
+添加 JUnit Jupiter 5.x 与 Mockito 5.x（scope=test）。**具体版本以离线 m2-repo（D:/dev/WorkSpace/VideoPlatform/maven）中可用且兼容 JDK 25 为准**；若无对应包，暂停本任务并请用户补充离线仓库。
 
 #### 验证标准
 
@@ -1009,7 +989,7 @@ Mock DAO/CacheManager/StatusFiller，覆盖推荐、搜索、详情、发布、�
 
 #### 任务描述
 
-补充：内容删除（逻辑删除+文件消失）、管理员权限（403/200）、媒体运维扫描/恢复、备份脚本校验。
+补充：管理员权限（403/200）、媒体运维扫描/恢复、备份脚本校验。
 
 #### 验证标准
 
@@ -1156,9 +1136,9 @@ Filter 统计响应时间与错误率，日志输出；连接池使用率统计�
 ```
 阶段零（灾后收尾与备份）
 ├── TASK-001 手动清理未引用方法（用户执行）──────────────┐
-├── TASK-002 ContentDao 列名 bug ────────────────────────┤
+├── TASK-002 列名 bug（已取消）─────────────────────────┤
 ├── TASK-003 UploadController return ────────────────────┤
-├── TASK-004 deleteContent 语义 ◄── TASK-002 ────────────┤
+├── TASK-004 deleteContent（已取消）────────────────────┤
 ├── TASK-005 欢迎页 ─────────────────────────────────────┤
 ├── TASK-006 LogUtil 目录 ───────────────────────────────┤
 ├── TASK-007 数据清理 ◄── TASK-008（先备份） ─────────────┤
@@ -1204,7 +1184,7 @@ Filter 统计响应时间与错误率，日志输出；连接池使用率统计�
 阶段六（安全）
 ├── TASK-036 SQL 注入复查
 ├── TASK-037 管理员角色 ◄── TASK-008
-├── TASK-038 所有权校验 ◄── TASK-004/037
+├── TASK-038 所有权校验 ◄── TASK-037
 └── TASK-039 XSS/CSRF
 
 阶段七（IoC/连接池）
@@ -1235,7 +1215,7 @@ Filter 统计响应时间与错误率，日志输出；连接池使用率统计�
 
 ## 推荐执行顺序
 
-1. **第一批（灾后收尾）**：TASK-008 → TASK-001 → TASK-002 → TASK-003 → TASK-004 → TASK-005 → TASK-006 → TASK-007 → TASK-009
+1. **第一批（灾后收尾）**：TASK-008 → TASK-001 → TASK-003 → TASK-005 → TASK-006 → TASK-007 → TASK-009（TASK-002/004 已取消）
 2. **第二批（基础清理）**：TASK-010 → TASK-011 → TASK-012 → TASK-013 → TASK-014 → TASK-015
 3. **第三批（配置外部化）**：TASK-016 → TASK-017 → TASK-018 → TASK-019 → TASK-020 → TASK-021 → TASK-022
 4. **第四批（异常与日志）**：TASK-023 → TASK-024 → TASK-025 → TASK-026 → TASK-027 → TASK-028
@@ -1255,3 +1235,4 @@ Filter 统计响应时间与错误率，日志输出；连接池使用率统计�
 |------|------|------|
 | 1.0 | 2026-07-23 | 初始版本，30 个任务 |
 | 2.0 | 2026-08-09 | 全面修订：基于 8/8 灾后状态重排为 54 个任务；新增阶段零（手动清理未引用方法、bug 修复、数据清理、备份自动化）；补齐事务/DAO、测试、安全、前端、部署等缺失阶段；任务状态与已完成事项同步 |
+| 2.1 | 2026-08-09 | 同步清理结果：TASK-001 完成，TASK-002/004 随"删除功能不做"取消，安全/测试任务与依赖图更新；离线仓库路径更新 |

@@ -28,34 +28,7 @@ public class ContentMediaDao {
         }
     }
 
-    //删除视频所有url
-    public int deleteContentMedia(Connection conn,long contentId) throws SQLException{
-        String sql = "delete from content_media where content_id=?";
-        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setLong(1, contentId);
-            return pstmt.executeUpdate();
-        }
-    }
 
-    //根据id删除url
-    public int deleteSpecificContentMedia(Connection conn,long mediaId) throws SQLException{
-        String sql = "delete from content_media where id=?";
-        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setLong(1, mediaId);
-            return pstmt.executeUpdate();
-        }
-    }
-
-    //根据contentId,type和sort删除
-    public int deleteSpecificContentMedia(Connection conn,long contentId,int type,int sort) throws SQLException{
-        String sql = "delete from content_media where content_id=? and type=? and sort=?";
-        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setLong(1, contentId);
-            pstmt.setInt(2,type);
-            pstmt.setInt(3,sort);
-            return pstmt.executeUpdate();
-        }
-    }
 
 
     //根据contentId查询所有media
@@ -117,20 +90,6 @@ public class ContentMediaDao {
         }
     }
 
-
-    //换源
-    public int updateMedia(Connection conn,long contentId,int type,int sort, String url) throws SQLException {
-        String sql="update video set url=? where content_id=? and type=? and sort=?";
-        int rows;
-        try(PreparedStatement pstmt=conn.prepareStatement(sql)){
-            pstmt.setString(1,url);
-            pstmt.setLong(2,contentId);
-            pstmt.setInt(3,type);
-            pstmt.setInt(4,sort);
-            rows=pstmt.executeUpdate();
-        }
-        return rows;
-    }
 
 
 

@@ -102,22 +102,6 @@ public class ContentLikeDao {
         }
     }
 
-    /**
-     * 查询用户所有点赞过的内容 ID（用于缓存全量加载）
-     */
-    public Set<Long> findAllLikedContentIds(Connection conn, long userId) throws SQLException {
-        String sql = "SELECT content_id FROM content_like WHERE user_id = ?";
-        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setLong(1, userId);
-            Set<Long> result = new HashSet<>();
-            try (ResultSet rs = pstmt.executeQuery()) {
-                while (rs.next()) {
-                    result.add(rs.getLong("content_id"));
-                }
-            }
-            return result;
-        }
-    }
 
     /**
      * 查询某个内容的所有点赞者（content 为中心，用于缓存回填）
