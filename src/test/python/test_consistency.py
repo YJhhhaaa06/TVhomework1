@@ -161,59 +161,11 @@ class TestContentLikeConsistency:
 @pytest.mark.consistency
 class TestCommentLikeConsistency:
 
-    def _get_first_comment_id(self, base_url, content_id, token_a):
-        """Helper: get the first commentId from a content's comment list.
-
-        Note: Cache is lazy-loaded. Must call content detail first to trigger
-        cache initialization before querying comments.
-        """
-        # Step 1: Trigger cache load by querying content detail
-        resp = requests.get(
-            f"{base_url}/search/IdSearch",
-            params={"contentId": content_id},
-            headers={"token": token_a},
-            timeout=10,
-        )
-        # Step 2: Now query comments (cache should be loaded)
-        resp = requests.get(
-            f"{base_url}/comment/show",
-            params={"contentId": content_id},
-            headers={"token": token_a},
-            timeout=10,
-        )
-        body = resp.json()
-        assert body.get("code") == 200, f"Comment list failed: {body}"
-        comments = body.get("data", [])
-        if len(comments) > 0:
-            return comments[0]["commentId"]
-
-        # If still no comments, try known content IDs with comments
-        for known_id in [65, 74, 110, 80, 68, 70]:
-            # Trigger cache load
-            requests.get(
-                f"{base_url}/search/IdSearch",
-                params={"contentId": known_id},
-                headers={"token": token_a},
-                timeout=10,
-            )
-            resp = requests.get(
-                f"{base_url}/comment/show",
-                params={"contentId": known_id},
-                headers={"token": token_a},
-                timeout=10,
-            )
-            body = resp.json()
-            comments = body.get("data", [])
-            if len(comments) > 0:
-                return comments[0]["commentId"]
-
-        pytest.skip("No content with comments found in database")
-
     def test_C04_comment_like_count_increments(
-        self, base_url, token_b, token_a, sample_content_id
+        self, base_url, token_b, sample_comment_id
     ):
         """C-04: After liking a comment, likeCount should increase by 1."""
-        comment_id = self._get_first_comment_id(base_url, sample_content_id, token_a)
+        comment_id = sample_comment_id
 
         before = get_comment_like_count(base_url, comment_id, token_b)
 
@@ -232,10 +184,10 @@ class TestCommentLikeConsistency:
             f"Comment likeCount should be {before + 1}, got {after}"
 
     def test_C05_comment_unlike_count_restores(
-        self, base_url, token_b, token_a, sample_content_id
+        self, base_url, token_b, sample_comment_id
     ):
         """C-05: After unliking a comment, likeCount should decrease by 1."""
-        comment_id = self._get_first_comment_id(base_url, sample_content_id, token_a)
+        comment_id = sample_comment_id
 
         # Record count before unlike (userB liked this comment in C-04)
         count_before = get_comment_like_count(base_url, comment_id, token_b)
@@ -366,7 +318,7 @@ class TestCommentCountConsistency:
 class TestCouponStockConsistency:
 
     def test_C10_coupon_stock_decrements(
-        self, base_url, token_a, available_coupon_id
+        self, base_url, token_b, available_coupon_id
     ):
         """C-10: After grabbing a coupon, stock should decrease by 1."""
         if available_coupon_id is None:
@@ -387,10 +339,11 @@ class TestCouponStockConsistency:
         if stock_before is None:
             pytest.skip(f"Coupon {available_coupon_id} not found in list response")
 
-        # Grab the coupon (may already be grabbed by user_a in smoke test)
+        # Use userB so this test does not collide with E-09 (userA) in a
+        # combined run.
         resp = requests.post(
             f"{base_url}/coupon/grab",
-            headers={"token": token_a, "Content-Type": "application/json"},
+            headers={"token": token_b, "Content-Type": "application/json"},
             json={"couponId": available_coupon_id},
             timeout=10,
         )

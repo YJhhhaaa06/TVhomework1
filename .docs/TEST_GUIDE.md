@@ -38,13 +38,13 @@ pip install -r requirements.txt
 
 1. **启动 MySQL** - 确保 `TVDatabase` 数据库可访问
 2. **启动 Redis** - 端口 6379
-3. **启动 Tomcat** - 在 IDEA 中运行，确保应用部署到 `/MyAPP`
+3. **启动 Tomcat** - 在 IDEA 中运行（当前运行配置 `CONTEXT_PATH="/"`，应用部署在根路径）
 
 ### 2.2 验证服务可用
 
 ```bash
 # 测试首页推荐接口
-curl http://localhost:8080/MyAPP/start
+curl http://localhost:8080/start
 
 # 预期返回：
 # {"msg":"success","code":200,"data":[...]}
@@ -57,7 +57,7 @@ curl http://localhost:8080/MyAPP/start
 ### 3.1 运行全部测试
 
 ```bash
-cd D:\javaproject\TVtest\202604\untitled\src\test\python
+cd D:\javaproject\VideoPlatform\TVhomework1\src\test\python
 pytest -v
 ```
 
@@ -87,6 +87,16 @@ pytest test_boundary.py -v
 ```bash
 pytest test_smoke.py::TestUserModule::test_S01_register_returns_token -v
 ```
+
+### 3.5 使用自动化脚本（Codex 沙盒）
+
+推荐在沙盒内直接运行：
+
+```powershell
+python tools\run_tests.py all
+```
+
+该脚本会自动完成 Maven 打包、启动独立 Tomcat（18080）、运行 pytest、关停清理，与 IDEA 的 8080 实例完全隔离。详细设计、前置条件与排查方式见 `TEST_AUTOMATION.md`。
 
 ---
 
@@ -133,7 +143,7 @@ pytest test_smoke.py::TestUserModule::test_S01_register_returns_token -v
 | S-06 | 内容详情 | 返回详情字段 |
 | S-07 | 上传视频 | 返回 contentId |
 | S-08 | 上传验证 | 详情包含 URL |
-| S-09 | 文件落盘 | D:/stone 下文件存在 |
+| S-09 | 文件落盘 | D:/data/projects/VideoPlatform/stone 下文件存在 |
 | S-10/S-11 | 点赞/取消点赞 | 计数变化正确 |
 | S-12 | 评论 | 评论成功 |
 | S-13/S-14 | 关注/取关 | 计数变化正确 |
@@ -197,11 +207,13 @@ DELETE FROM content WHERE title = 'pytest_test_video' OR title = 'pytest_test_po
 
 ### 6.3 文件存储
 
-测试上传的文件存储在 `D:/stone/` 目录下：
+测试上传的文件存储在 `D:/data/projects/VideoPlatform/stone/` 目录下：
 
-- 视频：`D:/stone/video/`
-- 图片：`D:/stone/image/`
-- 封面：`D:/stone/cover/`
+- 视频：`D:/data/projects/VideoPlatform/stone/video/`
+- 图片：`D:/data/projects/VideoPlatform/stone/image/`
+- 封面：`D:/data/projects/VideoPlatform/stone/cover/`
+
+测试默认使用真实素材上传（`D:\dev\WorkSpace\VideoPlatform\TestResource`），可通过环境变量 `TV_TEST_RESOURCE_DIR` 覆盖；服务基址可通过 `TV_BASE_URL` 覆盖。
 
 ---
 
@@ -239,7 +251,7 @@ AssertionError: No comments found for this content
 ### 7.4 文件不存在
 
 ```
-AssertionError: File not found on disk: D:/stone/xxx.mp4
+AssertionError: File not found on disk: D:/data/projects/VideoPlatform/stone/xxx.mp4
 ```
 
 **原因**：文件存储在子目录中（video/, image/, cover/）。

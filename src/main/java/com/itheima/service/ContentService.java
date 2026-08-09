@@ -653,7 +653,10 @@ public class ContentService {
 
             ContentVO cVO = new ContentVO();
             copyToContentVO(cVO, dto);
-            recommendList.add(0, cVO);
+            //初始化评论缓存
+            commentCache.put(contentId,new ArrayList<CommentCacheDTO>());
+
+            recommendList.addFirst(cVO);
             addToIndex(contentId, dto.getType(), dto.getCategoryId());
             LOGGER.info("新内容已加入缓存, contentId=" + contentId);
         } catch (Exception e) {

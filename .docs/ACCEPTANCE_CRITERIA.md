@@ -43,10 +43,10 @@
 
 | 依赖 | 要求 | 说明 |
 |------|------|------|
-| Tomcat | 运行中，端口 8080 | 应用已部署到 `/MyAPP` |
+| Tomcat | 运行中，端口 8080 | 应用部署在根路径（IDEA 运行配置 CONTEXT_PATH="/"） |
 | MySQL | 运行中，端口 3306 | 数据库 `TVDatabase` 可访问 |
 | Redis | 运行中，端口 6379 | 用于点赞缓存 |
-| 存储目录 | `D:/stone` 可读写 | 文件上传目标目录 |
+| 存储目录 | `D:/data/projects/VideoPlatform/stone` 可读写 | 文件上传目标目录 |
 
 ### 2.2 测试数据准备
 
@@ -87,7 +87,7 @@
 |------|--------|------|----------|--------|
 | S-07 | 上传视频 | POST /api/upload/video | code=200，返回 contentId | P0 |
 | S-08 | 上传验证 | 用 contentId 查详情 | 返回的 videoUrl 可访问 | P0 |
-| S-09 | 文件落盘 | 检查本地文件 | D:/stone 下文件存在且大小 > 0 | P0 |
+| S-09 | 文件落盘 | 检查本地文件 | D:/data/projects/VideoPlatform/stone 下文件存在且大小 > 0 | P0 |
 
 **上传验证链路**：
 ```
@@ -211,17 +211,17 @@ assert "token" in response["data"]
 # 验证链路
 1. 上传接口返回 contentId
 2. 用 contentId 调详情接口获取 URL
-3. URL 格式：/MyAPP/upload/{filename}
-4. 本地路径：D:/stone/{filename}
+3. URL 格式：/upload/{filename}
+4. 本地路径：D:/data/projects/VideoPlatform/stone/{filename}
 5. 检查文件存在且大小 > 0
 
 # 代码示例
 content_id = upload_response["data"]["contentId"]
 detail = get_detail(content_id)
-video_url = detail["data"]["videoUrl"]  # /MyAPP/upload/abc-123.mp4
+video_url = detail["data"]["videoUrl"]  # /upload/abc-123.mp4
 filename = video_url.split("/")[-1]
-assert os.path.exists(f"D:/stone/{filename}")
-assert os.path.getsize(f"D:/stone/{filename}") > 0
+assert os.path.exists(f"D:/data/projects/VideoPlatform/stone/{filename}")
+assert os.path.getsize(f"D:/data/projects/VideoPlatform/stone/{filename}") > 0
 ```
 
 ### 6.3 计数一致性验证
@@ -251,6 +251,7 @@ src/test/python/
 ├── test_smoke.py        # Level 1: 冒烟测试
 ├── test_consistency.py  # Level 2: 数据一致性
 ├── test_boundary.py     # Level 3: 边界与异常
+├── pytest.ini           # 注册 smoke/consistency/boundary markers
 └── requirements.txt     # pytest, requests
 ```
 
@@ -271,7 +272,7 @@ test_boundary_auth_no_token.py
 # conftest.py
 @pytest.fixture(scope="session")
 def base_url():
-    return "http://localhost:8080/MyAPP"
+    return "http://localhost:8080"
 
 @pytest.fixture(scope="session")
 def user_a_token(base_url):
@@ -415,7 +416,7 @@ Level 3: 边界与异常
 
 **TEST-02 详情**：
 
-**问题**：测试脚本假设文件在 `D:/stone/`，实际在 `D:/stone/video/` 等子目录。
+**问题**：测试脚本假设文件在 `D:/data/projects/VideoPlatform/stone/`，实际在 `D:/data/projects/VideoPlatform/stone/video/` 等子目录。
 
 **修复**：从 URL 中提取完整相对路径。
 
