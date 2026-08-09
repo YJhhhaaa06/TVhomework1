@@ -39,6 +39,7 @@
 - 一键测试脚本 tools/run_tests.py 可用，8/8 验证 35/35 pytest 通过。
 - 2026-08-09：手动清理完成（记录见 `.docs/REMOVE_CODE.md`）：移除 Service 12 个方法、DAO 31 个方法及 CouponDao 注释 DDL；`deleteContent`/隐藏/删除类功能确认不做。
 - 2026-08-09：TASK-003/005/006/008/009 完成（UploadController 补 return、欢迎页 index.html、LogUtil 自动建 logs 目录、tools/backup.py、.http 基址/token/素材路径修正）。
+- 2026-08-09：TASK-007 完成（数据清理：pytest/smoke 测试内容 46+2 条、孤儿 content_media 7 条、孤儿 comment_like 1 条；中文标题测试内容保留，遗留表未 DROP，报告见 CLEANUP_REPORT）。
 
 ---
 
@@ -165,7 +166,7 @@
 - **优先级**: P0
 - **预估工时**: 1 天
 - **前置依赖**: TASK-008（先备份）
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-09 完成，报告见 `.docs/CLEANUP_REPORT_2026-08-09.md`）
 
 #### 任务描述
 
@@ -173,14 +174,14 @@
 
 | 清理项 | 说明 |
 |--------|------|
-| 测试内容污染 | 23 条 `pytest_test_video`/`smoke_test_video` 及 3 条中文测试标题内容，连同其 media/like/comment |
+| 测试内容污染 | `pytest_test_video`/`smoke_test_video` 前缀内容及其 media/comment（2026-08-09 用户决策：中文标题的测试内容保留，不纳入清理） |
 | 孤儿 content_media | 7 条（media id 50~56，指向不存在的 content 56~58）：先记录 URL 到清理报告，再删除 |
 | 孤儿 comment_like | 1 条指向不存在的 comment 54，删除 |
-| 遗留表 | `video`/`videoinfo` 确认代码无引用后 DROP（决策：保留 `comment_media` 空表结构，不动） |
+| 遗留表 | `video`/`videoinfo` 已确认代码无引用，但暂不 DROP（2026-08-09 用户决策：先保留，仅清理数据时不涉及）；`comment_media` 空表结构保留不动 |
 
 #### 涉及文件
 
-新增 `tools/cleanup_data.py`（Python + SQL，输出清理报告到 `.docs/`）
+`tools/cleanup_data.py` 已创建（默认只读预览，`--execute` 才写库；执行前自动备份；输出清理报告到 `.docs/`）
 
 #### 验证标准
 
@@ -1238,3 +1239,4 @@ Filter 统计响应时间与错误率，日志输出；连接池使用率统计�
 | 2.0 | 2026-08-09 | 全面修订：基于 8/8 灾后状态重排为 54 个任务；新增阶段零（手动清理未引用方法、bug 修复、数据清理、备份自动化）；补齐事务/DAO、测试、安全、前端、部署等缺失阶段；任务状态与已完成事项同步 |
 | 2.1 | 2026-08-09 | 同步清理结果：TASK-001 完成，TASK-002/004 随"删除功能不做"取消，安全/测试任务与依赖图更新；离线仓库路径更新 |
 | 2.2 | 2026-08-09 | TASK-003/005/006/008/009 完成；备份方案改为仅数据库备份到 auto_backup（媒体由用户手动打包） |
+| 2.3 | 2026-08-09 | TASK-007 完成：清理 pytest/smoke 测试内容与孤儿数据；中文标题测试内容保留、遗留表暂不 DROP（用户决策） |

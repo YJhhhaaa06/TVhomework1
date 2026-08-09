@@ -108,6 +108,7 @@
 - 一键测试脚本 `tools/run_tests.py`（Maven 打包 → 独立 Tomcat 18080 → pytest → 关停）已可用，8/8 验证 35/35 通过。
 - 2026-08-09：手动清理未引用/未接线方法（记录见 `.docs/REMOVE_CODE.md`），Service 12 个、DAO 31 个方法移除；`deleteContent`/隐藏/删除类功能确认不做。
 - 2026-08-09：TASK-003/005/006/008/009 完成——UploadController 补 return、欢迎页 index.html、LogUtil 自动建日志目录、`tools/backup.py`（仅数据库备份到 auto_backup）、.http 测试修正。
+- 2026-08-09：TASK-007 完成——清理 pytest/smoke 测试内容（46+2 条）及孤儿 content_media/comment_like；中文标题测试内容保留，遗留表 video/videoinfo 暂不 DROP。
 
 ---
 
@@ -662,3 +663,4 @@ webapp/
 | 2.0 | 2026-08-09 | 基于 8/8 灾后状态全面修订：取消 Application 层、DAO 事务方案改为 TransactionTemplate、补齐灾后收尾/备份/清理/运维权限、测试策略去掉 H2/MockMvc、代码规模与硬编码清单刷新 |
 | 2.1 | 2026-08-09 | 同步清理结果：删除功能确认不做，风险清单/拆分方案/权限表更新；代码规模按清理后实测刷新 |
 | 2.2 | 2026-08-09 | TASK-003/005/006/008/009 完成；备份方案调整为仅数据库备份到 auto_backup，媒体备份由用户手动执行 |
+| 2.3 | 2026-08-09 | TASK-007 数据清理完成；备份与清理脚本（backup.py / cleanup_data.py）投入使用 |
