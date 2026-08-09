@@ -41,6 +41,7 @@ public class UploadController extends BaseServlet {
         String action=req.getPathInfo();
         if(action==null){
             BaseServletUtil.writeError(resp,ErrorCode.NOT_FOUND,"未识别功能");
+            return;
         }
         switch (action){
             case("/video"):

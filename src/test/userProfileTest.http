@@ -2,13 +2,13 @@
 # 测试修改用户名、修改手机号功能
 
 ### ==================== 变量 ====================
-@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4NTg3NjY2LCJleHAiOjE3Nzg1OTQ4NjZ9.S73BNb8WkLL77KqqjwS28HuGzd7QvclP-Gf5s-PYcrY
+@token = REPLACE_ME_请粘贴登录token
 
 
 ### ==================== 修改用户名 ====================
 
 ### 1. 正常修改用户名
-POST http://localhost:8080/MyAPP/user/changeUserName
+POST http://localhost:8080/user/changeUserName
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
@@ -16,7 +16,7 @@ newName=新用户名测试
 
 
 ### 2. 修改用户名 — 长度为 50（边界值，应该成功）
-POST http://localhost:8080/MyAPP/user/changeUserName
+POST http://localhost:8080/user/changeUserName
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
@@ -24,7 +24,7 @@ newName=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
 
 ### 3. 修改用户名 — 长度超过 50（应该失败）
-POST http://localhost:8080/MyAPP/user/changeUserName
+POST http://localhost:8080/user/changeUserName
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
@@ -32,7 +32,7 @@ newName=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
 
 ### 4. 修改用户名 — 名称为空字符串
-POST http://localhost:8080/MyAPP/user/changeUserName
+POST http://localhost:8080/user/changeUserName
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
@@ -40,20 +40,20 @@ newName=
 
 
 ### 5. 修改用户名 — 缺少 newName 参数
-POST http://localhost:8080/MyAPP/user/changeUserName
+POST http://localhost:8080/user/changeUserName
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
 
 ### 6. 修改用户名 — 未登录
-POST http://localhost:8080/MyAPP/user/changeUserName
+POST http://localhost:8080/user/changeUserName
 Content-Type: application/x-www-form-urlencoded
 
 newName=未登录修改
 
 
 ### 7. 修改用户名 — 伪造 token
-POST http://localhost:8080/MyAPP/user/changeUserName
+POST http://localhost:8080/user/changeUserName
 token: fake-token-12345
 Content-Type: application/x-www-form-urlencoded
 
@@ -63,7 +63,7 @@ newName=伪造token修改
 ### ==================== 修改手机号 ====================
 
 ### 8. 正常修改手机号
-POST http://localhost:8080/MyAPP/user/changePhone
+POST http://localhost:8080/user/changePhone
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
@@ -71,7 +71,7 @@ oldPhone=13800138000&newPhone=13900139000
 
 
 ### 9. 修改手机号 — 旧手机号不匹配
-POST http://localhost:8080/MyAPP/user/changePhone
+POST http://localhost:8080/user/changePhone
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
@@ -79,7 +79,7 @@ oldPhone=13800000000&newPhone=13900139001
 
 
 ### 10. 修改手机号 — 新手机号格式错误（太短）
-POST http://localhost:8080/MyAPP/user/changePhone
+POST http://localhost:8080/user/changePhone
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
@@ -87,7 +87,7 @@ oldPhone=13800138000&newPhone=123
 
 
 ### 11. 修改手机号 — 新手机号格式错误（非数字）
-POST http://localhost:8080/MyAPP/user/changePhone
+POST http://localhost:8080/user/changePhone
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
@@ -95,7 +95,7 @@ oldPhone=13800138000&newPhone=abcdefghijk
 
 
 ### 12. 修改手机号 — 新旧手机号相同
-POST http://localhost:8080/MyAPP/user/changePhone
+POST http://localhost:8080/user/changePhone
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
@@ -103,7 +103,7 @@ oldPhone=13800138000&newPhone=13800138000
 
 
 ### 13. 修改手机号 — 新手机号已被其他用户使用
-POST http://localhost:8080/MyAPP/user/changePhone
+POST http://localhost:8080/user/changePhone
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
@@ -111,7 +111,7 @@ oldPhone=13800138000&newPhone=10000000001
 
 
 ### 14. 修改手机号 — 缺少 oldPhone
-POST http://localhost:8080/MyAPP/user/changePhone
+POST http://localhost:8080/user/changePhone
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
@@ -119,7 +119,7 @@ newPhone=13900139002
 
 
 ### 15. 修改手机号 — 缺少 newPhone
-POST http://localhost:8080/MyAPP/user/changePhone
+POST http://localhost:8080/user/changePhone
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
@@ -127,7 +127,7 @@ oldPhone=13800138000
 
 
 ### 16. 修改手机号 — 未登录
-POST http://localhost:8080/MyAPP/user/changePhone
+POST http://localhost:8080/user/changePhone
 Content-Type: application/x-www-form-urlencoded
 
 oldPhone=13800138000&newPhone=13900139003
@@ -136,7 +136,7 @@ oldPhone=13800138000&newPhone=13900139003
 ### ==================== 修改密码 ====================
 
 ### 17. 正常修改密码
-POST http://localhost:8080/MyAPP/user/changePassword
+POST http://localhost:8080/user/changePassword
 token: {{token}}
 Content-Type: application/json
 
@@ -148,7 +148,7 @@ Content-Type: application/json
 
 
 ### 18. 修改密码 — 旧密码错误
-POST http://localhost:8080/MyAPP/user/changePassword
+POST http://localhost:8080/user/changePassword
 token: {{token}}
 Content-Type: application/json
 
@@ -160,7 +160,7 @@ Content-Type: application/json
 
 
 ### 19. 修改密码 — 手机号不匹配
-POST http://localhost:8080/MyAPP/user/changePassword
+POST http://localhost:8080/user/changePassword
 token: {{token}}
 Content-Type: application/json
 
@@ -172,7 +172,7 @@ Content-Type: application/json
 
 
 ### 20. 修改密码 — 缺少 phone
-POST http://localhost:8080/MyAPP/user/changePassword
+POST http://localhost:8080/user/changePassword
 token: {{token}}
 Content-Type: application/json
 
@@ -183,7 +183,7 @@ Content-Type: application/json
 
 
 ### 21. 修改密码 — 缺少 oldPassword
-POST http://localhost:8080/MyAPP/user/changePassword
+POST http://localhost:8080/user/changePassword
 token: {{token}}
 Content-Type: application/json
 
@@ -194,7 +194,7 @@ Content-Type: application/json
 
 
 ### 22. 修改密码 — 缺少 newPassword
-POST http://localhost:8080/MyAPP/user/changePassword
+POST http://localhost:8080/user/changePassword
 token: {{token}}
 Content-Type: application/json
 
@@ -205,7 +205,7 @@ Content-Type: application/json
 
 
 ### 23. 修改密码 — 未登录
-POST http://localhost:8080/MyAPP/user/changePassword
+POST http://localhost:8080/user/changePassword
 Content-Type: application/json
 
 {

@@ -1,48 +1,48 @@
 ### ==================== 变量 ====================
 # 先用 loginTest.http 登录拿到 token，替换下面
-@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4MzQxMTMwLCJleHAiOjE3NzgzNDgzMzB9.x59wtWm1VXKCSUxWEsgdiIOnLR4evifyZRh853KyO20
+@token = REPLACE_ME_请粘贴登录token
 
 
 ### ==================== 首页推荐流测试 ====================
 
 ### 1. 登录用户获取推荐 — 应包含 isFollow 字段
-GET http://localhost:8080/MyAPP/start
+GET http://localhost:8080/start
 token: {{token}}
 
 
 ### 2. 连续请求 — 验证随机打乱
-GET http://localhost:8080/MyAPP/start
+GET http://localhost:8080/start
 token: {{token}}
 
 
 ### 3. 不传 token — isFollow 应全为 false
-GET http://localhost:8080/MyAPP/start
+GET http://localhost:8080/start
 
 
 ### 4. 验证返回格式 — 应包含 id/title/coverUrl/authorName/likeCount 等字段
-GET http://localhost:8080/MyAPP/start
+GET http://localhost:8080/start
 token: {{token}}
 
 
 ### 5. 伪造 token — 应返回未登录用户的推荐（isFollow=false）
-GET http://localhost:8080/MyAPP/start
+GET http://localhost:8080/start
 token: invalid-token-0000
 
 
 ### ==================== 筛选测试 ====================
 
 ### 6. 筛选视频 — 只返回 type=1 的内容
-GET http://localhost:8080/MyAPP/start?type=1
+GET http://localhost:8080/start?type=1
 token: {{token}}
 
 ### 7. 筛选游戏分区 — 只返回 categoryId=1
-GET http://localhost:8080/MyAPP/start?categoryId=1
+GET http://localhost:8080/start?categoryId=1
 token: {{token}}
 
 ### 8. 组合筛选 — 视频 + 游戏分区
-GET http://localhost:8080/MyAPP/start?type=1&categoryId=1
+GET http://localhost:8080/start?type=1&categoryId=1
 token: {{token}}
 
 ### 9. 不传参 — 保持兼容，返回全部
-GET http://localhost:8080/MyAPP/start
+GET http://localhost:8080/start
 token: {{token}}

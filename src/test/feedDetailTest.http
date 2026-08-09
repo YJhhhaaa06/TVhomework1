@@ -2,7 +2,7 @@
 # 测试关注动态流、内容详情功能
 
 ### ==================== 变量 ====================
-@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4NTg3NjY2LCJleHAiOjE3Nzg1OTQ4NjZ9.S73BNb8WkLL77KqqjwS28HuGzd7QvclP-Gf5s-PYcrY
+@token = REPLACE_ME_请粘贴登录token
 
 # 测试用内容 ID
 @contentId = 1
@@ -14,7 +14,7 @@
 ### ==================== Feed 流测试 ====================
 
 ### 1. 正常获取 Feed 流（登录状态）
-GET http://localhost:8080/MyAPP/feed?page=1&pageSize=10
+GET http://localhost:8080/feed?page=1&pageSize=10
 token: {{token}}
 
 > {%
@@ -30,11 +30,11 @@ token: {{token}}
 
 
 ### 2. Feed 流未登录（应返回 401）
-GET http://localhost:8080/MyAPP/feed?page=1&pageSize=10
+GET http://localhost:8080/feed?page=1&pageSize=10
 
 
 ### 3. Feed 流分页 — 第一页
-GET http://localhost:8080/MyAPP/feed?page=1&pageSize=5
+GET http://localhost:8080/feed?page=1&pageSize=5
 token: {{token}}
 
 > {%
@@ -45,7 +45,7 @@ token: {{token}}
 
 
 ### 4. Feed 流分页 — 第二页
-GET http://localhost:8080/MyAPP/feed?page=2&pageSize=5
+GET http://localhost:8080/feed?page=2&pageSize=5
 token: {{token}}
 
 > {%
@@ -56,7 +56,7 @@ token: {{token}}
 
 
 ### 5. Feed 流分页 — 超出范围
-GET http://localhost:8080/MyAPP/feed?page=999&pageSize=10
+GET http://localhost:8080/feed?page=999&pageSize=10
 token: {{token}}
 
 > {%
@@ -67,7 +67,7 @@ token: {{token}}
 
 
 ### 6. Feed 流 — 验证列表项结构
-GET http://localhost:8080/MyAPP/feed?page=1&pageSize=10
+GET http://localhost:8080/feed?page=1&pageSize=10
 token: {{token}}
 
 > {%
@@ -89,7 +89,7 @@ token: {{token}}
 
 
 ### 7. Feed 流 — 验证点赞状态填充
-GET http://localhost:8080/MyAPP/feed?page=1&pageSize=10
+GET http://localhost:8080/feed?page=1&pageSize=10
 token: {{token}}
 
 > {%
@@ -105,7 +105,7 @@ token: {{token}}
 ### ==================== 关注后 Feed 流变化验证 ====================
 
 ### 8. 关注用户 userA（userId=5）
-POST http://localhost:8080/MyAPP/follow/add
+POST http://localhost:8080/follow/add
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
@@ -113,7 +113,7 @@ followedUserId=5
 
 
 ### 9. 关注后查看 Feed 流（应包含 userA 的内容）
-GET http://localhost:8080/MyAPP/feed?page=1&pageSize=50
+GET http://localhost:8080/feed?page=1&pageSize=50
 token: {{token}}
 
 > {%
@@ -126,7 +126,7 @@ token: {{token}}
 
 
 ### 10. 取消关注用户 userA
-POST http://localhost:8080/MyAPP/follow/remove
+POST http://localhost:8080/follow/remove
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
@@ -134,7 +134,7 @@ followedUserId=5
 
 
 ### 11. 取消关注后查看 Feed 流（不应包含 userA 的内容）
-GET http://localhost:8080/MyAPP/feed?page=1&pageSize=50
+GET http://localhost:8080/feed?page=1&pageSize=50
 token: {{token}}
 
 > {%
@@ -148,7 +148,7 @@ token: {{token}}
 ### ==================== 内容详情测试 ====================
 
 ### 12. 正常查看内容详情（登录状态）
-GET http://localhost:8080/MyAPP/detail?contentId={{contentId}}
+GET http://localhost:8080/detail?contentId={{contentId}}
 token: {{token}}
 
 > {%
@@ -169,11 +169,11 @@ token: {{token}}
 
 
 ### 13. 查看内容详情（未登录）
-GET http://localhost:8080/MyAPP/detail?contentId={{contentId}}
+GET http://localhost:8080/detail?contentId={{contentId}}
 
 
 ### 14. 查看不存在的内容详情
-GET http://localhost:8080/MyAPP/detail?contentId=99999
+GET http://localhost:8080/detail?contentId=99999
 token: {{token}}
 
 > {%
@@ -184,7 +184,7 @@ token: {{token}}
 
 
 ### 15. 查看内容详情 — 缺少 contentId
-GET http://localhost:8080/MyAPP/detail
+GET http://localhost:8080/detail
 token: {{token}}
 
 > {%
@@ -195,7 +195,7 @@ token: {{token}}
 
 
 ### 16. 查看内容详情 — contentId 非数字
-GET http://localhost:8080/MyAPP/detail?contentId=abc
+GET http://localhost:8080/detail?contentId=abc
 token: {{token}}
 
 > {%
@@ -206,7 +206,7 @@ token: {{token}}
 
 
 ### 17. 视频类型内容详情 — 验证 videoUrl 字段
-GET http://localhost:8080/MyAPP/detail?contentId={{contentId}}
+GET http://localhost:8080/detail?contentId={{contentId}}
 token: {{token}}
 
 > {%
@@ -219,7 +219,7 @@ token: {{token}}
 
 
 ### 18. 图片类型内容详情 — 验证 imageUrls 字段
-GET http://localhost:8080/MyAPP/detail?contentId=2
+GET http://localhost:8080/detail?contentId=2
 token: {{token}}
 
 > {%
@@ -233,7 +233,7 @@ token: {{token}}
 
 
 ### 19. 内容详情 — 验证评论列表
-GET http://localhost:8080/MyAPP/detail?contentId={{contentId}}
+GET http://localhost:8080/detail?contentId={{contentId}}
 token: {{token}}
 
 > {%
@@ -245,7 +245,7 @@ token: {{token}}
 
 
 ### 20. 内容详情 — 验证评论树结构
-GET http://localhost:8080/MyAPP/detail?contentId={{contentId}}
+GET http://localhost:8080/detail?contentId={{contentId}}
 token: {{token}}
 
 > {%

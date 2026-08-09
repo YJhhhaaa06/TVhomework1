@@ -107,6 +107,7 @@
 - 灾后重建已完成：`RequestContext` 动态 context path（替换 `/MyAPP` 硬编码）、DB 新增 `file_exists`/`last_verify_time` 列、MediaAuditService/MediaAdminController/recovery.html、34 个视频文件写回。
 - 一键测试脚本 `tools/run_tests.py`（Maven 打包 → 独立 Tomcat 18080 → pytest → 关停）已可用，8/8 验证 35/35 通过。
 - 2026-08-09：手动清理未引用/未接线方法（记录见 `.docs/REMOVE_CODE.md`），Service 12 个、DAO 31 个方法移除；`deleteContent`/隐藏/删除类功能确认不做。
+- 2026-08-09：TASK-003/005/006/008/009 完成——UploadController 补 return、欢迎页 index.html、LogUtil 自动建日志目录、`tools/backup.py`（仅数据库备份到 auto_backup）、.http 测试修正。
 
 ---
 
@@ -609,7 +610,7 @@ webapp/
 |----|------|--------|
 | 部署脚本 | Python 脚本 `tools/deploy.py`：构建 → 备份旧 war → 部署 → 启动 → 探活（复用 run_tests.py 的隔离与停止约定；AGENTS.md 要求脚本必须 Python） | P2 |
 | 健康检查 | 新增 `/health`：检查 DB 连接、Redis ping、上传目录可写 | P2 |
-| 自动备份 | `tools/backup.py`：mysqldump + 上传目录全量备份 + 校验（见 CURRENT_TASK 阶段零） | P0 |
+| 自动备份 | `tools/backup.py`：仅 mysqldump 整库备份到 `D:/dev/WorkSpace/VideoPlatform/auto_backup/<时间戳>/`，含 manifest 与校验；媒体资源由用户手动打包备份（2026-08-09 决策） | P0 |
 | 监控指标 | 响应时间、错误率、连接池使用率（P3 可选） | P3 |
 
 ---
@@ -660,3 +661,4 @@ webapp/
 | 1.0 | 2026-07-23 | 初始版本 |
 | 2.0 | 2026-08-09 | 基于 8/8 灾后状态全面修订：取消 Application 层、DAO 事务方案改为 TransactionTemplate、补齐灾后收尾/备份/清理/运维权限、测试策略去掉 H2/MockMvc、代码规模与硬编码清单刷新 |
 | 2.1 | 2026-08-09 | 同步清理结果：删除功能确认不做，风险清单/拆分方案/权限表更新；代码规模按清理后实测刷新 |
+| 2.2 | 2026-08-09 | TASK-003/005/006/008/009 完成；备份方案调整为仅数据库备份到 auto_backup，媒体备份由用户手动执行 |

@@ -6,7 +6,7 @@
 ### ==================== IdSearch — 从数据库按 contentId 查 ====================
 
 ### 1. IdSearch — 登录用户查询，应含 isFollow
-GET http://localhost:8080/MyAPP/search/IdSearch
+GET http://localhost:8080/search/IdSearch
 Content-Type: application/json
 token: {{token}}
 
@@ -16,7 +16,7 @@ token: {{token}}
 
 
 ### 2. IdSearch — 未登录用户查询
-GET http://localhost:8080/MyAPP/search/IdSearch
+GET http://localhost:8080/search/IdSearch
 Content-Type: application/json
 
 {
@@ -25,7 +25,7 @@ Content-Type: application/json
 
 
 ### 3. IdSearch — 查询不存在的 content
-GET http://localhost:8080/MyAPP/search/IdSearch
+GET http://localhost:8080/search/IdSearch
 Content-Type: application/json
 token: {{token}}
 
@@ -37,7 +37,7 @@ token: {{token}}
 ### ==================== keywordSearch — 全文搜索 ====================
 
 ### 4. keywordSearch — 登录用户搜索
-GET http://localhost:8080/MyAPP/search/keywordSearch
+GET http://localhost:8080/search/keywordSearch
 Content-Type: application/json
 token: {{token}}
 
@@ -47,7 +47,7 @@ token: {{token}}
 
 
 ### 5. keywordSearch — 未登录用户搜索
-GET http://localhost:8080/MyAPP/search/keywordSearch
+GET http://localhost:8080/search/keywordSearch
 Content-Type: application/json
 
 {
@@ -56,7 +56,7 @@ Content-Type: application/json
 
 
 ### 6. keywordSearch — 搜索不存在的关键词
-GET http://localhost:8080/MyAPP/search/keywordSearch
+GET http://localhost:8080/search/keywordSearch
 Content-Type: application/json
 token: {{token}}
 
@@ -66,7 +66,7 @@ token: {{token}}
 
 
 ### 7. keywordSearch — keyword 为空
-GET http://localhost:8080/MyAPP/search/keywordSearch
+GET http://localhost:8080/search/keywordSearch
 Content-Type: application/json
 token: {{token}}
 
@@ -78,7 +78,7 @@ token: {{token}}
 ### ==================== getDetailRecommended — 从缓存取详情 ====================
 
 ### 8. getDetail — 登录用户从缓存获取
-GET http://localhost:8080/MyAPP/search/getDetailRecommended
+GET http://localhost:8080/search/getDetailRecommended
 Content-Type: application/json
 token: {{token}}
 
@@ -88,7 +88,7 @@ token: {{token}}
 
 
 ### 9. getDetail — 未登录用户从缓存获取
-GET http://localhost:8080/MyAPP/search/getDetailRecommended
+GET http://localhost:8080/search/getDetailRecommended
 Content-Type: application/json
 
 {
@@ -99,7 +99,7 @@ Content-Type: application/json
 ### ==================== 异常路径 ====================
 
 ### 10. 缺少 action
-GET http://localhost:8080/MyAPP/search
+GET http://localhost:8080/search
 Content-Type: application/json
 token: {{token}}
 
@@ -109,7 +109,7 @@ token: {{token}}
 
 
 ### 11. IdSearch — contentId 为非数字
-GET http://localhost:8080/MyAPP/search/IdSearch
+GET http://localhost:8080/search/IdSearch
 Content-Type: application/json
 token: {{token}}
 
@@ -119,7 +119,7 @@ token: {{token}}
 
 
 ### 12. IdSearch — 缺少 contentId
-GET http://localhost:8080/MyAPP/search/IdSearch
+GET http://localhost:8080/search/IdSearch
 Content-Type: application/json
 token: {{token}}
 
@@ -128,7 +128,7 @@ token: {{token}}
 
 
 ### 13. keywordSearch — 缺少 keyword 字段
-GET http://localhost:8080/MyAPP/search/keywordSearch
+GET http://localhost:8080/search/keywordSearch
 Content-Type: application/json
 token: {{token}}
 
@@ -138,7 +138,7 @@ token: {{token}}
 ### ==================== 单字搜索（LIKE 回退）====================
 
 ### 14. keywordSearch — 单字搜索
-GET http://localhost:8080/MyAPP/search/keywordSearch
+GET http://localhost:8080/search/keywordSearch
 Content-Type: application/json
 token: {{token}}
 
@@ -147,19 +147,19 @@ token: {{token}}
 }
 
 ### 15. keywordSearch — 单字搜索（GET 参数）
-GET http://localhost:8080/MyAPP/search/keywordSearch?keyword=火
+GET http://localhost:8080/search/keywordSearch?keyword=火
 token: {{token}}
 
 ### ==================== 分页搜索 ====================
 
 ### 16. keywordSearch — 分页第1页，每页5条
-GET http://localhost:8080/MyAPP/search/keywordSearch?keyword=游戏&page=1&pageSize=5
+GET http://localhost:8080/search/keywordSearch?keyword=游戏&page=1&pageSize=5
 token: {{token}}
 
 ### 17. keywordSearch — 分页第2页，每页5条
-GET http://localhost:8080/MyAPP/search/keywordSearch?keyword=游戏&page=2&pageSize=5
+GET http://localhost:8080/search/keywordSearch?keyword=游戏&page=2&pageSize=5
 token: {{token}}
 
 ### 18. keywordSearch — 默认分页（page=1, pageSize=12）
-GET http://localhost:8080/MyAPP/search/keywordSearch?keyword=美食
+GET http://localhost:8080/search/keywordSearch?keyword=美食
 token: {{token}}

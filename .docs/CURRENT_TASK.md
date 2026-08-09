@@ -38,6 +38,7 @@
 - 灾后重建：RequestContext 动态 context path；DB 新增 `file_exists`/`last_verify_time`；MediaAuditService/MediaAdminController/recovery.html；34 个视频文件写回。
 - 一键测试脚本 tools/run_tests.py 可用，8/8 验证 35/35 pytest 通过。
 - 2026-08-09：手动清理完成（记录见 `.docs/REMOVE_CODE.md`）：移除 Service 12 个方法、DAO 31 个方法及 CouponDao 注释 DDL；`deleteContent`/隐藏/删除类功能确认不做。
+- 2026-08-09：TASK-003/005/006/008/009 完成（UploadController 补 return、欢迎页 index.html、LogUtil 自动建 logs 目录、tools/backup.py、.http 基址/token/素材路径修正）。
 
 ---
 
@@ -89,7 +90,7 @@
 - **优先级**: P0
 - **预估工时**: 5 分钟
 - **前置依赖**: 无
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-09 完成）
 
 #### 任务描述
 
@@ -124,7 +125,7 @@
 - **优先级**: P0
 - **预估工时**: 15 分钟
 - **前置依赖**: 无
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-09 完成：新增 index.html 跳转 start.html）
 
 #### 任务描述
 
@@ -142,7 +143,7 @@
 - **优先级**: P0
 - **预估工时**: 30 分钟
 - **前置依赖**: 无
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-09 完成：启动时自动创建 logs 目录）
 
 #### 任务描述
 
@@ -195,22 +196,22 @@
 - **优先级**: P0
 - **预估工时**: 半天
 - **前置依赖**: 无
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-09 完成，已实跑验证一次）
 
 #### 任务描述
 
-新增 Python 脚本 `tools/backup.py`（AGENTS.md 要求脚本必须 Python）：
+新增 Python 脚本 `tools/backup.py`（AGENTS.md 要求脚本必须 Python）。**2026-08-09 用户决策：只备份数据库；媒体资源由用户手动打包备份；每次备份后由用户手动把数据库备份迁移到工作区外。**
 
-1. `mysqldump --single-transaction --routines --triggers` 导出 `tvdatabase` 到 `D:/data/projects/VideoPlatform/stone/backup/<yyyyMMdd_HHmmss>/db.sql`。
-2. 全量复制上传目录 `video/`、`image/`、`cover/` 到同时间戳目录。
-3. 生成 manifest：文件数、总字节数、DB 中 content_media 引用数。
-4. 校验：db.sql 非空；媒体文件数与 DB 引用数一致（差异记录警告）。
-5. 不删除旧备份；退出码约定（0 成功 / 2 路径缺失 / 3 校验失败）。
+1. `mysqldump --single-transaction --routines --triggers` 导出 `tvdatabase` 到 `D:/dev/WorkSpace/VideoPlatform/auto_backup/<yyyyMMdd_HHmmss>/db.sql`。
+2. 生成 manifest：时间、库名、文件大小、SHA-256、备份说明。
+3. 校验：db.sql 非空且包含 `Dump completed` 标记。
+4. 不删除旧备份；退出码约定（0 成功 / 2 mysqldump 不可用 / 3 校验失败）。
+5. 媒体资源（stone/video、image、cover）由用户手动打包备份，脚本不做。
 
 #### 验证标准
 
-- [ ] 脚本可运行并生成完整备份
-- [ ] 校验逻辑能发现文件缺失
+- [ ] 脚本可运行并生成 db.sql + manifest.txt
+- [ ] 校验逻辑能发现空/损坏的备份
 - [ ] 第二次运行不覆盖第一次备份
 
 ---
@@ -220,7 +221,7 @@
 - **优先级**: P0
 - **预估工时**: 2 小时
 - **前置依赖**: 无
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-09 完成：基址去 /MyAPP、token 改占位符、素材指向 TestResource）
 
 #### 任务描述
 
@@ -1236,3 +1237,4 @@ Filter 统计响应时间与错误率，日志输出；连接池使用率统计�
 | 1.0 | 2026-07-23 | 初始版本，30 个任务 |
 | 2.0 | 2026-08-09 | 全面修订：基于 8/8 灾后状态重排为 54 个任务；新增阶段零（手动清理未引用方法、bug 修复、数据清理、备份自动化）；补齐事务/DAO、测试、安全、前端、部署等缺失阶段；任务状态与已完成事项同步 |
 | 2.1 | 2026-08-09 | 同步清理结果：TASK-001 完成，TASK-002/004 随"删除功能不做"取消，安全/测试任务与依赖图更新；离线仓库路径更新 |
+| 2.2 | 2026-08-09 | TASK-003/005/006/008/009 完成；备份方案改为仅数据库备份到 auto_backup（媒体由用户手动打包） |

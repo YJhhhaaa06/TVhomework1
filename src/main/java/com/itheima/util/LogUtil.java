@@ -1,5 +1,6 @@
 package com.itheima.util;
 
+import java.io.File;
 import java.util.logging.*;
 
 public class LogUtil {
@@ -13,6 +14,10 @@ public class LogUtil {
         rootLogger.setLevel(Level.INFO);
 
         try {
+            File logDir = new File("logs");
+            if (!logDir.exists() && !logDir.mkdirs()) {
+                System.err.println("fail to create log dir: " + logDir.getAbsolutePath());
+            }
             FileHandler fileHandler = new FileHandler("logs/system.log", true);
             fileHandler.setFormatter(new SimpleFormatter());
             fileHandler.setLevel(Level.INFO);

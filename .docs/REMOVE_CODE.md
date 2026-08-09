@@ -25,7 +25,7 @@
 | public void hideOrUnhideComment(long videoId, boolean choose) | 实施隐藏或取消隐藏评论                    | 暂时不做这个功能，避免误导 |
 | public List<CommentVO> getComment(long contentId)            | 根据contentId，前往数据库获取包装好的评论 | 已被缓存查询策略代替       |
 | public List<CommentVO> getComment(long contentId, long userId) | 已登录用户查询评论                        | 已被缓存查询策略代替       |
-| public void hideComment(long videoId)                        |                                           |                            |
+|                                                              |                                           |                            |
 |                                                              |                                           |                            |
 |                                                              |                                           |                            |
 
@@ -118,7 +118,7 @@
 
 | 方法声明                                                     | 作用                         | 删除理由                                                     |
 | ------------------------------------------------------------ | ---------------------------- | ------------------------------------------------------------ |
-| public Set<Long> findAllLikedContentIds(Connection conn, long userId) throws SQLException | 查询用户点赞过的内容         | 由于缓存策略是以content为中心，记录所有给content点过赞的人，这个方法别舍弃 |
+| public Set<Long> findAllLikedContentIds(Connection conn, long userId) throws SQLException | 查询用户点赞过的内容         | 由于缓存策略是以content为中心，记录所有给content点过赞的人，这个方法被舍弃 |
 | public int deleteContentMedia(Connection conn,long contentId) throws SQLException | 删除视频所有url              | 暂时不做这个功能                                             |
 | public int deleteSpecificContentMedia(Connection conn,long mediaId) throws SQLException | 根据id删除url                | 暂时不做这个功能                                             |
 | public int deleteSpecificContentMedia(Connection conn,long contentId,int type,int sort) throws SQLException | 根据contentId,type和sort删除 | 暂时不做这个功能                                             |
