@@ -28,8 +28,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEST_DIR = PROJECT_ROOT / "src" / "test" / "python"
-TARGET_DIR = PROJECT_ROOT / "target"
-WAR_FILE = TARGET_DIR / "untitled-1.0-SNAPSHOT.war"
+STAGE8_TARGET = Path(r"D:\data\projects\VideoPlatform\stone\temp\stage8-target")
+WAR_FILE = STAGE8_TARGET / "untitled-1.0-SNAPSHOT.war"
 
 MAVEN_CMD = Path(r"D:\IDE\IDEA\IntelliJ IDEA 2025.3.2\plugins\maven\lib\maven3\bin\mvn.cmd")
 JAVA_HOME = Path(r"D:\dev\DevTools\jdk\openjdk-25.0.2")
@@ -194,6 +194,7 @@ def cmd_build(_args) -> int:
         str(MAVEN_CMD), "-o", "-q", "package", "-DskipTests",
         "-Duser.home=C:\\Users\\ASUS",
         f"-Dmaven.repo.local={M2_REPO}",
+        f"-Dstage8.buildDir={STAGE8_TARGET}",
     ]
     log("开始 Maven 离线打包 ...")
     result = run_hidden(

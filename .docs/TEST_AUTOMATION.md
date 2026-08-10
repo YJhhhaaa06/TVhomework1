@@ -118,6 +118,8 @@ build ──> start ──> test ──> finally: stop
    ```
 
    沙盒运行测试时通过 `PYTHONPATH` 指向该目录。
+7. **javac 无法读取 worktree 的 `target/` 作为 classpath**：沙箱内目录枚举被拒，表现为测试编译时"程序包 com.itheima.* 不存在"；因此 Maven 构建通过 `-Dstage8.buildDir` 指向 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（pom 默认 `./target`），war 也位于该目录。
+8. **离线仓库来源记录**：新加入的测试依赖（junit/mockito/bytebuddy/surefire）`_remote.repositories` 原本只有 `>central=`，默认 aliyun 镜像下离线解析会拒认；已逐项追加 `>aliyun=` 行（只追加不删除，模式与既有 mysql 依赖一致）。
 
 ---
 
@@ -196,13 +198,14 @@ build ──> start ──> test ──> finally: stop
 
 ```powershell
 python tools\run_tests_report.py all       # 默认：build -> start -> test -> stop
+python tools\run_tests_report.py junit     # mvn -o test（JUnit 61 例，输出同样落盘）
 python tools\run_tests_report.py build     # 仅离线打包
 python tools\run_tests_report.py start     # 仅启动
 python tools\run_tests_report.py test      # 仅 pytest
 python tools\run_tests_report.py stop      # 仅关停
 ```
 
-参数原样透传给 `tools/run_tests.py`，退出码约定相同。
+`all/build/start/test/stop` 参数原样透传给 `tools/run_tests.py`，退出码约定相同；`junit` 等价执行 `mvn -o test`（含连接池独立 fork 执行）。
 
 ### 9.3 产物
 
@@ -218,6 +221,8 @@ python tools\run_tests_report.py stop      # 仅关停
 | `build_ok` | build/all 时是否构建成功 |
 | `pytest.passed/failed/errors/skipped` | pytest 汇总计数 |
 | `pytest_summary` | pytest 最后一行汇总 |
+| `junit.tests/failures/errors/skipped` | junit 时 surefire 每测试类统计之和 |
+| `junit_summary` | junit 时最后一条 Tests run 行 |
 | `war.exists/mtime` | war 产物状态 |
 | `port_18080_open_after` | 执行后 18080 是否仍被占用 |
 | `log_file` | 完整日志路径 |

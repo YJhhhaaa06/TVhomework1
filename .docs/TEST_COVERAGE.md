@@ -654,7 +654,7 @@ mvn test
 | 异常覆盖 | ⭐⭐⭐⭐⭐ | 参数校验、鉴权覆盖良好 |
 | 数据验证 | ⭐⭐⭐⭐ | 新增数据一致性验证 |
 | 并发测试 | ⭐ | 无（可选） |
-| 单元测试 | ⭐ | 无（建议重构时补充） |
+| 单元测试 | ⭐⭐⭐⭐ | JUnit 61 例（阶段八新增） |
 
 ### 8.2 建议
 
@@ -675,8 +675,24 @@ mvn test
 
 ---
 
+## 十、JUnit 单元测试（阶段八新增）
+
+| 测试类 | 用例数 | 覆盖重点 |
+|--------|--------|----------|
+| service/UserServiceTest | 23 | 登录成功/用户不存在/密码错误、注册重复手机号与用户名、改密、改用户名/手机号、isAdmin |
+| service/ContentServiceTest | 11 | 搜索组装与分页、状态填充、详情空缓存、评论查询、视频/动态发布、SQLException 包装 |
+| service/LikeServiceTest | 14 | 点赞/取消点赞、重复冲突、缓存命中短路、批量查询空列表与部分未命中回填 |
+| service/CommentServiceTest | 5 | 评论归属校验、计数与缓存更新、CommentVO 树转换 |
+| service/ContentCacheManagerLifecycleTest | 4 | 初始化装载、缓存命中、destroy 关闭定时器、刷新失败抛 CacheException |
+| util/MyConnectionPoolTest | 4 | 满池超时、归还重取、失效连接移除、关闭后拒绝 |
+
+> 运行方式：`python tools\run_tests_report.py junit`（mvn -o test，输出落盘）。连接池用例在独立 surefire 执行中 fork，环境变量 DB_POOL_INITSIZE=1 / DB_POOL_MAXSIZE=1 / DB_POOL_TIMEOUTMS=500，需要 MySQL 运行。
+
+---
+
 ## 文档历史
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
 | 1.0 | 2026-07-23 | 初始版本 |
+| 2.0 | 2026-08-10 | 阶段八：新增 JUnit 单元测试覆盖（61 例）与 pytest 管理员/媒体运维用例（11 例），单元测试评分更新 |

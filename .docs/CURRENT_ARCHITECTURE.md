@@ -63,7 +63,8 @@ untitled/
 │   │
 │   └── test/
 │       ├── *.http                   # HTTP 测试文件（17个）
-│       └── python/                  # pytest 测试脚本（35 例）
+│       ├── java/com/itheima/        # JUnit 单元测试（61 例，阶段八新增）
+│       └── python/                  # pytest 测试脚本（45 例 + 1 条件跳过）
 │
 ├── ssm_*/                           # 空壳子模块（待删除）
 └── logs/                            # 运行日志
@@ -429,6 +430,28 @@ com.itheima/
 | searchCompleteTest.http | 15 | 搜索完整 |
 | startCompleteTest.http | 14 | 首页推荐完整 |
 | **合计** | **~265** | - |
+
+### 9.1 pytest 自动化用例（tools/run_tests.py 驱动）
+
+| 文件 | 用例数 | 覆盖模块 |
+|------|--------|----------|
+| test_smoke.py / test_consistency.py / test_boundary.py | 35 | 冒烟/一致性/边界（既有） |
+| test_admin.py | 11（1 条件跳过） | 管理员权限 401/403/200、媒体扫描/恢复（阶段八） |
+
+### 9.2 JUnit 单元测试（阶段八新增，src/test/java）
+
+| 文件 | 用例数 | 覆盖模块 |
+|------|--------|----------|
+| service/UserServiceTest | 23 | 登录/注册/改密/改资料/isAdmin |
+| service/ContentServiceTest | 11 | 搜索/详情/评论查询/发布 |
+| service/LikeServiceTest | 14 | 点赞/取消/缓存优先/批量查询 |
+| service/CommentServiceTest | 5 | 评论归属/树转换/缓存更新 |
+| service/ContentCacheManagerLifecycleTest | 4 | 初始化/缓存命中/定时器关闭/刷新失败 |
+| util/MyConnectionPoolTest | 4 | 满池超时/归还重取/失效移除/关闭后拒绝 |
+| **合计** | **61** | - |
+
+> 构建输出：沙箱内 Maven 通过 `-Dstage8.buildDir` 指向 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（pom 默认 `./target`），原因是沙箱内 javac 无法把 worktree `target/classes` 作为 classpath（报"程序包不存在"）。
+> 离线仓库：新增测试依赖（junit/mockito/bytebuddy/surefire 等）的 `_remote.repositories` 已补 `>aliyun=` 来源行（只追加不删除），默认 aliyun 镜像下可离线解析。
 
 ---
 

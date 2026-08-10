@@ -915,16 +915,18 @@ MyConnectionPool 增加 MAX_SIZE（配置 `db.pool.maxSize`，默认 20）与获
 - **优先级**: P1
 - **预估工时**: 30 分钟
 - **前置依赖**: 无
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成：JUnit 6.0.0 + Mockito 5.20.0 + ByteBuddy 1.17.8 + Surefire 3.2.5）
 
 #### 任务描述
 
 添加 JUnit Jupiter 5.x 与 Mockito 5.x（scope=test）。**具体版本以离线 m2-repo（D:/dev/WorkSpace/VideoPlatform/maven）中可用且兼容 JDK 25 为准**；若无对应包，暂停本任务并请用户补充离线仓库。
 
+> 2026-08-10 实际落地：离线仓库无完整 JUnit 5.x 套装（launcher 1.12.1 缺失且 5.12.1+1.9.3 版本不对齐），经用户确认改用 **JUnit 6.0.0 全套 + Mockito 5.20.0 + Surefire 3.2.5**，已在 JDK 25 离线端到端验证。
+
 #### 验证标准
 
-- [ ] `mvn test-compile` 通过
-- [ ] 一个最小 JUnit 用例可运行
+- [x] `mvn test-compile` 通过
+- [x] 一个最小 JUnit 用例可运行
 
 ---
 
@@ -933,7 +935,7 @@ MyConnectionPool 增加 MAX_SIZE（配置 `db.pool.maxSize`，默认 20）与获
 - **优先级**: P1
 - **预估工时**: 1 天
 - **前置依赖**: TASK-040、TASK-043
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成：UserServiceTest 23 例）
 
 #### 任务描述
 
@@ -941,8 +943,8 @@ Mock UserDao/PasswordUtil，覆盖 login 成功/密码错误/用户不存在、r
 
 #### 验证标准
 
-- [ ] 核心分支有断言
-- [ ] `mvn test` 通过
+- [x] 核心分支有断言
+- [x] `mvn test` 通过
 
 ---
 
@@ -951,16 +953,16 @@ Mock UserDao/PasswordUtil，覆盖 login 成功/密码错误/用户不存在、r
 - **优先级**: P1
 - **预估工时**: 2 天
 - **前置依赖**: TASK-034、TASK-043
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成：ContentServiceTest 11 例）
 
 #### 任务描述
 
-Mock DAO/CacheManager/StatusFiller，覆盖推荐、搜索、详情、发布、删除校验。
+Mock DAO/CacheManager/StatusFiller，覆盖推荐、搜索、详情、发布、删除校验。（删除功能未实现，校验类分支不适用）
 
 #### 验证标准
 
-- [ ] 核心查询/发布/删除分支有断言
-- [ ] `mvn test` 通过
+- [x] 核心查询/发布分支有断言
+- [x] `mvn test` 通过
 
 ---
 
@@ -969,7 +971,7 @@ Mock DAO/CacheManager/StatusFiller，覆盖推荐、搜索、详情、发布、�
 - **优先级**: P2
 - **预估工时**: 1 天
 - **前置依赖**: TASK-043
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成：LikeServiceTest 14 例 + CommentServiceTest 5 例）
 
 #### 任务描述
 
@@ -977,8 +979,8 @@ Mock DAO/CacheManager/StatusFiller，覆盖推荐、搜索、详情、发布、�
 
 #### 验证标准
 
-- [ ] 核心分支有断言
-- [ ] `mvn test` 通过
+- [x] 核心分支有断言
+- [x] `mvn test` 通过
 
 ---
 
@@ -987,16 +989,16 @@ Mock DAO/CacheManager/StatusFiller，覆盖推荐、搜索、详情、发布、�
 - **优先级**: P1
 - **预估工时**: 1 天
 - **前置依赖**: TASK-037、TASK-038
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成：test_admin.py 11 例，其中正向恢复按条件跳过）
 
 #### 任务描述
 
-补充：管理员权限（403/200）、媒体运维扫描/恢复、备份脚本校验。
+补充：管理员权限（401/403/200）、媒体运维扫描/恢复。（备份脚本校验按用户决定不做自动化）
 
 #### 验证标准
 
-- [ ] 新增用例全部通过
-- [ ] 原有 35 例不回归
+- [x] 新增用例全部通过（45 passed + 1 条件跳过）
+- [x] 原有 35 例不回归
 
 ---
 
@@ -1247,3 +1249,4 @@ Filter 统计响应时间与错误率，日志输出；连接池使用率统计�
 | 2.8 | 2026-08-10 | TASK-032~034 完成（阶段五）：ContentService 缓存职责迁入 ContentCacheManager、状态填充迁入 ContentStatusFiller；CommentService/LikeService/FeedService/ProfileService/StartController 调用点更新；TASK-035（UserService 拆分）按用户决定暂缓；35/35 pytest 通过 |
 | 2.9 | 2026-08-10 | TASK-036~038 完成（阶段六）：SQL 注入与资源所有权审计记录（全参数化、无注入点）；users 表新增 role 列 + tools/admin.py（--list/--promote/--demote）；AuthFilter 对 /api/admin/* 校验管理员角色；recovery.html 区分 403 并隐藏非管理员操作；TASK-039（XSS/CSRF）按用户决定暂缓；35/35 pytest 通过 |
 | 3.0 | 2026-08-10 | TASK-040~042 完成（阶段七）：@InjectConstructor 构造器注入（11 个服务类迁移，字段注入兼容）；Initializable/Disposable 生命周期接口接入容器（ContentCacheManager 迁移，AppShutDownListener 统一关闭）；MyConnectionPool 上限 20 + 获取超时 5000ms（等待/超时抛 SQLException/失效连接移除）；35/35 pytest 通过 |
+| 3.1 | 2026-08-10 | TASK-043~047 完成（阶段八）：JUnit 6.0.0 + Mockito 5.20.0 + Surefire 3.2.5 测试体系（61 例 JUnit，含连接池与缓存生命周期补测）；pytest 新增 test_admin.py（45 passed + 1 条件跳过）；构建输出经 -Dstage8.buildDir 指向 D 盘（沙箱 javac 无法读 worktree target/）；离线仓库补 aliyun 来源记录 |
