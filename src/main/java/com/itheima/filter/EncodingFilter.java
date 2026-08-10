@@ -1,14 +1,12 @@
 package com.itheima.filter;
 
 import jakarta.servlet.*;
-import jakarta.servlet.annotation.WebFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import com.itheima.util.RequestContext;
 
 import java.io.IOException;
 
-// /* 表示拦截所有请求，包括 Servlet 和 HTML/JSP
-@WebFilter("/*")
+// /* 表示拦截所有请求，包括 Servlet 和 HTML/JSP；注册顺序见 web.xml
 public class EncodingFilter implements Filter {
     @Override
     public void doFilter(ServletRequest req, ServletResponse resp, FilterChain chain)

@@ -1,6 +1,6 @@
 # 当前系统架构地图
 
-> 版本：1.4
+> 版本：1.5
 > 最后更新：2026-08-10
 > 维护说明：每次架构改动后必须更新本文档
 
@@ -111,11 +111,12 @@ com.itheima/
 
 | 类 | 行数 | 职责 | URL 匹配 |
 |----|------|------|----------|
+| ExceptionFilter | 55 | 全局异常处理（业务异常按 code/msg 输出，未知异常 500） | /* |
 | EncodingFilter | 21 | UTF-8 编码 | /* |
 | LoginFilter | 41 | 解析 JWT Token，设置 userId | /* |
 | AuthFilter | 59 | 权限校验 | /* |
 
-**执行顺序**：EncodingFilter → LoginFilter → AuthFilter
+**执行顺序**：ExceptionFilter → EncodingFilter → LoginFilter → AuthFilter（web.xml 注册）
 
 **AuthFilter 保护路径**：
 - 前缀：`/api/upload`、`/api/admin`、`/follow`、`/like`、`/feed`
@@ -236,14 +237,20 @@ com.itheima/
 
 | 类 | 行数 | 错误码 |
 |----|------|--------|
-| BusinessException | 19 | 基类 |
-| ErrorCode | 11 | 错误码常量接口 |
+| BusinessException | 35 | 基类（code + message，支持 ErrorCode 构造） |
+| ErrorCode | 55 | 错误码枚举（code + 中文默认消息） |
 | AuthException | 8 | 401 |
 | ForbiddenException | 9 | 403 |
 | NotFoundException | 7 | 404 |
 | ConflictException | 7 | 409 |
 | ParamException | 7 | 400 |
 | ServerException | 5 | 500 |
+| UserNotFoundException / PasswordIncorrectException / TokenExpiredException | - | 401 |
+| AccessDeniedException | - | 403 |
+| ContentNotFoundException / CommentNotFoundException | - | 404 |
+| DuplicateLikeException / DuplicatePhoneException | - | 409 |
+| InvalidPhoneException / InvalidPasswordException | - | 400 |
+| DatabaseException / CacheException | - | 500 |
 
 #### util 包 — 工具类
 
@@ -478,6 +485,7 @@ com.itheima/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-08-10 | 1.5 | 阶段三完成：ErrorCode 枚举化（code+中文消息）与 12 个具体异常；业务 RuntimeException/英文消息替换为具体异常；新增 ExceptionFilter 全局异常处理并清理 Controller catch 样板；日志清理（printStackTrace/System.out）与手机号脱敏；登录用户不存在调整为 401，非法上传类型调整为 400 |
 | 2026-08-10 | 1.4 | 阶段二完成：新增 app.properties + AppConfig（环境变量覆盖）；MyConnectionPool/MyRedisPool/JwtUtil/FileUploadService/LogUtil/ContentService 全部读配置；AppShutDownListener 启动校验 context.xml 与 upload.path 一致；JWT 密钥/有效期、缓存 TTL/刷新、日志路径/级别配置化 |
 | 2026-08-10 | 1.3 | 阶段一完成：删除残留测试/空壳类与 ssm_*/util 子模块；CouponAdmin 移至 src/test；pojo/DTO/command 合并为 com.itheima.model（entity/dto/vo/cache/audit/command）；DTO 包名全小写；LogInVO 重命名为 LoginVO |
 | 2026-08-09 | 1.2 | 手动清理未引用/未接线方法（Service 12 个、DAO 31 个，见 REMOVE_CODE.md）；删除功能确认不做；代码统计刷新至 97 文件 / 6,559 行；API 清单删除不存在的 /user/changeUserName、/user/changePhone；修复 UploadController return、欢迎页、日志目录 |

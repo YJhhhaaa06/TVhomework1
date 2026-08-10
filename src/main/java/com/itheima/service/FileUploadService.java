@@ -1,6 +1,7 @@
 package com.itheima.service;
 
 import com.itheima.config.AppConfig;
+import com.itheima.exception.ParamException;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.controller.UploadType;
 import com.itheima.model.vo.UploadResult;
@@ -61,7 +62,7 @@ public class FileUploadService {
         String fileName = part.getSubmittedFileName();
 
         if (contentType == null || !type.isSuffixValid(fileName)) {
-            throw new RuntimeException("文件类型不支持");
+            throw new ParamException("文件类型不支持");
         }
 
     }

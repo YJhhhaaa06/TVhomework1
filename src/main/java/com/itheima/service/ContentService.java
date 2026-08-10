@@ -220,9 +220,9 @@ public class ContentService {
             }
 
         } catch (Exception e) {
-            LOGGER.log(Level.SEVERE, "内容缓存刷新失败", e);
+            LOGGER.log(Level.WARNING, "内容缓存刷新失败", e);
 
-            throw new RuntimeException("FAIL_TO_REFRESH", e);
+            throw new CacheException("内容缓存刷新失败", e);
         } finally {
             MyConnectionPool.release(conn);
         }
@@ -543,7 +543,7 @@ public class ContentService {
                 try {
                     conn.rollback();
                 } catch (SQLException ex) {
-                    throw new BusinessException(ErrorCode.SERVER_ERROR, "回滚失败", ex);
+                    throw new DatabaseException("回滚失败", ex);
                 }
             }
             throw new ServerException("数据库写入失败");
@@ -574,7 +574,7 @@ public class ContentService {
                 try {
                     conn.rollback();
                 } catch (SQLException ex) {
-                    throw new BusinessException(ErrorCode.SERVER_ERROR, "回滚失败", ex);
+                    throw new DatabaseException("回滚失败", ex);
                 }
             }
             throw new ServerException("数据库写入失败");

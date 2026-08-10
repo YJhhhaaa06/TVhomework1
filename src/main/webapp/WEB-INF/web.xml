@@ -11,6 +11,14 @@
         <welcome-file>index.html</welcome-file>
     </welcome-file-list>
 
+    <filter>
+        <filter-name>ExceptionFilter</filter-name>
+        <filter-class>com.itheima.filter.ExceptionFilter</filter-class>
+    </filter>
+    <filter-mapping>
+        <filter-name>ExceptionFilter</filter-name>
+        <url-pattern>/*</url-pattern>
+    </filter-mapping>
 
     <filter>
         <filter-name>EncodingFilter</filter-name>

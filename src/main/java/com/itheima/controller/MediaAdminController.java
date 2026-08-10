@@ -1,7 +1,7 @@
 package com.itheima.controller;
 
-import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
+import com.itheima.exception.ParamException;
 import com.itheima.ioc.annotation.Inject;
 import com.itheima.model.audit.MediaAuditResult;
 import com.itheima.model.audit.RestoreResult;
@@ -29,55 +29,41 @@ public class MediaAdminController extends BaseServlet {
     private MediaAuditService mediaAuditService;
 
     @Override
-    protected void doGet(HttpServletRequest req, HttpServletResponse resp)
-            throws ServletException, IOException {
-        try {
-            String action = req.getPathInfo();
-            if ("/list".equals(action)) {
-                MediaAuditResult result = mediaAuditService.scanAll();
-                BaseServletUtil.writeSuccess(resp, result);
-            } else {
-                BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "未识别功能");
-            }
-        } catch (BusinessException e) {
-            BaseServletUtil.writeError(resp, e.getCode(), e.getMessage());
-        } catch (Exception e) {
-            e.printStackTrace();
-            BaseServletUtil.writeError(resp, ErrorCode.SERVER_ERROR, "服务器异常，请重试");
+    protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        String action = req.getPathInfo();
+        if ("/list".equals(action)) {
+            MediaAuditResult result = mediaAuditService.scanAll();
+            BaseServletUtil.writeSuccess(resp, result);
+        } else {
+            BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "未识别功能");
         }
     }
 
     @Override
-    protected void doPost(HttpServletRequest req, HttpServletResponse resp)
-            throws ServletException, IOException {
-        try {
-            String action = req.getPathInfo();
-            if ("/scan".equals(action)) {
-                MediaAuditResult result = mediaAuditService.scanAll();
-                BaseServletUtil.writeSuccess(resp, result);
-            } else if ("/restore".equals(action)) {
-                long mediaId = parseMediaId(req);
-                Part part = req.getPart("file");
-                RestoreResult result = mediaAuditService.restoreMedia(mediaId, part);
-                BaseServletUtil.writeSuccess(resp, result);
-            } else {
-                BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "未识别功能");
-            }
-        } catch (NumberFormatException e) {
-            BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "mediaId 格式错误");
-        } catch (BusinessException e) {
-            BaseServletUtil.writeError(resp, e.getCode(), e.getMessage());
-        } catch (Exception e) {
-            e.printStackTrace();
-            BaseServletUtil.writeError(resp, ErrorCode.SERVER_ERROR, "服务器异常，请重试");
+    protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        String action = req.getPathInfo();
+        if ("/scan".equals(action)) {
+            MediaAuditResult result = mediaAuditService.scanAll();
+            BaseServletUtil.writeSuccess(resp, result);
+        } else if ("/restore".equals(action)) {
+            long mediaId = parseMediaId(req);
+            Part part = req.getPart("file");
+            RestoreResult result = mediaAuditService.restoreMedia(mediaId, part);
+            BaseServletUtil.writeSuccess(resp, result);
+        } else {
+            BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "未识别功能");
         }
     }
 
     private long parseMediaId(HttpServletRequest req) {
         String param = req.getParameter("mediaId");
         if (param == null || param.isBlank()) {
-            throw new NumberFormatException("mediaId");
+            throw new ParamException("mediaId 格式错误");
         }
-        return Long.parseLong(param);
+        try {
+            return Long.parseLong(param);
+        } catch (NumberFormatException e) {
+            throw new ParamException("mediaId 格式错误");
+        }
     }
 }

@@ -36,7 +36,7 @@ public class LikeService {
 
     // ==================== 内容点赞 ====================
 
-    public void likeContent(long userId, long contentId) throws Exception {
+    public void likeContent(long userId, long contentId) {
         Connection conn = null;
         try {
             conn = MyConnectionPool.getConnection();
@@ -100,7 +100,7 @@ public class LikeService {
 
     // ==================== 评论点赞 ====================
 
-    public void likeComment(long userId, long commentId) throws Exception {
+    public void likeComment(long userId, long commentId) {
         Connection conn = null;
         try {
             conn = MyConnectionPool.getConnection();

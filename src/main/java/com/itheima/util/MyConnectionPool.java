@@ -8,8 +8,12 @@ import java.sql.SQLException;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class MyConnectionPool {
+    private static final Logger LOGGER = LogUtil.getLogger(MyConnectionPool.class);
+
     private static final String URL = AppConfig.getDbUrl();
     private static final String USER = AppConfig.getDbUsername();
     private static final String PASSWORD = AppConfig.getDbPassword();
@@ -19,7 +23,7 @@ public class MyConnectionPool {
         try {
             Class.forName(AppConfig.getDbDriver());
         } catch (ClassNotFoundException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE, "MySQL 驱动加载失败", e);
         }
     }
 
@@ -37,7 +41,7 @@ public class MyConnectionPool {
                 createConnection();
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.SEVERE, "初始化数据库连接池失败", e);
         }
     }
     private static void createConnection() throws SQLException {
@@ -98,7 +102,7 @@ public class MyConnectionPool {
                     conn.close();
                 }
             } catch (SQLException e) {
-                e.printStackTrace();
+                LOGGER.log(Level.SEVERE, "关闭数据库连接失败", e);
             }
         }
         pool.clear();

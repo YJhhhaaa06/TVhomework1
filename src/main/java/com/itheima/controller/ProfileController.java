@@ -1,7 +1,5 @@
 package com.itheima.controller;
 
-import com.itheima.exception.BusinessException;
-import com.itheima.exception.ErrorCode;
 import com.itheima.exception.ParamException;
 import com.itheima.ioc.annotation.Inject;
 import com.itheima.model.vo.ProfileVO;
@@ -19,21 +17,14 @@ public class ProfileController extends BaseServlet {
     private ProfileService profileService;
 
     @Override
-    protected void doGet(HttpServletRequest req, HttpServletResponse resp)
-            throws ServletException, IOException {
-        try {
-            long profileUserId = parseUserId(req);
-            int page = parsePage(req);
-            int pageSize = parsePageSize(req);
-            Long currentUserId = (Long) req.getAttribute("userId");
+    protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        long profileUserId = parseUserId(req);
+        int page = parsePage(req);
+        int pageSize = parsePageSize(req);
+        Long currentUserId = (Long) req.getAttribute("userId");
 
-            ProfileVO profile = profileService.getProfile(profileUserId, currentUserId, page, pageSize);
-            BaseServletUtil.writeSuccess(resp, profile);
-        } catch (BusinessException e) {
-            BaseServletUtil.writeError(resp, e.getCode(), e.getMessage());
-        } catch (Exception e) {
-            BaseServletUtil.writeError(resp, ErrorCode.SERVER_ERROR, "服务器异常，请重试");
-        }
+        ProfileVO profile = profileService.getProfile(profileUserId, currentUserId, page, pageSize);
+        BaseServletUtil.writeSuccess(resp, profile);
     }
 
     private long parseUserId(HttpServletRequest req) {

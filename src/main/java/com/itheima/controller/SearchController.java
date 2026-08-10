@@ -2,12 +2,12 @@ package com.itheima.controller;
 
 import com.itheima.model.dto.PageResult;
 import com.itheima.model.dto.SearchDTO;
-import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
 import com.itheima.ioc.annotation.Inject;
 import com.itheima.model.vo.ContentDetailVO;
 import com.itheima.model.vo.ContentVO;
 import com.itheima.service.ContentService;
+import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -20,35 +20,28 @@ public class SearchController extends BaseServlet {
     private ContentService contentService;
 
     @Override
-    protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {
-        try {
-            String action = req.getPathInfo();
-            if (action == null) {
-                BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "未识别功能");
-                return;
-            }
-            switch (action) {
-                case "/IdSearch":
-                    getContentDetailById(req, resp);
-                    break;
-                case "/keywordSearch":
-                    search(req, resp);
-                    break;
-                case "/getDetailRecommended":
-                    getDetail(req, resp);
-                    break;
-                default:
-                    BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "未识别功能");
-            }
-        } catch (BusinessException e) {
-            e.printStackTrace();
-            BaseServletUtil.writeError(resp, e.getCode(), e.getMessage());
-        } catch (Exception ex) {
-            BaseServletUtil.writeError(resp, ErrorCode.SERVER_ERROR, ex.getMessage());
+    protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        String action = req.getPathInfo();
+        if (action == null) {
+            BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "未识别功能");
+            return;
+        }
+        switch (action) {
+            case "/IdSearch":
+                getContentDetailById(req, resp);
+                break;
+            case "/keywordSearch":
+                search(req, resp);
+                break;
+            case "/getDetailRecommended":
+                getDetail(req, resp);
+                break;
+            default:
+                BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "未识别功能");
         }
     }
 
-    protected void getContentDetailById(HttpServletRequest req, HttpServletResponse resp) throws Exception {
+    protected void getContentDetailById(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         SearchDTO dto;
         if (req.getContentLength() <= 0) {
             dto = new SearchDTO();
@@ -72,7 +65,7 @@ public class SearchController extends BaseServlet {
         BaseServletUtil.writeSuccess(resp, cdVO);
     }
 
-    protected void search(HttpServletRequest req, HttpServletResponse resp) throws Exception {
+    protected void search(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         SearchDTO dto;
         if (req.getContentLength() <= 0) {
             dto = new SearchDTO();
@@ -100,7 +93,7 @@ public class SearchController extends BaseServlet {
         BaseServletUtil.writeSuccess(resp, result);
     }
 
-    protected void getDetail(HttpServletRequest req, HttpServletResponse resp) throws Exception {
+    protected void getDetail(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         SearchDTO dto;
         if (req.getContentLength() <= 0) {
             dto = new SearchDTO();

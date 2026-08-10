@@ -517,7 +517,7 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 - **优先级**: P1
 - **预估工时**: 30 分钟
 - **前置依赖**: 无
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -525,8 +525,8 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 
 #### 验证标准
 
-- [ ] 枚举包含全部现有码
-- [ ] `mvn compile` 通过（一次性替换全部引用）
+- [x] 枚举包含全部现有码
+- [x] `mvn compile` 通过（一次性替换全部引用）
 
 ---
 
@@ -535,7 +535,7 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 - **优先级**: P1
 - **预估工时**: 30 分钟
 - **前置依赖**: TASK-023
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -543,8 +543,8 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 
 #### 验证标准
 
-- [ ] 异常类齐全
-- [ ] 每个异常有便捷构造器（仅 message）
+- [x] 异常类齐全
+- [x] 每个异常有便捷构造器（仅 message）
 
 ---
 
@@ -553,7 +553,7 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 - **优先级**: P1
 - **预估工时**: 2 小时
 - **前置依赖**: TASK-024
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -561,8 +561,8 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 
 #### 验证标准
 
-- [ ] 业务包无 `throw new RuntimeException`
-- [ ] `mvn compile` 通过
+- [x] 业务包无 `throw new RuntimeException`
+- [x] `mvn compile` 通过
 
 ---
 
@@ -571,7 +571,7 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 - **优先级**: P1
 - **预估工时**: 30 分钟
 - **前置依赖**: TASK-025
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -579,7 +579,7 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 
 #### 验证标准
 
-- [ ] 无 `"USER_NOT_FOUND"` 等英文常量异常消息
+- [x] 无 `"USER_NOT_FOUND"` 等英文常量异常消息
 
 ---
 
@@ -588,7 +588,7 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 - **优先级**: P1
 - **预估工时**: 1 小时
 - **前置依赖**: TASK-025
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成，采用 ExceptionFilter 方案）
 
 #### 任务描述
 
@@ -596,9 +596,9 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 
 #### 验证标准
 
-- [ ] Controller 无重复 catch 样板
-- [ ] 业务异常返回对应 code，未知异常返回 500
-- [ ] `python tools/run_tests.py all` 全绿
+- [x] Controller 无重复 catch 样板
+- [x] 业务异常返回对应 code，未知异常返回 500
+- [x] `python tools/run_tests.py all` 全绿
 
 ---
 
@@ -607,7 +607,7 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 - **优先级**: P2
 - **预估工时**: 1 小时
 - **前置依赖**: TASK-006、TASK-027
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -615,8 +615,8 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 
 #### 验证标准
 
-- [ ] 业务代码无 `e.printStackTrace()`（`rg` 验证）
-- [ ] 日志无明文密码/完整 token
+- [x] 业务代码无 `e.printStackTrace()`（`rg` 验证）
+- [x] 日志无明文密码/完整 token
 
 ---
 
@@ -1242,3 +1242,4 @@ Filter 统计响应时间与错误率，日志输出；连接池使用率统计�
 | 2.3 | 2026-08-09 | TASK-007 完成：清理 pytest/smoke 测试内容与孤儿数据；中文标题测试内容保留、遗留表暂不 DROP（用户决策） |
 | 2.4 | 2026-08-10 | TASK-010~015 完成（阶段一）：删除残留测试/空壳类与 ssm_*/util；CouponAdmin 迁至测试目录；DTO → dto；pojo/DTO/command 合并为 com.itheima.model；LogInVO → LoginVO |
 | 2.5 | 2026-08-10 | TASK-016~022 完成（阶段二）：app.properties + AppConfig（环境变量覆盖）；连接池/Redis/JWT/上传/日志/缓存全部读配置；context.xml 启动校验；35/35 pytest 通过 |
+| 2.6 | 2026-08-10 | TASK-023~028 完成（阶段三）：ErrorCode 枚举化 + 12 个具体异常；业务 RuntimeException/英文消息全部替换；ExceptionFilter 全局异常处理；日志清理与手机号脱敏；35/35 pytest 通过 |

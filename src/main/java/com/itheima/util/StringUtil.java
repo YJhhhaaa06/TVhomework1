@@ -24,4 +24,14 @@ public class StringUtil {
         return phone.charAt(0) == '1';//如果第一位不是1
     }
 
+    /**
+     * 手机号脱敏：138****1234。非 11 位或为 null 时统一返回 ******。
+     */
+    public static String maskPhone(String phone) {
+        if (phone == null || phone.length() != 11) {
+            return "******";
+        }
+        return phone.substring(0, 3) + "****" + phone.substring(7);
+    }
+
 }

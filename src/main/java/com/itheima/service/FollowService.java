@@ -4,6 +4,7 @@ import com.itheima.dao.FollowDao;
 import com.itheima.dao.UserDao;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ConflictException;
+import com.itheima.exception.DatabaseException;
 import com.itheima.exception.ErrorCode;
 import com.itheima.exception.ServerException;
 import com.itheima.ioc.annotation.Component;
@@ -59,7 +60,7 @@ public class FollowService {
                 try {
                     conn.rollback();
                 } catch (SQLException ex) {
-                    throw new BusinessException(ErrorCode.SERVER_ERROR, "回滚失败", ex);
+                    throw new DatabaseException("回滚失败", ex);
                 }
             }
             throw new ServerException("关注失败");
@@ -141,7 +142,7 @@ public class FollowService {
                 try {
                     conn.rollback();
                 } catch (SQLException ex) {
-                    throw new BusinessException(ErrorCode.SERVER_ERROR, "回滚失败", ex);
+                    throw new DatabaseException("回滚失败", ex);
                 }
             }
             throw new ServerException("取关失败");

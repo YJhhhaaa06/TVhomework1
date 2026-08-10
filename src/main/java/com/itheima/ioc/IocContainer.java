@@ -3,15 +3,19 @@ package com.itheima.ioc;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.Inject;
 import com.itheima.ioc.annotation.PostConstruct;
+import com.itheima.util.LogUtil;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class IocContainer {
 
+    private static final Logger LOGGER = LogUtil.getLogger(IocContainer.class);
     private static final IocContainer INSTANCE = new IocContainer();
 
     private final Map<Class<?>, Object> beans = new ConcurrentHashMap<>();
@@ -66,7 +70,7 @@ public class IocContainer {
                 m.invoke(bean);
             } catch (NoSuchMethodException ignored) {
             } catch (Exception e) {
-                e.printStackTrace();
+                LOGGER.log(Level.SEVERE, "Bean shutdown 失败: " + bean.getClass().getName(), e);
             }
         }
     }

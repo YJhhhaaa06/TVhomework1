@@ -123,7 +123,7 @@ public class CommentService {
                     LOGGER.warning("添加评论时事务已回滚");
                 } catch (SQLException ex) {
                     LOGGER.log(Level.SEVERE,"事务回滚失败",ex);
-                    throw new BusinessException(ErrorCode.SERVER_ERROR, "评论添加失败", ex);
+                    throw new DatabaseException("评论添加失败", ex);
                 }
             }
             LOGGER.log(Level.SEVERE,"评论添加失败",e);

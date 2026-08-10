@@ -1,6 +1,5 @@
 package com.itheima.controller;
 
-import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
 import com.itheima.exception.ParamException;
 import com.itheima.ioc.annotation.Inject;
@@ -18,62 +17,48 @@ public class FollowController extends BaseServlet {
     private FollowService followService;
 
     @Override
-    protected void doGet(HttpServletRequest req, HttpServletResponse resp)
-            throws ServletException, IOException {
-        try {
-            String action = req.getPathInfo();
-            if (action == null) {
-                BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "action不能为空");
-                return;
-            }
-            Long currentUserId = (Long) req.getAttribute("userId");
-            long userId = parseUserId(req);
+    protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        String action = req.getPathInfo();
+        if (action == null) {
+            BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "action不能为空");
+            return;
+        }
+        Long currentUserId = (Long) req.getAttribute("userId");
+        long userId = parseUserId(req);
 
-            switch (action) {
-                case "/following":
-                    BaseServletUtil.writeSuccess(resp, followService.getFollowingList(userId, currentUserId));
-                    break;
-                case "/followers":
-                    BaseServletUtil.writeSuccess(resp, followService.getFollowerList(userId, currentUserId));
-                    break;
-                default:
-                    BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "未识别操作");
-            }
-        } catch (BusinessException e) {
-            BaseServletUtil.writeError(resp, e.getCode(), e.getMessage());
-        } catch (Exception e) {
-            BaseServletUtil.writeError(resp, ErrorCode.SERVER_ERROR, "服务器异常，请重试");
+        switch (action) {
+            case "/following":
+                BaseServletUtil.writeSuccess(resp, followService.getFollowingList(userId, currentUserId));
+                break;
+            case "/followers":
+                BaseServletUtil.writeSuccess(resp, followService.getFollowerList(userId, currentUserId));
+                break;
+            default:
+                BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "未识别操作");
         }
     }
 
     @Override
-    protected void doPost(HttpServletRequest req, HttpServletResponse resp)
-            throws ServletException, IOException {
-        try {
-            String action = req.getPathInfo();
-            if(action==null){
-                BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR,"action不能为空");
-                return;
-            }
-            Long userId = (Long) req.getAttribute("userId");
-            long followedUserId = parseFollowedUserId(req);
+    protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        String action = req.getPathInfo();
+        if(action==null){
+            BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR,"action不能为空");
+            return;
+        }
+        Long userId = (Long) req.getAttribute("userId");
+        long followedUserId = parseFollowedUserId(req);
 
-            switch (action) {
-                case "/add":
-                    followService.follow(userId, followedUserId);
-                    BaseServletUtil.writeSuccess(resp, "关注成功");
-                    break;
-                case "/remove":
-                    followService.unfollow(userId, followedUserId);
-                    BaseServletUtil.writeSuccess(resp, "已取关");
-                    break;
-                default:
-                    BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "未识别操作");
-            }
-        } catch (BusinessException e) {
-            BaseServletUtil.writeError(resp, e.getCode(), e.getMessage());
-        } catch (Exception e) {
-            BaseServletUtil.writeError(resp, ErrorCode.SERVER_ERROR, "服务器异常，请重试");
+        switch (action) {
+            case "/add":
+                followService.follow(userId, followedUserId);
+                BaseServletUtil.writeSuccess(resp, "关注成功");
+                break;
+            case "/remove":
+                followService.unfollow(userId, followedUserId);
+                BaseServletUtil.writeSuccess(resp, "已取关");
+                break;
+            default:
+                BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "未识别操作");
         }
     }
 

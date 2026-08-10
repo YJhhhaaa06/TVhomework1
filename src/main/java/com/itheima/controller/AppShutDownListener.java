@@ -6,6 +6,7 @@ import com.itheima.service.ContentService;
 import com.itheima.util.MyConnectionPool;
 import com.itheima.util.MyRedisPool;
 import com.itheima.util.RequestContext;
+import com.itheima.util.LogUtil;
 import jakarta.servlet.ServletContextEvent;
 import jakarta.servlet.ServletContextListener;
 import jakarta.servlet.annotation.WebListener;
@@ -18,9 +19,12 @@ import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
+import java.util.logging.Logger;
 
 @WebListener
 public class AppShutDownListener implements ServletContextListener {
+
+    private static final Logger LOGGER = LogUtil.getLogger(AppShutDownListener.class);
 
     @Override
     public void contextInitialized(ServletContextEvent sce) {
@@ -28,7 +32,7 @@ public class AppShutDownListener implements ServletContextListener {
         // 启动时记录部署上下文，供非请求线程（缓存刷新）拼接媒体 URL
         RequestContext.setDefaultContextPath(sce.getServletContext().getContextPath());
         IocContainer.getInstance().init();
-        System.out.println("IOC 容器初始化完成");
+        LOGGER.info("IOC 容器初始化完成");
     }
 
     @Override
@@ -39,7 +43,7 @@ public class AppShutDownListener implements ServletContextListener {
         MyRedisPool.close();
         MyConnectionPool.closePool();
 
-        System.out.println("资源已释放");
+        LOGGER.info("资源已释放");
     }
 
     /**
