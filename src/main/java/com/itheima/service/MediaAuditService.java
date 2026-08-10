@@ -1,5 +1,6 @@
 package com.itheima.service;
 
+import com.itheima.config.AppConfig;
 import com.itheima.dao.ContentDao;
 import com.itheima.dao.ContentMediaDao;
 import com.itheima.exception.NotFoundException;
@@ -243,7 +244,7 @@ public class MediaAuditService {
         if (fileName.contains("..")) {
             return null;
         }
-        return FileUploadService.BASE_PATH + File.separator + type + File.separator + fileName;
+        return AppConfig.getUploadPath() + File.separator + type + File.separator + fileName;
     }
 
     private String extensionOf(String fileName) {

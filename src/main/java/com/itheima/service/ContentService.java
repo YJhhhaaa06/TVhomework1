@@ -1,4 +1,5 @@
 package com.itheima.service;
+import com.itheima.config.AppConfig;
 import com.itheima.model.cache.CommentCacheDTO;
 import com.itheima.model.cache.ContentCacheDTO;
 import com.itheima.model.entity.ContentMedia;
@@ -53,7 +54,7 @@ public class ContentService {
     private static Map<Long, ContentCacheDTO> contentCache = new HashMap<>();
     private static Map<Long, List<CommentCacheDTO>> commentCache = new HashMap<>();
     private static Map<Long, Long> contentTimestamps = new HashMap<>();
-    private static final long CONTENT_TTL_MS = 10 * 60 * 1000;
+    private static final long CONTENT_TTL_MS = AppConfig.getContentTtlMillis();
     private static Map<String, List<Long>> typeCategoryIndex = new HashMap<>();
     private ScheduledExecutorService scheduler;
 
@@ -235,7 +236,7 @@ public class ContentService {
             } catch (Exception e) {
                 LOGGER.log(Level.WARNING, "缓存定时刷新异常", e);
             }
-        }, 0, 10, TimeUnit.MINUTES);
+        }, 0, AppConfig.getContentRefreshMinutes(), TimeUnit.MINUTES);
     }
 
     public void shutdown() {

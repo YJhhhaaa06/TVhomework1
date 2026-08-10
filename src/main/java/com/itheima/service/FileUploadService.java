@@ -1,5 +1,6 @@
 package com.itheima.service;
 
+import com.itheima.config.AppConfig;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.controller.UploadType;
 import com.itheima.model.vo.UploadResult;
@@ -16,8 +17,6 @@ import java.util.logging.Logger;
 
 @Component
 public class FileUploadService {
-
-    public static final String BASE_PATH = "D:/data/projects/VideoPlatform/stone";
 
     private static final Logger LOGGER =
             LogUtil.getLogger(FileUploadService.class);
@@ -72,7 +71,7 @@ public class FileUploadService {
         return fileName.substring(dotIndex).toLowerCase();
     }
     private String getBasePath() {   // 需要把 req 传进来
-        return BASE_PATH;
+        return AppConfig.getUploadPath();
     }
 }
 

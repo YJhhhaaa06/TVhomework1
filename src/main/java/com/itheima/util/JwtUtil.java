@@ -1,5 +1,6 @@
 package com.itheima.util;
 
+import com.itheima.config.AppConfig;
 import com.auth0.jwt.JWT;
 import com.auth0.jwt.algorithms.Algorithm;
 import com.auth0.jwt.exceptions.JWTVerificationException;
@@ -8,8 +9,8 @@ import com.auth0.jwt.interfaces.DecodedJWT;
 import java.util.Date;
 
 public class JwtUtil {
-    private static final String SECRET = "STONE"; //用于生成签名
-    private static final long EXPIRE_TIME = 2 * 60 * 60 * 1000; // 2小时
+    private static final String SECRET = AppConfig.getJwtSecret(); //用于生成签名
+    private static final long EXPIRE_TIME = AppConfig.getJwtExpireMillis();
 
     private static final Algorithm algorithm = Algorithm.HMAC256(SECRET);
     // 生成 token

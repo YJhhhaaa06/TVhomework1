@@ -1,7 +1,7 @@
 # 当前系统架构地图
 
-> 版本：1.2
-> 最后更新：2026-08-09
+> 版本：1.4
+> 最后更新：2026-08-10
 > 维护说明：每次架构改动后必须更新本文档
 
 ---
@@ -268,10 +268,12 @@ com.itheima/
 
 | 配置项 | 值 | 位置 |
 |--------|-----|------|
-| URL | jdbc:mysql://localhost:3306/TVDatabase?useSSL=false&serverTimezone=Asia/Shanghai | MyConnectionPool.java |
-| 用户名 | root | MyConnectionPool.java |
-| 密码 | MySQL | MyConnectionPool.java |
-| 连接池初始大小 | 5 | MyConnectionPool.java |
+| 驱动 | com.mysql.cj.jdbc.Driver | app.properties (db.driver) / AppConfig |
+| URL | jdbc:mysql://localhost:3306/TVDatabase?useSSL=false&serverTimezone=Asia/Shanghai | app.properties (db.url) / AppConfig |
+| 用户名 | root | app.properties (db.username) / AppConfig |
+| 密码 | MySQL | app.properties (db.password) / AppConfig |
+| 连接池初始大小 | 5 | app.properties (db.pool.initSize) / AppConfig |
+| 连接池上限/超时 | 20 / 5000ms（已定义，TASK-042 接线） | app.properties (db.pool.*) / AppConfig |
 
 ### 5.2 数据库表
 
@@ -300,10 +302,10 @@ com.itheima/
 
 | 配置项 | 值 | 位置 |
 |--------|-----|------|
-| 地址 | localhost:6379 | MyRedisPool.java |
-| 最大连接数 | 50 | MyRedisPool.java |
-| 最大空闲 | 10 | MyRedisPool.java |
-| 最小空闲 | 5 | MyRedisPool.java |
+| 地址 | localhost:6379 | app.properties (redis.host/port) / AppConfig |
+| 最大连接数 | 50 | app.properties (redis.maxTotal) / AppConfig |
+| 最大空闲 | 10 | app.properties (redis.maxIdle) / AppConfig |
+| 最小空闲 | 5 | app.properties (redis.minIdle) / AppConfig |
 
 ### 6.2 Key 设计
 
@@ -468,7 +470,6 @@ com.itheima/
 | ContentService | 拆分为 3-4 个类 |
 | DAO 层 | TransactionTemplate + DAO 只接收 Connection（v2.0 修正，废弃 BaseDao 自取连接方案） |
 | 异常处理 | 统一使用 BusinessException |
-| 配置管理 | 硬编码 → app.properties |
 | 运维权限 | /api/admin/* 增加管理员角色 |
 
 ---
@@ -477,6 +478,7 @@ com.itheima/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-08-10 | 1.4 | 阶段二完成：新增 app.properties + AppConfig（环境变量覆盖）；MyConnectionPool/MyRedisPool/JwtUtil/FileUploadService/LogUtil/ContentService 全部读配置；AppShutDownListener 启动校验 context.xml 与 upload.path 一致；JWT 密钥/有效期、缓存 TTL/刷新、日志路径/级别配置化 |
 | 2026-08-10 | 1.3 | 阶段一完成：删除残留测试/空壳类与 ssm_*/util 子模块；CouponAdmin 移至 src/test；pojo/DTO/command 合并为 com.itheima.model（entity/dto/vo/cache/audit/command）；DTO 包名全小写；LogInVO 重命名为 LoginVO |
 | 2026-08-09 | 1.2 | 手动清理未引用/未接线方法（Service 12 个、DAO 31 个，见 REMOVE_CODE.md）；删除功能确认不做；代码统计刷新至 97 文件 / 6,559 行；API 清单删除不存在的 /user/changeUserName、/user/changePhone；修复 UploadController return、欢迎页、日志目录 |
 | 2026-08-08 | 1.1 | 新增媒体运维：content/content_media 增加 file_exists、last_verify_time；新增 MediaAuditService、MediaAdminController、recovery.html；jointUrl 改为动态 context path |

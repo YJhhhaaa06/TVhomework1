@@ -384,7 +384,7 @@ com.itheima.model/
 - **优先级**: P1
 - **预估工时**: 1 小时
 - **前置依赖**: 无
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -392,9 +392,9 @@ com.itheima.model/
 
 #### 验证标准
 
-- [ ] 配置在 classpath 可读取
-- [ ] 环境变量能覆盖默认值
-- [ ] `mvn compile` 通过
+- [x] 配置在 classpath 可读取
+- [x] 环境变量能覆盖默认值（LOG_PATH 端到端验证）
+- [x] `mvn compile` 通过
 
 ---
 
@@ -403,7 +403,7 @@ com.itheima.model/
 - **优先级**: P1
 - **预估工时**: 30 分钟
 - **前置依赖**: TASK-016
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -411,8 +411,8 @@ URL/USER/PASSWORD/INIT_SIZE 改为 `AppConfig` 读取。
 
 #### 验证标准
 
-- [ ] 无硬编码连接串
-- [ ] 连接数据库正常
+- [x] 无硬编码连接串
+- [x] 连接数据库正常
 
 ---
 
@@ -421,7 +421,7 @@ URL/USER/PASSWORD/INIT_SIZE 改为 `AppConfig` 读取。
 - **优先级**: P1
 - **预估工时**: 15 分钟
 - **前置依赖**: TASK-016
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -429,8 +429,8 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 
 #### 验证标准
 
-- [ ] 无硬编码 Redis 地址
-- [ ] Redis 连接正常
+- [x] 无硬编码 Redis 地址
+- [x] Redis 连接正常
 
 ---
 
@@ -439,7 +439,7 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 - **优先级**: P1
 - **预估工时**: 15 分钟
 - **前置依赖**: TASK-016
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -447,8 +447,8 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 
 #### 验证标准
 
-- [ ] 密钥与过期时间来自配置
-- [ ] 登录 token 生成/校验正常
+- [x] 密钥与过期时间来自配置
+- [x] 登录 token 生成/校验正常
 
 ---
 
@@ -457,7 +457,7 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 - **优先级**: P1
 - **预估工时**: 30 分钟
 - **前置依赖**: TASK-016
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成，采用启动校验方案）
 
 #### 任务描述
 
@@ -465,8 +465,8 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 
 #### 验证标准
 
-- [ ] 上传文件写入配置路径
-- [ ] `/upload` 静态资源映射正常
+- [x] 上传文件写入配置路径
+- [x] `/upload` 静态资源映射正常
 
 ---
 
@@ -475,7 +475,7 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 - **优先级**: P1
 - **预估工时**: 15 分钟
 - **前置依赖**: TASK-016
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -483,8 +483,8 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 
 #### 验证标准
 
-- [ ] 日志写入配置路径
-- [ ] 级别配置生效
+- [x] 日志写入配置路径
+- [x] 级别配置生效
 
 ---
 
@@ -493,7 +493,7 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 - **优先级**: P1
 - **预估工时**: 15 分钟
 - **前置依赖**: TASK-016
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -501,8 +501,8 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 
 #### 验证标准
 
-- [ ] 无硬编码 10 分钟常量
-- [ ] 缓存刷新正常
+- [x] 无硬编码 10 分钟常量
+- [x] 缓存刷新正常
 
 ---
 
@@ -1241,3 +1241,4 @@ Filter 统计响应时间与错误率，日志输出；连接池使用率统计�
 | 2.2 | 2026-08-09 | TASK-003/005/006/008/009 完成；备份方案改为仅数据库备份到 auto_backup（媒体由用户手动打包） |
 | 2.3 | 2026-08-09 | TASK-007 完成：清理 pytest/smoke 测试内容与孤儿数据；中文标题测试内容保留、遗留表暂不 DROP（用户决策） |
 | 2.4 | 2026-08-10 | TASK-010~015 完成（阶段一）：删除残留测试/空壳类与 ssm_*/util；CouponAdmin 迁至测试目录；DTO → dto；pojo/DTO/command 合并为 com.itheima.model；LogInVO → LoginVO |
+| 2.5 | 2026-08-10 | TASK-016~022 完成（阶段二）：app.properties + AppConfig（环境变量覆盖）；连接池/Redis/JWT/上传/日志/缓存全部读配置；context.xml 启动校验；35/35 pytest 通过 |

@@ -1,5 +1,7 @@
 package com.itheima.util;
 
+import com.itheima.config.AppConfig;
+
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -8,22 +10,21 @@ import java.util.LinkedList;
 import java.util.Set;
 
 public class MyConnectionPool {
-//    private static final String URL = "jdbc:mysql:///TVDatabase?useSSL=false";
-private static final String URL = "jdbc:mysql://localhost:3306/TVDatabase?useSSL=false&serverTimezone=Asia/Shanghai";
-    private static final String USER = "root";
-    private static final String PASSWORD = "MySQL";
+    private static final String URL = AppConfig.getDbUrl();
+    private static final String USER = AppConfig.getDbUsername();
+    private static final String PASSWORD = AppConfig.getDbPassword();
 
     //手动加载驱动
     static {
         try {
-            Class.forName("com.mysql.cj.jdbc.Driver");
+            Class.forName(AppConfig.getDbDriver());
         } catch (ClassNotFoundException e) {
             e.printStackTrace();
         }
     }
 
     // 池子
-    private static final int INIT_SIZE = 5;
+    private static final int INIT_SIZE = AppConfig.getDbInitSize();
     private static final LinkedList<Connection> pool = new LinkedList<>();
     private static final Set<Connection> allConnections = new HashSet<>();
     //连接池是否已关闭
