@@ -205,6 +205,20 @@ public class UserDao {
         }
     }
 
+    //查询用户角色（0=普通用户，1=管理员；查无此人返回 0）
+    public int getUserRole(Connection conn, long userId) throws SQLException {
+        String sql = "select role from users where id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, userId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt("role");
+                }
+                return 0;
+            }
+        }
+    }
+
 }
 
 

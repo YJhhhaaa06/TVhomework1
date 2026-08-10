@@ -224,4 +224,15 @@ public class UserService {
     //根据id查询用户名
 
 
+    //查询用户是否为管理员（0=普通用户，1=管理员）
+    public boolean isAdmin(long userId) {
+        return transactionTemplate.execute(conn -> {
+            try {
+                return userDao.getUserRole(conn, userId) == 1;
+            } catch (SQLException e) {
+                throw new DatabaseException("查询用户角色失败", e);
+            }
+        });
+    }
+
 }

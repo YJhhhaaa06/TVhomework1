@@ -80,19 +80,54 @@ async function init() {
         window.location.href = 'login.html';
         return;
     }
-    await loadList();
+    if (await checkAdmin()) {
+        await loadList();
+    }
+}
+
+async function checkAdmin() {
+    try {
+        const data = await request('./api/admin/media/me');
+        if (data.data === true) return true;
+        renderNoPermission();
+        return false;
+    } catch (e) {
+        if (e.message === 'unauthorized') return false;
+        if (e.message === 'forbidden') {
+            renderNoPermission();
+            return false;
+        }
+        showMsg(e.message || '权限检查失败');
+        renderNoPermission();
+        return false;
+    }
+}
+
+function renderNoPermission() {
+    const scanBtn = document.querySelector('.top .btn.primary');
+    if (scanBtn) scanBtn.style.display = 'none';
+    const toolbar = document.querySelector('.toolbar');
+    if (toolbar) toolbar.style.display = 'none';
+    const thead = document.querySelector('table thead');
+    if (thead) thead.style.display = 'none';
+    document.getElementById('stats').innerHTML = '';
+    document.getElementById('tbody').innerHTML =
+        '<tr><td colspan="9" class="empty">无权限访问：该页面仅管理员可用</td></tr>';
 }
 
 async function request(url, options = {}) {
     options.headers = options.headers || {};
     if (token) options.headers['token'] = token;
     const res = await fetch(url, options);
-    if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
         localStorage.removeItem('userToken');
         localStorage.removeItem('username');
         alert('登录已过期，请重新登录');
         window.location.href = 'login.html';
         throw new Error('unauthorized');
+    }
+    if (res.status === 403) {
+        throw new Error('forbidden');
     }
     const data = await res.json();
     if (data.code !== 200) throw new Error(data.msg || '请求失败');

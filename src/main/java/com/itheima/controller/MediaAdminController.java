@@ -16,7 +16,7 @@ import jakarta.servlet.http.Part;
 import java.io.IOException;
 
 /**
- * 运维接口：媒体资源扫描与恢复。当前对所有登录用户开放，后续再上线管理员身份。
+ * 运维接口：媒体资源扫描与恢复。仅管理员可访问（AuthFilter 校验 role==1）。
  */
 @WebServlet("/api/admin/media/*")
 @MultipartConfig(
@@ -31,7 +31,9 @@ public class MediaAdminController extends BaseServlet {
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
         String action = req.getPathInfo();
-        if ("/list".equals(action)) {
+        if ("/me".equals(action)) {
+            BaseServletUtil.writeSuccess(resp, true);
+        } else if ("/list".equals(action)) {
             MediaAuditResult result = mediaAuditService.scanAll();
             BaseServletUtil.writeSuccess(resp, result);
         } else {

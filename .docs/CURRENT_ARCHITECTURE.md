@@ -1,6 +1,6 @@
 # 当前系统架构地图
 
-> 版本：1.7
+> 版本：1.8
 > 最后更新：2026-08-10
 > 维护说明：每次架构改动后必须更新本文档
 
@@ -114,13 +114,14 @@ com.itheima/
 | ExceptionFilter | 55 | 全局异常处理（业务异常按 code/msg 输出，未知异常 500） | /* |
 | EncodingFilter | 21 | UTF-8 编码 | /* |
 | LoginFilter | 41 | 解析 JWT Token，设置 userId | /* |
-| AuthFilter | 59 | 权限校验 | /* |
+| AuthFilter | 71 | 权限校验（登录 + /api/admin 管理员角色） | /* |
 
 **执行顺序**：ExceptionFilter → EncodingFilter → LoginFilter → AuthFilter（web.xml 注册）
 
 **AuthFilter 保护路径**：
 - 前缀：`/api/upload`、`/api/admin`、`/follow`、`/like`、`/feed`
 - 精确：`/comment/add`、`/user/changePassword`、`/coupon/grab`、`/coupon/my`
+- `/api/admin/*` 额外校验 `role == 1`，非管理员返回 403（每次请求查库）
 
 #### controller 包 — 控制器
 
@@ -136,7 +137,7 @@ com.itheima/
 | FeedController | /feed | 64 | 关注动态流 |
 | ProfileController | /profile | 76 | 用户主页 |
 | UploadController | /api/upload/* | 164 | 上传视频/动态 |
-| MediaAdminController | /api/admin/media/* | 83 | 媒体运维：扫描/恢复 |
+| MediaAdminController | /api/admin/media/* | 71 | 媒体运维：扫描/恢复（仅管理员） |
 | FollowController | /follow/* | 103 | 关注/取关 |
 | LikeController | /like/* | 127 | 点赞 |
 | CommentController | /comment/* | 98 | 评论 |
@@ -153,7 +154,7 @@ com.itheima/
 | LikeService | 308 | 点赞业务 | ContentDao, CommentDao, ContentLikeDao, CommentLikeDao, LikeCacheService, ContentCacheManager, TransactionTemplate |
 | LikeCacheService | 264 | Redis 点赞缓存 | - |
 | CommentService | 99 | 评论业务 | CommentDao, ContentDao, ContentCacheManager, TransactionTemplate |
-| UserService | 227 | 用户认证 | UserDao |
+| UserService | 238 | 用户认证 + 管理员判定 | UserDao, TransactionTemplate |
 | FollowService | 118 | 关注业务 | FollowDao, UserDao |
 | ProfileService | 91 | 用户主页 | UserDao, ContentDao, FollowDao, ContentCacheManager, LikeService, TransactionTemplate |
 | FeedService | 80 | 关注动态流 | FollowDao, ContentDao, ContentCacheManager, LikeService, TransactionTemplate |
@@ -165,7 +166,7 @@ com.itheima/
 
 | 类 | 行数 | 对应表 | 职责 |
 |----|------|--------|------|
-| UserDao | 250 | users | 用户 CRUD |
+| UserDao | 224 | users | 用户 CRUD + 角色查询 |
 | ContentDao | 290 | content | 内容 CRUD + 全文搜索 + 媒体状态更新 |
 | CommentDao | 133 | comment | 评论 CRUD |
 | CouponDao | 114 | coupon, coupon_order | 优惠券 CRUD |
@@ -291,7 +292,7 @@ com.itheima/
 
 | 表名 | 说明 | 关键字段 |
 |------|------|----------|
-| users | 用户表 | id, username, hashed_password, phone, follow_count, follower_count |
+| users | 用户表 | id, username, hashed_password, phone, follow_count, follower_count, role（0=普通/1=管理员） |
 | content | 内容表 | id, user_id, title, description, type, category_id, comment_count, like_count, is_deleted, create_time, file_exists, last_verify_time |
 | comment | 评论表 | id, content_id, user_id, message, parent_id, like_count, is_deleted |
 | follow | 关注关系表 | user_id, followed_user_id |
@@ -377,10 +378,11 @@ com.itheima/
 | GET | /coupon/my | 我的优惠券 | ✓ |
 | POST | /coupon/grab | 抢购优惠券 | ✓ |
 
-### 7.5 媒体运维模块（当前仅要求登录，无管理员角色）
+### 7.5 媒体运维模块（仅管理员，AuthFilter 校验 role==1）
 
 | 方法 | 路径 | 说明 | 需要登录 |
 |------|------|------|----------|
+| GET | /api/admin/media/me | 管理员身份检查（供运维页隐藏入口） | ✓ |
 | GET | /api/admin/media/list | 扫描并返回媒体资源状态 | ✓ |
 | POST | /api/admin/media/scan | 重新扫描并回写状态 | ✓ |
 | POST | /api/admin/media/restore | 按数据库原文件名重新上传写回 | ✓ |
@@ -399,7 +401,7 @@ com.itheima/
 | space.html | 499 | 个人主页 | /space.html |
 | profile.html | 360 | 个人资料 | /profile.html |
 | coupon.html | 231 | 优惠券中心 | /coupon.html |
-| recovery.html | - | 媒体资源运维（扫描/恢复） | /recovery.html |
+| recovery.html | 253 | 媒体资源运维（扫描/恢复，仅管理员） | /recovery.html |
 
 ---
 
@@ -482,14 +484,30 @@ com.itheima/
 | ContentService | ~~拆分为 3-4 个类~~（阶段五已完成：ContentCacheManager + ContentStatusFiller，2026-08-10） |
 | DAO 层 | TransactionTemplate + DAO 只接收 Connection（v2.0 修正，废弃 BaseDao 自取连接方案） |
 | 异常处理 | 统一使用 BusinessException |
-| 运维权限 | /api/admin/* 增加管理员角色 |
+| 运维权限 | ~~/api/admin/* 增加管理员角色~~（阶段六已完成：role 列 + AuthFilter 校验，2026-08-10） |
 
 ---
 
-## 十三、更新日志
+## 十三、安全审计记录
+
+### 13.1 SQL 注入复查（2026-08-10，TASK-036）
+
+- 范围：UserDao / ContentDao / CommentDao / ContentMediaDao / CommentLikeDao / ContentLikeDao / FollowDao / CouponDao 全部 DAO。
+- 结论：所有 SQL 均使用 `PreparedStatement` 参数化；动态 IN 查询先拼接 `?` 占位符再 `setXxx` 绑定；LIMIT/OFFSET 参数化；未发现字符串拼接用户输入，无注入风险点。
+
+### 13.2 资源所有权校验（2026-08-10，TASK-038）
+
+- 点赞/评论/关注/优惠券/修改密码等写操作均取 `req.getAttribute("userId")`（由 LoginFilter 从 JWT subject 设置），客户端无法伪造身份。
+- 媒体运维扫描/恢复经 AuthFilter 收口为仅管理员（role==1），普通用户返回 403。
+- 内容删除功能已取消，无删除接口需要校验。
+
+---
+
+## 十四、更新日志
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-08-10 | 1.8 | 阶段六完成：SQL 注入与资源所有权审计记录（全参数化、无注入点）；users 表新增 role 列（0=普通/1=管理员）；UserDao.getUserRole + UserService.isAdmin；AuthFilter 对 /api/admin/* 校验管理员角色（每次请求查库）；MediaAdminController 新增 GET /api/admin/media/me；recovery.html 区分 403 并隐藏非管理员操作；新增 tools/admin.py（--list/--promote/--demote）；迁移前已备份 |
 | 2026-08-10 | 1.7 | 阶段五完成：ContentService 缓存职责迁入 ContentCacheManager（@Component 实例 Bean，评论树加载一并迁入以消除循环依赖）；状态填充迁入 ContentStatusFiller；ContentService 精简为查询与发布；CommentService/LikeService/FeedService/ProfileService/StartController 调用点改为注入新 Bean；缓存策略原样保留 |
 | 2026-08-10 | 1.6 | 阶段四完成：新增 TransactionTemplate 统一事务管理；UserService/CommentService/FollowService/LikeService/ContentService/CouponService/MediaAuditService/FeedService/ProfileService 手工事务样板全部替换；DAO 全部只接收 Connection（UserDao/CouponDao/ContentLikeDao/CommentLikeDao 移除自取连接包装）；媒体扫描改为单事务 |
 | 2026-08-10 | 1.5 | 阶段三完成：ErrorCode 枚举化（code+中文消息）与 12 个具体异常；业务 RuntimeException/英文消息替换为具体异常；新增 ExceptionFilter 全局异常处理并清理 Controller catch 样板；日志清理（printStackTrace/System.out）与手机号脱敏；登录用户不存在调整为 401，非法上传类型调整为 400 |

@@ -774,7 +774,7 @@ ContentService 注入 ContentCacheManager/ContentStatusFiller，保留查询与�
 - **优先级**: P1
 - **预估工时**: 1 小时
 - **前置依赖**: 无
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -782,8 +782,8 @@ ContentService 注入 ContentCacheManager/ContentStatusFiller，保留查询与�
 
 #### 验证标准
 
-- [ ] 审计记录完成
-- [ ] 无注入风险点
+- [x] 审计记录完成
+- [x] 无注入风险点
 
 ---
 
@@ -792,7 +792,7 @@ ContentService 注入 ContentCacheManager/ContentStatusFiller，保留查询与�
 - **优先级**: P1
 - **预估工时**: 1 天
 - **前置依赖**: TASK-008（备份）
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -803,9 +803,9 @@ ContentService 注入 ContentCacheManager/ContentStatusFiller，保留查询与�
 
 #### 验证标准
 
-- [ ] 普通用户访问 /api/admin/* 返回 403
-- [ ] 管理员可正常扫描/恢复
-- [ ] 运维页对非管理员隐藏
+- [x] 普通用户访问 /api/admin/* 返回 403
+- [x] 管理员可正常扫描/恢复
+- [x] 运维页对非管理员隐藏
 
 ---
 
@@ -814,7 +814,7 @@ ContentService 注入 ContentCacheManager/ContentStatusFiller，保留查询与�
 - **优先级**: P1
 - **预估工时**: 1 小时
 - **前置依赖**: TASK-037
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -822,8 +822,8 @@ ContentService 注入 ContentCacheManager/ContentStatusFiller，保留查询与�
 
 #### 验证标准
 
-- [ ] 普通用户无法执行运维扫描/恢复
-- [ ] 越权返回 403
+- [x] 普通用户无法执行运维扫描/恢复
+- [x] 越权返回 403
 
 ---
 
@@ -832,7 +832,7 @@ ContentService 注入 ContentCacheManager/ContentStatusFiller，保留查询与�
 - **优先级**: P2
 - **预估工时**: 1 天
 - **前置依赖**: 无
-- **状态**: `[ ]`
+- **状态**: `[ ]`（2026-08-10 本轮跳过，后续再做）
 
 #### 任务描述
 
@@ -1245,3 +1245,4 @@ Filter 统计响应时间与错误率，日志输出；连接池使用率统计�
 | 2.6 | 2026-08-10 | TASK-023~028 完成（阶段三）：ErrorCode 枚举化 + 12 个具体异常；业务 RuntimeException/英文消息全部替换；ExceptionFilter 全局异常处理；日志清理与手机号脱敏；35/35 pytest 通过 |
 | 2.7 | 2026-08-10 | TASK-029~031 完成（阶段四）：TransactionTemplate 统一事务；9 个 Service 手工事务样板全部替换；DAO 只接收 Connection（删除自取连接包装）；35/35 pytest 通过 |
 | 2.8 | 2026-08-10 | TASK-032~034 完成（阶段五）：ContentService 缓存职责迁入 ContentCacheManager、状态填充迁入 ContentStatusFiller；CommentService/LikeService/FeedService/ProfileService/StartController 调用点更新；TASK-035（UserService 拆分）按用户决定暂缓；35/35 pytest 通过 |
+| 2.9 | 2026-08-10 | TASK-036~038 完成（阶段六）：SQL 注入与资源所有权审计记录（全参数化、无注入点）；users 表新增 role 列 + tools/admin.py（--list/--promote/--demote）；AuthFilter 对 /api/admin/* 校验管理员角色；recovery.html 区分 403 并隐藏非管理员操作；TASK-039（XSS/CSRF）按用户决定暂缓；35/35 pytest 通过 |

@@ -2,6 +2,8 @@ package com.itheima.filter;
 
 import com.itheima.controller.BaseServletUtil;
 import com.itheima.exception.ErrorCode;
+import com.itheima.ioc.IocContainer;
+import com.itheima.service.UserService;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -43,6 +45,15 @@ public class AuthFilter implements Filter {
         if (requiresLogin(path) && req.getAttribute("userId") == null) {
             BaseServletUtil.writeError(resp, ErrorCode.UNAUTHORIZED, "请先登录");
             return;
+        }
+
+        if (path.startsWith("/api/admin")) {
+            Long userId = (Long) req.getAttribute("userId");
+            UserService userService = IocContainer.getInstance().getBean(UserService.class);
+            if (userId == null || !userService.isAdmin(userId)) {
+                BaseServletUtil.writeError(resp, ErrorCode.FORBIDDEN, "无权限");
+                return;
+            }
         }
 
         chain.doFilter(request, response);
