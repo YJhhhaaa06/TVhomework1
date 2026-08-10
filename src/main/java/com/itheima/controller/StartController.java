@@ -1,7 +1,7 @@
 package com.itheima.controller;
 
 import com.itheima.ioc.annotation.Inject;
-import com.itheima.pojo.ContentVO;
+import com.itheima.model.vo.ContentVO;
 import com.itheima.service.ContentService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;

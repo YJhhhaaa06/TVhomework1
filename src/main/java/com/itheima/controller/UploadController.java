@@ -1,11 +1,11 @@
 package com.itheima.controller;
 
-import com.itheima.command.CommandConverter;
-import com.itheima.command.UploadCommand;
+import com.itheima.model.command.CommandConverter;
+import com.itheima.model.command.UploadCommand;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
 import com.itheima.ioc.annotation.Inject;
-import com.itheima.pojo.UploadResult;
+import com.itheima.model.vo.UploadResult;
 import com.itheima.service.ContentService;
 import com.itheima.service.FileUploadService;
 import jakarta.servlet.ServletException;

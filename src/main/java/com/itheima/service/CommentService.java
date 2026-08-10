@@ -1,13 +1,13 @@
 package com.itheima.service;
 
-import com.itheima.command.CommentCommand;
+import com.itheima.model.command.CommentCommand;
 import com.itheima.dao.CommentDao;
 import com.itheima.dao.ContentDao;
 import com.itheima.exception.*;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.Inject;
-import com.itheima.pojo.CommentCacheDTO;
-import com.itheima.pojo.CommentVO;
+import com.itheima.model.cache.CommentCacheDTO;
+import com.itheima.model.vo.CommentVO;
 import com.itheima.util.LogUtil;
 import com.itheima.util.MyConnectionPool;
 

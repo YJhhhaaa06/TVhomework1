@@ -2,7 +2,7 @@ package com.itheima.service;
 
 import com.itheima.ioc.annotation.Component;
 import com.itheima.controller.UploadType;
-import com.itheima.pojo.UploadResult;
+import com.itheima.model.vo.UploadResult;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.Part;
 

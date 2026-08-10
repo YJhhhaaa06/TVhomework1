@@ -1,5 +1,5 @@
-### ==================== UploadServlet — 静态文件服务测试 ====================
-# UploadServlet 映射 /upload/*，读取 D:/data/projects/VideoPlatform/stone 下的文件
+### ==================== 静态文件服务测试（/upload/*） ====================
+# /upload/* 由 context.xml 的 PostResources 映射，读取 D:/data/projects/VideoPlatform/stone 下的文件
 # 需要先通过 uploadTest.http 上传文件，拿到返回的 URL 后替换下面的路径
 
 

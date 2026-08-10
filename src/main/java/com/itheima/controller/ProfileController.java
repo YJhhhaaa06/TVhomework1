@@ -4,7 +4,7 @@ import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
 import com.itheima.exception.ParamException;
 import com.itheima.ioc.annotation.Inject;
-import com.itheima.pojo.ProfileVO;
+import com.itheima.model.vo.ProfileVO;
 import com.itheima.service.ProfileService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;

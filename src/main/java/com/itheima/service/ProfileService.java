@@ -1,6 +1,10 @@
 package com.itheima.service;
+import com.itheima.model.cache.ContentCacheDTO;
+import com.itheima.model.entity.User;
+import com.itheima.model.vo.ContentVO;
+import com.itheima.model.vo.ProfileVO;
 
-import com.itheima.DTO.PageResult;
+import com.itheima.model.dto.PageResult;
 import com.itheima.dao.ContentDao;
 import com.itheima.dao.FollowDao;
 import com.itheima.dao.UserDao;
@@ -8,7 +12,6 @@ import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.Inject;
-import com.itheima.pojo.*;
 import com.itheima.util.LogUtil;
 import com.itheima.util.MyConnectionPool;
 

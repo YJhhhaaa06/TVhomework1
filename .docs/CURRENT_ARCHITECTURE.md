@@ -82,17 +82,20 @@ com.itheima/
 ├── controller/             # 控制器层（1205行）
 ├── service/                # 业务逻辑层（2236行）
 ├── dao/                    # 数据访问层（1160行）
-├── pojo/                   # 实体/VO/缓存DTO（614行）
-├── DTO/                    # 数据传输对象（206行）
-├── command/                # 命令对象（327行）
+├── model/                  # 统一数据模型（28类，1147行）
+│   ├── entity/             # User、ContentMedia
+│   ├── dto/                # 请求/分页 DTO
+│   ├── vo/                 # 视图对象
+│   ├── cache/              # 缓存 DTO
+│   ├── audit/              # 媒体审计/恢复结果
+│   └── command/            # 命令对象与转换器
 ├── exception/              # 异常体系（58行）
 ├── util/                   # 工具类（370行）
-└── CouponAdmin.java        # 管理员工具（55行）
 ```
 
 ### 4.2 各包详细清单
 
-> 行数统计更新至 2026-08-09；个别类行数以实际代码为准。
+> 行数统计更新至 2026-08-10；个别类行数以实际代码为准。
 
 #### ioc 包 — 依赖注入容器
 
@@ -138,8 +141,6 @@ com.itheima/
 | CommentController | /comment/* | 98 | 评论 |
 | CouponController | /coupon/* | 81 | 优惠券 |
 | UploadType | - | 72 | 上传类型枚举 |
-| UploadServlet | (旧版) | 57 | 已废弃（待删除） |
-| Test3 | - | 11 | 测试用（待删除） |
 
 #### service 包 — 业务逻辑
 
@@ -156,8 +157,6 @@ com.itheima/
 | FileUploadService | 78 | 文件上传 | - |
 | MediaAuditService | 259 | 媒体完整性扫描与恢复 | ContentDao, ContentMediaDao |
 | CouponService | 76 | 优惠券抢购 | CouponDao |
-| MenuService | 7 | 空壳（待删除） | - |
-| ImageService | 7 | 空壳（待删除） | - |
 
 #### dao 包 — 数据访问
 
@@ -172,27 +171,17 @@ com.itheima/
 | ContentMediaDao | 99 | content_media | 内容媒体 + 媒体状态更新 |
 | FollowDao | 107 | follow | 关注关系 |
 | ResultMap | 66 | - | ResultSet → 对象映射 |
-| CommentMediaDao | 8 | comment_media | 空壳 |
 
-#### pojo 包 — 实体/VO
+#### model 包 — 统一数据模型（原 pojo/DTO/command 合并）
+
+> entity/ 子包
 
 | 类 | 行数 | 类型 | 用途 |
 |----|------|------|------|
-| ContentCacheDTO | 127 | 缓存DTO | 内容缓存对象 |
-| CommentCacheDTO | 92 | 缓存DTO | 评论缓存对象（含树形 children） |
 | User | 89 | 实体 | 用户实体 |
 | ContentMedia | 63 | 实体 | 内容媒体实体 |
-| ProfileVO | 43 | VO | 个人主页视图 |
-| ContentVO | 41 | VO | 内容列表视图（继承 ContentCacheDTO） |
-| LogInVO | 40 | VO | 登录返回（待重命名为 LoginVO） |
-| UploadResult | 31 | VO | 上传结果 |
-| ContentDetailVO | 25 | VO | 内容详情视图（继承 ContentCacheDTO） |
-| CommentVO | 21 | VO | 评论视图 |
-| MediaAuditItem | 87 | 审计 | 媒体扫描结果项（灾后新增） |
-| MediaAuditResult | 88 | 审计 | 媒体扫描汇总结果（灾后新增） |
-| RestoreResult | 49 | 审计 | 媒体恢复结果（灾后新增） |
 
-#### DTO 包 — 数据传输对象
+> dto/ 子包
 
 | 类 | 行数 | 用途 |
 |----|------|------|
@@ -204,7 +193,33 @@ com.itheima/
 | PageResult | - | 分页结果 |
 | GrabCouponRequest | - | 抢券请求 |
 
-#### command 包 — 命令对象
+> vo/ 子包
+
+| 类 | 行数 | 类型 | 用途 |
+|----|------|------|------|
+| ProfileVO | 43 | VO | 个人主页视图 |
+| ContentVO | 41 | VO | 内容列表视图（继承 ContentCacheDTO） |
+| LoginVO | 40 | VO | 登录返回（原 LogInVO） |
+| UploadResult | 31 | VO | 上传结果 |
+| ContentDetailVO | 25 | VO | 内容详情视图（继承 ContentCacheDTO） |
+| CommentVO | 21 | VO | 评论视图 |
+
+> cache/ 子包
+
+| 类 | 行数 | 类型 | 用途 |
+|----|------|------|------|
+| ContentCacheDTO | 127 | 缓存DTO | 内容缓存对象 |
+| CommentCacheDTO | 92 | 缓存DTO | 评论缓存对象（含树形 children） |
+
+> audit/ 子包
+
+| 类 | 行数 | 类型 | 用途 |
+|----|------|------|------|
+| MediaAuditItem | 87 | 审计 | 媒体扫描结果项（灾后新增） |
+| MediaAuditResult | 88 | 审计 | 媒体扫描汇总结果（灾后新增） |
+| RestoreResult | 49 | 审计 | 媒体恢复结果（灾后新增） |
+
+> command/ 子包
 
 | 类 | 行数 | 用途 |
 |----|------|------|
@@ -244,7 +259,6 @@ com.itheima/
 | ResultUtil | 26 | 响应格式构建 |
 | CountRepairTool | 59 | 数据修复工具 |
 | TimeUtil | 15 | 时间工具 |
-| CheckUtil | 4 | 校验工具 |
 
 ---
 
@@ -406,15 +420,12 @@ com.itheima/
 | Service | 13 | 2,236 | 34.1% |
 | Controller | 18 | 1,205 | 18.4% |
 | DAO | 10 | 1,160 | 17.7% |
-| POJO | 13 | 614 | 9.4% |
+| Model | 28 | 1,147 | 17.6% |
 | Util | 11 | 370 | 5.6% |
-| Command | 8 | 327 | 5.0% |
 | IoC | 5 | 226 | 3.4% |
-| DTO | 7 | 206 | 3.1% |
 | Filter | 3 | 102 | 1.6% |
 | Exception | 8 | 58 | 0.9% |
-| 其他 | 1 | 55 | 0.8% |
-| **合计** | **97** | **6,559** | **100%** |
+| **合计** | **96** | **6,504** | **100%** |
 
 ---
 
@@ -448,23 +459,12 @@ com.itheima/
 
 ### 12.1 待删除
 
-| 文件/目录 | 原因 |
-|-----------|------|
-| Test3.java | 测试类混入主代码 |
-| MenuService.java | 空壳 |
-| ImageService.java | 空壳 |
-| UploadServlet.java | 旧版上传 Servlet |
-| CommentMediaDao.java | 空壳 |
-| CheckUtil.java | 空壳 |
-| ssm_*/ | 空壳子模块 |
+> 2026-08-10 阶段一完成，本清单已清空：Test3/MenuService/ImageService/UploadServlet/CommentMediaDao/CheckUtil 与 ssm_*/util 全部删除，`mvn compile` 通过。
 
 ### 12.2 待重构
 
 | 项目 | 目标 |
 |------|------|
-| DTO 包名 | DTO → dto（全小写） |
-| LogInVO | 重命名为 LoginVO |
-| pojo/DTO/command | 合并为 model 包 |
 | ContentService | 拆分为 3-4 个类 |
 | DAO 层 | TransactionTemplate + DAO 只接收 Connection（v2.0 修正，废弃 BaseDao 自取连接方案） |
 | 异常处理 | 统一使用 BusinessException |
@@ -477,6 +477,7 @@ com.itheima/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-08-10 | 1.3 | 阶段一完成：删除残留测试/空壳类与 ssm_*/util 子模块；CouponAdmin 移至 src/test；pojo/DTO/command 合并为 com.itheima.model（entity/dto/vo/cache/audit/command）；DTO 包名全小写；LogInVO 重命名为 LoginVO |
 | 2026-08-09 | 1.2 | 手动清理未引用/未接线方法（Service 12 个、DAO 31 个，见 REMOVE_CODE.md）；删除功能确认不做；代码统计刷新至 97 文件 / 6,559 行；API 清单删除不存在的 /user/changeUserName、/user/changePhone；修复 UploadController return、欢迎页、日志目录 |
 | 2026-08-08 | 1.1 | 新增媒体运维：content/content_media 增加 file_exists、last_verify_time；新增 MediaAuditService、MediaAdminController、recovery.html；jointUrl 改为动态 context path |
 | 2026-07-23 | 1.0 | 初始版本 |

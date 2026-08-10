@@ -1,6 +1,6 @@
 package com.itheima.controller;
 
-import com.itheima.DTO.GrabCouponRequest;
+import com.itheima.model.dto.GrabCouponRequest;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
 import com.itheima.ioc.annotation.Inject;

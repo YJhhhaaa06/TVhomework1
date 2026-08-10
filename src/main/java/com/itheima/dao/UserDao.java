@@ -1,7 +1,7 @@
 package com.itheima.dao;
 
 import com.itheima.ioc.annotation.Component;
-import com.itheima.pojo.User;
+import com.itheima.model.entity.User;
 
 import java.sql.*;
 import java.util.List;

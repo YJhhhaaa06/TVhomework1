@@ -1,7 +1,7 @@
 package com.itheima.dao;
 
 import com.itheima.ioc.annotation.Component;
-import com.itheima.pojo.ContentMedia;
+import com.itheima.model.entity.ContentMedia;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;

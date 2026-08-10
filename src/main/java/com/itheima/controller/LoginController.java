@@ -1,17 +1,17 @@
 package com.itheima.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.itheima.command.ChangePasswordCommand;
-import com.itheima.command.CommandConverter;
-import com.itheima.command.LoginCommand;
-import com.itheima.command.RegisterCommand;
-import com.itheima.DTO.ChangePasswordDTO;
-import com.itheima.DTO.LoginDTO;
-import com.itheima.DTO.RegisterDTO;
+import com.itheima.model.command.ChangePasswordCommand;
+import com.itheima.model.command.CommandConverter;
+import com.itheima.model.command.LoginCommand;
+import com.itheima.model.command.RegisterCommand;
+import com.itheima.model.dto.ChangePasswordDTO;
+import com.itheima.model.dto.LoginDTO;
+import com.itheima.model.dto.RegisterDTO;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
 import com.itheima.ioc.annotation.Inject;
-import com.itheima.pojo.LogInVO;
+import com.itheima.model.vo.LoginVO;
 import com.itheima.service.UserService;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServletRequest;
@@ -62,7 +62,7 @@ public class LoginController extends BaseServlet {
         LoginDTO dto = RequestParser.parse(req,LoginDTO.class);
         System.out.println("finish parse");
         LoginCommand loginCommand= CommandConverter.loginToCommand(dto);
-        LogInVO ls=userService.login(loginCommand);
+        LoginVO ls=userService.login(loginCommand);
         BaseServletUtil.writeSuccess(resp,ls);
     }
 
@@ -70,7 +70,7 @@ public class LoginController extends BaseServlet {
         RegisterDTO dto = RequestParser.parse(req, RegisterDTO.class);
         RegisterCommand rc = CommandConverter.registerToCommand(dto);
         long id = userService.registerAsUser(rc);
-        LogInVO ls = userService.login(id, rc.getPassword());
+        LoginVO ls = userService.login(id, rc.getPassword());
         BaseServletUtil.writeSuccess(resp, ls);
     }
 

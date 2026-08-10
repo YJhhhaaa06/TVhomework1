@@ -1,17 +1,17 @@
 package com.itheima.service;
 
-import com.itheima.command.ChangePasswordCommand;
-import com.itheima.command.LoginCommand;
-import com.itheima.command.LoginType;
-import com.itheima.command.RegisterCommand;
+import com.itheima.model.command.ChangePasswordCommand;
+import com.itheima.model.command.LoginCommand;
+import com.itheima.model.command.LoginType;
+import com.itheima.model.command.RegisterCommand;
 import com.itheima.dao.UserDao;
 import com.itheima.exception.AuthException;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.Inject;
-import com.itheima.pojo.LogInVO;
-import com.itheima.pojo.User;
+import com.itheima.model.vo.LoginVO;
+import com.itheima.model.entity.User;
 import com.itheima.util.*;
 
 import java.sql.Connection;
@@ -27,23 +27,23 @@ public class UserService {
     private static final Logger LOGGER =
             LogUtil.getLogger(UserService.class);
 
-    public LogInVO login(LoginCommand loginCommand)throws Exception{
+    public LoginVO login(LoginCommand loginCommand)throws Exception{
         if(loginCommand.getType()== LoginType.BY_ID){
             return login(loginCommand.getId(),loginCommand.getPassword());
         }
         return login(loginCommand.getPhone(),loginCommand.getPassword());
     }
 
-    public LogInVO login(long id, String rawPassword) throws Exception {
+    public LoginVO login(long id, String rawPassword) throws Exception {
         User dbUser = userDao.getUserForLoginById(id);
         String tokenStr=doLogin(dbUser,rawPassword);
-        return new LogInVO(dbUser.getId(),dbUser.getUserName(),tokenStr);
+        return new LoginVO(dbUser.getId(),dbUser.getUserName(),tokenStr);
 
     }
-    public LogInVO login(String phone, String rawPassword) throws Exception {
+    public LoginVO login(String phone, String rawPassword) throws Exception {
         User dbUser = userDao.getUserForLoginByPhone(phone);
         String tokenStr=doLogin(dbUser,rawPassword);
-        return new LogInVO(dbUser.getId(),dbUser.getUserName(),tokenStr);
+        return new LoginVO(dbUser.getId(),dbUser.getUserName(),tokenStr);
     }
 
 

@@ -1,11 +1,11 @@
 package com.itheima.controller;
 
-import com.itheima.DTO.PageResult;
+import com.itheima.model.dto.PageResult;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
 import com.itheima.exception.ParamException;
 import com.itheima.ioc.annotation.Inject;
-import com.itheima.pojo.ContentVO;
+import com.itheima.model.vo.ContentVO;
 import com.itheima.service.FeedService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;

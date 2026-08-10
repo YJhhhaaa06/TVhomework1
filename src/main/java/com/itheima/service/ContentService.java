@@ -1,7 +1,13 @@
 package com.itheima.service;
+import com.itheima.model.cache.CommentCacheDTO;
+import com.itheima.model.cache.ContentCacheDTO;
+import com.itheima.model.entity.ContentMedia;
+import com.itheima.model.vo.CommentVO;
+import com.itheima.model.vo.ContentDetailVO;
+import com.itheima.model.vo.ContentVO;
 
-import com.itheima.DTO.PageResult;
-import com.itheima.command.UploadCommand;
+import com.itheima.model.dto.PageResult;
+import com.itheima.model.command.UploadCommand;
 import com.itheima.controller.UploadType;
 import com.itheima.dao.CommentDao;
 import com.itheima.dao.ContentDao;
@@ -11,7 +17,6 @@ import com.itheima.exception.*;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.Inject;
 import com.itheima.ioc.annotation.PostConstruct;
-import com.itheima.pojo.*;
 import com.itheima.util.LogUtil;
 import com.itheima.util.MyConnectionPool;
 import com.itheima.util.RequestContext;
