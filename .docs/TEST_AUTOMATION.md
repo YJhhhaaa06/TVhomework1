@@ -151,11 +151,13 @@ build ──> start ──> test ──> finally: stop
    try { Invoke-WebRequest -Uri 'http://127.0.0.1:18080/start' -UseBasicParsing -TimeoutSec 3 } catch { '空闲' }
    ```
 
-3. 运行：
+3. 运行（主会话推荐，输出自动落盘、stdout 只回显摘要）：
 
    ```powershell
-   python tools\run_tests.py all
+   python tools\run_tests_report.py all
    ```
+
+   需要分步操作时仍用 `python tools\run_tests.py build/start/test/stop`。
 
 4. 失败排查顺序：
    - 看 `run.log` 和 `tomcat_stdout.log` / `tomcat_stderr.log`；
@@ -171,3 +173,68 @@ build ──> start ──> test ──> finally: stop
 - 修改路径或端口时，同步更新脚本常量与本文档。
 - 脚本改动后至少执行 `python -m py_compile tools\run_tests.py` 并完整跑一次 `all`。
 - 涉及安全逻辑（停止/强杀/删除）的大改动，建议按用户要求先派 subagent 审查，通过后再运行。
+
+## 九、上下文收口执行方式（主会话推荐入口）
+
+> 文件：`tools/run_tests_report.py`
+> 用途：主会话跑测试时避免输出灌入上下文；完整日志落盘 + `latest.json` 留痕。
+> 最后验证：2026-08-10，35/35 通过，stdout 仅 3 行摘要。
+
+### 9.1 为什么测试不派 subagent 执行
+
+当前环境实测（2026-08-10）：
+
+| 派发方式 | 结果 |
+|---------|------|
+| `fork_turns="none"` | 任务消息不送达，subagent 回复“没有收到任务” |
+| `fork_turns="1"` | 最小 ACK 任务也卡死无响应，需人工中断 |
+| `fork_turns="all"` | 消息可达，但继承全部项目上下文，跑完测试会自行找活干 |
+
+因此测试统一由主会话 + 收口脚本执行，不派 subagent；除非用户明确要求。
+
+### 9.2 用法
+
+```powershell
+python tools\run_tests_report.py all       # 默认：build -> start -> test -> stop
+python tools\run_tests_report.py build     # 仅离线打包
+python tools\run_tests_report.py start     # 仅启动
+python tools\run_tests_report.py test      # 仅 pytest
+python tools\run_tests_report.py stop      # 仅关停
+```
+
+参数原样透传给 `tools/run_tests.py`，退出码约定相同。
+
+### 9.3 产物
+
+- 完整日志：`D:\data\projects\VideoPlatform\stone\temp\test-reports\run-<yyyyMMdd_HHmmss>.log`（UTF-8，只追加不删除）
+- 机器可读结果：同目录 `latest.json`
+
+`latest.json` 字段：
+
+| 字段 | 说明 |
+|------|------|
+| `phase` / `script` | 本次执行的子命令 |
+| `exit_code` | run_tests.py 退出码 |
+| `build_ok` | build/all 时是否构建成功 |
+| `pytest.passed/failed/errors/skipped` | pytest 汇总计数 |
+| `pytest_summary` | pytest 最后一行汇总 |
+| `war.exists/mtime` | war 产物状态 |
+| `port_18080_open_after` | 执行后 18080 是否仍被占用 |
+| `log_file` | 完整日志路径 |
+
+### 9.4 主会话复核步骤
+
+1. 看 stdout 摘要（exit、pytest 汇总、18080 状态）。
+2. 读 `latest.json` 核对退出码与用例数；不采信任何口头汇报。
+3. 失败时只读日志尾部（约 60 行）或按 `FAILED` 关键词定位，禁止整份日志灌入上下文：
+
+   ```powershell
+   Get-Content -Encoding UTF8 -Tail 60 "D:\data\projects\VideoPlatform\stone\temp\test-reports\run-<时间戳>.log"
+   ```
+
+4. 确认 `port_18080_open_after=false`；若为 true，先 `python tools\run_tests.py stop`，无法停止时把 PID/端口信息交给用户人工处理。
+
+### 9.5 维护约定
+
+- 修改 `run_tests_report.py` 后至少执行 `python -m py_compile tools\run_tests_report.py` 并跑一次 `all`。
+- 修改 `run_tests.py` 的输出或退出码行为时，同步检查本脚本的解析字段。

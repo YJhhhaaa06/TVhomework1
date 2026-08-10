@@ -10,4 +10,4 @@
 
 下面的仅为建议
 
-- 建议在使用测试脚本时，主会话派出subagent执行，理由是测试脚本的输出非常多，会引发上下文膨胀。subagent自己不要再派subagent执行测试了
+- 测试统一由主会话执行 `python tools\run_tests_report.py all`（完整输出落盘、stdout 只回显摘要，详见 .docs/TEST_AUTOMATION.md 第九节）；不派 subagent 跑测试，除非用户明确要求
