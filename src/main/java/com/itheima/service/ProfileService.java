@@ -30,7 +30,7 @@ public class ProfileService {
     @Inject
     private FollowDao followDao;
     @Inject
-    private ContentService contentService;
+    private ContentCacheManager contentCacheManager;
     @Inject
     private LikeService likeService;
     @Inject
@@ -53,11 +53,9 @@ public class ProfileService {
 
                 List<ContentVO> contentVOList = new ArrayList<>();
                 for (Long contentId : pageIds) {
-                    ContentCacheDTO cached = contentService.getContentFromCache(contentId);
+                    ContentCacheDTO cached = contentCacheManager.getContentFromCache(contentId);
                     if (cached == null) continue;
-                    ContentVO cVO = new ContentVO();
-                    copyToContentVO(cVO, cached);
-                    contentVOList.add(cVO);
+                    contentVOList.add(contentCacheManager.toContentVO(cached));
                 }
 
                 Boolean isFollowed = null;
@@ -90,17 +88,4 @@ public class ProfileService {
         });
     }
 
-    private void copyToContentVO(ContentVO cVO, ContentCacheDTO dto) {
-        cVO.setId(dto.getId());
-        cVO.setAuthorId(dto.getAuthorId());
-        cVO.setType(dto.getType());
-        cVO.setTitle(dto.getTitle());
-        cVO.setDescription(dto.getDescription());
-        cVO.setCategoryId(dto.getCategoryId());
-        cVO.setCommentCount(dto.getCommentCount());
-        cVO.setLikeCount(dto.getLikeCount());
-        cVO.setAuthorName(dto.getAuthorName());
-        cVO.setCoverUrl(dto.getCoverUrl());
-        cVO.setCreateTime(dto.getCreateTime());
-    }
 }

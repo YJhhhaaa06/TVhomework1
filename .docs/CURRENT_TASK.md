@@ -692,7 +692,7 @@ UserService、CommentService、FollowService、LikeService、ContentService、Me
 - **优先级**: P2
 - **预估工时**: 3 小时
 - **前置依赖**: TASK-031
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -702,9 +702,9 @@ UserService、CommentService、FollowService、LikeService、ContentService、Me
 
 #### 验证标准
 
-- [ ] 缓存代码已迁出 ContentService
-- [ ] 无 `ContentService.` 静态缓存调用残留
-- [ ] 缓存刷新/回填回归通过
+- [x] 缓存代码已迁出 ContentService
+- [x] 无 `ContentService.` 静态缓存调用残留
+- [x] 缓存刷新/回填回归通过
 
 ---
 
@@ -713,7 +713,7 @@ UserService、CommentService、FollowService、LikeService、ContentService、Me
 - **优先级**: P2
 - **预估工时**: 1 小时
 - **前置依赖**: TASK-032
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -721,8 +721,8 @@ UserService、CommentService、FollowService、LikeService、ContentService、Me
 
 #### 验证标准
 
-- [ ] 状态填充代码已迁出
-- [ ] 列表/详情点赞关注状态正确
+- [x] 状态填充代码已迁出
+- [x] 列表/详情点赞关注状态正确
 
 ---
 
@@ -731,7 +731,7 @@ UserService、CommentService、FollowService、LikeService、ContentService、Me
 - **优先级**: P2
 - **预估工时**: 2 小时
 - **前置依赖**: TASK-032、TASK-033
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -739,9 +739,9 @@ ContentService 注入 ContentCacheManager/ContentStatusFiller，保留查询与�
 
 #### 验证标准
 
-- [ ] ContentService < 300 行
-- [ ] 首页/搜索/详情/上传/删除全部回归通过
-- [ ] `python tools/run_tests.py all` 全绿
+- [x] ContentService 精简（153 行；行数为目标、非强制验收）
+- [x] 首页/搜索/详情/上传/删除全部回归通过
+- [x] `python tools/run_tests.py all` 全绿
 
 ---
 
@@ -1244,3 +1244,4 @@ Filter 统计响应时间与错误率，日志输出；连接池使用率统计�
 | 2.5 | 2026-08-10 | TASK-016~022 完成（阶段二）：app.properties + AppConfig（环境变量覆盖）；连接池/Redis/JWT/上传/日志/缓存全部读配置；context.xml 启动校验；35/35 pytest 通过 |
 | 2.6 | 2026-08-10 | TASK-023~028 完成（阶段三）：ErrorCode 枚举化 + 12 个具体异常；业务 RuntimeException/英文消息全部替换；ExceptionFilter 全局异常处理；日志清理与手机号脱敏；35/35 pytest 通过 |
 | 2.7 | 2026-08-10 | TASK-029~031 完成（阶段四）：TransactionTemplate 统一事务；9 个 Service 手工事务样板全部替换；DAO 只接收 Connection（删除自取连接包装）；35/35 pytest 通过 |
+| 2.8 | 2026-08-10 | TASK-032~034 完成（阶段五）：ContentService 缓存职责迁入 ContentCacheManager、状态填充迁入 ContentStatusFiller；CommentService/LikeService/FeedService/ProfileService/StartController 调用点更新；TASK-035（UserService 拆分）按用户决定暂缓；35/35 pytest 通过 |

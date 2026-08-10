@@ -2,7 +2,8 @@ package com.itheima.controller;
 
 import com.itheima.ioc.annotation.Inject;
 import com.itheima.model.vo.ContentVO;
-import com.itheima.service.ContentService;
+import com.itheima.service.ContentCacheManager;
+import com.itheima.service.ContentStatusFiller;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServletRequest;
@@ -14,7 +15,9 @@ import java.util.List;
 @WebServlet("/start")
 public class StartController extends BaseServlet {
     @Inject
-    private ContentService contentService;
+    private ContentStatusFiller contentStatusFiller;
+    @Inject
+    private ContentCacheManager contentCacheManager;
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
@@ -23,10 +26,10 @@ public class StartController extends BaseServlet {
         Integer type = parseParam(req.getParameter("type"));
         Integer categoryId = parseParam(req.getParameter("categoryId"));
 
-        List<ContentVO> recommend = contentService.getRecommendByFilter(type, categoryId, 12);
+        List<ContentVO> recommend = contentCacheManager.getRecommendByFilter(type, categoryId, 12);
 
         Long userId = (Long) req.getAttribute("userId");
-        contentService.fillLikeAndFollowBatch(recommend, userId);
+        contentStatusFiller.fillLikeAndFollowBatch(recommend, userId);
 
         BaseServletUtil.writeSuccess(resp, recommend);
     }

@@ -31,6 +31,8 @@ public class LikeService {
     @Inject
     private LikeCacheService cache;
     @Inject
+    private ContentCacheManager contentCacheManager;
+    @Inject
     private TransactionTemplate transactionTemplate;
     private static final Logger LOGGER =
             LogUtil.getLogger(LikeService.class);
@@ -57,7 +59,7 @@ public class LikeService {
 
         // 缓存更新放在事务提交后
         cache.likeContent(userId, contentId);
-        ContentService.updateContentLikeCount(contentId, 1);
+        contentCacheManager.updateContentLikeCount(contentId, 1);
     }
 
     public void removeLikeContent(long userId, long contentId) {
@@ -79,7 +81,7 @@ public class LikeService {
         });
 
         cache.unlikeContent(userId, contentId);
-        ContentService.updateContentLikeCount(contentId, -1);
+        contentCacheManager.updateContentLikeCount(contentId, -1);
     }
 
     // ==================== 评论点赞 ====================
@@ -103,7 +105,7 @@ public class LikeService {
         });
 
         cache.likeComment(userId, commentId);
-        ContentService.updateCommentLikeCount(commentId, 1);
+        contentCacheManager.updateCommentLikeCount(commentId, 1);
     }
 
     public void removeLikeComment(long userId, long commentId) {
@@ -125,7 +127,7 @@ public class LikeService {
         });
 
         cache.unlikeComment(userId, commentId);
-        ContentService.updateCommentLikeCount(commentId, -1);
+        contentCacheManager.updateCommentLikeCount(commentId, -1);
     }
 
     // ==================== 内容点赞查询（单条，缓存优先） ====================

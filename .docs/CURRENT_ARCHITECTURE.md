@@ -1,6 +1,6 @@
 # 当前系统架构地图
 
-> 版本：1.6
+> 版本：1.7
 > 最后更新：2026-08-10
 > 维护说明：每次架构改动后必须更新本文档
 
@@ -147,17 +147,19 @@ com.itheima/
 
 | 类 | 行数 | 职责 | 依赖 |
 |----|------|------|------|
-| ContentService | 709 | 内容管理（核心），含缓存 | ContentDao, CommentDao, ContentMediaDao, FollowDao, CommentService, LikeService, LikeCacheService |
-| LikeService | 371 | 点赞业务 | ContentDao, CommentDao, ContentLikeDao, CommentLikeDao, LikeCacheService |
+| ContentCacheManager | 544 | 内容缓存管理（内存索引/评论树/实时计数） | ContentDao, ContentMediaDao, CommentDao, LikeCacheService, TransactionTemplate |
+| ContentService | 153 | 内容管理（查询与发布） | ContentDao, ContentMediaDao, CommentService, LikeService, ContentCacheManager, ContentStatusFiller, TransactionTemplate |
+| ContentStatusFiller | 100 | 内容状态填充（点赞/关注） | LikeService, FollowDao, TransactionTemplate |
+| LikeService | 308 | 点赞业务 | ContentDao, CommentDao, ContentLikeDao, CommentLikeDao, LikeCacheService, ContentCacheManager, TransactionTemplate |
 | LikeCacheService | 264 | Redis 点赞缓存 | - |
-| CommentService | 188 | 评论业务 | CommentDao, ContentDao, LikeService |
-| UserService | 242 | 用户认证 | UserDao |
-| FollowService | 152 | 关注业务 | FollowDao, UserDao |
-| ProfileService | 104 | 用户主页 | UserDao, ContentService, FollowService, LikeService |
-| FeedService | 96 | 关注动态流 | FollowDao, ContentDao, ContentService, LikeService |
+| CommentService | 99 | 评论业务 | CommentDao, ContentDao, ContentCacheManager, TransactionTemplate |
+| UserService | 227 | 用户认证 | UserDao |
+| FollowService | 118 | 关注业务 | FollowDao, UserDao |
+| ProfileService | 91 | 用户主页 | UserDao, ContentDao, FollowDao, ContentCacheManager, LikeService, TransactionTemplate |
+| FeedService | 80 | 关注动态流 | FollowDao, ContentDao, ContentCacheManager, LikeService, TransactionTemplate |
 | FileUploadService | 78 | 文件上传 | - |
-| MediaAuditService | 259 | 媒体完整性扫描与恢复 | ContentDao, ContentMediaDao |
-| CouponService | 76 | 优惠券抢购 | CouponDao |
+| MediaAuditService | 258 | 媒体完整性扫描与恢复 | ContentDao, ContentMediaDao |
+| CouponService | 70 | 优惠券抢购 | CouponDao |
 
 #### dao 包 — 数据访问
 
@@ -477,7 +479,7 @@ com.itheima/
 
 | 项目 | 目标 |
 |------|------|
-| ContentService | 拆分为 3-4 个类 |
+| ContentService | ~~拆分为 3-4 个类~~（阶段五已完成：ContentCacheManager + ContentStatusFiller，2026-08-10） |
 | DAO 层 | TransactionTemplate + DAO 只接收 Connection（v2.0 修正，废弃 BaseDao 自取连接方案） |
 | 异常处理 | 统一使用 BusinessException |
 | 运维权限 | /api/admin/* 增加管理员角色 |
@@ -488,6 +490,7 @@ com.itheima/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-08-10 | 1.7 | 阶段五完成：ContentService 缓存职责迁入 ContentCacheManager（@Component 实例 Bean，评论树加载一并迁入以消除循环依赖）；状态填充迁入 ContentStatusFiller；ContentService 精简为查询与发布；CommentService/LikeService/FeedService/ProfileService/StartController 调用点改为注入新 Bean；缓存策略原样保留 |
 | 2026-08-10 | 1.6 | 阶段四完成：新增 TransactionTemplate 统一事务管理；UserService/CommentService/FollowService/LikeService/ContentService/CouponService/MediaAuditService/FeedService/ProfileService 手工事务样板全部替换；DAO 全部只接收 Connection（UserDao/CouponDao/ContentLikeDao/CommentLikeDao 移除自取连接包装）；媒体扫描改为单事务 |
 | 2026-08-10 | 1.5 | 阶段三完成：ErrorCode 枚举化（code+中文消息）与 12 个具体异常；业务 RuntimeException/英文消息替换为具体异常；新增 ExceptionFilter 全局异常处理并清理 Controller catch 样板；日志清理（printStackTrace/System.out）与手机号脱敏；登录用户不存在调整为 401，非法上传类型调整为 400 |
 | 2026-08-10 | 1.4 | 阶段二完成：新增 app.properties + AppConfig（环境变量覆盖）；MyConnectionPool/MyRedisPool/JwtUtil/FileUploadService/LogUtil/ContentService 全部读配置；AppShutDownListener 启动校验 context.xml 与 upload.path 一致；JWT 密钥/有效期、缓存 TTL/刷新、日志路径/级别配置化 |

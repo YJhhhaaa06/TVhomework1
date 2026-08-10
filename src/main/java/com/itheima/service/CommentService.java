@@ -13,7 +13,6 @@ import com.itheima.util.TransactionTemplate;
 
 import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.logging.Level;
@@ -27,36 +26,11 @@ public class CommentService {
     @Inject
     private ContentDao contentDao;
     @Inject
-    private LikeService likeService;
+    private ContentCacheManager contentCacheManager;
     @Inject
     private TransactionTemplate transactionTemplate;
     private static final Logger LOGGER =
             LogUtil.getLogger(CommentService.class);
-
-    // ===== 构建评论树（缓存用）=====
-
-    public List<CommentCacheDTO> buildCommentTree(List<CommentCacheDTO> list) {
-        Map<Long, CommentCacheDTO> map = new HashMap<>();
-        List<CommentCacheDTO> roots = new ArrayList<>();
-
-        for (CommentCacheDTO c : list) {
-            c.setChildren(new ArrayList<>());
-            map.put(c.getCommentId(), c);
-        }
-
-        for (CommentCacheDTO c : list) {
-            Long parentId = c.getParentId();
-            if (parentId == null || parentId == 0) {
-                roots.add(c);
-            } else {
-                CommentCacheDTO parent = map.get(parentId);
-                if (parent != null) {
-                    parent.getChildren().add(c);
-                }
-            }
-        }
-        return roots;
-    }
 
     // ===== 转换：CommentCacheVO 树 → CommentVO 树（带 isLiked）=====
 
@@ -107,7 +81,7 @@ public class CommentService {
             try {
                 long commentId = commentDao.addComment(conn, contentId, userId, message, parentId);
                 contentDao.updateCommentCount(conn, contentId, 1);
-                ContentService.updateContentCommentCount(contentId, 1);
+                contentCacheManager.updateContentCommentCount(contentId, 1);
                 return commentDao.findCommentById(conn, commentId);
             } catch (SQLException e) {
                 LOGGER.log(Level.SEVERE, "评论添加失败", e);
@@ -117,53 +91,9 @@ public class CommentService {
 
         // 缓存更新放在事务提交后
         if (newComment != null) {
-            ContentService.addCommentToCache(contentId, newComment, parentId);
+            contentCacheManager.addCommentToCache(contentId, newComment, parentId);
         }
     }
 
-
-    // ===== 查 =====
-
-    private List<CommentCacheDTO> findComment(long contentId) {
-        return transactionTemplate.execute(conn -> {
-            try {
-                return commentDao.getComments(conn, contentId);
-            } catch (SQLException e) {
-                LOGGER.log(Level.SEVERE, "查询评论失败", e);
-                throw new ServerException("服务器异常，查询失败");
-            }
-        });
-    }
-
-
-
-    // ===== 收集评论 ID（递归）=====
-
-    /**
-     * 递归收集评论树中所有评论的 ID（用于批量查询点赞状态）
-     */
-    private List<Long> collectAllCommentIds(List<CommentCacheDTO> tree) {
-        List<Long> ids = new ArrayList<>();
-        for (CommentCacheDTO ccVO : tree) {
-            collectIdsRecursive(ccVO, ids);
-        }
-        return ids;
-    }
-
-    private void collectIdsRecursive(CommentCacheDTO ccVO, List<Long> ids) {
-        ids.add(ccVO.getCommentId());
-        if (ccVO.getChildren() != null) {
-            for (CommentCacheDTO child : ccVO.getChildren()) {
-                collectIdsRecursive(child, ids);
-            }
-        }
-    }
-
-    // ===== 缓存用：获取 CommentCacheVO 树 =====
-
-    public List<CommentCacheDTO> getCommentCacheVOList(long contentId) {
-        List<CommentCacheDTO> wholeList = findComment(contentId);
-        return buildCommentTree(wholeList);
-    }
 
 }
