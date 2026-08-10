@@ -1,7 +1,6 @@
 package com.itheima.dao;
 
 import com.itheima.ioc.annotation.Component;
-import com.itheima.util.MyConnectionPool;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -35,68 +34,50 @@ public class CouponDao {
         }
     }
 
-    public Map<String, Object> findById(long couponId) throws SQLException {
+    public Map<String, Object> findById(Connection conn, long couponId) throws SQLException {
         String sql = "SELECT id, title, stock, begin_time, end_time, create_time FROM coupon WHERE id = ?";
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setLong(1, couponId);
-                try (ResultSet rs = ps.executeQuery()) {
-                    if (rs.next()) {
-                        return rowToMap(rs);
-                    }
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, couponId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rowToMap(rs);
                 }
             }
-        } finally {
-            MyConnectionPool.release(conn);
         }
         return null;
     }
 
-    public List<Map<String, Object>> findAvailableCoupons() throws SQLException {
+    public List<Map<String, Object>> findAvailableCoupons(Connection conn) throws SQLException {
         String sql = "SELECT id, title, stock, begin_time, end_time, create_time FROM coupon WHERE end_time > NOW() ORDER BY begin_time ASC";
         List<Map<String, Object>> list = new ArrayList<>();
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            try (PreparedStatement ps = conn.prepareStatement(sql);
-                 ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    list.add(rowToMap(rs));
-                }
+        try (PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                list.add(rowToMap(rs));
             }
-        } finally {
-            MyConnectionPool.release(conn);
         }
         return list;
     }
 
-    public List<Map<String, Object>> findOrdersByUserId(long userId) throws SQLException {
+    public List<Map<String, Object>> findOrdersByUserId(Connection conn, long userId) throws SQLException {
         String sql = "SELECT co.id, co.coupon_id, co.coupon_code, co.status, co.create_time, c.title " +
                      "FROM coupon_order co JOIN coupon c ON co.coupon_id = c.id " +
                      "WHERE co.user_id = ? ORDER BY co.create_time DESC";
         List<Map<String, Object>> list = new ArrayList<>();
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setLong(1, userId);
-                try (ResultSet rs = ps.executeQuery()) {
-                    while (rs.next()) {
-                        Map<String, Object> map = new HashMap<>();
-                        map.put("id", rs.getLong("id"));
-                        map.put("couponId", rs.getLong("coupon_id"));
-                        map.put("couponCode", rs.getString("coupon_code"));
-                        map.put("status", rs.getInt("status"));
-                        map.put("title", rs.getString("title"));
-                        map.put("createTime", rs.getTimestamp("create_time").toLocalDateTime().toString());
-                        list.add(map);
-                    }
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, userId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Map<String, Object> map = new HashMap<>();
+                    map.put("id", rs.getLong("id"));
+                    map.put("couponId", rs.getLong("coupon_id"));
+                    map.put("couponCode", rs.getString("coupon_code"));
+                    map.put("status", rs.getInt("status"));
+                    map.put("title", rs.getString("title"));
+                    map.put("createTime", rs.getTimestamp("create_time").toLocalDateTime().toString());
+                    list.add(map);
                 }
             }
-        } finally {
-            MyConnectionPool.release(conn);
         }
         return list;
     }

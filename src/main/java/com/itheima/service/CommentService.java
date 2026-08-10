@@ -9,9 +9,8 @@ import com.itheima.ioc.annotation.Inject;
 import com.itheima.model.cache.CommentCacheDTO;
 import com.itheima.model.vo.CommentVO;
 import com.itheima.util.LogUtil;
-import com.itheima.util.MyConnectionPool;
+import com.itheima.util.TransactionTemplate;
 
-import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -29,6 +28,8 @@ public class CommentService {
     private ContentDao contentDao;
     @Inject
     private LikeService likeService;
+    @Inject
+    private TransactionTemplate transactionTemplate;
     private static final Logger LOGGER =
             LogUtil.getLogger(CommentService.class);
 
@@ -94,11 +95,7 @@ public class CommentService {
         Long parentId = commentCommand.getParentId();
         String message = commentCommand.getMessage();
 
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            conn.setAutoCommit(false);
-
+        CommentCacheDTO newComment = transactionTemplate.execute(conn -> {
             if(!contentDao.isContentExist(conn,contentId)){
                 throw new NotFoundException("被点赞的内容不存在");
             }
@@ -107,46 +104,35 @@ public class CommentService {
                     throw new ConflictException("被回复评论不属于该视频或动态");
                 }
             }
-            long commentId = commentDao.addComment(conn, contentId, userId, message, parentId);
-            contentDao.updateCommentCount(conn, contentId, 1);
-            ContentService.updateContentCommentCount(contentId, 1);
-            conn.commit();
-            // 即时更新评论缓存
-            CommentCacheDTO newComment = commentDao.findCommentById(conn, commentId);
-            if (newComment != null) {
-                ContentService.addCommentToCache(contentId, newComment, parentId);
+            try {
+                long commentId = commentDao.addComment(conn, contentId, userId, message, parentId);
+                contentDao.updateCommentCount(conn, contentId, 1);
+                ContentService.updateContentCommentCount(contentId, 1);
+                return commentDao.findCommentById(conn, commentId);
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "评论添加失败", e);
+                throw new ServerException("评论写入失败");
             }
-        } catch (SQLException e) {
-            if (conn != null) {
-                try {
-                    conn.rollback();
-                    LOGGER.warning("添加评论时事务已回滚");
-                } catch (SQLException ex) {
-                    LOGGER.log(Level.SEVERE,"事务回滚失败",ex);
-                    throw new DatabaseException("评论添加失败", ex);
-                }
-            }
-            LOGGER.log(Level.SEVERE,"评论添加失败",e);
-            throw new ServerException("评论写入失败");
-        } finally {
-            MyConnectionPool.release(conn);
+        });
+
+        // 缓存更新放在事务提交后
+        if (newComment != null) {
+            ContentService.addCommentToCache(contentId, newComment, parentId);
         }
     }
 
 
     // ===== 查 =====
 
-    private List<CommentCacheDTO> findComment(long contentId) throws SQLException {
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            return commentDao.getComments(conn, contentId);
-        } catch (SQLException e) {
-            LOGGER.log(Level.SEVERE,"查询评论失败",e);
-            throw new ServerException("服务器异常，查询失败");
-        } finally {
-            MyConnectionPool.release(conn);
-        }
+    private List<CommentCacheDTO> findComment(long contentId) {
+        return transactionTemplate.execute(conn -> {
+            try {
+                return commentDao.getComments(conn, contentId);
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "查询评论失败", e);
+                throw new ServerException("服务器异常，查询失败");
+            }
+        });
     }
 
 
@@ -176,13 +162,8 @@ public class CommentService {
     // ===== 缓存用：获取 CommentCacheVO 树 =====
 
     public List<CommentCacheDTO> getCommentCacheVOList(long contentId) {
-        try {
-            List<CommentCacheDTO> wholeList = findComment(contentId);
-            return buildCommentTree(wholeList);
-        } catch (SQLException e) {
-            LOGGER.log(Level.SEVERE,"查询评论缓存失败, contentId=" + contentId, e);
-            throw new NotFoundException("FAIL_TO_GET_COMMENT,VIDEO_ID=" + contentId);
-        }
+        List<CommentCacheDTO> wholeList = findComment(contentId);
+        return buildCommentTree(wholeList);
     }
 
 }

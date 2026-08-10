@@ -14,7 +14,7 @@ import com.itheima.model.audit.MediaAuditItem;
 import com.itheima.model.audit.MediaAuditResult;
 import com.itheima.model.audit.RestoreResult;
 import com.itheima.util.LogUtil;
-import com.itheima.util.MyConnectionPool;
+import com.itheima.util.TransactionTemplate;
 import jakarta.servlet.http.Part;
 
 import java.io.File;
@@ -51,104 +51,104 @@ public class MediaAuditService {
     private ContentDao contentDao;
     @Inject
     private ContentMediaDao contentMediaDao;
+    @Inject
+    private TransactionTemplate transactionTemplate;
 
     /**
      * 全量扫描并回写 file_exists / last_verify_time。
      */
     public MediaAuditResult scanAll() {
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            LocalDateTime now = LocalDateTime.now();
-            Timestamp ts = Timestamp.valueOf(now);
+        return transactionTemplate.execute(conn -> {
+            try {
+                LocalDateTime now = LocalDateTime.now();
+                Timestamp ts = Timestamp.valueOf(now);
 
-            List<ContentMedia> mediaList = contentMediaDao.findAllMedia(conn);
-            List<ContentCacheDTO> contents = contentDao.findAllContent(conn);
-            Map<Long, String> titleMap = new HashMap<>();
-            Set<Long> contentIdSet = new HashSet<>();
-            for (ContentCacheDTO content : contents) {
-                titleMap.put(content.getId(), content.getTitle());
-                contentIdSet.add(content.getId());
-            }
-
-            List<MediaAuditItem> items = new ArrayList<>();
-            Map<Long, List<Boolean>> mediaFlagsByContent = new HashMap<>();
-            List<Long> orphanMediaIds = new ArrayList<>();
-            int existing = 0;
-            int missing = 0;
-            int invalid = 0;
-
-            for (ContentMedia media : mediaList) {
-                String expectedPath = resolveExpectedPath(media.getUrl());
-                boolean exists = expectedPath != null && new File(expectedPath).isFile();
-                String status;
-                if (expectedPath == null) {
-                    status = "INVALID_URL";
-                    invalid++;
-                } else if (exists) {
-                    status = "EXISTS";
-                    existing++;
-                } else {
-                    status = "MISSING";
-                    missing++;
+                List<ContentMedia> mediaList = contentMediaDao.findAllMedia(conn);
+                List<ContentCacheDTO> contents = contentDao.findAllContent(conn);
+                Map<Long, String> titleMap = new HashMap<>();
+                Set<Long> contentIdSet = new HashSet<>();
+                for (ContentCacheDTO content : contents) {
+                    titleMap.put(content.getId(), content.getTitle());
+                    contentIdSet.add(content.getId());
                 }
 
-                contentMediaDao.updateFileExists(conn, media.getMediaId(), exists, ts);
+                List<MediaAuditItem> items = new ArrayList<>();
+                Map<Long, List<Boolean>> mediaFlagsByContent = new HashMap<>();
+                List<Long> orphanMediaIds = new ArrayList<>();
+                int existing = 0;
+                int missing = 0;
+                int invalid = 0;
 
-                MediaAuditItem item = new MediaAuditItem();
-                item.setMediaId(media.getMediaId());
-                item.setContentId(media.getContentId());
-                item.setContentTitle(titleMap.get(media.getContentId()));
-                item.setType(media.getType());
-                item.setUrl(media.getUrl());
-                item.setFileExists(exists);
-                item.setLastVerifyTime(now);
-                item.setExpectedPath(expectedPath);
-                item.setStatus(status);
-                items.add(item);
+                for (ContentMedia media : mediaList) {
+                    String expectedPath = resolveExpectedPath(media.getUrl());
+                    boolean exists = expectedPath != null && new File(expectedPath).isFile();
+                    String status;
+                    if (expectedPath == null) {
+                        status = "INVALID_URL";
+                        invalid++;
+                    } else if (exists) {
+                        status = "EXISTS";
+                        existing++;
+                    } else {
+                        status = "MISSING";
+                        missing++;
+                    }
 
-                mediaFlagsByContent.computeIfAbsent(media.getContentId(), k -> new ArrayList<>()).add(exists);
-                if (!contentIdSet.contains(media.getContentId())) {
-                    orphanMediaIds.add(media.getMediaId());
-                }
-            }
+                    contentMediaDao.updateFileExists(conn, media.getMediaId(), exists, ts);
 
-            List<Long> contentsWithoutMedia = new ArrayList<>();
-            for (Long contentId : contentIdSet) {
-                List<Boolean> flags = mediaFlagsByContent.get(contentId);
-                boolean ok;
-                if (flags == null || flags.isEmpty()) {
-                    contentsWithoutMedia.add(contentId);
-                    ok = true; // 纯文字内容视为完整
-                } else {
-                    ok = true;
-                    for (Boolean flag : flags) {
-                        if (!flag) {
-                            ok = false;
-                            break;
-                        }
+                    MediaAuditItem item = new MediaAuditItem();
+                    item.setMediaId(media.getMediaId());
+                    item.setContentId(media.getContentId());
+                    item.setContentTitle(titleMap.get(media.getContentId()));
+                    item.setType(media.getType());
+                    item.setUrl(media.getUrl());
+                    item.setFileExists(exists);
+                    item.setLastVerifyTime(now);
+                    item.setExpectedPath(expectedPath);
+                    item.setStatus(status);
+                    items.add(item);
+
+                    mediaFlagsByContent.computeIfAbsent(media.getContentId(), k -> new ArrayList<>()).add(exists);
+                    if (!contentIdSet.contains(media.getContentId())) {
+                        orphanMediaIds.add(media.getMediaId());
                     }
                 }
-                contentDao.updateFileExists(conn, contentId, ok, ts);
-            }
 
-            MediaAuditResult result = new MediaAuditResult();
-            result.setScanTime(now);
-            result.setTotal(mediaList.size());
-            result.setExisting(existing);
-            result.setMissing(missing);
-            result.setInvalid(invalid);
-            result.setNotScanned(0);
-            result.setOrphanMediaIds(orphanMediaIds);
-            result.setContentsWithoutMedia(contentsWithoutMedia);
-            result.setItems(items);
-            return result;
-        } catch (SQLException e) {
-            LOGGER.log(Level.SEVERE, "媒体扫描失败", e);
-            throw new ServerException("媒体扫描失败");
-        } finally {
-            MyConnectionPool.release(conn);
-        }
+                List<Long> contentsWithoutMedia = new ArrayList<>();
+                for (Long contentId : contentIdSet) {
+                    List<Boolean> flags = mediaFlagsByContent.get(contentId);
+                    boolean ok;
+                    if (flags == null || flags.isEmpty()) {
+                        contentsWithoutMedia.add(contentId);
+                        ok = true; // 纯文字内容视为完整
+                    } else {
+                        ok = true;
+                        for (Boolean flag : flags) {
+                            if (!flag) {
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    contentDao.updateFileExists(conn, contentId, ok, ts);
+                }
+
+                MediaAuditResult result = new MediaAuditResult();
+                result.setScanTime(now);
+                result.setTotal(mediaList.size());
+                result.setExisting(existing);
+                result.setMissing(missing);
+                result.setInvalid(invalid);
+                result.setNotScanned(0);
+                result.setOrphanMediaIds(orphanMediaIds);
+                result.setContentsWithoutMedia(contentsWithoutMedia);
+                result.setItems(items);
+                return result;
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "媒体扫描失败", e);
+                throw new ServerException("媒体扫描失败");
+            }
+        });
     }
 
     /**
@@ -159,53 +159,51 @@ public class MediaAuditService {
             throw new ParamException("请选择要恢复的文件");
         }
 
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            ContentMedia media = contentMediaDao.findMediaById(conn, mediaId);
-            if (media == null) {
-                throw new NotFoundException("媒体资源不存在: mediaId=" + mediaId);
+        return transactionTemplate.execute(conn -> {
+            try {
+                ContentMedia media = contentMediaDao.findMediaById(conn, mediaId);
+                if (media == null) {
+                    throw new NotFoundException("媒体资源不存在: mediaId=" + mediaId);
+                }
+
+                String expectedPath = resolveExpectedPath(media.getUrl());
+                if (expectedPath == null) {
+                    throw new ParamException("媒体 URL 不合法，无法定位文件: " + media.getUrl());
+                }
+
+                String targetExt = extensionOf(new File(expectedPath).getName());
+                String submittedExt = extensionOf(part.getSubmittedFileName());
+                if (submittedExt == null || !submittedExt.equalsIgnoreCase(targetExt)) {
+                    throw new ParamException("文件扩展名不匹配，目标需要 ." + targetExt);
+                }
+
+                File target = new File(expectedPath);
+                File parent = target.getParentFile();
+                if (parent != null && !parent.exists()) {
+                    parent.mkdirs();
+                }
+                Files.copy(part.getInputStream(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+
+                LocalDateTime now = LocalDateTime.now();
+                Timestamp ts = Timestamp.valueOf(now);
+                contentMediaDao.updateFileExists(conn, media.getMediaId(), true, ts);
+                refreshContentAggregate(conn, media.getContentId(), ts);
+
+                RestoreResult result = new RestoreResult();
+                result.setMediaId(media.getMediaId());
+                result.setUrl(media.getUrl());
+                result.setTargetPath(target.getAbsolutePath().replace('\\', '/'));
+                result.setSize(target.length());
+                result.setFileExists(true);
+                return result;
+            } catch (IOException e) {
+                LOGGER.log(Level.SEVERE, "媒体恢复写入失败, mediaId=" + mediaId, e);
+                throw new ServerException("文件写入失败");
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "媒体恢复更新数据库失败, mediaId=" + mediaId, e);
+                throw new ServerException("数据库更新失败");
             }
-
-            String expectedPath = resolveExpectedPath(media.getUrl());
-            if (expectedPath == null) {
-                throw new ParamException("媒体 URL 不合法，无法定位文件: " + media.getUrl());
-            }
-
-            String targetExt = extensionOf(new File(expectedPath).getName());
-            String submittedExt = extensionOf(part.getSubmittedFileName());
-            if (submittedExt == null || !submittedExt.equalsIgnoreCase(targetExt)) {
-                throw new ParamException("文件扩展名不匹配，目标需要 ." + targetExt);
-            }
-
-            File target = new File(expectedPath);
-            File parent = target.getParentFile();
-            if (parent != null && !parent.exists()) {
-                parent.mkdirs();
-            }
-            Files.copy(part.getInputStream(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
-
-            LocalDateTime now = LocalDateTime.now();
-            Timestamp ts = Timestamp.valueOf(now);
-            contentMediaDao.updateFileExists(conn, media.getMediaId(), true, ts);
-            refreshContentAggregate(conn, media.getContentId(), ts);
-
-            RestoreResult result = new RestoreResult();
-            result.setMediaId(media.getMediaId());
-            result.setUrl(media.getUrl());
-            result.setTargetPath(target.getAbsolutePath().replace('\\', '/'));
-            result.setSize(target.length());
-            result.setFileExists(true);
-            return result;
-        } catch (IOException e) {
-            LOGGER.log(Level.SEVERE, "媒体恢复写入失败, mediaId=" + mediaId, e);
-            throw new ServerException("文件写入失败");
-        } catch (SQLException e) {
-            LOGGER.log(Level.SEVERE, "媒体恢复更新数据库失败, mediaId=" + mediaId, e);
-            throw new ServerException("数据库更新失败");
-        } finally {
-            MyConnectionPool.release(conn);
-        }
+        });
     }
 
     private void refreshContentAggregate(Connection conn, long contentId, Timestamp ts) throws SQLException {

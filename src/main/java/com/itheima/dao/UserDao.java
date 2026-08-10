@@ -6,8 +6,6 @@ import com.itheima.model.entity.User;
 import java.sql.*;
 import java.util.List;
 
-import com.itheima.util.MyConnectionPool;
-
 @Component
 public class UserDao {
 
@@ -53,44 +51,6 @@ public class UserDao {
                     return null; // 用户不存在
                 }
             }
-        }
-    }
-    public User getUserForLoginById(long id) throws SQLException {
-        java.sql.Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            return getUserForLoginById(conn,id);
-        }catch (SQLException e){
-            if (conn != null) {
-                    try {
-                        conn.close(); // 出异常直接关闭
-                    } catch (SQLException ex) {
-                        e.addSuppressed(ex);//将关闭失败的异常挂到e上
-                    }
-                    conn = null;
-            }
-            throw e;
-        } finally {
-            MyConnectionPool.release(conn);
-        }
-    }
-    public User getUserForLoginByPhone(String phone) throws SQLException {
-        java.sql.Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            return getUserForLoginByPhone(conn,phone);
-        }catch (SQLException e){
-            if (conn != null) {
-                try {
-                    conn.close(); // 出异常直接关闭
-                } catch (SQLException ex) {
-                    e.addSuppressed(ex);
-                }
-                conn = null;
-            }
-            throw e;
-        }finally {
-            MyConnectionPool.release(conn);
         }
     }
     public User getUserForLoginByPhone(Connection conn, String phone) throws SQLException {

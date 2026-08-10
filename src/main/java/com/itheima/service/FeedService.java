@@ -9,9 +9,8 @@ import com.itheima.ioc.annotation.Inject;
 import com.itheima.model.cache.ContentCacheDTO;
 import com.itheima.model.vo.ContentVO;
 import com.itheima.util.LogUtil;
-import com.itheima.util.MyConnectionPool;
+import com.itheima.util.TransactionTemplate;
 
-import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.*;
 import java.util.logging.Level;
@@ -28,56 +27,56 @@ public class FeedService {
     private ContentService contentService;
     @Inject
     private LikeService likeService;
+    @Inject
+    private TransactionTemplate transactionTemplate;
     private static final Logger LOGGER = LogUtil.getLogger(FeedService.class);
 
     public PageResult<ContentVO> getFeed(long currentUserId, int page, int pageSize) {
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            List<Long> followedIds = followDao.getAllFollowedUserIds(conn, currentUserId);
+        return transactionTemplate.execute(conn -> {
+            try {
+                List<Long> followedIds = followDao.getAllFollowedUserIds(conn, currentUserId);
 
-            if (followedIds.isEmpty()) {
-                return new PageResult<>(Collections.emptyList(), 0, page, pageSize);
-            }
-
-            int total = contentDao.countContentByUsers(conn, followedIds);
-            if (total == 0) {
-                return new PageResult<>(Collections.emptyList(), 0, page, pageSize);
-            }
-
-            int offset = (page - 1) * pageSize;
-            List<Long> pageIds = contentDao.findContentIdsByUsers(conn, followedIds, offset, pageSize);
-
-            List<ContentVO> contentVOList = new ArrayList<>();
-            for (Long contentId : pageIds) {
-                ContentCacheDTO cached = contentService.getContentFromCache(contentId);
-                if (cached == null) continue;
-                ContentVO cVO = new ContentVO();
-                copyToContentVO(cVO, cached);
-                contentVOList.add(cVO);
-            }
-
-            if (!contentVOList.isEmpty()) {
-                List<Long> ids = new ArrayList<>();
-                for (ContentVO vo : contentVOList) {
-                    ids.add(vo.getId());
+                if (followedIds.isEmpty()) {
+                    return new PageResult<>(Collections.emptyList(), 0, page, pageSize);
                 }
-                Map<Long, Boolean> likedMap = likeService.batchIsContentLiked(currentUserId, ids);
-                if (likedMap != null) {
+
+                int total = contentDao.countContentByUsers(conn, followedIds);
+                if (total == 0) {
+                    return new PageResult<>(Collections.emptyList(), 0, page, pageSize);
+                }
+
+                int offset = (page - 1) * pageSize;
+                List<Long> pageIds = contentDao.findContentIdsByUsers(conn, followedIds, offset, pageSize);
+
+                List<ContentVO> contentVOList = new ArrayList<>();
+                for (Long contentId : pageIds) {
+                    ContentCacheDTO cached = contentService.getContentFromCache(contentId);
+                    if (cached == null) continue;
+                    ContentVO cVO = new ContentVO();
+                    copyToContentVO(cVO, cached);
+                    contentVOList.add(cVO);
+                }
+
+                if (!contentVOList.isEmpty()) {
+                    List<Long> ids = new ArrayList<>();
                     for (ContentVO vo : contentVOList) {
-                        Boolean liked = likedMap.get(vo.getId());
-                        vo.setIsLiked(liked != null && liked);
+                        ids.add(vo.getId());
+                    }
+                    Map<Long, Boolean> likedMap = likeService.batchIsContentLiked(currentUserId, ids);
+                    if (likedMap != null) {
+                        for (ContentVO vo : contentVOList) {
+                            Boolean liked = likedMap.get(vo.getId());
+                            vo.setIsLiked(liked != null && liked);
+                        }
                     }
                 }
-            }
 
-            return new PageResult<>(contentVOList, total, page, pageSize);
-        } catch (SQLException e) {
-            LOGGER.log(Level.SEVERE, "获取关注动态失败, userId=" + currentUserId, e);
-            throw new ServerException("获取关注动态失败");
-        } finally {
-            MyConnectionPool.release(conn);
-        }
+                return new PageResult<>(contentVOList, total, page, pageSize);
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "获取关注动态失败, userId=" + currentUserId, e);
+                throw new ServerException("获取关注动态失败");
+            }
+        });
     }
 
     private void copyToContentVO(ContentVO cVO, ContentCacheDTO dto) {

@@ -2,7 +2,6 @@ package com.itheima.dao;
 
 import com.itheima.ioc.annotation.Component;
 import com.itheima.model.cache.ContentCacheDTO;
-import com.itheima.util.MyConnectionPool;
 
 import java.sql.*;
 import java.util.ArrayList;

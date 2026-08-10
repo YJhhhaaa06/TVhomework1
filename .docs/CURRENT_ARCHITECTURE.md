@@ -1,6 +1,6 @@
 # 当前系统架构地图
 
-> 版本：1.5
+> 版本：1.6
 > 最后更新：2026-08-10
 > 维护说明：每次架构改动后必须更新本文档
 
@@ -173,6 +173,8 @@ com.itheima/
 | FollowDao | 107 | follow | 关注关系 |
 | ResultMap | 66 | - | ResultSet → 对象映射 |
 
+> 规范：所有 DAO 方法只接收 `Connection`，不自行获取/释放连接；连接与事务统一由 Service 通过 TransactionTemplate 管理。
+
 #### model 包 — 统一数据模型（原 pojo/DTO/command 合并）
 
 > entity/ 子包
@@ -257,6 +259,7 @@ com.itheima/
 | 类 | 行数 | 职责 |
 |----|------|------|
 | MyConnectionPool | 109 | JDBC 连接池 |
+| TransactionTemplate | 50 | 统一事务模板（取连接/提交/回滚/归还，业务异常原样重抛） |
 | PasswordUtil | 58 | BCrypt 密码哈希 |
 | JwtUtil | 39 | JWT 生成/校验 |
 | MyRedisPool | 37 | Redis 连接池 |
@@ -485,6 +488,7 @@ com.itheima/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-08-10 | 1.6 | 阶段四完成：新增 TransactionTemplate 统一事务管理；UserService/CommentService/FollowService/LikeService/ContentService/CouponService/MediaAuditService/FeedService/ProfileService 手工事务样板全部替换；DAO 全部只接收 Connection（UserDao/CouponDao/ContentLikeDao/CommentLikeDao 移除自取连接包装）；媒体扫描改为单事务 |
 | 2026-08-10 | 1.5 | 阶段三完成：ErrorCode 枚举化（code+中文消息）与 12 个具体异常；业务 RuntimeException/英文消息替换为具体异常；新增 ExceptionFilter 全局异常处理并清理 Controller catch 样板；日志清理（printStackTrace/System.out）与手机号脱敏；登录用户不存在调整为 401，非法上传类型调整为 400 |
 | 2026-08-10 | 1.4 | 阶段二完成：新增 app.properties + AppConfig（环境变量覆盖）；MyConnectionPool/MyRedisPool/JwtUtil/FileUploadService/LogUtil/ContentService 全部读配置；AppShutDownListener 启动校验 context.xml 与 upload.path 一致；JWT 密钥/有效期、缓存 TTL/刷新、日志路径/级别配置化 |
 | 2026-08-10 | 1.3 | 阶段一完成：删除残留测试/空壳类与 ssm_*/util 子模块；CouponAdmin 移至 src/test；pojo/DTO/command 合并为 com.itheima.model（entity/dto/vo/cache/audit/command）；DTO 包名全小写；LogInVO 重命名为 LoginVO |

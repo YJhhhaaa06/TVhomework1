@@ -1,7 +1,6 @@
 package com.itheima.dao;
 
 import com.itheima.ioc.annotation.Component;
-import com.itheima.util.MyConnectionPool;
 
 import java.sql.*;
 import java.util.*;
@@ -38,23 +37,6 @@ public class ContentLikeDao {
             pstmt.setLong(1, userId);
             pstmt.setLong(2, contentId);
             return pstmt.executeUpdate();
-        }
-    }
-
-    /**
-     * 根据userId和contentId查看用户是否已经给content点过赞
-     * @param userId 用户ID
-     * @param contentId 内容ID
-     * @return true表示已点赞，false表示未点赞
-     */
-    public boolean isLiked(long userId, long contentId) throws SQLException {
-        String sql = "SELECT COUNT(*) FROM content_like WHERE user_id = ? AND content_id = ?";
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            return isLiked(conn,userId,contentId);
-        } finally {
-            MyConnectionPool.release(conn);
         }
     }
 

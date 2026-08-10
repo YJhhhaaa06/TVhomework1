@@ -631,7 +631,7 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 - **优先级**: P2
 - **预估工时**: 1 小时
 - **前置依赖**: TASK-017
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -639,8 +639,8 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 
 #### 验证标准
 
-- [ ] 提交/回滚/释放路径正确
-- [ ] 回调抛异常时连接回滚并归还
+- [x] 提交/回滚/释放路径正确
+- [x] 回调抛异常时连接回滚并归还
 
 ---
 
@@ -649,7 +649,7 @@ host/port/maxTotal/maxIdle/minIdle 改为 `AppConfig` 读取。
 - **优先级**: P2
 - **预估工时**: 2 小时
 - **前置依赖**: TASK-029
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -657,8 +657,8 @@ UserService、CommentService、FollowService、LikeService、ContentService、Me
 
 #### 验证标准
 
-- [ ] Service 无手工事务样板代码
-- [ ] 点赞/评论/关注/注册等事务操作回归通过
+- [x] Service 无手工事务样板代码
+- [x] 点赞/评论/关注/注册等事务操作回归通过
 
 ---
 
@@ -667,7 +667,7 @@ UserService、CommentService、FollowService、LikeService、ContentService、Me
 - **优先级**: P2
 - **预估工时**: 2 小时
 - **前置依赖**: TASK-030
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -675,9 +675,9 @@ UserService、CommentService、FollowService、LikeService、ContentService、Me
 
 #### 验证标准
 
-- [ ] DAO 无自取连接代码
-- [ ] 全部 DAO 调用点适配
-- [ ] `python tools/run_tests.py all` 全绿
+- [x] DAO 无自取连接代码
+- [x] 全部 DAO 调用点适配
+- [x] `python tools/run_tests.py all` 全绿
 
 ---
 
@@ -1243,3 +1243,4 @@ Filter 统计响应时间与错误率，日志输出；连接池使用率统计�
 | 2.4 | 2026-08-10 | TASK-010~015 完成（阶段一）：删除残留测试/空壳类与 ssm_*/util；CouponAdmin 迁至测试目录；DTO → dto；pojo/DTO/command 合并为 com.itheima.model；LogInVO → LoginVO |
 | 2.5 | 2026-08-10 | TASK-016~022 完成（阶段二）：app.properties + AppConfig（环境变量覆盖）；连接池/Redis/JWT/上传/日志/缓存全部读配置；context.xml 启动校验；35/35 pytest 通过 |
 | 2.6 | 2026-08-10 | TASK-023~028 完成（阶段三）：ErrorCode 枚举化 + 12 个具体异常；业务 RuntimeException/英文消息全部替换；ExceptionFilter 全局异常处理；日志清理与手机号脱敏；35/35 pytest 通过 |
+| 2.7 | 2026-08-10 | TASK-029~031 完成（阶段四）：TransactionTemplate 统一事务；9 个 Service 手工事务样板全部替换；DAO 只接收 Connection（删除自取连接包装）；35/35 pytest 通过 |

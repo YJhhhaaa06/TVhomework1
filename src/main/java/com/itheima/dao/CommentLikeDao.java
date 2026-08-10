@@ -2,19 +2,15 @@ package com.itheima.dao;
 
 
 import com.itheima.ioc.annotation.Component;
-import com.itheima.util.MyConnectionPool;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-
-
-
-import com.itheima.util.MyConnectionPool;
-
-import java.sql.*;
-import java.util.*;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 @Component
 public class CommentLikeDao {
 
@@ -50,22 +46,6 @@ public class CommentLikeDao {
         }
     }
 
-
-    /**
-     * 根据userId和commentId查看用户是否已经给评论点过赞
-     * @param userId 用户ID
-     * @param commentId 评论ID
-     * @return true表示已点赞，false表示未点赞
-     */
-    public boolean isLiked(long userId, long commentId) throws SQLException {
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            return isLiked(conn,userId,commentId);
-        } finally {
-            MyConnectionPool.release(conn);
-        }
-    }
 
     public boolean isLiked(Connection conn,long userId, long commentId) throws SQLException {
         String sql = "SELECT COUNT(*) FROM comment_like WHERE user_id = ? AND comment_id = ?";

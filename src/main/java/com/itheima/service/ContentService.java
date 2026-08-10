@@ -19,8 +19,8 @@ import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.Inject;
 import com.itheima.ioc.annotation.PostConstruct;
 import com.itheima.util.LogUtil;
-import com.itheima.util.MyConnectionPool;
 import com.itheima.util.RequestContext;
+import com.itheima.util.TransactionTemplate;
 
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -47,6 +47,8 @@ public class ContentService {
     private LikeService likeService;
     @Inject
     private LikeCacheService likeCacheService;
+    @Inject
+    private TransactionTemplate transactionTemplate;
     private static final Logger LOGGER =
             LogUtil.getLogger(ContentService.class);
 
@@ -183,49 +185,48 @@ public class ContentService {
     }
 
     public void refresh() {
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            List<ContentCacheDTO> allContent = contentDao.findAllContent(conn);
+        transactionTemplate.execute(conn -> {
+            try {
+                List<ContentCacheDTO> allContent = contentDao.findAllContent(conn);
 
-            Map<Long, ContentCacheDTO> newContentCache = new HashMap<>();
-            for (ContentCacheDTO dto : allContent) {
-                Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, dto.getId());
-                buildContentMedia(dto, mediaMap);
-                newContentCache.put(dto.getId(), dto);
+                Map<Long, ContentCacheDTO> newContentCache = new HashMap<>();
+                for (ContentCacheDTO dto : allContent) {
+                    Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, dto.getId());
+                    buildContentMedia(dto, mediaMap);
+                    newContentCache.put(dto.getId(), dto);
+                }
+
+                List<ContentVO> newRecommendList = new ArrayList<>();
+                for (ContentCacheDTO dto : allContent) {
+                    ContentVO cVO = new ContentVO();
+                    copyToContentVO(cVO, dto);
+                    newRecommendList.add(cVO);
+                }
+
+                Map<Long, List<CommentCacheDTO>> newCommentCache = getCommentCache(newContentCache.keySet());
+
+                Map<String, List<Long>> newIndex = new HashMap<>();
+                for (ContentCacheDTO dto : allContent) {
+                    addToIndexInternal(newIndex, dto.getId(), dto.getType(), dto.getCategoryId());
+                }
+
+                recommendList = newRecommendList;
+                contentCache = newContentCache;
+                commentCache = newCommentCache;
+                typeCategoryIndex = newIndex;
+                contentTimestamps.clear();
+                long now = System.currentTimeMillis();
+                for (Long id : newContentCache.keySet()) {
+                    contentTimestamps.put(id, now);
+                }
+
+            } catch (Exception e) {
+                LOGGER.log(Level.WARNING, "内容缓存刷新失败", e);
+
+                throw new CacheException("内容缓存刷新失败", e);
             }
-
-            List<ContentVO> newRecommendList = new ArrayList<>();
-            for (ContentCacheDTO dto : allContent) {
-                ContentVO cVO = new ContentVO();
-                copyToContentVO(cVO, dto);
-                newRecommendList.add(cVO);
-            }
-
-            Map<Long, List<CommentCacheDTO>> newCommentCache = getCommentCache(newContentCache.keySet());
-
-            Map<String, List<Long>> newIndex = new HashMap<>();
-            for (ContentCacheDTO dto : allContent) {
-                addToIndexInternal(newIndex, dto.getId(), dto.getType(), dto.getCategoryId());
-            }
-
-            recommendList = newRecommendList;
-            contentCache = newContentCache;
-            commentCache = newCommentCache;
-            typeCategoryIndex = newIndex;
-            contentTimestamps.clear();
-            long now = System.currentTimeMillis();
-            for (Long id : newContentCache.keySet()) {
-                contentTimestamps.put(id, now);
-            }
-
-        } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "内容缓存刷新失败", e);
-
-            throw new CacheException("内容缓存刷新失败", e);
-        } finally {
-            MyConnectionPool.release(conn);
-        }
+            return null;
+        });
     }
 
     public void startScheduler() {
@@ -281,31 +282,29 @@ public class ContentService {
     // ===== 搜索 =====
 
     public PageResult<ContentVO> search(String keyword, Long userId, int page, int pageSize) {
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            int total = contentDao.countKeywordSearch(conn, keyword);
-            List<Long> contentIdList = contentDao.keywordSearchInBrief(conn, keyword, page, pageSize);
-            List<ContentVO> result = new ArrayList<>();
-            for (Long contentId : contentIdList) {
-                ContentCacheDTO cacheDTO = getContentFromCache(contentId);
-                if (cacheDTO == null) continue;
-                ContentVO cVO = new ContentVO();
-                copyToContentVO(cVO, cacheDTO);
-                result.add(cVO);
-            }
+        return transactionTemplate.execute(conn -> {
+            try {
+                int total = contentDao.countKeywordSearch(conn, keyword);
+                List<Long> contentIdList = contentDao.keywordSearchInBrief(conn, keyword, page, pageSize);
+                List<ContentVO> result = new ArrayList<>();
+                for (Long contentId : contentIdList) {
+                    ContentCacheDTO cacheDTO = getContentFromCache(contentId);
+                    if (cacheDTO == null) continue;
+                    ContentVO cVO = new ContentVO();
+                    copyToContentVO(cVO, cacheDTO);
+                    result.add(cVO);
+                }
 
-            if (userId != null && !result.isEmpty()) {
-                fillLikeAndFollowBatch(result, userId);
-            }
+                if (userId != null && !result.isEmpty()) {
+                    fillLikeAndFollowBatch(result, userId);
+                }
 
-            return new PageResult<>(result, total, page, pageSize);
-        } catch (SQLException e) {
-            LOGGER.log(Level.SEVERE, "搜索内容失败, keyword=" + keyword, e);
-            throw new ServerException("搜索失败，请重试");
-        } finally {
-            MyConnectionPool.release(conn);
-        }
+                return new PageResult<>(result, total, page, pageSize);
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "搜索内容失败, keyword=" + keyword, e);
+                throw new ServerException("搜索失败，请重试");
+            }
+        });
     }
 
     // ===== 组装响应 VO =====
@@ -349,21 +348,20 @@ public class ContentService {
     // ===== 缓存回填 =====
 
     private void backfillContent(long contentId) {
-        Connection conn = null;
         try {
-            conn = MyConnectionPool.getConnection();
-            ContentCacheDTO dto = contentDao.findContent(conn, contentId);
-            if (dto == null) return;
-            Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, dto.getId());
-            buildContentMedia(dto, mediaMap);
-            List<CommentCacheDTO> comments = commentService.getCommentCacheVOList(contentId);
-            cacheContent(contentId, dto, comments);
-            addToIndex(contentId, dto.getType(), dto.getCategoryId());
-            LOGGER.info("缓存回填成功, contentId=" + contentId);
+            transactionTemplate.execute(conn -> {
+                ContentCacheDTO dto = contentDao.findContent(conn, contentId);
+                if (dto == null) return null;
+                Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, dto.getId());
+                buildContentMedia(dto, mediaMap);
+                List<CommentCacheDTO> comments = commentService.getCommentCacheVOList(contentId);
+                cacheContent(contentId, dto, comments);
+                addToIndex(contentId, dto.getType(), dto.getCategoryId());
+                LOGGER.info("缓存回填成功, contentId=" + contentId);
+                return null;
+            });
         } catch (Exception e) {
             LOGGER.log(Level.WARNING, "缓存回填失败, contentId=" + contentId, e);
-        } finally {
-            MyConnectionPool.release(conn);
         }
     }
 
@@ -461,17 +459,16 @@ public class ContentService {
         }
         if (authorIds.isEmpty()) return;
 
-        Connection conn = null;
         try {
-            conn = MyConnectionPool.getConnection();
-            Set<Long> followedSet = followDao.getFollowedIds(conn, userId, authorIds);
-            for (ContentVO vo : list) {
-                vo.setIsFollowed(followedSet.contains(vo.getAuthorId()));
-            }
-        } catch (SQLException e) {
+            transactionTemplate.execute(conn -> {
+                Set<Long> followedSet = followDao.getFollowedIds(conn, userId, authorIds);
+                for (ContentVO vo : list) {
+                    vo.setIsFollowed(followedSet.contains(vo.getAuthorId()));
+                }
+                return null;
+            });
+        } catch (DatabaseException e) {
             LOGGER.log(Level.WARNING, "批量填充关注状态失败, userId=" + userId, e);
-        } finally {
-            MyConnectionPool.release(conn);
         }
     }
 
@@ -480,15 +477,14 @@ public class ContentService {
     private void fillFollowStatus(ContentDetailVO vo, Long userId) {
         if (userId == null || vo == null) return;
 
-        Connection conn = null;
         try {
-            conn = MyConnectionPool.getConnection();
-            Set<Long> followedSet = followDao.getFollowedIds(conn, userId, List.of(vo.getAuthorId()));
-            vo.setIsFollowed(followedSet.contains(vo.getAuthorId()));
-        } catch (SQLException e) {
+            transactionTemplate.execute(conn -> {
+                Set<Long> followedSet = followDao.getFollowedIds(conn, userId, List.of(vo.getAuthorId()));
+                vo.setIsFollowed(followedSet.contains(vo.getAuthorId()));
+                return null;
+            });
+        } catch (DatabaseException e) {
             LOGGER.log(Level.WARNING, "填充关注状态失败, userId=" + userId, e);
-        } finally {
-            MyConnectionPool.release(conn);
         }
     }
 
@@ -527,60 +523,38 @@ public class ContentService {
     // ===== 管理 =====
 
     public long addVideo(UploadCommand uc, String videoUrl, String coverUrl) {
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            conn.setAutoCommit(false);
-            long videoId = doAddContent(conn, uc);
-            contentMediaDao.addMedia(conn, videoId, videoUrl, UploadType.VIDEO.getMediaType(), 1);
-            contentMediaDao.addMedia(conn, videoId, coverUrl, UploadType.COVER.getMediaType(), 1);
-            conn.commit();
-            updateCacheAfterAdd(conn, videoId);
-            return videoId;
-        } catch (SQLException e) {
-            LOGGER.log(Level.SEVERE, "添加视频失败, userId=" + uc.getUserId(), e);
-            if (conn != null) {
-                try {
-                    conn.rollback();
-                } catch (SQLException ex) {
-                    throw new DatabaseException("回滚失败", ex);
-                }
+        return transactionTemplate.execute(conn -> {
+            try {
+                long videoId = doAddContent(conn, uc);
+                contentMediaDao.addMedia(conn, videoId, videoUrl, UploadType.VIDEO.getMediaType(), 1);
+                contentMediaDao.addMedia(conn, videoId, coverUrl, UploadType.COVER.getMediaType(), 1);
+                updateCacheAfterAdd(conn, videoId);
+                return videoId;
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "添加视频失败, userId=" + uc.getUserId(), e);
+                throw new ServerException("数据库写入失败");
             }
-            throw new ServerException("数据库写入失败");
-        } finally {
-            MyConnectionPool.release(conn);
-        }
+        });
     }
 
     public long addPost(UploadCommand uc, String coverUrl, List<String> imageUrls) {
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            conn.setAutoCommit(false);
-            long contentId = doAddContent(conn, uc);
-            if (coverUrl != null) {
-                contentMediaDao.addMedia(conn, contentId, coverUrl, UploadType.COVER.getMediaType(), 1);
-            }
-            int sort = 1;
-            for (String imageUrl : imageUrls) {
-                contentMediaDao.addMedia(conn, contentId, imageUrl, UploadType.IMAGE.getMediaType(), sort++);
-            }
-            conn.commit();
-            updateCacheAfterAdd(conn, contentId);
-            return contentId;
-        } catch (SQLException e) {
-            LOGGER.log(Level.SEVERE, "添加动态失败, userId=" + uc.getUserId(), e);
-            if (conn != null) {
-                try {
-                    conn.rollback();
-                } catch (SQLException ex) {
-                    throw new DatabaseException("回滚失败", ex);
+        return transactionTemplate.execute(conn -> {
+            try {
+                long contentId = doAddContent(conn, uc);
+                if (coverUrl != null) {
+                    contentMediaDao.addMedia(conn, contentId, coverUrl, UploadType.COVER.getMediaType(), 1);
                 }
+                int sort = 1;
+                for (String imageUrl : imageUrls) {
+                    contentMediaDao.addMedia(conn, contentId, imageUrl, UploadType.IMAGE.getMediaType(), sort++);
+                }
+                updateCacheAfterAdd(conn, contentId);
+                return contentId;
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "添加动态失败, userId=" + uc.getUserId(), e);
+                throw new ServerException("数据库写入失败");
             }
-            throw new ServerException("数据库写入失败");
-        } finally {
-            MyConnectionPool.release(conn);
-        }
+        });
     }
 
     private void updateCacheAfterAdd(Connection conn, long contentId) {
