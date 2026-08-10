@@ -854,7 +854,7 @@ ContentService 注入 ContentCacheManager/ContentStatusFiller，保留查询与�
 - **优先级**: P2
 - **预估工时**: 1 天
 - **前置依赖**: 无
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -862,8 +862,8 @@ ContentService 注入 ContentCacheManager/ContentStatusFiller，保留查询与�
 
 #### 验证标准
 
-- [ ] 容器启动正常，无循环依赖
-- [ ] 构造器注入的 Bean 可正常获取
+- [x] 容器启动正常，无循环依赖
+- [x] 构造器注入的 Bean 可正常获取
 
 ---
 
@@ -872,7 +872,7 @@ ContentService 注入 ContentCacheManager/ContentStatusFiller，保留查询与�
 - **优先级**: P2
 - **预估工时**: 半天
 - **前置依赖**: TASK-040
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -880,8 +880,8 @@ ContentService 注入 ContentCacheManager/ContentStatusFiller，保留查询与�
 
 #### 验证标准
 
-- [ ] 初始化/销毁回调顺序正确
-- [ ] 原有 shutdown 逻辑不丢失
+- [x] 初始化/销毁回调顺序正确
+- [x] 原有 shutdown 逻辑不丢失
 
 ---
 
@@ -890,7 +890,7 @@ ContentService 注入 ContentCacheManager/ContentStatusFiller，保留查询与�
 - **优先级**: P2
 - **预估工时**: 1 小时
 - **前置依赖**: TASK-017
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-10 完成）
 
 #### 任务描述
 
@@ -898,9 +898,9 @@ MyConnectionPool 增加 MAX_SIZE（配置 `db.pool.maxSize`，默认 20）与获
 
 #### 验证标准
 
-- [ ] 超过上限不无限创建连接
-- [ ] 超时抛出异常
-- [ ] 回归测试通过
+- [x] 超过上限不无限创建连接
+- [x] 超时抛出异常
+- [x] 回归测试通过
 
 ---
 
@@ -1246,3 +1246,4 @@ Filter 统计响应时间与错误率，日志输出；连接池使用率统计�
 | 2.7 | 2026-08-10 | TASK-029~031 完成（阶段四）：TransactionTemplate 统一事务；9 个 Service 手工事务样板全部替换；DAO 只接收 Connection（删除自取连接包装）；35/35 pytest 通过 |
 | 2.8 | 2026-08-10 | TASK-032~034 完成（阶段五）：ContentService 缓存职责迁入 ContentCacheManager、状态填充迁入 ContentStatusFiller；CommentService/LikeService/FeedService/ProfileService/StartController 调用点更新；TASK-035（UserService 拆分）按用户决定暂缓；35/35 pytest 通过 |
 | 2.9 | 2026-08-10 | TASK-036~038 完成（阶段六）：SQL 注入与资源所有权审计记录（全参数化、无注入点）；users 表新增 role 列 + tools/admin.py（--list/--promote/--demote）；AuthFilter 对 /api/admin/* 校验管理员角色；recovery.html 区分 403 并隐藏非管理员操作；TASK-039（XSS/CSRF）按用户决定暂缓；35/35 pytest 通过 |
+| 3.0 | 2026-08-10 | TASK-040~042 完成（阶段七）：@InjectConstructor 构造器注入（11 个服务类迁移，字段注入兼容）；Initializable/Disposable 生命周期接口接入容器（ContentCacheManager 迁移，AppShutDownListener 统一关闭）；MyConnectionPool 上限 20 + 获取超时 5000ms（等待/超时抛 SQLException/失效连接移除）；35/35 pytest 通过 |

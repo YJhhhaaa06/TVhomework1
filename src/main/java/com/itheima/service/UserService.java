@@ -16,7 +16,7 @@ import com.itheima.exception.PasswordIncorrectException;
 import com.itheima.exception.ServerException;
 import com.itheima.exception.UserNotFoundException;
 import com.itheima.ioc.annotation.Component;
-import com.itheima.ioc.annotation.Inject;
+import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.model.vo.LoginVO;
 import com.itheima.model.entity.User;
 import com.itheima.util.TransactionTemplate;
@@ -30,12 +30,16 @@ import java.util.logging.Logger;
 @Component
 public class UserService {
 
-    @Inject
-    private UserDao userDao;
-    @Inject
-    private TransactionTemplate transactionTemplate;
+    private final UserDao userDao;
+    private final TransactionTemplate transactionTemplate;
     private static final Logger LOGGER =
             LogUtil.getLogger(UserService.class);
+
+    @InjectConstructor
+    public UserService(UserDao userDao, TransactionTemplate transactionTemplate) {
+        this.userDao = userDao;
+        this.transactionTemplate = transactionTemplate;
+    }
 
     public LoginVO login(LoginCommand loginCommand){
         if(loginCommand.getType()== LoginType.BY_ID){

@@ -2,7 +2,6 @@ package com.itheima.controller;
 
 import com.itheima.config.AppConfig;
 import com.itheima.ioc.IocContainer;
-import com.itheima.service.ContentCacheManager;
 import com.itheima.util.MyConnectionPool;
 import com.itheima.util.MyRedisPool;
 import com.itheima.util.RequestContext;
@@ -37,7 +36,7 @@ public class AppShutDownListener implements ServletContextListener {
 
     @Override
     public void contextDestroyed(ServletContextEvent sce) {
-        IocContainer.getInstance().getBean(ContentCacheManager.class).shutdown();
+        IocContainer.getInstance().shutdown();
 
         MyRedisPool.flushDb();
         MyRedisPool.close();

@@ -8,7 +8,7 @@ import com.itheima.exception.ConflictException;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
 import com.itheima.ioc.annotation.Component;
-import com.itheima.ioc.annotation.Inject;
+import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.util.LogUtil;
 import com.itheima.util.TransactionTemplate;
 
@@ -20,22 +20,29 @@ import java.util.logging.Logger;
 @Component
 public class LikeService {
 
-    @Inject
-    private ContentDao contentDao;
-    @Inject
-    private CommentDao commentDao;
-    @Inject
-    private ContentLikeDao contentLikeDao;
-    @Inject
-    private CommentLikeDao commentLikeDao;
-    @Inject
-    private LikeCacheService cache;
-    @Inject
-    private ContentCacheManager contentCacheManager;
-    @Inject
-    private TransactionTemplate transactionTemplate;
+    private final ContentDao contentDao;
+    private final CommentDao commentDao;
+    private final ContentLikeDao contentLikeDao;
+    private final CommentLikeDao commentLikeDao;
+    private final LikeCacheService cache;
+    private final ContentCacheManager contentCacheManager;
+    private final TransactionTemplate transactionTemplate;
     private static final Logger LOGGER =
             LogUtil.getLogger(LikeService.class);
+
+    @InjectConstructor
+    public LikeService(ContentDao contentDao, CommentDao commentDao,
+                       ContentLikeDao contentLikeDao, CommentLikeDao commentLikeDao,
+                       LikeCacheService cache, ContentCacheManager contentCacheManager,
+                       TransactionTemplate transactionTemplate) {
+        this.contentDao = contentDao;
+        this.commentDao = commentDao;
+        this.contentLikeDao = contentLikeDao;
+        this.commentLikeDao = commentLikeDao;
+        this.cache = cache;
+        this.contentCacheManager = contentCacheManager;
+        this.transactionTemplate = transactionTemplate;
+    }
 
     // ==================== 内容点赞 ====================
 

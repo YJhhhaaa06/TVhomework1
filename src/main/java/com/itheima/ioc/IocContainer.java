@@ -2,6 +2,7 @@ package com.itheima.ioc;
 
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.Inject;
+import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.ioc.annotation.PostConstruct;
 import com.itheima.util.LogUtil;
 
@@ -45,6 +46,10 @@ public class IocContainer {
             invokePostConstruct(bean);
         }
 
+        for (Object bean : beans.values()) {
+            invokeInitializable(bean);
+        }
+
         initialized = true;
     }
 
@@ -65,6 +70,14 @@ public class IocContainer {
 
     public void shutdown() {
         for (Object bean : beans.values()) {
+            if (bean instanceof Disposable disposable) {
+                try {
+                    disposable.destroy();
+                } catch (Exception e) {
+                    LOGGER.log(Level.SEVERE, "Bean destroy 失败: " + bean.getClass().getName(), e);
+                }
+                continue;
+            }
             try {
                 Method m = bean.getClass().getMethod("shutdown");
                 m.invoke(bean);
@@ -78,6 +91,25 @@ public class IocContainer {
     // ==================== 内部实现 ====================
 
     private Object createInstance(Class<?> clazz) {
+        Constructor<?> injectCtor = findInjectConstructor(clazz);
+        if (injectCtor != null) {
+            Class<?>[] paramTypes = injectCtor.getParameterTypes();
+            Object[] args = new Object[paramTypes.length];
+            for (int i = 0; i < paramTypes.length; i++) {
+                Object dep = beans.get(paramTypes[i]);
+                if (dep == null) {
+                    throw new RuntimeException("构造器依赖未就绪: "
+                            + clazz.getSimpleName() + " -> " + paramTypes[i].getSimpleName());
+                }
+                args[i] = dep;
+            }
+            try {
+                injectCtor.setAccessible(true);
+                return injectCtor.newInstance(args);
+            } catch (Exception e) {
+                throw new RuntimeException("构造器创建实例失败: " + clazz.getName(), e);
+            }
+        }
         try {
             Constructor<?> ctor = clazz.getDeclaredConstructor();
             ctor.setAccessible(true);
@@ -85,6 +117,19 @@ public class IocContainer {
         } catch (Exception e) {
             throw new RuntimeException("无法创建实例: " + clazz.getName(), e);
         }
+    }
+
+    private Constructor<?> findInjectConstructor(Class<?> clazz) {
+        Constructor<?> found = null;
+        for (Constructor<?> ctor : clazz.getDeclaredConstructors()) {
+            if (ctor.isAnnotationPresent(InjectConstructor.class)) {
+                if (found != null) {
+                    throw new RuntimeException("存在多个 @InjectConstructor 构造器: " + clazz.getName());
+                }
+                found = ctor;
+            }
+        }
+        return found;
     }
 
     private void injectFields(Object target) {
@@ -121,6 +166,17 @@ public class IocContainer {
                             + target.getClass().getSimpleName() + "."
                             + method.getName(), e);
                 }
+            }
+        }
+    }
+
+    private void invokeInitializable(Object target) {
+        if (target instanceof Initializable initializable) {
+            try {
+                initializable.init();
+            } catch (Exception e) {
+                throw new RuntimeException("Initializable.init 执行失败: "
+                        + target.getClass().getSimpleName(), e);
             }
         }
     }
@@ -186,6 +242,14 @@ public class IocContainer {
                 Class<?> type = field.getType();
                 if (allClasses.contains(type)) {
                     result.add(type);
+                }
+            }
+        }
+        Constructor<?> injectCtor = findInjectConstructor(clazz);
+        if (injectCtor != null) {
+            for (Class<?> paramType : injectCtor.getParameterTypes()) {
+                if (allClasses.contains(paramType)) {
+                    result.add(paramType);
                 }
             }
         }

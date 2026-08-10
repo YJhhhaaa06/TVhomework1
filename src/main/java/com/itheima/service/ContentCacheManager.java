@@ -8,9 +8,10 @@ import com.itheima.exception.CacheException;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ParamException;
 import com.itheima.exception.ServerException;
+import com.itheima.ioc.Disposable;
+import com.itheima.ioc.Initializable;
 import com.itheima.ioc.annotation.Component;
-import com.itheima.ioc.annotation.Inject;
-import com.itheima.ioc.annotation.PostConstruct;
+import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.model.cache.CommentCacheDTO;
 import com.itheima.model.cache.ContentCacheDTO;
 import com.itheima.model.entity.ContentMedia;
@@ -30,17 +31,12 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 @Component
-public class ContentCacheManager {
-    @Inject
-    private ContentDao contentDao;
-    @Inject
-    private ContentMediaDao contentMediaDao;
-    @Inject
-    private CommentDao commentDao;
-    @Inject
-    private LikeCacheService likeCacheService;
-    @Inject
-    private TransactionTemplate transactionTemplate;
+public class ContentCacheManager implements Initializable, Disposable {
+    private final ContentDao contentDao;
+    private final ContentMediaDao contentMediaDao;
+    private final CommentDao commentDao;
+    private final LikeCacheService likeCacheService;
+    private final TransactionTemplate transactionTemplate;
     private static final Logger LOGGER =
             LogUtil.getLogger(ContentCacheManager.class);
 
@@ -52,7 +48,16 @@ public class ContentCacheManager {
     private Map<String, List<Long>> typeCategoryIndex = new HashMap<>();
     private ScheduledExecutorService scheduler;
 
-    public ContentCacheManager() {}
+    @InjectConstructor
+    public ContentCacheManager(ContentDao contentDao, ContentMediaDao contentMediaDao,
+                               CommentDao commentDao, LikeCacheService likeCacheService,
+                               TransactionTemplate transactionTemplate) {
+        this.contentDao = contentDao;
+        this.contentMediaDao = contentMediaDao;
+        this.commentDao = commentDao;
+        this.likeCacheService = likeCacheService;
+        this.transactionTemplate = transactionTemplate;
+    }
 
     // ===== 缓存 TTL 管理 =====
 
@@ -163,7 +168,7 @@ public class ContentCacheManager {
     }
 
     // ===== 初始化 =====
-    @PostConstruct
+    @Override
     public void init() {
         try {
             refresh();
@@ -228,7 +233,8 @@ public class ContentCacheManager {
         }, 0, AppConfig.getContentRefreshMinutes(), TimeUnit.MINUTES);
     }
 
-    public void shutdown() {
+    @Override
+    public void destroy() {
         if (scheduler != null && !scheduler.isShutdown()) {
             scheduler.shutdownNow();
         }

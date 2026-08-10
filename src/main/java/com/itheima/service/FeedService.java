@@ -5,7 +5,7 @@ import com.itheima.dao.ContentDao;
 import com.itheima.dao.FollowDao;
 import com.itheima.exception.ServerException;
 import com.itheima.ioc.annotation.Component;
-import com.itheima.ioc.annotation.Inject;
+import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.model.cache.ContentCacheDTO;
 import com.itheima.model.vo.ContentVO;
 import com.itheima.util.LogUtil;
@@ -19,17 +19,23 @@ import java.util.logging.Logger;
 @Component
 public class FeedService {
 
-    @Inject
-    private FollowDao followDao;
-    @Inject
-    private ContentDao contentDao;
-    @Inject
-    private ContentCacheManager contentCacheManager;
-    @Inject
-    private LikeService likeService;
-    @Inject
-    private TransactionTemplate transactionTemplate;
+    private final FollowDao followDao;
+    private final ContentDao contentDao;
+    private final ContentCacheManager contentCacheManager;
+    private final LikeService likeService;
+    private final TransactionTemplate transactionTemplate;
     private static final Logger LOGGER = LogUtil.getLogger(FeedService.class);
+
+    @InjectConstructor
+    public FeedService(FollowDao followDao, ContentDao contentDao,
+                       ContentCacheManager contentCacheManager, LikeService likeService,
+                       TransactionTemplate transactionTemplate) {
+        this.followDao = followDao;
+        this.contentDao = contentDao;
+        this.contentCacheManager = contentCacheManager;
+        this.likeService = likeService;
+        this.transactionTemplate = transactionTemplate;
+    }
 
     public PageResult<ContentVO> getFeed(long currentUserId, int page, int pageSize) {
         return transactionTemplate.execute(conn -> {

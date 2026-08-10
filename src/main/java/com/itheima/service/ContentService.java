@@ -5,7 +5,7 @@ import com.itheima.dao.ContentDao;
 import com.itheima.dao.ContentMediaDao;
 import com.itheima.exception.*;
 import com.itheima.ioc.annotation.Component;
-import com.itheima.ioc.annotation.Inject;
+import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.model.cache.CommentCacheDTO;
 import com.itheima.model.cache.ContentCacheDTO;
 import com.itheima.model.command.UploadCommand;
@@ -24,24 +24,30 @@ import java.util.logging.Logger;
 
 @Component
 public class ContentService {
-    @Inject
-    private ContentDao contentDao;
-    @Inject
-    private ContentMediaDao contentMediaDao;
-    @Inject
-    private CommentService commentService;
-    @Inject
-    private LikeService likeService;
-    @Inject
-    private ContentCacheManager contentCacheManager;
-    @Inject
-    private ContentStatusFiller contentStatusFiller;
-    @Inject
-    private TransactionTemplate transactionTemplate;
+    private final ContentDao contentDao;
+    private final ContentMediaDao contentMediaDao;
+    private final CommentService commentService;
+    private final LikeService likeService;
+    private final ContentCacheManager contentCacheManager;
+    private final ContentStatusFiller contentStatusFiller;
+    private final TransactionTemplate transactionTemplate;
     private static final Logger LOGGER =
             LogUtil.getLogger(ContentService.class);
 
-    public ContentService() {}
+    @InjectConstructor
+    public ContentService(ContentDao contentDao, ContentMediaDao contentMediaDao,
+                          CommentService commentService, LikeService likeService,
+                          ContentCacheManager contentCacheManager,
+                          ContentStatusFiller contentStatusFiller,
+                          TransactionTemplate transactionTemplate) {
+        this.contentDao = contentDao;
+        this.contentMediaDao = contentMediaDao;
+        this.commentService = commentService;
+        this.likeService = likeService;
+        this.contentCacheManager = contentCacheManager;
+        this.contentStatusFiller = contentStatusFiller;
+        this.transactionTemplate = transactionTemplate;
+    }
 
     // ===== 搜索 =====
 

@@ -5,7 +5,7 @@ import com.itheima.dao.CommentDao;
 import com.itheima.dao.ContentDao;
 import com.itheima.exception.*;
 import com.itheima.ioc.annotation.Component;
-import com.itheima.ioc.annotation.Inject;
+import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.model.cache.CommentCacheDTO;
 import com.itheima.model.vo.CommentVO;
 import com.itheima.util.LogUtil;
@@ -21,16 +21,22 @@ import java.util.logging.Logger;
 @Component
 public class CommentService {
 
-    @Inject
-    private CommentDao commentDao;
-    @Inject
-    private ContentDao contentDao;
-    @Inject
-    private ContentCacheManager contentCacheManager;
-    @Inject
-    private TransactionTemplate transactionTemplate;
+    private final CommentDao commentDao;
+    private final ContentDao contentDao;
+    private final ContentCacheManager contentCacheManager;
+    private final TransactionTemplate transactionTemplate;
     private static final Logger LOGGER =
             LogUtil.getLogger(CommentService.class);
+
+    @InjectConstructor
+    public CommentService(CommentDao commentDao, ContentDao contentDao,
+                          ContentCacheManager contentCacheManager,
+                          TransactionTemplate transactionTemplate) {
+        this.commentDao = commentDao;
+        this.contentDao = contentDao;
+        this.contentCacheManager = contentCacheManager;
+        this.transactionTemplate = transactionTemplate;
+    }
 
     // ===== 转换：CommentCacheVO 树 → CommentVO 树（带 isLiked）=====
 

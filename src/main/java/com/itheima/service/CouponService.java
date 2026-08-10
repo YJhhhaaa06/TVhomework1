@@ -4,7 +4,7 @@ import com.itheima.dao.CouponDao;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.ServerException;
 import com.itheima.ioc.annotation.Component;
-import com.itheima.ioc.annotation.Inject;
+import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.util.TransactionTemplate;
 
 import java.sql.SQLException;
@@ -15,10 +15,14 @@ import java.util.UUID;
 @Component
 public class CouponService {
 
-    @Inject
-    private CouponDao couponDao;
-    @Inject
-    private TransactionTemplate transactionTemplate;
+    private final CouponDao couponDao;
+    private final TransactionTemplate transactionTemplate;
+
+    @InjectConstructor
+    public CouponService(CouponDao couponDao, TransactionTemplate transactionTemplate) {
+        this.couponDao = couponDao;
+        this.transactionTemplate = transactionTemplate;
+    }
 
     public String grabCoupon(long couponId, long userId) {
         return transactionTemplate.execute(conn -> {

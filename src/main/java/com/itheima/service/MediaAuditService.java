@@ -7,7 +7,7 @@ import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ParamException;
 import com.itheima.exception.ServerException;
 import com.itheima.ioc.annotation.Component;
-import com.itheima.ioc.annotation.Inject;
+import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.model.cache.ContentCacheDTO;
 import com.itheima.model.entity.ContentMedia;
 import com.itheima.model.audit.MediaAuditItem;
@@ -47,12 +47,17 @@ public class MediaAuditService {
     private static final Pattern MEDIA_URL_PATTERN =
             Pattern.compile("^/upload/(video|image|cover)/([A-Za-z0-9._-]+)$");
 
-    @Inject
-    private ContentDao contentDao;
-    @Inject
-    private ContentMediaDao contentMediaDao;
-    @Inject
-    private TransactionTemplate transactionTemplate;
+    private final ContentDao contentDao;
+    private final ContentMediaDao contentMediaDao;
+    private final TransactionTemplate transactionTemplate;
+
+    @InjectConstructor
+    public MediaAuditService(ContentDao contentDao, ContentMediaDao contentMediaDao,
+                             TransactionTemplate transactionTemplate) {
+        this.contentDao = contentDao;
+        this.contentMediaDao = contentMediaDao;
+        this.transactionTemplate = transactionTemplate;
+    }
 
     /**
      * 全量扫描并回写 file_exists / last_verify_time。

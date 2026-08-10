@@ -29,6 +29,8 @@ public class MyConnectionPool {
 
     // 池子
     private static final int INIT_SIZE = AppConfig.getDbInitSize();
+    private static final int MAX_SIZE = AppConfig.getDbMaxSize();
+    private static final long TIMEOUT_MS = AppConfig.getDbTimeoutMs();
     private static final LinkedList<Connection> pool = new LinkedList<>();
     private static final Set<Connection> allConnections = new HashSet<>();
     //连接池是否已关闭
@@ -36,6 +38,10 @@ public class MyConnectionPool {
 
     // 静态代码块初始化
     static {
+        if (MAX_SIZE < INIT_SIZE) {
+            throw new IllegalStateException(
+                    "db.pool.maxSize(" + MAX_SIZE + ") 不能小于 db.pool.initSize(" + INIT_SIZE + ")");
+        }
         try {
             for (int i = 0; i < INIT_SIZE; i++) {
                 createConnection();
@@ -52,29 +58,43 @@ public class MyConnectionPool {
 
     // 获取连接
     public static synchronized Connection getConnection() throws SQLException {
-        if(isClosed){
+        if (isClosed) {
             throw new IllegalStateException("连接池已关闭");
         }
-        if (pool.isEmpty()) {
-            // 没有就新建
-            createConnection();
+        long deadline = System.currentTimeMillis() + TIMEOUT_MS;
+        while (pool.isEmpty()) {
+            if (allConnections.size() < MAX_SIZE) {
+                createConnection();
+                break;
+            }
+            long remaining = deadline - System.currentTimeMillis();
+            if (remaining <= 0) {
+                throw new SQLException("获取数据库连接超时");
+            }
+            try {
+                MyConnectionPool.class.wait(remaining);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new SQLException("获取数据库连接被中断");
+            }
         }
         return pool.removeFirst();
     }
 
     // 归还连接
     public static synchronized void release(Connection conn) {
-        //synchronized 线程锁    保证同一时刻只有一个线程用这个方法
         if (conn == null) return;
 
         try {
-            // 检查连接是否还活着（建议加）
+            // 检查连接是否还活着
             if (conn.isClosed()) {
-                return; // 已经关了，直接丢弃
+                allConnections.remove(conn);
+                return;
             }
 
             if (!conn.isValid(1)) {
-                conn.close();//等一秒钟还没确认conn是有效的，关闭后丢弃
+                conn.close();
+                allConnections.remove(conn);
                 return;
             }
 
@@ -83,6 +103,7 @@ public class MyConnectionPool {
 
             //  归还连接池
             pool.addLast(conn);
+            MyConnectionPool.class.notifyAll();
 
         } catch (SQLException e) {
             // 只要出异常 → 直接销毁连接
@@ -90,12 +111,14 @@ public class MyConnectionPool {
                 conn.close();
             } catch (SQLException ex) {
                 e.addSuppressed(ex);
+            } finally {
+                allConnections.remove(conn);
             }
         }
     }
 
     public static synchronized void closePool() {
-        isClosed=true;
+        isClosed = true;
         for (Connection conn : allConnections) {
             try {
                 if (!conn.isClosed()) {
@@ -107,6 +130,7 @@ public class MyConnectionPool {
         }
         pool.clear();
         allConnections.clear();
+        MyConnectionPool.class.notifyAll();
     }
 
 

@@ -11,7 +11,7 @@ import com.itheima.dao.UserDao;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
 import com.itheima.ioc.annotation.Component;
-import com.itheima.ioc.annotation.Inject;
+import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.util.LogUtil;
 import com.itheima.util.TransactionTemplate;
 
@@ -23,19 +23,25 @@ import java.util.logging.Logger;
 @Component
 public class ProfileService {
 
-    @Inject
-    private UserDao userDao;
-    @Inject
-    private ContentDao contentDao;
-    @Inject
-    private FollowDao followDao;
-    @Inject
-    private ContentCacheManager contentCacheManager;
-    @Inject
-    private LikeService likeService;
-    @Inject
-    private TransactionTemplate transactionTemplate;
+    private final UserDao userDao;
+    private final ContentDao contentDao;
+    private final FollowDao followDao;
+    private final ContentCacheManager contentCacheManager;
+    private final LikeService likeService;
+    private final TransactionTemplate transactionTemplate;
     private static final Logger LOGGER = LogUtil.getLogger(ProfileService.class);
+
+    @InjectConstructor
+    public ProfileService(UserDao userDao, ContentDao contentDao, FollowDao followDao,
+                          ContentCacheManager contentCacheManager, LikeService likeService,
+                          TransactionTemplate transactionTemplate) {
+        this.userDao = userDao;
+        this.contentDao = contentDao;
+        this.followDao = followDao;
+        this.contentCacheManager = contentCacheManager;
+        this.likeService = likeService;
+        this.transactionTemplate = transactionTemplate;
+    }
 
     public ProfileVO getProfile(long profileUserId, Long currentUserId, int page, int pageSize) {
         return transactionTemplate.execute(conn -> {

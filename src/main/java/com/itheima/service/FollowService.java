@@ -5,7 +5,7 @@ import com.itheima.dao.UserDao;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.ServerException;
 import com.itheima.ioc.annotation.Component;
-import com.itheima.ioc.annotation.Inject;
+import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.model.entity.User;
 import com.itheima.util.TransactionTemplate;
 
@@ -22,14 +22,19 @@ import java.util.logging.Logger;
 @Component
 public class FollowService {
 
-    @Inject
-    private FollowDao followDao;
-    @Inject
-    private UserDao userDao;
-    @Inject
-    private TransactionTemplate transactionTemplate;
+    private final FollowDao followDao;
+    private final UserDao userDao;
+    private final TransactionTemplate transactionTemplate;
     private static final Logger LOGGER =
             LogUtil.getLogger(FollowService.class);
+
+    @InjectConstructor
+    public FollowService(FollowDao followDao, UserDao userDao,
+                         TransactionTemplate transactionTemplate) {
+        this.followDao = followDao;
+        this.userDao = userDao;
+        this.transactionTemplate = transactionTemplate;
+    }
 
     public void follow(long userId, long followedUserId) {
         if (userId == followedUserId) {

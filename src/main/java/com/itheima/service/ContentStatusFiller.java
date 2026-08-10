@@ -3,7 +3,7 @@ package com.itheima.service;
 import com.itheima.dao.FollowDao;
 import com.itheima.exception.DatabaseException;
 import com.itheima.ioc.annotation.Component;
-import com.itheima.ioc.annotation.Inject;
+import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.model.vo.ContentDetailVO;
 import com.itheima.model.vo.ContentVO;
 import com.itheima.util.LogUtil;
@@ -20,14 +20,19 @@ import java.util.logging.Logger;
 @Component
 public class ContentStatusFiller {
 
-    @Inject
-    private LikeService likeService;
-    @Inject
-    private FollowDao followDao;
-    @Inject
-    private TransactionTemplate transactionTemplate;
+    private final LikeService likeService;
+    private final FollowDao followDao;
+    private final TransactionTemplate transactionTemplate;
     private static final Logger LOGGER =
             LogUtil.getLogger(ContentStatusFiller.class);
+
+    @InjectConstructor
+    public ContentStatusFiller(LikeService likeService, FollowDao followDao,
+                               TransactionTemplate transactionTemplate) {
+        this.likeService = likeService;
+        this.followDao = followDao;
+        this.transactionTemplate = transactionTemplate;
+    }
 
     // ===== 点赞状态填充 =====
 

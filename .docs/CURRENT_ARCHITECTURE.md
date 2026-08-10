@@ -1,6 +1,6 @@
 # 当前系统架构地图
 
-> 版本：1.8
+> 版本：1.9
 > 最后更新：2026-08-10
 > 维护说明：每次架构改动后必须更新本文档
 
@@ -77,7 +77,7 @@ untitled/
 
 ```
 com.itheima/
-├── ioc/                    # 手写 IoC 容器（226行）
+├── ioc/                    # 手写 IoC 容器（366行，构造器注入 + 生命周期接口）
 ├── filter/                 # Servlet 过滤器（102行）
 ├── controller/             # 控制器层（1205行）
 ├── service/                # 业务逻辑层（2236行）
@@ -101,11 +101,14 @@ com.itheima/
 
 | 类 | 行数 | 职责 |
 |----|------|------|
-| IocContainer | 189 | 单例容器，管理 Bean 生命周期 |
-| ClassScanner | 47 | 扫描 @Component 注解的类 |
+| IocContainer | 258 | 单例容器：构造器注入优先、字段注入兼容，管理 Bean 生命周期（@PostConstruct → Initializable.init；关闭时 Disposable.destroy / 反射 shutdown） |
+| ClassScanner | 48 | 扫描 @Component 注解的类 |
 | @Component | - | 标记为受管 Bean |
 | @Inject | - | 字段依赖注入 |
+| @InjectConstructor | - | 构造器依赖注入（带注解的构造器优先） |
 | @PostConstruct | - | 初始化回调 |
+| Initializable | - | 生命周期接口：依赖注入完成后调用 init() |
+| Disposable | - | 生命周期接口：容器关闭时调用 destroy() |
 
 #### filter 包 — 请求过滤器
 
@@ -130,7 +133,7 @@ com.itheima/
 | BaseServlet | - | 40 | 基类，IoC 注入 + JSON 响应 |
 | BaseServletUtil | - | 38 | 静态工具，writeSuccess/writeError |
 | RequestParser | - | 69 | JSON 请求体解析 |
-| AppShutDownListener | - | 33 | 容器生命周期管理 |
+| AppShutDownListener | - | 102 | 容器生命周期管理（统一关闭 IoC 容器） |
 | LoginController | /user/* | 88 | 登录、注册、修改密码 |
 | StartController | /start | 43 | 首页推荐 |
 | SearchController | /search | 127 | 搜索 |
@@ -148,19 +151,19 @@ com.itheima/
 
 | 类 | 行数 | 职责 | 依赖 |
 |----|------|------|------|
-| ContentCacheManager | 544 | 内容缓存管理（内存索引/评论树/实时计数） | ContentDao, ContentMediaDao, CommentDao, LikeCacheService, TransactionTemplate |
-| ContentService | 153 | 内容管理（查询与发布） | ContentDao, ContentMediaDao, CommentService, LikeService, ContentCacheManager, ContentStatusFiller, TransactionTemplate |
-| ContentStatusFiller | 100 | 内容状态填充（点赞/关注） | LikeService, FollowDao, TransactionTemplate |
-| LikeService | 308 | 点赞业务 | ContentDao, CommentDao, ContentLikeDao, CommentLikeDao, LikeCacheService, ContentCacheManager, TransactionTemplate |
+| ContentCacheManager | 550 | 内容缓存管理（内存索引/评论树/实时计数） | ContentDao, ContentMediaDao, CommentDao, LikeCacheService, TransactionTemplate |
+| ContentService | 159 | 内容管理（查询与发布） | ContentDao, ContentMediaDao, CommentService, LikeService, ContentCacheManager, ContentStatusFiller, TransactionTemplate |
+| ContentStatusFiller | 105 | 内容状态填充（点赞/关注） | LikeService, FollowDao, TransactionTemplate |
+| LikeService | 315 | 点赞业务 | ContentDao, CommentDao, ContentLikeDao, CommentLikeDao, LikeCacheService, ContentCacheManager, TransactionTemplate |
 | LikeCacheService | 264 | Redis 点赞缓存 | - |
-| CommentService | 99 | 评论业务 | CommentDao, ContentDao, ContentCacheManager, TransactionTemplate |
-| UserService | 238 | 用户认证 + 管理员判定 | UserDao, TransactionTemplate |
-| FollowService | 118 | 关注业务 | FollowDao, UserDao |
-| ProfileService | 91 | 用户主页 | UserDao, ContentDao, FollowDao, ContentCacheManager, LikeService, TransactionTemplate |
-| FeedService | 80 | 关注动态流 | FollowDao, ContentDao, ContentCacheManager, LikeService, TransactionTemplate |
+| CommentService | 105 | 评论业务 | CommentDao, ContentDao, ContentCacheManager, TransactionTemplate |
+| UserService | 242 | 用户认证 + 管理员判定 | UserDao, TransactionTemplate |
+| FollowService | 123 | 关注业务 | FollowDao, UserDao |
+| ProfileService | 97 | 用户主页 | UserDao, ContentDao, FollowDao, ContentCacheManager, LikeService, TransactionTemplate |
+| FeedService | 86 | 关注动态流 | FollowDao, ContentDao, ContentCacheManager, LikeService, TransactionTemplate |
 | FileUploadService | 78 | 文件上传 | - |
-| MediaAuditService | 258 | 媒体完整性扫描与恢复 | ContentDao, ContentMediaDao |
-| CouponService | 70 | 优惠券抢购 | CouponDao |
+| MediaAuditService | 263 | 媒体完整性扫描与恢复 | ContentDao, ContentMediaDao |
+| CouponService | 74 | 优惠券抢购 | CouponDao |
 
 #### dao 包 — 数据访问
 
@@ -261,7 +264,7 @@ com.itheima/
 
 | 类 | 行数 | 职责 |
 |----|------|------|
-| MyConnectionPool | 109 | JDBC 连接池 |
+| MyConnectionPool | 138 | JDBC 连接池（上限 20、获取超时 5000ms、等待归还） |
 | TransactionTemplate | 50 | 统一事务模板（取连接/提交/回滚/归还，业务异常原样重抛） |
 | PasswordUtil | 58 | BCrypt 密码哈希 |
 | JwtUtil | 39 | JWT 生成/校验 |
@@ -286,7 +289,7 @@ com.itheima/
 | 用户名 | root | app.properties (db.username) / AppConfig |
 | 密码 | MySQL | app.properties (db.password) / AppConfig |
 | 连接池初始大小 | 5 | app.properties (db.pool.initSize) / AppConfig |
-| 连接池上限/超时 | 20 / 5000ms（已定义，TASK-042 接线） | app.properties (db.pool.*) / AppConfig |
+| 连接池上限/超时 | 20 / 5000ms（TASK-042 已接线） | app.properties (db.pool.*) / AppConfig |
 
 ### 5.2 数据库表
 
@@ -507,6 +510,7 @@ com.itheima/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-08-10 | 1.9 | 阶段七完成：IocContainer 支持 @InjectConstructor 构造器注入（11 个服务类迁移，字段注入保留兼容）；新增 Initializable/Disposable 生命周期接口并接入容器（ContentCacheManager 迁移，AppShutDownListener 改走容器统一关闭，反射 shutdown 兼容保留）；MyConnectionPool 增加上限 20 与获取超时 5000ms（满池等待、超时抛 SQLException、失效连接从 allConnections 移除）；35/35 pytest 通过 |
 | 2026-08-10 | 1.8 | 阶段六完成：SQL 注入与资源所有权审计记录（全参数化、无注入点）；users 表新增 role 列（0=普通/1=管理员）；UserDao.getUserRole + UserService.isAdmin；AuthFilter 对 /api/admin/* 校验管理员角色（每次请求查库）；MediaAdminController 新增 GET /api/admin/media/me；recovery.html 区分 403 并隐藏非管理员操作；新增 tools/admin.py（--list/--promote/--demote）；迁移前已备份 |
 | 2026-08-10 | 1.7 | 阶段五完成：ContentService 缓存职责迁入 ContentCacheManager（@Component 实例 Bean，评论树加载一并迁入以消除循环依赖）；状态填充迁入 ContentStatusFiller；ContentService 精简为查询与发布；CommentService/LikeService/FeedService/ProfileService/StartController 调用点改为注入新 Bean；缓存策略原样保留 |
 | 2026-08-10 | 1.6 | 阶段四完成：新增 TransactionTemplate 统一事务管理；UserService/CommentService/FollowService/LikeService/ContentService/CouponService/MediaAuditService/FeedService/ProfileService 手工事务样板全部替换；DAO 全部只接收 Connection（UserDao/CouponDao/ContentLikeDao/CommentLikeDao 移除自取连接包装）；媒体扫描改为单事务 |
