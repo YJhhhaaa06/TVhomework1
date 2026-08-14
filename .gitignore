@@ -51,6 +51,7 @@ out/artifacts/MyApp/com/itheima/controller/Test3.class
 .docs/AVAILABLE_TOOLS.md
 .docs/DISASTER_CHECK_REPORT_2026-08-08.md
 .docs/DISASTER_RECOVERY_PLAN.md
+.docs/HANDOFF*.md
 
 ### Python ###
 __pycache__/
