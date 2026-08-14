@@ -1002,7 +1002,7 @@ Mock DAO/CacheManager/StatusFiller，覆盖推荐、搜索、详情、发布、�
 
 ---
 
-## 阶段九：前端优化（P3）
+## 阶段九：前端优化（P3）(延期)
 
 ---
 
