@@ -433,6 +433,8 @@ Content-Type: multipart/form-data
 
 ### 3.4 首页推荐流程
 
+> **前端交互（2026-08-14 重构后）**：首页为 SPA 视图 `#/`；分区（推荐/游戏/音乐…）收纳在顶部导航「分类」下拉（选中跳 `#/?cat=<id>`）；类型筛选（全部/视频/图文）在首页内容区；「换一换」重新拉 `/start` 并在客户端打乱顺序以获得「新一批」观感；关注流独立为 `#/follow`（`/feed` 分页）。
+
 ```
 ┌──────────┐   GET /start   ┌────────────────┐
 │  客户端   │ ─────────────► │ StartController │
@@ -548,8 +550,10 @@ GET /search?keyword=关键词&page=1&pageSize=10&token=xxx（可选）
 
 ### 3.6 查看内容详情流程
 
+> **前端交互（2026-08-14 重构后）**：详情为 SPA 视图 `#/video/:id`（原 `detail.html?contentId=` 已删除）；详情端点实为 `GET /search/IdSearch`（**无 `/detail`**）；右侧新增「相关推荐」栏，本轮用 `/start` 推荐流兜底（后端暂无推荐接口）；评论为树形，支持回复/点赞；视频类型用 `videoUrl` 播放，图文类型展示 `coverUrl` + `imageUrls` 画廊。
+
 ```
-GET /detail?contentId=123&token=xxx（可选）
+GET /search/IdSearch?contentId=123&token=xxx（可选）
 
 步骤：
 1. 从缓存获取内容详情

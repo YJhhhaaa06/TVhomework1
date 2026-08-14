@@ -1,7 +1,7 @@
 # 当前系统架构地图
 
-> 版本：1.9
-> 最后更新：2026-08-10
+> 版本：2.0
+> 最后更新：2026-08-14
 > 维护说明：每次架构改动后必须更新本文档
 
 ---
@@ -58,8 +58,8 @@ untitled/
 │   │   └── webapp/                  # Web 应用
 │   │       ├── WEB-INF/web.xml      # Servlet 配置
 │   │       ├── META-INF/context.xml # Tomcat 配置
-│   │       ├── index.html           # 欢迎页（跳转 start.html）
-│   │       └── *.html               # 前端页面（9个，含 recovery.html）
+│   │       ├── index.html           # 应用外壳（SPA 入口）
+│   │       └── static/              # 前端资源（css/common.css + js/ 基础设施与视图模块）
 │   │
 │   └── test/
 │       ├── *.http                   # HTTP 测试文件（17个）
@@ -395,17 +395,48 @@ com.itheima/
 
 ## 八、前端页面
 
-| 页面 | 行数 | 功能 | 路径 |
-|------|------|------|------|
-| login.html | 198 | 登录/注册 | /login.html |
-| start.html | 552 | 首页/启动页 | /start.html |
-| search.html | 563 | 搜索 | /search.html |
-| detail.html | 589 | 内容详情 | /detail.html |
-| publish.html | 581 | 发布内容 | /publish.html |
-| space.html | 499 | 个人主页 | /space.html |
-| profile.html | 360 | 个人资料 | /profile.html |
-| coupon.html | 231 | 优惠券中心 | /coupon.html |
-| recovery.html | 253 | 媒体资源运维（扫描/恢复，仅管理员） | /recovery.html |
+> 2026-08-14 起由「9 个独立 html（移动端优先）」重构为**单页应用（SPA）**：只保留 1 个 `index.html` 外壳 + 原生 hash 路由 + `static/js/views/` 视图模块，纯原生 HTML/CSS/JS、无构建工具，本轮不改后端。
+
+### 8.1 文件结构
+
+```
+src/main/webapp/
+├── index.html                 # 应用外壳：顶部导航 + 左抽屉 + <main id="app">
+└── static/
+    ├── css/common.css         # reset + 变量 + 布局 + 全部公共组件
+    └── js/
+        ├── main.js            # 渲染外壳 + 注册路由 + 导航高亮
+        ├── router.js          # hash 路由（视图 mount/unmount 生命周期）
+        ├── api.js             # request()：token 头 + {code,msg,data} 解包 + 401 跳登录
+        ├── auth.js            # token/username/userId 存取、JWT sub 解码
+        ├── utils.js           # 工具 + createVideoCard（字段降级收敛）
+        └── views/
+            ├── home.js        # #/            首页（推荐流 + 换一换）
+            ├── follow.js      # #/follow      关注流（/feed 分页）
+            ├── detail.js      # #/video/:id   详情（播放器 + 评论 + 相关推荐）
+            ├── search.js      # #/search?kw=  搜索
+            ├── user.js        # #/user/:id    个人主页（本人/他人合一）
+            ├── publish.js     # #/publish     创作中心（我的投稿 + 投稿上传）
+            ├── login.js       # #/login       登录/注册
+            ├── coupon.js      # #/coupon      优惠券中心
+            └── admin.js       # #/admin       媒体运维（仅管理员）
+```
+
+### 8.2 路由表
+
+| 路由 | 视图 | 需要登录 |
+|------|------|----------|
+| `#/` | home | ✗（关注流需登录） |
+| `#/follow` | follow | ✓ |
+| `#/video/:id` | detail | ✗（点赞/评论/关注需登录） |
+| `#/search?kw=…` | search | ✗ |
+| `#/user/:id` | user | ✗（本人操作需登录） |
+| `#/publish` | publish | ✓ |
+| `#/login` | login | ✗ |
+| `#/coupon` | coupon | ✗（抢券需登录） |
+| `#/admin` | admin | ✓（且需管理员） |
+
+> 说明：选 hash 路由（`#/…`）而非 History API，纯 Tomcat 下刷新无需服务端重写；`space.html`/`profile.html` 合并为 `user.js`（用「是否本人」决定展示与操作）。分区导航收纳在顶部「分类」下拉（`#/?cat=<id>`），首页只留类型筛选 + 内容网格。
 
 ---
 
@@ -533,6 +564,7 @@ com.itheima/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-08-14 | 2.0 | 前端重构（阶段九）：9 个独立 html 改为单页应用（SPA）——只留 index.html 外壳 + 原生 hash 路由 + static/js/views 视图模块（首页/关注流/详情/搜索/用户主页/创作中心/登录/券包/媒体运维），纯原生 HTML/CSS/JS、无构建工具，后端不动；新增首页分类下拉 + 换一换、关注流独立 #/follow、详情右侧相关推荐（/start 兜底）、创作中心「我的投稿」列表 |
 | 2026-08-10 | 1.9 | 阶段七完成：IocContainer 支持 @InjectConstructor 构造器注入（11 个服务类迁移，字段注入保留兼容）；新增 Initializable/Disposable 生命周期接口并接入容器（ContentCacheManager 迁移，AppShutDownListener 改走容器统一关闭，反射 shutdown 兼容保留）；MyConnectionPool 增加上限 20 与获取超时 5000ms（满池等待、超时抛 SQLException、失效连接从 allConnections 移除）；35/35 pytest 通过 |
 | 2026-08-10 | 1.8 | 阶段六完成：SQL 注入与资源所有权审计记录（全参数化、无注入点）；users 表新增 role 列（0=普通/1=管理员）；UserDao.getUserRole + UserService.isAdmin；AuthFilter 对 /api/admin/* 校验管理员角色（每次请求查库）；MediaAdminController 新增 GET /api/admin/media/me；recovery.html 区分 403 并隐藏非管理员操作；新增 tools/admin.py（--list/--promote/--demote）；迁移前已备份 |
 | 2026-08-10 | 1.7 | 阶段五完成：ContentService 缓存职责迁入 ContentCacheManager（@Component 实例 Bean，评论树加载一并迁入以消除循环依赖）；状态填充迁入 ContentStatusFiller；ContentService 精简为查询与发布；CommentService/LikeService/FeedService/ProfileService/StartController 调用点改为注入新 Bean；缓存策略原样保留 |

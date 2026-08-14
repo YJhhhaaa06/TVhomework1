@@ -1002,78 +1002,83 @@ Mock DAO/CacheManager/StatusFiller，覆盖推荐、搜索、详情、发布、�
 
 ---
 
-## 阶段九：前端优化（P3）(延期)
+## 阶段九：前端重构（P3）
+
+> 2026-08-14 决策（见 `.docs/HANDOFF_2026-08-14_前端重构B站桌面版.md`）：由「9 个独立 html（移动端优先）」改为**仿 B 站桌面网页版单页应用（SPA）**，纯原生 HTML/CSS/JS、无构建工具，本轮不改后端。原「抽取公共 JS/CSS」目标并入重构。
 
 ---
 
-### TASK-048: 创建前端目录结构
+### TASK-048: 删除旧 html 并搭建 SPA 外壳
 
 - **优先级**: P3
 - **预估工时**: 15 分钟
 - **前置依赖**: 无
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-14 完成）
 
 #### 任务描述
 
-创建 `static/css/common`、`static/js/common`、`static/images` 目录。
+`git rm` 删除 9 个旧 html（login/start/search/detail/publish/space/profile/coupon/recovery），新建 `index.html` 外壳（顶部导航 + 左抽屉 + `<main id="app">`）与 `static/` 目录。
 
 #### 验证标准
 
-- [ ] 目录已创建
+- [x] 9 个旧 html 已删除，仅保留 index.html 外壳
+- [x] 目录结构符合 HANDOFF 第六节
 
 ---
 
-### TASK-049: 抽取公共 JavaScript
+### TASK-049: 基础设施与公共 JS
 
 - **优先级**: P3
 - **预估工时**: 2 小时
 - **前置依赖**: TASK-048
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-14 完成）
 
 #### 任务描述
 
-抽取 `api.js`（请求封装 + 401 跳转）、`auth.js`（token 管理）、`utils.js`（工具函数）。
+编写 `static/js/` 基础设施：`api.js`（token 头 + {code,msg,data} 解包 + 401 跳登录）、`auth.js`（token/username/userId 存取、JWT sub 解码）、`utils.js`（工具 + createVideoCard 字段降级收敛）、`router.js`（hash 路由 + mount/unmount 生命周期）、`main.js`（外壳渲染 + 路由注册）。
 
 #### 验证标准
 
-- [ ] 9 个页面不再各自重复请求逻辑
-- [ ] 页面功能无回归
+- [x] 请求统一走 api.js，无页面各自复制 request()
+- [x] 视图切换无残留（unmount 清理）
+- [x] 全量 JS 通过 node --check 语法校验
 
 ---
 
-### TASK-050: 抽取公共 CSS
+### TASK-050: 设计系统与公共 CSS
 
 - **优先级**: P3
 - **预估工时**: 2 小时
 - **前置依赖**: TASK-048
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-14 完成）
 
 #### 任务描述
 
-抽取 `reset.css`、`common.css`（布局、按钮、卡片）。
+编写 `static/css/common.css`：reset + 设计变量 + 顶部导航/左抽屉布局 + 卡片/按钮/toast/骨架屏/弹层等公共组件，B 站品牌粉 #fb7299 + 噪点纹理 + 错峰入场动效。
 
 #### 验证标准
 
-- [ ] 公共样式集中管理
-- [ ] 页面样式无回归
+- [x] 公共样式集中管理
+- [x] 卡片/按钮/toast/弹层等组件全站复用
 
 ---
 
-### TASK-051: 页面迁移与引用更新
+### TASK-051: 视图模块铺开与路由接入
 
 - **优先级**: P3
 - **预估工时**: 2 小时
 - **前置依赖**: TASK-049、TASK-050
-- **状态**: `[ ]`
+- **状态**: `[x]`（2026-08-14 完成）
 
 #### 任务描述
 
-9 个页面（含 recovery.html）移入 `pages/`，更新静态资源引用与跳转路径。
+铺开 9 个视图模块并接入 hash 路由：home（首页推荐）、follow（关注流）、detail（详情+评论+相关推荐）、search、user（本人/他人合一）、publish（创作中心：我的投稿+投稿上传）、login、coupon、admin。space/profile 合并为 user。
 
 #### 验证标准
 
-- [ ] 所有页面可正常访问
-- [ ] 资源引用无 404
+- [x] 全部路由可访问，无整页刷新
+- [x] 资源引用无 404
+- [x] 后端接口契约未变（字段名照抄 HANDOFF 第三节）
 
 ---
 
@@ -1250,3 +1255,4 @@ Filter 统计响应时间与错误率，日志输出；连接池使用率统计�
 | 2.9 | 2026-08-10 | TASK-036~038 完成（阶段六）：SQL 注入与资源所有权审计记录（全参数化、无注入点）；users 表新增 role 列 + tools/admin.py（--list/--promote/--demote）；AuthFilter 对 /api/admin/* 校验管理员角色；recovery.html 区分 403 并隐藏非管理员操作；TASK-039（XSS/CSRF）按用户决定暂缓；35/35 pytest 通过 |
 | 3.0 | 2026-08-10 | TASK-040~042 完成（阶段七）：@InjectConstructor 构造器注入（11 个服务类迁移，字段注入兼容）；Initializable/Disposable 生命周期接口接入容器（ContentCacheManager 迁移，AppShutDownListener 统一关闭）；MyConnectionPool 上限 20 + 获取超时 5000ms（等待/超时抛 SQLException/失效连接移除）；35/35 pytest 通过 |
 | 3.1 | 2026-08-10 | TASK-043~047 完成（阶段八）：JUnit 6.0.0 + Mockito 5.20.0 + Surefire 3.2.5 测试体系（61 例 JUnit，含连接池与缓存生命周期补测）；pytest 新增 test_admin.py（45 passed + 1 条件跳过）；构建输出经 -Dstage8.buildDir 指向 D 盘（沙箱 javac 无法读 worktree target/）；离线仓库补 aliyun 来源记录 |
+| 3.2 | 2026-08-14 | TASK-048~051 完成（阶段九）：前端重构为 B 站桌面版单页应用（SPA）——删除 9 个旧 html，改为 index.html 外壳 + hash 路由 + static/js/views 视图模块，纯原生 HTML/CSS/JS、无构建工具，后端不动；commit ce4277f |
