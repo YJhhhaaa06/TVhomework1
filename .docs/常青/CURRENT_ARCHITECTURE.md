@@ -1,7 +1,7 @@
 # 当前系统架构地图
 
-> 版本：2.0
-> 最后更新：2026-08-14
+> 版本：2.1
+> 最后更新：2026-08-18
 > 维护说明：每次架构改动后必须更新本文档
 
 ---
@@ -42,14 +42,22 @@
 untitled/
 ├── pom.xml                          # Maven 配置
 ├── AGENTS.md                        # 项目约束（禁止Spring等）
-├── .docs/                           # 项目文档
-│   ├── CURRENT_ARCHITECTURE.md      # 本文件（系统地图）
-│   ├── ARCHITECTURE_PLAN.md         # 架构优化规划
-│   ├── CURRENT_TASK.md              # 当前任务清单
-│   ├── BUSINESS_FLOW.md             # 业务流程文档
-│   ├── TEST_COVERAGE.md             # 测试覆盖分析
-│   ├── REMOVE_CODE.md               # 未引用方法清理记录
-│   └── 项目分析报告.md              # 项目整体分析
+├── .docs/                           # 项目文档（入口：.docs/INDEX.md）
+│   ├── INDEX.md                     # 文档索引（唯一入口导航）
+│   ├── 常青/                        # 启动必读，随代码更新
+│   │   ├── CURRENT_ARCHITECTURE.md  # 本文件（系统地图）
+│   │   └── BUSINESS_FLOW.md         # 业务流程文档
+│   ├── 目标与任务/                   # 当前目标与任务（暂空）
+│   ├── 说明书/                       # 按需读的参考手册
+│   │   ├── TEST_GUIDE.md            # 测试运行指南
+│   │   ├── TEST_AUTOMATION.md       # 测试自动化脚本说明
+│   │   ├── ACCEPTANCE_CRITERIA.md   # 验收标准
+│   │   ├── DATABASE.md              # 数据库建表语句（本机，不追踪）
+│   │   └── AVAILABLE_TOOLS.md       # 工具路径清单（本机，不追踪）
+│   ├── archive/                     # 历史存档（追踪可追溯，勿读）
+│   │   ├── 目标与任务/               # 已完成：ARCHITECTURE_PLAN、CURRENT_TASK
+│   │   └── 报告/                    # 项目分析报告、TEST_COVERAGE
+│   └── temp/                        # 临时文档（永不追踪，可删）
 │
 ├── src/
 │   ├── main/
@@ -564,6 +572,7 @@ src/main/webapp/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-08-18 | 2.1 | 目录结构更新：.docs/ 由平铺改为分层（常青/目标与任务/说明书/archive/temp），本文件随结构归档至 .docs/常青/，入口改为 .docs/INDEX.md |
 | 2026-08-14 | 2.0 | 前端重构（阶段九）：9 个独立 html 改为单页应用（SPA）——只留 index.html 外壳 + 原生 hash 路由 + static/js/views 视图模块（首页/关注流/详情/搜索/用户主页/创作中心/登录/券包/媒体运维），纯原生 HTML/CSS/JS、无构建工具，后端不动；新增首页分类下拉 + 换一换、关注流独立 #/follow、详情右侧相关推荐（/start 兜底）、创作中心「我的投稿」列表 |
 | 2026-08-10 | 1.9 | 阶段七完成：IocContainer 支持 @InjectConstructor 构造器注入（11 个服务类迁移，字段注入保留兼容）；新增 Initializable/Disposable 生命周期接口并接入容器（ContentCacheManager 迁移，AppShutDownListener 改走容器统一关闭，反射 shutdown 兼容保留）；MyConnectionPool 增加上限 20 与获取超时 5000ms（满池等待、超时抛 SQLException、失效连接从 allConnections 移除）；35/35 pytest 通过 |
 | 2026-08-10 | 1.8 | 阶段六完成：SQL 注入与资源所有权审计记录（全参数化、无注入点）；users 表新增 role 列（0=普通/1=管理员）；UserDao.getUserRole + UserService.isAdmin；AuthFilter 对 /api/admin/* 校验管理员角色（每次请求查库）；MediaAdminController 新增 GET /api/admin/media/me；recovery.html 区分 403 并隐藏非管理员操作；新增 tools/admin.py（--list/--promote/--demote）；迁移前已备份 |
