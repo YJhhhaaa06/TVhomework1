@@ -11,11 +11,12 @@ Provides:
 """
 
 import os
+import shutil
 import uuid
 import pytest
 import requests
 
-BASE_URL = "http://localhost:8080/MyAPP"
+BASE_URL = os.environ.get("TV_BASE_URL", "http://localhost:8080")
 
 # Test user credentials - use UUID for guaranteed uniqueness across runs
 # Phone must be 11 digits starting with 1, so use digits only
@@ -33,7 +34,12 @@ USER_B = {
 }
 
 # Storage directory on server (used to verify file uploads exist)
-STONE_DIR = "D:/stone"
+STONE_DIR = os.environ.get("TV_STONE_DIR", "D:/data/projects/VideoPlatform/stone")
+
+# Real media files for upload tests (configurable via TV_TEST_RESOURCE_DIR)
+TEST_RESOURCE_DIR = os.environ.get(
+    "TV_TEST_RESOURCE_DIR", r"D:\dev\WorkSpace\VideoPlatform\TestResource"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -62,17 +68,45 @@ def login_user(account, password):
     return resp.json()
 
 
-def create_test_files():
-    """Create minimal test files for upload tests. Returns paths dict.
+_REAL_FILES = {
+    "video": ("test_video.mp4", os.path.join(TEST_RESOURCE_DIR, "test_video.mp4")),
+    "cover": ("test_cover.png", os.path.join(TEST_RESOURCE_DIR, "test_cover.png")),
+    "image": ("test_image.jpg", os.path.join(TEST_RESOURCE_DIR, "test_image.jpg")),
+}
 
-    Files are at least 1KB to avoid server-side minimum size rejection.
+
+def _copy_real_test_files(test_dir):
+    """Copy real media files from TEST_RESOURCE_DIR into test_dir.
+
+    Returns None if any required file is missing, so callers can fall back.
+    """
+    result = {}
+    for key, (filename, source) in _REAL_FILES.items():
+        if not os.path.isfile(source):
+            return None
+        dest = os.path.join(test_dir, filename)
+        shutil.copy2(source, dest)
+        result[key] = dest
+    return result
+
+
+def create_test_files():
+    """Return paths to upload test files.
+
+    Prefers real media files from TEST_RESOURCE_DIR (copied to a temp dir so
+    the originals are never modified). Falls back to synthetic 1KB files if
+    the resource directory is unavailable.
     """
     import tempfile
 
-    MIN_SIZE = 1024  # 1 KB minimum
-
     test_dir = os.path.join(tempfile.gettempdir(), "tvtest_upload")
     os.makedirs(test_dir, exist_ok=True)
+
+    real_files = _copy_real_test_files(test_dir)
+    if real_files:
+        return real_files
+
+    MIN_SIZE = 1024  # 1 KB minimum
 
     # MP4 file: ftyp box + padding to reach >= 1KB
     video_path = os.path.join(test_dir, "test_video.mp4")
@@ -246,6 +280,45 @@ def sample_post_content_id(token_a, test_files):
     result = resp.json()
     assert result.get("code") == 200, f"Post upload failed: {result}"
     return result["data"]["contentId"]
+
+
+@pytest.fixture(scope="session")
+def sample_comment_id(base_url, token_a):
+    """Return a commentId from an existing content that already has comments.
+
+    The app keeps an in-memory comment cache populated at startup; comments
+    added to freshly uploaded content are not visible until a cache refresh,
+    so consistency tests reuse an existing comment instead of creating one.
+    """
+    resp = requests.get(f"{base_url}/start", params={"limit": 50}, timeout=10)
+    body = resp.json()
+    assert body.get("code") == 200, f"Homepage failed: {body}"
+
+    for item in body.get("data", []):
+        if item.get("commentCount", 0) > 0:
+            content_id = item["id"]
+            resp = requests.get(
+                f"{base_url}/search/IdSearch",
+                params={"contentId": content_id},
+                headers={"token": token_a},
+                timeout=10,
+            )
+            body = resp.json()
+            assert body.get("code") == 200, f"Content detail failed: {body}"
+
+            resp = requests.get(
+                f"{base_url}/comment/show",
+                params={"contentId": content_id},
+                headers={"token": token_a},
+                timeout=10,
+            )
+            body = resp.json()
+            assert body.get("code") == 200, f"Comment list failed: {body}"
+            comments = body.get("data", [])
+            if comments:
+                return comments[0]["commentId"]
+
+    pytest.skip("No content with comments found in database")
 
 
 @pytest.fixture(scope="session")

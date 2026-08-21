@@ -2,13 +2,13 @@
 # 测试搜索功能的各种场景
 
 ### ==================== 变量 ====================
-@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4NTg3NjY2LCJleHAiOjE3Nzg1OTQ4NjZ9.S73BNb8WkLL77KqqjwS28HuGzd7QvclP-Gf5s-PYcrY
+@token = REPLACE_ME_请粘贴登录token
 
 
 ### ==================== 正常搜索 ====================
 
 ### 1. 正常搜索（登录状态）
-GET http://localhost:8080/MyAPP/search?keyword=test&page=1&pageSize=10
+GET http://localhost:8080/search?keyword=test&page=1&pageSize=10
 token: {{token}}
 
 > {%
@@ -24,7 +24,7 @@ token: {{token}}
 
 
 ### 2. 正常搜索（未登录）
-GET http://localhost:8080/MyAPP/search?keyword=test&page=1&pageSize=10
+GET http://localhost:8080/search?keyword=test&page=1&pageSize=10
 
 > {%
     client.test("未登录也可以搜索", function() {
@@ -35,7 +35,7 @@ GET http://localhost:8080/MyAPP/search?keyword=test&page=1&pageSize=10
 
 
 ### 3. 搜索中文关键词
-GET http://localhost:8080/MyAPP/search?keyword=测试&page=1&pageSize=10
+GET http://localhost:8080/search?keyword=测试&page=1&pageSize=10
 token: {{token}}
 
 > {%
@@ -49,7 +49,7 @@ token: {{token}}
 ### ==================== 分页测试 ====================
 
 ### 4. 搜索分页 — 第一页
-GET http://localhost:8080/MyAPP/search?keyword=test&page=1&pageSize=5
+GET http://localhost:8080/search?keyword=test&page=1&pageSize=5
 token: {{token}}
 
 > {%
@@ -61,7 +61,7 @@ token: {{token}}
 
 
 ### 5. 搜索分页 — 第二页
-GET http://localhost:8080/MyAPP/search?keyword=test&page=2&pageSize=5
+GET http://localhost:8080/search?keyword=test&page=2&pageSize=5
 token: {{token}}
 
 > {%
@@ -72,7 +72,7 @@ token: {{token}}
 
 
 ### 6. 搜索分页 — 超出范围
-GET http://localhost:8080/MyAPP/search?keyword=test&page=999&pageSize=10
+GET http://localhost:8080/search?keyword=test&page=999&pageSize=10
 token: {{token}}
 
 > {%
@@ -85,7 +85,7 @@ token: {{token}}
 ### ==================== 结果结构验证 ====================
 
 ### 7. 搜索结果 — 验证列表项结构
-GET http://localhost:8080/MyAPP/search?keyword=test&page=1&pageSize=10
+GET http://localhost:8080/search?keyword=test&page=1&pageSize=10
 token: {{token}}
 
 > {%
@@ -106,7 +106,7 @@ token: {{token}}
 
 
 ### 8. 搜索结果 — 验证点赞状态填充（登录状态）
-GET http://localhost:8080/MyAPP/search?keyword=test&page=1&pageSize=10
+GET http://localhost:8080/search?keyword=test&page=1&pageSize=10
 token: {{token}}
 
 > {%
@@ -120,7 +120,7 @@ token: {{token}}
 
 
 ### 9. 搜索结果 — 验证关注状态填充（登录状态）
-GET http://localhost:8080/MyAPP/search?keyword=test&page=1&pageSize=10
+GET http://localhost:8080/search?keyword=test&page=1&pageSize=10
 token: {{token}}
 
 > {%
@@ -136,7 +136,7 @@ token: {{token}}
 ### ==================== 边界条件 ====================
 
 ### 10. 搜索 — 空关键词
-GET http://localhost:8080/MyAPP/search?keyword=&page=1&pageSize=10
+GET http://localhost:8080/search?keyword=&page=1&pageSize=10
 token: {{token}}
 
 > {%
@@ -148,7 +148,7 @@ token: {{token}}
 
 
 ### 11. 搜索 — 缺少 keyword 参数
-GET http://localhost:8080/MyAPP/search?page=1&pageSize=10
+GET http://localhost:8080/search?page=1&pageSize=10
 token: {{token}}
 
 > {%
@@ -159,7 +159,7 @@ token: {{token}}
 
 
 ### 12. 搜索 — 缺少 page 参数（应使用默认值）
-GET http://localhost:8080/MyAPP/search?keyword=test&pageSize=10
+GET http://localhost:8080/search?keyword=test&pageSize=10
 token: {{token}}
 
 > {%
@@ -170,7 +170,7 @@ token: {{token}}
 
 
 ### 13. 搜索 — 缺少 pageSize 参数（应使用默认值）
-GET http://localhost:8080/MyAPP/search?keyword=test&page=1
+GET http://localhost:8080/search?keyword=test&page=1
 token: {{token}}
 
 > {%
@@ -181,7 +181,7 @@ token: {{token}}
 
 
 ### 14. 搜索 — 特殊字符关键词
-GET http://localhost:8080/MyAPP/search?keyword=%3Cscript%3Ealert(1)%3C/script%3E&page=1&pageSize=10
+GET http://localhost:8080/search?keyword=%3Cscript%3Ealert(1)%3C/script%3E&page=1&pageSize=10
 token: {{token}}
 
 > {%
@@ -192,7 +192,7 @@ token: {{token}}
 
 
 ### 15. 搜索 — 超长关键词
-GET http://localhost:8080/MyAPP/search?keyword=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&page=1&pageSize=10
+GET http://localhost:8080/search?keyword=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&page=1&pageSize=10
 token: {{token}}
 
 > {%

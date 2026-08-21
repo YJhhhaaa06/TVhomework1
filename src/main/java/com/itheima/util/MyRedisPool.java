@@ -1,5 +1,6 @@
 package com.itheima.util;
 
+import com.itheima.config.AppConfig;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
 import redis.clients.jedis.JedisPoolConfig;
@@ -11,12 +12,12 @@ public class MyRedisPool {
     static {
         JedisPoolConfig config = new JedisPoolConfig();//规则配置对象，告诉连接池配置信息
 
-        config.setMaxTotal(50);     // 最大连接数
-        config.setMaxIdle(10);      // 最大空闲连接
-        config.setMinIdle(5);       // 最小空闲连接
+        config.setMaxTotal(AppConfig.getRedisMaxTotal());     // 最大连接数
+        config.setMaxIdle(AppConfig.getRedisMaxIdle());      // 最大空闲连接
+        config.setMinIdle(AppConfig.getRedisMinIdle());       // 最小空闲连接
         config.setTestOnBorrow(true); // 取连接时校验
 
-        pool = new JedisPool(config, "localhost", 6379);
+        pool = new JedisPool(config, AppConfig.getRedisHost(), AppConfig.getRedisPort());
     }
 
     public static Jedis getJedis() {

@@ -13,6 +13,8 @@ import os
 import pytest
 import requests
 
+from conftest import STONE_DIR
+
 
 # ---------------------------------------------------------------------------
 # S-01 ~ S-03: User Module
@@ -167,7 +169,7 @@ class TestUploadModule:
         assert video_url and len(video_url) > 0, "videoUrl is empty"
 
     def test_S09_file_on_disk(self, sample_content_id, token_a, base_url):
-        """S-09: Uploaded file exists in D:/stone and has size > 0."""
+        """S-09: Uploaded file exists in the storage dir and has size > 0."""
         # Get detail to find the filename
         resp = requests.get(
             f"{base_url}/search/IdSearch",
@@ -181,14 +183,14 @@ class TestUploadModule:
         video_url = data.get("videoUrl", "")
         assert video_url, "No videoUrl in detail"
 
-        # URL format: /MyAPP/upload/video/abc-123.mp4
-        # Local path: D:/stone/video/abc-123.mp4
+        # URL format: /upload/video/abc-123.mp4
+        # Local path: <STONE_DIR>/video/abc-123.mp4
         # Extract relative path after /upload/
         if "/upload/" in video_url:
             relative_path = video_url.split("/upload/")[1]
         else:
             relative_path = video_url.split("/")[-1]
-        filepath = f"D:/stone/{relative_path}"
+        filepath = f"{STONE_DIR}/{relative_path}"
 
         assert os.path.exists(filepath), \
             f"File not found on disk: {filepath} (videoUrl={video_url})"

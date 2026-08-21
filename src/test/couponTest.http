@@ -1,16 +1,16 @@
 ### ==================== 变量 ====================
 # 先用 loginTest.http 的用例1或2登录，拿到 token 替换下面
-@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4NDI0NDc4LCJleHAiOjE3Nzg0MzE2Nzh9.hY8C5mqXR0YbyS4mRNGfCFm5FTqNu5vrKq6OvXpjA-o
+@token = REPLACE_ME_请粘贴登录token
 
 ### ==================== 查询可用优惠券 ====================
 
 ### 1. 查询所有可用优惠券（无需登录）
-GET http://localhost:8080/MyAPP/coupon/list
+GET http://localhost:8080/coupon/list
 
 ### ==================== 抢购优惠券 ====================
 
 ### 2. 正常抢购 — 抢一张优惠券（couponId 根据数据库实际数据修改）
-POST http://localhost:8080/MyAPP/coupon/grab
+POST http://localhost:8080/coupon/grab
 token: {{token}}
 Content-Type: application/json
 
@@ -21,7 +21,7 @@ Content-Type: application/json
 ### ==================== 异常 — 重复抢购 ====================
 
 ### 3. 重复抢购 — 同一用户抢同一优惠券，应返回 409 "您已抢过该优惠券"
-POST http://localhost:8080/MyAPP/coupon/grab
+POST http://localhost:8080/coupon/grab
 token: {{token}}
 Content-Type: application/json
 
@@ -32,20 +32,20 @@ Content-Type: application/json
 ### ==================== 查询我的优惠券 ====================
 
 ### 4. 查询我已抢到的优惠券
-GET http://localhost:8080/MyAPP/coupon/my
+GET http://localhost:8080/coupon/my
 token: {{token}}
 
 ### ==================== 异常 — 参数校验 ====================
 
 ### 5. 缺少 couponId
-POST http://localhost:8080/MyAPP/coupon/grab
+POST http://localhost:8080/coupon/grab
 token: {{token}}
 Content-Type: application/json
 
 {}
 
 ### 6. couponId 为不存在的优惠券（库存不足/未开始/已结束表现一致）
-POST http://localhost:8080/MyAPP/coupon/grab
+POST http://localhost:8080/coupon/grab
 token: {{token}}
 Content-Type: application/json
 
@@ -56,7 +56,7 @@ Content-Type: application/json
 ### ==================== 异常 — 鉴权 ====================
 
 ### 7. 不带 token — AuthFilter 拦截
-POST http://localhost:8080/MyAPP/coupon/grab
+POST http://localhost:8080/coupon/grab
 Content-Type: application/json
 
 {
@@ -64,7 +64,7 @@ Content-Type: application/json
 }
 
 ### 8. 伪造 token — AuthFilter 拦截
-POST http://localhost:8080/MyAPP/coupon/grab
+POST http://localhost:8080/coupon/grab
 token: fake-token-12345
 Content-Type: application/json
 
@@ -75,7 +75,7 @@ Content-Type: application/json
 ### ==================== 异常 — 路径 ====================
 
 ### 9. 未识别的 action
-POST http://localhost:8080/MyAPP/coupon/unknown
+POST http://localhost:8080/coupon/unknown
 token: {{token}}
 Content-Type: application/json
 

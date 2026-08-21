@@ -1,12 +1,12 @@
 ### ==================== 变量 ====================
 # 先用 loginTest.http 的用例1或2登录，拿到 token 替换下面
-@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4MjM0MDk0LCJleHAiOjE3NzgyNDEyOTR9.bw_h890cadNqzyF0uRRY2hjrQFYrRZpXzcnXkI09pe8
+@token = REPLACE_ME_请粘贴登录token
 
 
 ### ==================== 正常发评论 ====================
 
 ### 1. 正常发评论（无父评论）
-POST http://localhost:8080/MyAPP/comment/add
+POST http://localhost:8080/comment/add
 token: {{token}}
 Content-Type: application/json
 
@@ -17,7 +17,7 @@ Content-Type: application/json
 
 
 ### 2. 正常回复评论（带 parentId）
-POST http://localhost:8080/MyAPP/comment/add
+POST http://localhost:8080/comment/add
 token: {{token}}
 Content-Type: application/json
 
@@ -31,7 +31,7 @@ Content-Type: application/json
 ### ==================== 异常 — 鉴权 ====================
 
 ### 3. 缺少 token
-POST http://localhost:8080/MyAPP/comment/add
+POST http://localhost:8080/comment/add
 Content-Type: application/json
 
 {
@@ -41,7 +41,7 @@ Content-Type: application/json
 
 
 ### 4. 伪造 token
-POST http://localhost:8080/MyAPP/comment/add
+POST http://localhost:8080/comment/add
 token: fake-token-12345
 Content-Type: application/json
 
@@ -54,7 +54,7 @@ Content-Type: application/json
 ### ==================== 异常 — 参数缺失/非法 ====================
 
 ### 5. 缺少 contentId
-POST http://localhost:8080/MyAPP/comment/add
+POST http://localhost:8080/comment/add
 token: {{token}}
 Content-Type: application/json
 
@@ -64,7 +64,7 @@ Content-Type: application/json
 
 
 ### 6. 缺少 message
-POST http://localhost:8080/MyAPP/comment/add
+POST http://localhost:8080/comment/add
 token: {{token}}
 Content-Type: application/json
 
@@ -74,7 +74,7 @@ Content-Type: application/json
 
 
 ### 7. message 为空字符串
-POST http://localhost:8080/MyAPP/comment/add
+POST http://localhost:8080/comment/add
 token: {{token}}
 Content-Type: application/json
 
@@ -85,7 +85,7 @@ Content-Type: application/json
 
 
 ### 8. contentId 为不存在的值
-POST http://localhost:8080/MyAPP/comment/add
+POST http://localhost:8080/comment/add
 token: {{token}}
 Content-Type: application/json
 
@@ -98,7 +98,7 @@ Content-Type: application/json
 ### ==================== 异常 — parentId 非法 ====================
 
 ### 9. parentId 指向不存在的评论
-POST http://localhost:8080/MyAPP/comment/add
+POST http://localhost:8080/comment/add
 token: {{token}}
 Content-Type: application/json
 
@@ -110,7 +110,7 @@ Content-Type: application/json
 
 
 ### 10. parentId 与 contentId 不匹配（父评论不属于该内容）
-POST http://localhost:8080/MyAPP/comment/add
+POST http://localhost:8080/comment/add
 token: {{token}}
 Content-Type: application/json
 
@@ -124,7 +124,7 @@ Content-Type: application/json
 ### ==================== 异常 — 路由 ====================
 
 ### 11. 未识别的 action（POST）
-POST http://localhost:8080/MyAPP/comment/unknown
+POST http://localhost:8080/comment/unknown
 token: {{token}}
 Content-Type: application/json
 
@@ -137,36 +137,36 @@ Content-Type: application/json
 ### ==================== 查询评论（GET /show）====================
 
 ### 12. 登录用户查询评论
-GET http://localhost:8080/MyAPP/comment/show?contentId=1
+GET http://localhost:8080/comment/show?contentId=1
 token: {{token}}
 
 
 ### 13. 未登录用户查询评论
-GET http://localhost:8080/MyAPP/comment/show?contentId=1
+GET http://localhost:8080/comment/show?contentId=1
 
 
 ### 14. 查询不存在的内容的评论
-GET http://localhost:8080/MyAPP/comment/show?contentId=99999
+GET http://localhost:8080/comment/show?contentId=99999
 token: {{token}}
 
 
 ### ==================== 查询评论 — 异常 ====================
 
 ### 15. 缺少 contentId 参数
-GET http://localhost:8080/MyAPP/comment/show
+GET http://localhost:8080/comment/show
 token: {{token}}
 
 
 ### 16. contentId 为非数字
-GET http://localhost:8080/MyAPP/comment/show?contentId=abc
+GET http://localhost:8080/comment/show?contentId=abc
 token: {{token}}
 
 
 ### 17. 缺少 action
-GET http://localhost:8080/MyAPP/comment
+GET http://localhost:8080/comment
 token: {{token}}
 
 
 ### 18. 未识别的 action（GET）
-GET http://localhost:8080/MyAPP/comment/unknown
+GET http://localhost:8080/comment/unknown
 token: {{token}}

@@ -1,11 +1,8 @@
 package com.itheima.controller;
 
-import com.itheima.DTO.PageResult;
-import com.itheima.exception.BusinessException;
-import com.itheima.exception.ErrorCode;
-import com.itheima.exception.ParamException;
+import com.itheima.model.dto.PageResult;
 import com.itheima.ioc.annotation.Inject;
-import com.itheima.pojo.ContentVO;
+import com.itheima.model.vo.ContentVO;
 import com.itheima.service.FeedService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
@@ -20,20 +17,13 @@ public class FeedController extends BaseServlet {
     private FeedService feedService;
 
     @Override
-    protected void doGet(HttpServletRequest req, HttpServletResponse resp)
-            throws ServletException, IOException {
-        try {
-            Long currentUserId = (Long) req.getAttribute("userId");
-            int page = parsePage(req);
-            int pageSize = parsePageSize(req);
+    protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        Long currentUserId = (Long) req.getAttribute("userId");
+        int page = parsePage(req);
+        int pageSize = parsePageSize(req);
 
-            PageResult<ContentVO> result = feedService.getFeed(currentUserId, page, pageSize);
-            BaseServletUtil.writeSuccess(resp, result);
-        } catch (BusinessException e) {
-            BaseServletUtil.writeError(resp, e.getCode(), e.getMessage());
-        } catch (Exception e) {
-            BaseServletUtil.writeError(resp, ErrorCode.SERVER_ERROR, "服务器异常，请重试");
-        }
+        PageResult<ContentVO> result = feedService.getFeed(currentUserId, page, pageSize);
+        BaseServletUtil.writeSuccess(resp, result);
     }
 
     private int parsePage(HttpServletRequest req) {

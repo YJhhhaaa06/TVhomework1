@@ -1,11 +1,11 @@
 package com.itheima.controller;
 
-import com.itheima.command.CommandConverter;
-import com.itheima.command.UploadCommand;
+import com.itheima.model.command.CommandConverter;
+import com.itheima.model.command.UploadCommand;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
 import com.itheima.ioc.annotation.Inject;
-import com.itheima.pojo.UploadResult;
+import com.itheima.model.vo.UploadResult;
 import com.itheima.service.ContentService;
 import com.itheima.service.FileUploadService;
 import jakarta.servlet.ServletException;
@@ -34,13 +34,11 @@ public class UploadController extends BaseServlet {
 
 
 
-    protected void doPost(HttpServletRequest req, HttpServletResponse resp)
-            throws ServletException, IOException {
-    try {
-        System.out.println("enter uploadController");
+    protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
         String action=req.getPathInfo();
         if(action==null){
             BaseServletUtil.writeError(resp,ErrorCode.NOT_FOUND,"未识别功能");
+            return;
         }
         switch (action){
             case("/video"):
@@ -52,16 +50,6 @@ public class UploadController extends BaseServlet {
             default:
                 BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND,"未识别功能");
         }
-    }catch (BusinessException e){
-        e.printStackTrace();
-        BaseServletUtil.writeError(resp,e.getCode(),e.getMessage());
-    }catch (Exception e){
-        e.printStackTrace();
-        BaseServletUtil.writeError(resp,ErrorCode.SERVER_ERROR,"服务器异常，请重试");
-    }
-
-
-
     }
 
     private void saveVideo(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
@@ -82,21 +70,21 @@ public class UploadController extends BaseServlet {
             BaseServletUtil.writeSuccess(resp, Map.of("contentId", contentId));
 
         }catch (BusinessException e){
-            BaseServletUtil.writeError(resp,e.getCode(),e.getMessage());
             if(videoResult!=null){
                 fileUploadService.deleteFileQuietly(videoResult.getAbsolutePath());
             }
             if(coverResult!=null){
                 fileUploadService.deleteFileQuietly(coverResult.getAbsolutePath());
             }
+            throw e;
         }catch (Exception e){
-            BaseServletUtil.writeError(resp,ErrorCode.SERVER_ERROR,"服务器异常，请重试");
             if(videoResult!=null){
                 fileUploadService.deleteFileQuietly(videoResult.getAbsolutePath());
             }
             if(coverResult!=null){
                 fileUploadService.deleteFileQuietly(coverResult.getAbsolutePath());
             }
+            throw new ServletException(e);
         }
     }
 
@@ -140,17 +128,15 @@ public class UploadController extends BaseServlet {
             BaseServletUtil.writeSuccess(resp, Map.of("contentId", contentId));
 
         } catch (BusinessException e) {
-            e.printStackTrace();
             for (String path : savedPaths) {
                 fileUploadService.deleteFileQuietly(path);
             }
-            BaseServletUtil.writeError(resp, e.getCode(), e.getMessage());
+            throw e;
         } catch (Exception e) {
-            e.printStackTrace();
             for (String path : savedPaths) {
                 fileUploadService.deleteFileQuietly(path);
             }
-            BaseServletUtil.writeError(resp, ErrorCode.SERVER_ERROR, "服务器异常，请重试");
+            throw new ServletException(e);
         }
     }
 

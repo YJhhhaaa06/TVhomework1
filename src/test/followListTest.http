@@ -2,7 +2,7 @@
 # 测试查看关注列表、粉丝列表功能
 
 ### ==================== 变量 ====================
-@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1IiwiaWF0IjoxNzc4NTg3NjY2LCJleHAiOjE3Nzg1OTQ4NjZ9.S73BNb8WkLL77KqqjwS28HuGzd7QvclP-Gf5s-PYcrY
+@token = REPLACE_ME_请粘贴登录token
 
 # 当前用户 ID
 @currentUserId = 5
@@ -14,7 +14,7 @@
 ### ==================== 关注列表测试 ====================
 
 ### 1. 查看自己的关注列表（登录状态）
-GET http://localhost:8080/MyAPP/follow/following?userId={{currentUserId}}
+GET http://localhost:8080/follow/following?userId={{currentUserId}}
 token: {{token}}
 
 > {%
@@ -27,7 +27,7 @@ token: {{token}}
 
 
 ### 2. 查看他人的关注列表（登录状态）
-GET http://localhost:8080/MyAPP/follow/following?userId={{otherUserId}}
+GET http://localhost:8080/follow/following?userId={{otherUserId}}
 token: {{token}}
 
 > {%
@@ -39,11 +39,11 @@ token: {{token}}
 
 
 ### 3. 查看关注列表（未登录）
-GET http://localhost:8080/MyAPP/follow/following?userId={{currentUserId}}
+GET http://localhost:8080/follow/following?userId={{currentUserId}}
 
 
 ### 4. 查看关注列表 — 缺少 userId 参数
-GET http://localhost:8080/MyAPP/follow/following
+GET http://localhost:8080/follow/following
 token: {{token}}
 
 > {%
@@ -54,7 +54,7 @@ token: {{token}}
 
 
 ### 5. 查看关注列表 — userId 为空字符串
-GET http://localhost:8080/MyAPP/follow/following?userId=
+GET http://localhost:8080/follow/following?userId=
 token: {{token}}
 
 > {%
@@ -65,7 +65,7 @@ token: {{token}}
 
 
 ### 6. 查看关注列表 — userId 非数字
-GET http://localhost:8080/MyAPP/follow/following?userId=abc
+GET http://localhost:8080/follow/following?userId=abc
 token: {{token}}
 
 > {%
@@ -76,7 +76,7 @@ token: {{token}}
 
 
 ### 7. 查看关注列表 — 验证列表项结构
-GET http://localhost:8080/MyAPP/follow/following?userId={{currentUserId}}
+GET http://localhost:8080/follow/following?userId={{currentUserId}}
 token: {{token}}
 
 > {%
@@ -93,7 +93,7 @@ token: {{token}}
 
 
 ### 8. 关注列表 — 验证 isSelf 字段
-GET http://localhost:8080/MyAPP/follow/following?userId={{currentUserId}}
+GET http://localhost:8080/follow/following?userId={{currentUserId}}
 token: {{token}}
 
 > {%
@@ -109,7 +109,7 @@ token: {{token}}
 ### ==================== 粉丝列表测试 ====================
 
 ### 9. 查看自己的粉丝列表（登录状态）
-GET http://localhost:8080/MyAPP/follow/followers?userId={{currentUserId}}
+GET http://localhost:8080/follow/followers?userId={{currentUserId}}
 token: {{token}}
 
 > {%
@@ -122,7 +122,7 @@ token: {{token}}
 
 
 ### 10. 查看他人的粉丝列表（登录状态）
-GET http://localhost:8080/MyAPP/follow/followers?userId={{otherUserId}}
+GET http://localhost:8080/follow/followers?userId={{otherUserId}}
 token: {{token}}
 
 > {%
@@ -134,11 +134,11 @@ token: {{token}}
 
 
 ### 11. 查看粉丝列表（未登录）
-GET http://localhost:8080/MyAPP/follow/followers?userId={{currentUserId}}
+GET http://localhost:8080/follow/followers?userId={{currentUserId}}
 
 
 ### 12. 查看粉丝列表 — 缺少 userId 参数
-GET http://localhost:8080/MyAPP/follow/followers
+GET http://localhost:8080/follow/followers
 token: {{token}}
 
 > {%
@@ -149,7 +149,7 @@ token: {{token}}
 
 
 ### 13. 查看粉丝列表 — userId 非数字
-GET http://localhost:8080/MyAPP/follow/followers?userId=abc
+GET http://localhost:8080/follow/followers?userId=abc
 token: {{token}}
 
 > {%
@@ -160,7 +160,7 @@ token: {{token}}
 
 
 ### 14. 查看粉丝列表 — 验证列表项结构
-GET http://localhost:8080/MyAPP/follow/followers?userId={{currentUserId}}
+GET http://localhost:8080/follow/followers?userId={{currentUserId}}
 token: {{token}}
 
 > {%
@@ -179,7 +179,7 @@ token: {{token}}
 ### ==================== 关注/取关后列表变化验证 ====================
 
 ### 15. 记录关注前的关注列表长度
-GET http://localhost:8080/MyAPP/follow/following?userId={{currentUserId}}
+GET http://localhost:8080/follow/following?userId={{currentUserId}}
 token: {{token}}
 
 > {%
@@ -190,7 +190,7 @@ token: {{token}}
 
 
 ### 16. userB 关注 userA（userId=5）
-POST http://localhost:8080/MyAPP/follow/add
+POST http://localhost:8080/follow/add
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
@@ -198,7 +198,7 @@ followedUserId=5
 
 
 ### 17. 验证 userA 的粉丝列表中出现 userB
-GET http://localhost:8080/MyAPP/follow/followers?userId=5
+GET http://localhost:8080/follow/followers?userId=5
 token: {{token}}
 
 > {%
@@ -210,7 +210,7 @@ token: {{token}}
 
 
 ### 18. userB 取消关注 userA
-POST http://localhost:8080/MyAPP/follow/remove
+POST http://localhost:8080/follow/remove
 token: {{token}}
 Content-Type: application/x-www-form-urlencoded
 
@@ -218,7 +218,7 @@ followedUserId=5
 
 
 ### 19. 验证 userA 的粉丝列表中不再有 userB
-GET http://localhost:8080/MyAPP/follow/followers?userId=5
+GET http://localhost:8080/follow/followers?userId=5
 token: {{token}}
 
 > {%

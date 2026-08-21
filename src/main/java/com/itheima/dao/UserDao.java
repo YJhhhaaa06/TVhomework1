@@ -1,12 +1,10 @@
 package com.itheima.dao;
 
 import com.itheima.ioc.annotation.Component;
-import com.itheima.pojo.User;
+import com.itheima.model.entity.User;
 
 import java.sql.*;
 import java.util.List;
-
-import com.itheima.util.MyConnectionPool;
 
 @Component
 public class UserDao {
@@ -38,60 +36,7 @@ public class UserDao {
         }
     }
 
-    //删
-    //删除用户
-    public int deleteUser(Connection conn, String phone, long id) throws SQLException {
-        String sql = "delete from users where phone=? and id=?";
-        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setString(1, phone);
-            pstmt.setLong(2, id);
-            return pstmt.executeUpdate();
-        }
-    }
-
     //查
-    //通过ID获取用户名
-    public String findUsernameById(long id) throws SQLException {
-        String sql = "select username from users where id=?";
-        java.sql.Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setLong(1, id);
-                // 获取结果集
-                try (ResultSet res = pstmt.executeQuery()) {
-                    if (res.next()) {
-                        return res.getString("username");
-                    } else {
-                        return null; // 用户不存在
-                    }
-                }
-            }
-        } finally {
-            MyConnectionPool.release(conn);
-        }
-    }
-
-    public String findUsernameByPhone(String phone) throws SQLException {
-        String sql = "select username from users where phone=?";
-        java.sql.Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, phone);
-                // 获取结果集
-                try (ResultSet res = pstmt.executeQuery()) {
-                    if (res.next()) {
-                        return res.getString("username");
-                    } else {
-                        return null; // 用户不存在
-                    }
-                }
-            }
-        } finally {
-            MyConnectionPool.release(conn);
-        }
-    }
 
     //为登录获取用户
     public User getUserForLoginById(Connection conn,long id) throws SQLException {
@@ -106,44 +51,6 @@ public class UserDao {
                     return null; // 用户不存在
                 }
             }
-        }
-    }
-    public User getUserForLoginById(long id) throws SQLException {
-        java.sql.Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            return getUserForLoginById(conn,id);
-        }catch (SQLException e){
-            if (conn != null) {
-                    try {
-                        conn.close(); // 出异常直接关闭
-                    } catch (SQLException ex) {
-                        e.addSuppressed(ex);//将关闭失败的异常挂到e上
-                    }
-                    conn = null;
-            }
-            throw e;
-        } finally {
-            MyConnectionPool.release(conn);
-        }
-    }
-    public User getUserForLoginByPhone(String phone) throws SQLException {
-        java.sql.Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            return getUserForLoginByPhone(conn,phone);
-        }catch (SQLException e){
-            if (conn != null) {
-                try {
-                    conn.close(); // 出异常直接关闭
-                } catch (SQLException ex) {
-                    e.addSuppressed(ex);
-                }
-                conn = null;
-            }
-            throw e;
-        }finally {
-            MyConnectionPool.release(conn);
         }
     }
     public User getUserForLoginByPhone(Connection conn, String phone) throws SQLException {
@@ -177,59 +84,6 @@ public class UserDao {
             }
         }
     }
-    public User getUserForProfileById(long id) throws SQLException {
-        java.sql.Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            return getUserForProfileById(conn,id);
-        }catch (SQLException e){
-            if (conn != null) {
-                try {
-                    conn.close(); // 出异常直接关闭
-                } catch (SQLException ex) {
-                    e.addSuppressed(ex);
-                }
-                conn = null;
-            }
-            throw e;
-        } finally {
-            MyConnectionPool.release(conn);
-        }
-    }
-    public User getUserForProfileByPhone(Connection conn,String phone)throws SQLException{
-        String sql = "select * from users where phone=?";
-        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setString(1, phone);
-            // 获取结果集
-            try (ResultSet rs = pstmt.executeQuery()) {
-                if (rs.next()) {
-                    return ResultMap.buildUserForProfile(rs);
-                } else {
-                    return null; // 用户不存在
-                }
-            }
-        }
-    }
-    public User getUserForProfileByPhone(String phone)throws SQLException{
-
-        java.sql.Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            return getUserForProfileByPhone(conn,phone);
-        }catch (SQLException e){
-            if (conn != null) {
-                try {
-                    conn.close(); // 出异常直接关闭
-                } catch (SQLException ex) {
-                    e.addSuppressed(ex);
-                }
-                conn = null;
-            }
-            throw e;
-        } finally {
-            MyConnectionPool.release(conn);
-        }
-    }
 
 
 
@@ -237,30 +91,6 @@ public class UserDao {
 
 
 
-
-
-
-
-    //查看手机号是否已经被使用
-    public boolean isPhoneUsed(String phone) throws SQLException {
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-           return isPhoneUsed(conn,phone);
-        }catch (SQLException e){
-            if(conn!=null){
-                try {
-                    conn.close();
-                }catch (SQLException ex){
-                    e.addSuppressed(ex);
-                }
-                conn=null;
-            }
-            throw e;
-        } finally {
-            MyConnectionPool.release(conn);
-        }
-    }
     public boolean isPhoneUsed(Connection conn, String phone) throws SQLException {
         String sql = "select 1 from users where phone=?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
@@ -284,26 +114,7 @@ public class UserDao {
         }
     }
 
-    //id是否存在 (用户是否存在)
-    public boolean isUserExist(long id) throws SQLException {
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            return isUserExist(conn,id);
-        }catch (SQLException e){
-            if(conn!=null){
-                try {
-                    conn.close();
-                }catch (SQLException ex){
-                    e.addSuppressed(ex);
-                }
-                conn=null;
-            }
-            throw e;
-        } finally {
-            MyConnectionPool.release(conn);
-        }
-    }
+
     public boolean isUserExist(Connection conn,long id) throws SQLException {
         String sql = "select 1 from users where id=?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
@@ -315,46 +126,7 @@ public class UserDao {
         }
     }
 
-    //根据手机号查询id
-    public long findIDbyPhone(String phone) throws SQLException {
-        String sql = "select id from users where phone=?";
-        java.sql.Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, phone);
-                try (ResultSet res = pstmt.executeQuery()) {
-                    if (res.next()) {
-                        return res.getLong("id");
-                    } else {
-                        throw new RuntimeException("USER_NOT_FOUND"); // 用户不存在
-                    }
-                }
-            }
-        } finally {
-            MyConnectionPool.release(conn);
-        }
-    }
 
-    public String findPhoneById(long id) throws SQLException {
-        String sql = "select phone from users where id=?";
-        Connection conn = null;
-        try {
-            conn = MyConnectionPool.getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setLong(1, id);
-                try (ResultSet res = pstmt.executeQuery()) {
-                    if (res.next()) {
-                        return res.getString("phone");
-                    } else {
-                        return null; // 用户不存在
-                    }
-                }
-            }
-        } finally {
-            MyConnectionPool.release(conn);
-        }
-    }
 
     //批量查询用户（仅id和username，给关注/粉丝列表用）
     public List<User> findUsersByIds(Connection conn, List<Long> ids) throws SQLException {
@@ -430,6 +202,20 @@ public class UserDao {
             pstmt.setString(1, newHashedPassword);
             pstmt.setLong(2, id);
             return pstmt.executeUpdate();
+        }
+    }
+
+    //查询用户角色（0=普通用户，1=管理员；查无此人返回 0）
+    public int getUserRole(Connection conn, long userId) throws SQLException {
+        String sql = "select role from users where id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, userId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt("role");
+                }
+                return 0;
+            }
         }
     }
 

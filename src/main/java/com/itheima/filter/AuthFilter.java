@@ -2,6 +2,8 @@ package com.itheima.filter;
 
 import com.itheima.controller.BaseServletUtil;
 import com.itheima.exception.ErrorCode;
+import com.itheima.ioc.IocContainer;
+import com.itheima.service.UserService;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -17,6 +19,7 @@ public class AuthFilter implements Filter {
 
     private static final Set<String> PROTECTED_PREFIXES = Set.of(
             "/api/upload",      // 上传视频/帖子
+            "/api/admin",       // 媒体运维（当前仅要求登录，无管理员角色）
             "/follow",      // 关注/取关
             "/like",        // 点赞/取消点赞
             "/feed"       // 关注动态
@@ -42,6 +45,15 @@ public class AuthFilter implements Filter {
         if (requiresLogin(path) && req.getAttribute("userId") == null) {
             BaseServletUtil.writeError(resp, ErrorCode.UNAUTHORIZED, "请先登录");
             return;
+        }
+
+        if (path.startsWith("/api/admin")) {
+            Long userId = (Long) req.getAttribute("userId");
+            UserService userService = IocContainer.getInstance().getBean(UserService.class);
+            if (userId == null || !userService.isAdmin(userId)) {
+                BaseServletUtil.writeError(resp, ErrorCode.FORBIDDEN, "无权限");
+                return;
+            }
         }
 
         chain.doFilter(request, response);

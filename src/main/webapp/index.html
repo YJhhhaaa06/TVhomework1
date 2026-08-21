@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>视频平台</title>
+    <link rel="stylesheet" href="static/css/common.css">
+</head>
+<body>
+<!-- 顶部导航栏（外壳渲染一次，视图切换不动它） -->
+<header class="top-nav" id="topNav"></header>
+
+<!-- 左侧抽屉（默认隐藏，点左上角菜单按钮展开） -->
+<aside class="side-drawer" id="sideDrawer"></aside>
+<div class="drawer-backdrop" id="drawerBackdrop"></div>
+
+<!-- 主内容容器（hash 路由视图挂载点） -->
+<main class="main-container" id="app"></main>
+
+<script type="module" src="static/js/main.js"></script>
+</body>
+</html>

@@ -1,12 +1,12 @@
 package com.itheima.controller;
 
-import com.itheima.command.CommandConverter;
-import com.itheima.command.CommentCommand;
-import com.itheima.exception.BusinessException;
+import com.itheima.model.command.CommandConverter;
+import com.itheima.model.command.CommentCommand;
 import com.itheima.exception.ErrorCode;
 import com.itheima.ioc.annotation.Inject;
 import com.itheima.service.CommentService;
 import com.itheima.service.ContentService;
+import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -23,59 +23,41 @@ public class CommentController extends BaseServlet {
 
 
     @Override
-    protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException  {
-        try{
-            String action = req.getPathInfo();
-            if(action==null){
-                BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR,"action不能为空");
-                return;
-            }
-            switch (action){
-                case "/add":
-                    addComment(req,resp);
-                    break;
-                default:
-                    BaseServletUtil.writeError(resp,ErrorCode.PARAM_ERROR,"未识别功能");
-            }
-        } catch (BusinessException e) {
-            e.printStackTrace();
-            BaseServletUtil.writeError(resp,e.getCode(),e.getMessage());
-        }catch (Exception e){
-            e.printStackTrace();
-            BaseServletUtil.writeError(resp,ErrorCode.SERVER_ERROR,e.getMessage());
+    protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        String action = req.getPathInfo();
+        if(action==null){
+            BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR,"action不能为空");
+            return;
         }
-
-
+        switch (action){
+            case "/add":
+                addComment(req,resp);
+                break;
+            default:
+                BaseServletUtil.writeError(resp,ErrorCode.PARAM_ERROR,"未识别功能");
+        }
     }
 
     @Override
-    protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {
-        try {
-            String action = req.getPathInfo();
-            if (action == null) {
-                BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "action不能为空");
-                return;
-            }
-            if ("/show".equals(action)) {
-                showComment(req, resp);
-            } else {
-                BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "未识别功能");
-            }
-        } catch (BusinessException e) {
-            e.printStackTrace();
-            BaseServletUtil.writeError(resp, e.getCode(), e.getMessage());
-        } catch (Exception e) {
-            e.printStackTrace();
-            BaseServletUtil.writeError(resp, ErrorCode.SERVER_ERROR, e.getMessage());
+    protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        String action = req.getPathInfo();
+        if (action == null) {
+            BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "action不能为空");
+            return;
+        }
+        if ("/show".equals(action)) {
+            showComment(req, resp);
+        } else {
+            BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "未识别功能");
         }
     }
 
 
 
 
-    protected void addComment(HttpServletRequest req, HttpServletResponse resp)throws Exception{
+    protected void addComment(HttpServletRequest req, HttpServletResponse resp) throws IOException {
 
-        com.itheima.DTO.CommentDTO dto=RequestParser.parse(req, com.itheima.DTO.CommentDTO.class);
+        com.itheima.model.dto.CommentDTO dto=RequestParser.parse(req, com.itheima.model.dto.CommentDTO.class);
         Long userId = (Long) req.getAttribute("userId");
         dto.setUserId(userId);
         CommentCommand commentCommand= CommandConverter.commentToCommand(dto);
@@ -83,7 +65,7 @@ public class CommentController extends BaseServlet {
         BaseServletUtil.writeSuccess(resp,"评论成功");
 
     }
-    protected void showComment(HttpServletRequest req, HttpServletResponse resp) throws Exception {
+    protected void showComment(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         String contentIdStr = req.getParameter("contentId");
         if (contentIdStr == null || contentIdStr.isEmpty()) {
             BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "contentId不能为空");

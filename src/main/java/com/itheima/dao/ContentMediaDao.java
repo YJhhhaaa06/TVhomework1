@@ -1,12 +1,13 @@
 package com.itheima.dao;
 
 import com.itheima.ioc.annotation.Component;
-import com.itheima.pojo.ContentMedia;
+import com.itheima.model.entity.ContentMedia;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -27,34 +28,7 @@ public class ContentMediaDao {
         }
     }
 
-    //删除视频所有url
-    public int deleteContentMedia(Connection conn,long contentId) throws SQLException{
-        String sql = "delete from content_media where content_id=?";
-        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setLong(1, contentId);
-            return pstmt.executeUpdate();
-        }
-    }
 
-    //根据id删除url
-    public int deleteSpecificContentMedia(Connection conn,long mediaId) throws SQLException{
-        String sql = "delete from content_media where id=?";
-        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setLong(1, mediaId);
-            return pstmt.executeUpdate();
-        }
-    }
-
-    //根据contentId,type和sort删除
-    public int deleteSpecificContentMedia(Connection conn,long contentId,int type,int sort) throws SQLException{
-        String sql = "delete from content_media where content_id=? and type=? and sort=?";
-        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setLong(1, contentId);
-            pstmt.setInt(2,type);
-            pstmt.setInt(3,sort);
-            return pstmt.executeUpdate();
-        }
-    }
 
 
     //根据contentId查询所有media
@@ -78,19 +52,44 @@ public class ContentMediaDao {
 
 
 
-    //换源
-    public int updateMedia(Connection conn,long contentId,int type,int sort, String url) throws SQLException {
-        String sql="update video set url=? where content_id=? and type=? and sort=?";
-        int rows;
-        try(PreparedStatement pstmt=conn.prepareStatement(sql)){
-            pstmt.setString(1,url);
-            pstmt.setLong(2,contentId);
-            pstmt.setInt(3,type);
-            pstmt.setInt(4,sort);
-            rows=pstmt.executeUpdate();
+    // 查询全部媒体（运维扫描用）
+    public List<ContentMedia> findAllMedia(Connection conn) throws SQLException {
+        String sql = "select id,content_id,url,type,sort from content_media order by id";
+        List<ContentMedia> list = new ArrayList<>();
+        try (PreparedStatement pstmt = conn.prepareStatement(sql);
+             ResultSet rs = pstmt.executeQuery()) {
+            while (rs.next()) {
+                list.add(ResultMap.buildContentMedia(rs));
+            }
         }
-        return rows;
+        return list;
     }
+
+    // 按 media id 查询单条媒体（运维恢复用）
+    public ContentMedia findMediaById(Connection conn, long mediaId) throws SQLException {
+        String sql = "select id,content_id,url,type,sort from content_media where id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, mediaId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return ResultMap.buildContentMedia(rs);
+                }
+                return null;
+            }
+        }
+    }
+
+    // 更新单条媒体的文件存在状态
+    public int updateFileExists(Connection conn, long mediaId, boolean exists, Timestamp lastVerifyTime) throws SQLException {
+        String sql = "update content_media set file_exists=?, last_verify_time=? where id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setInt(1, exists ? 1 : 0);
+            pstmt.setTimestamp(2, lastVerifyTime);
+            pstmt.setLong(3, mediaId);
+            return pstmt.executeUpdate();
+        }
+    }
+
 
 
 

@@ -17,6 +17,9 @@
         <maven.compiler.target>25</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <kotlin.version>2.2.20</kotlin.version>
+        <!-- 沙箱内 javac 无法枚举 worktree 的 target/ 作为 classpath，
+             测试/打包时通过 -Dstage8.buildDir 指向 D 盘可写目录（默认保持 ./target）。 -->
+        <stage8.buildDir>${project.basedir}/target</stage8.buildDir>
     </properties>
 
 
@@ -76,9 +79,55 @@
             <artifactId>java-jwt</artifactId>
             <version>4.4.0</version>
         </dependency>
+
+        <!-- 阶段八：单元测试（JUnit 6.0.0 为离线仓库可用全套版本，用户确认偏离 5.x 描述） -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>6.0.0</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
+            <version>6.0.0</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>5.20.0</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-junit-jupiter</artifactId>
+            <version>5.20.0</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- Mockito 声明的 byte-buddy 1.17.7 不在离线仓库，显式钉 1.17.8 -->
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy</artifactId>
+            <version>1.17.8</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy-agent</artifactId>
+            <version>1.17.8</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.13.1</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
+        <directory>${stage8.buildDir}</directory>
         <plugins>
             <plugin>
                 <groupId>org.jetbrains.kotlin</groupId>
@@ -135,6 +184,42 @@
                         <goals>
                             <goal>testCompile</goal>
                         </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+                <executions>
+                    <execution>
+                        <id>default-test</id>
+                        <configuration>
+                            <excludes>
+                                <exclude>**/MyConnectionPoolTest.java</exclude>
+                            </excludes>
+                            <environmentVariables>
+                                <LOG_PATH>target/test-logs</LOG_PATH>
+                            </environmentVariables>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>pool-test</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <includes>
+                                <include>**/MyConnectionPoolTest.java</include>
+                            </includes>
+                            <environmentVariables>
+                                <LOG_PATH>target/test-logs</LOG_PATH>
+                                <DB_POOL_INITSIZE>1</DB_POOL_INITSIZE>
+                                <DB_POOL_MAXSIZE>1</DB_POOL_MAXSIZE>
+                                <DB_POOL_TIMEOUTMS>500</DB_POOL_TIMEOUTMS>
+                            </environmentVariables>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>
