@@ -721,6 +721,11 @@ body.drawer-open .drawer-backdrop { opacity: 1; pointer-events: auto; }
 .comment-like:hover { color: var(--brand); }
 .comment-reply-btn { cursor: pointer; background: none; border: none; font-size: 12px; color: var(--text-3); padding: 2px 0; }
 .comment-reply-btn:hover { color: var(--brand); }
+.comment-delete-btn { cursor: pointer; background: none; border: none; font-size: 12px; color: var(--text-3); padding: 2px 0; }
+.comment-delete-btn:hover { color: #e5484d; }
+.comment-replies-toggle { cursor: pointer; font-size: 12px; color: var(--text-3); padding: 4px 12px; user-select: none; }
+.comment-replies-toggle:hover { color: var(--brand); }
+.comment-replies { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
 .reply-indent { margin-left: 10px; padding-left: 14px; border-left: 2px solid var(--line); }
 .empty-comments { text-align: center; padding: 40px 20px; color: var(--text-3); font-size: 14px; }
 .detail-side { min-width: 0; }
@@ -833,6 +838,10 @@ body.drawer-open .drawer-backdrop { opacity: 1; pointer-events: auto; }
 .admin-stat.ok b { color: #2ba245; }
 .admin-toolbar { margin-bottom: 12px; }
 .admin-toolbar select, .admin-toolbar input { padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; background: var(--bg-card); }
+.admin-card { background: var(--bg-card); border-radius: var(--radius); padding: 12px 16px; margin-bottom: 12px; box-shadow: var(--shadow-1); display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.admin-card-title { font-size: 13px; font-weight: 600; color: var(--text-2); }
+.admin-comment-tool { display: flex; gap: 8px; align-items: center; }
+.admin-comment-tool .input { width: 160px; }
 .media-table { width: 100%; border-collapse: collapse; background: var(--bg-card); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-1); }
 .media-table th, .media-table td { border-bottom: 1px solid var(--line-soft); padding: 9px 10px; font-size: 13px; text-align: left; vertical-align: top; }
 .media-table th { background: #fafbfc; color: var(--text-2); font-weight: 600; white-space: nowrap; }

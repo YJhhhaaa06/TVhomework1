@@ -19,7 +19,7 @@ public class AuthFilter implements Filter {
 
     private static final Set<String> PROTECTED_PREFIXES = Set.of(
             "/api/upload",      // 上传视频/帖子
-            "/api/admin",       // 媒体运维（当前仅要求登录，无管理员角色）
+            "/api/admin",       // 运维接口（媒体/评论删除等，需 role==1）
             "/follow",      // 关注/取关
             "/like",        // 点赞/取消点赞
             "/feed"       // 关注动态
@@ -28,6 +28,7 @@ public class AuthFilter implements Filter {
 
     private static final Set<String> PROTECTED_EXACT = Set.of(//精确的限制登录接口
             "/comment/add",  // 发表评论
+            "/comment/delete",  // 删除评论
             "/user/changePassword",  // 修改密码
             "/coupon/grab",      // 优惠券抢购
             "/coupon/my"        // 我的优惠券

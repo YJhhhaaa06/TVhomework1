@@ -132,7 +132,7 @@ com.itheima/
 
 **AuthFilter 保护路径**：
 - 前缀：`/api/upload`、`/api/admin`、`/follow`、`/like`、`/feed`
-- 精确：`/comment/add`、`/user/changePassword`、`/coupon/grab`、`/coupon/my`
+- 精确：`/comment/add`、`/comment/delete`、`/user/changePassword`、`/coupon/grab`、`/coupon/my`
 - `/api/admin/*` 额外校验 `role == 1`，非管理员返回 403（每次请求查库）
 
 #### controller 包 — 控制器
@@ -150,6 +150,7 @@ com.itheima/
 | ProfileController | /profile | 76 | 用户主页 |
 | UploadController | /api/upload/* | 164 | 上传视频/动态 |
 | MediaAdminController | /api/admin/media/* | 71 | 媒体运维：扫描/恢复（仅管理员） |
+| AdminCommentController | /api/admin/comment/* | 46 | 评论运维：管理员删评论（仅管理员） |
 | FollowController | /follow/* | 103 | 关注/取关 |
 | LikeController | /like/* | 127 | 点赞 |
 | CommentController | /comment/* | 98 | 评论 |
@@ -165,7 +166,7 @@ com.itheima/
 | ContentStatusFiller | 105 | 内容状态填充（点赞/关注） | LikeService, FollowDao, TransactionTemplate |
 | LikeService | 315 | 点赞业务 | ContentDao, CommentDao, ContentLikeDao, CommentLikeDao, LikeCacheService, ContentCacheManager, TransactionTemplate |
 | LikeCacheService | 264 | Redis 点赞缓存 | - |
-| CommentService | 105 | 评论业务 | CommentDao, ContentDao, ContentCacheManager, TransactionTemplate |
+| CommentService | 200 | 评论业务（楼中楼：发表归一化主楼 + 软删除：用户自删/管理员删） | CommentDao, ContentDao, ContentCacheManager, TransactionTemplate |
 | UserService | 242 | 用户认证 + 管理员判定 | UserDao, TransactionTemplate |
 | FollowService | 123 | 关注业务 | FollowDao, UserDao |
 | ProfileService | 97 | 用户主页 | UserDao, ContentDao, FollowDao, ContentCacheManager, LikeService, TransactionTemplate |
@@ -180,7 +181,7 @@ com.itheima/
 |----|------|--------|------|
 | UserDao | 224 | users | 用户 CRUD + 角色查询 |
 | ContentDao | 290 | content | 内容 CRUD + 全文搜索 + 媒体状态更新 |
-| CommentDao | 133 | comment | 评论 CRUD |
+| CommentDao | 145 | comment | 评论 CRUD + 软删除（整楼/单条）+ 楼内回复计数 |
 | CouponDao | 114 | coupon, coupon_order | 优惠券 CRUD |
 | ContentLikeDao | 124 | content_like | 内容点赞 |
 | CommentLikeDao | 132 | comment_like | 评论点赞 |
@@ -227,7 +228,7 @@ com.itheima/
 | 类 | 行数 | 类型 | 用途 |
 |----|------|------|------|
 | ContentCacheDTO | 127 | 缓存DTO | 内容缓存对象 |
-| CommentCacheDTO | 92 | 缓存DTO | 评论缓存对象（含树形 children） |
+| CommentCacheDTO | 92 | 缓存DTO | 评论缓存对象（楼中楼两级：主楼 + 平铺 children） |
 
 > audit/ 子包
 
@@ -376,6 +377,7 @@ com.itheima/
 | GET | /like/comment/count | 点赞数 | ✗ |
 | POST | /comment/add | 发表评论 | ✓ |
 | GET | /comment/show | 查看评论 | ✗ |
+| POST | /comment/delete | 删除评论（软删除，仅自己） | ✓ |
 | POST | /follow/add | 关注 | ✓ |
 | POST | /follow/remove | 取关 | ✓ |
 | GET | /follow/following | 关注列表 | ✗ |
@@ -398,6 +400,7 @@ com.itheima/
 | GET | /api/admin/media/list | 扫描并返回媒体资源状态 | ✓ |
 | POST | /api/admin/media/scan | 重新扫描并回写状态 | ✓ |
 | POST | /api/admin/media/restore | 按数据库原文件名重新上传写回 | ✓ |
+| POST | /api/admin/comment/delete | 管理员删除任意评论（软删除） | ✓ |
 
 ---
 
@@ -421,13 +424,13 @@ src/main/webapp/
         └── views/
             ├── home.js        # #/            首页（推荐流 + 换一换）
             ├── follow.js      # #/follow      关注流（/feed 分页）
-            ├── detail.js      # #/video/:id   详情（播放器 + 评论 + 相关推荐）
+            ├── detail.js      # #/video/:id   详情（播放器 + 楼中楼评论 + 相关推荐）
             ├── search.js      # #/search?kw=  搜索
             ├── user.js        # #/user/:id    个人主页（本人/他人合一）
             ├── publish.js     # #/publish     创作中心（我的投稿 + 投稿上传）
             ├── login.js       # #/login       登录/注册
             ├── coupon.js      # #/coupon      优惠券中心
-            └── admin.js       # #/admin       媒体运维（仅管理员）
+            └── admin.js       # #/admin       媒体运维 + 删评论工具（仅管理员）
 ```
 
 ### 8.2 路由表
@@ -454,7 +457,8 @@ src/main/webapp/
 |------|--------|----------|
 | loginTest.http | 22 | 登录、注册 |
 | likeTest.http | 24 | 点赞 |
-| commentTest.http | 18 | 评论 |
+| commentTest.http | 25 | 评论（新增删除小节） |
+| adminCommentTest.http | 6 | 管理员删评论（阶段一新增） |
 | followTest.http | 11 | 关注 |
 | couponTest.http | 9 | 优惠券 |
 | feedTest.http | ~10 | Feed 流 |
@@ -475,6 +479,7 @@ src/main/webapp/
 | 文件 | 用例数 | 覆盖模块 |
 |------|--------|----------|
 | test_smoke.py / test_consistency.py / test_boundary.py | 35 | 冒烟/一致性/边界（既有） |
+| test_comment_delete.py | 6 | 评论软删除（阶段一新增：自删主楼/回复、403/404/401、管理员删） |
 | test_admin.py | 11（1 条件跳过） | 管理员权限 401/403/200、媒体扫描/恢复（阶段八） |
 
 ### 9.2 JUnit 单元测试（阶段八新增，src/test/java）
@@ -484,8 +489,8 @@ src/main/webapp/
 | service/UserServiceTest | 23 | 登录/注册/改密/改资料/isAdmin |
 | service/ContentServiceTest | 11 | 搜索/详情/评论查询/发布 |
 | service/LikeServiceTest | 14 | 点赞/取消/缓存优先/批量查询 |
-| service/CommentServiceTest | 5 | 评论归属/树转换/缓存更新 |
-| service/ContentCacheManagerLifecycleTest | 4 | 初始化/缓存命中/定时器关闭/刷新失败 |
+| service/CommentServiceTest | 13 | 评论归属/楼中楼归一化/软删除（自删+管理员删）/缓存更新 |
+| service/ContentCacheManagerLifecycleTest | 7 | 初始化/缓存命中/定时器关闭/刷新失败/评论缓存删除/两级归一化 |
 | util/MyConnectionPoolTest | 4 | 满池超时/归还重取/失效移除/关闭后拒绝 |
 | **合计** | **61** | - |
 

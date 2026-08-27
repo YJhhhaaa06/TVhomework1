@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Field;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
@@ -132,5 +133,61 @@ class ContentCacheManagerLifecycleTest {
         ContentCacheManager manager = newManager();
 
         assertThrows(CacheException.class, manager::refresh);
+    }
+
+    @Test
+    void removeMainFloorRemovesItsChildrenFromCache() throws SQLException {
+        ContentCacheDTO dto = videoDto();
+        CommentCacheDTO main = new CommentCacheDTO("alice", 1L, 1L, 7L, "hi", null, 0);
+        CommentCacheDTO child = new CommentCacheDTO("bob", 2L, 1L, 8L, "reply", 1L, 0);
+        when(contentDao.findAllContent(conn)).thenReturn(List.of(dto));
+        when(contentMediaDao.findMedia(conn, 1L)).thenReturn(mediaMap());
+        when(commentDao.getComments(conn, 1L)).thenReturn(List.of(main, child));
+
+        ContentCacheManager manager = newManager();
+        manager.init();
+        manager.removeCommentFromCache(1L, 1L, true);
+
+        assertTrue(manager.getCommentTree(1L).isEmpty());
+        manager.destroy();
+    }
+
+    @Test
+    void removeReplyOnlyRemovesItselfFromCache() throws SQLException {
+        ContentCacheDTO dto = videoDto();
+        CommentCacheDTO main = new CommentCacheDTO("alice", 1L, 1L, 7L, "hi", null, 0);
+        CommentCacheDTO child = new CommentCacheDTO("bob", 2L, 1L, 8L, "reply", 1L, 0);
+        when(contentDao.findAllContent(conn)).thenReturn(List.of(dto));
+        when(contentMediaDao.findMedia(conn, 1L)).thenReturn(mediaMap());
+        when(commentDao.getComments(conn, 1L)).thenReturn(List.of(main, child));
+
+        ContentCacheManager manager = newManager();
+        manager.init();
+        manager.removeCommentFromCache(1L, 2L, false);
+
+        List<CommentCacheDTO> tree = manager.getCommentTree(1L);
+        assertEquals(1, tree.size());
+        assertNotNull(tree.get(0).getChildren());
+        assertTrue(tree.get(0).getChildren().isEmpty());
+        manager.destroy();
+    }
+
+    @Test
+    void buildCommentTreeNormalizesDeepChainToMainFloor() throws SQLException {
+        ContentCacheDTO dto = videoDto();
+        CommentCacheDTO main = new CommentCacheDTO("alice", 1L, 1L, 7L, "main", null, 0);
+        CommentCacheDTO reply = new CommentCacheDTO("bob", 2L, 1L, 8L, "r1", 1L, 0);
+        CommentCacheDTO deepReply = new CommentCacheDTO("carl", 3L, 1L, 9L, "r2", 2L, 0);
+        when(contentDao.findAllContent(conn)).thenReturn(List.of(dto));
+        when(contentMediaDao.findMedia(conn, 1L)).thenReturn(mediaMap());
+        when(commentDao.getComments(conn, 1L)).thenReturn(List.of(main, reply, deepReply));
+
+        ContentCacheManager manager = newManager();
+        manager.init();
+
+        List<CommentCacheDTO> tree = manager.getCommentTree(1L);
+        assertEquals(1, tree.size());
+        assertEquals(2, tree.get(0).getChildren().size(), "回复的回复也应平铺挂到主楼下");
+        manager.destroy();
     }
 }

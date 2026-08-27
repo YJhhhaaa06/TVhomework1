@@ -550,7 +550,7 @@ GET /search?keyword=关键词&page=1&pageSize=10&token=xxx（可选）
 
 ### 3.6 查看内容详情流程
 
-> **前端交互（2026-08-14 重构后）**：详情为 SPA 视图 `#/video/:id`（原 `detail.html?contentId=` 已删除）；详情端点实为 `GET /search/IdSearch`（**无 `/detail`**）；右侧新增「相关推荐」栏，本轮用 `/start` 推荐流兜底（后端暂无推荐接口）；评论为树形，支持回复/点赞；视频类型用 `videoUrl` 播放，图文类型展示 `coverUrl` + `imageUrls` 画廊。
+> **前端交互（2026-08-14 重构后）**：详情为 SPA 视图 `#/video/:id`（原 `detail.html?contentId=` 已删除）；详情端点实为 `GET /search/IdSearch`（**无 `/detail`**）；右侧新增「相关推荐」栏，本轮用 `/start` 推荐流兜底（后端暂无推荐接口）；评论为**楼中楼两级**（2026-08-28 阶段一：主楼 + 楼内回复折叠列表），支持回复（仅主楼下）/点赞/删除（自己的评论，管理员走运维页）；视频类型用 `videoUrl` 播放，图文类型展示 `coverUrl` + `imageUrls` 画廊。
 
 ```
 GET /search/IdSearch?contentId=123&token=xxx（可选）
@@ -709,8 +709,8 @@ POST /like/comment/add?commentId=456
 | 2 | 转换为 CommentCommand | - |
 | 3 | 开启事务 | - |
 | 4 | 检查内容是否存在 | 不存在返回 NotFoundException |
-| 5 | 如果是回复，检查父评论归属正确 | 不正确返回 ConflictException |
-| 6 | 插入 comment 表 | SQLException 回滚 |
+| 5 | 如果是回复，查询被回复评论：不存在/不在该内容下 → Conflict；若被回复评论本身是回复，则上溯挂到其主楼 id | 不正确返回 ConflictException |
+| 6 | 插入 comment 表（楼中楼：回复一律 parent_id=主楼 id） | SQLException 回滚 |
 | 7 | 更新 content 表 comment_count +1 | SQLException 回滚 |
 | 8 | 提交事务 | - |
 | 9 | 查询新评论详情 | - |
@@ -726,7 +726,7 @@ Content-Type: application/json
 请求体：
 {
     "contentId": 123,
-    "parentId": 0,       // 0=顶级评论，其他=回复
+    "parentId": 0,       // 0/NULL=主楼（一级）；其他=楼内回复（一律填所在主楼 id；回复的回复也传主楼 id）
     "message": "评论内容"
 }
 
@@ -745,7 +745,7 @@ Content-Type: application/json
 GET /comment/show?contentId=123&token=xxx（可选）
 
 步骤：
-1. 从缓存获取评论树
+1. 从缓存获取评论树（楼中楼两级：主楼 + 楼内回复平铺挂主楼）
 2. 如果已登录，批量查询点赞状态
 3. 转换为 CommentVO 树
 4. 返回评论列表
@@ -757,12 +757,49 @@ CommentVO 结构：
     "userId": 100,
     "username": "张三",
     "message": "评论内容",
-    "parentId": 0,
+    "parentId": 0,       // NULL=主楼；其他=所属主楼 id
     "likeCount": 5,
     "isLiked": false,
-    "children": [...]  // 子评论
+    "children": [...]  // 仅主楼有：楼内回复平铺列表（回复的回复也挂这里）
 }
 ```
+
+---
+
+#### 4.2.3 删除评论（软删除，不可恢复；楼中楼规则）
+
+```
+┌──────────┐  POST /comment/delete  ┌──────────────────┐
+│  客户端   │ ─────────────────────► │ CommentController │
+└──────────┘   ?commentId=           └──────────────────┘
+                                              │
+                                              ▼
+                                      ┌──────────────────┐
+                                      │  CommentService   │
+                                      │  deleteCommentByUser()
+                                      └──────────────────┘
+```
+
+| 步骤 | 操作 | 失败处理 |
+|------|------|----------|
+| 1 | 校验登录（AuthFilter 精确匹配 `/comment/delete`） | 401 |
+| 2 | 检查评论存在且未删除 | 不存在返回 NotFoundException（404） |
+| 3 | 校验 userId == comment.userId | 否则 ForbiddenException（403） |
+| 4 | 删**主楼**（parent_id IS NULL）：整栋软删 `WHERE comment_id=? OR parent_id=?`；deletedCount = 1+楼内回复数 | - |
+| 5 | 删**回复**：仅软删自己 `WHERE comment_id=?`；deletedCount = 1 | - |
+| 6 | content 表 comment_count -= deletedCount | SQLException 回滚 |
+| 7 | 提交事务后同步内存缓存：contentCache.commentCount 递减 + removeCommentFromCache | 失败只记录日志 |
+
+> **管理员删除**：`POST /api/admin/comment/delete?commentId=X`（AuthFilter 校验 role==1）。逻辑同步骤 4-7，跳过步骤 3 的所有权校验。
+>
+> 删除规则汇总（楼中楼 v0.4 定案）：
+>
+> | 删除对象 | 规则 | SQL 形态 |
+> |---------|------|---------|
+> | 主楼 | 整栋楼软删 | `UPDATE comment SET is_deleted=1 WHERE comment_id=? OR parent_id=?` |
+> | 回复 | 只删自己 | `UPDATE comment SET is_deleted=1 WHERE comment_id=?` |
+>
+> 均**不可恢复**；自删与管理员删不区分删除者，无恢复入口。
 
 ---
 
@@ -1033,6 +1070,7 @@ GET /feed?page=1&pageSize=10&token=xxx
 | `/feed` | 前缀 | ✓ |
 | `/api/admin/*` | 前缀 | ✓ |
 | `/comment/add` | 精确 | ✓ |
+| `/comment/delete` | 精确 | ✓ |
 | `/user/changePassword` | 精确 | ✓ |
 | `/coupon/grab` | 精确 | ✓ |
 | `/coupon/my` | 精确 | ✓ |
@@ -1056,8 +1094,8 @@ GET /feed?page=1&pageSize=10&token=xxx
 
 | 操作 | 应该校验 | 当前状态 |
 |------|----------|----------|
-| 删除内容 | userId == content.authorId | ❌ 未校验 |
-| 删除评论 | userId == comment.userId | ❌ 未校验 |
+| 删除内容 | userId == content.authorId | ❌ 未校验（阶段四） |
+| 删除评论 | userId == comment.userId（管理员走 /api/admin/comment/delete） | ✓ 已校验（阶段一，软删除） |
 | 修改密码 | userId == targetUserId | ✓ 已校验（通过 token） |
 | 修改用户名 | userId == targetUserId | ✓ 已校验（通过 token） |
 

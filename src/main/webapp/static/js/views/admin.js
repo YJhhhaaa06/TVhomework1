@@ -37,6 +37,13 @@ function render() {
           <option value="exists">仅存在</option>
         </select>
       </div>
+      <div class="admin-card" id="commentTool">
+        <div class="admin-card-title">删除评论（软删除，不可恢复）</div>
+        <div class="admin-comment-tool">
+          <input type="number" class="input" id="commentIdInput" placeholder="评论ID">
+          <button class="btn-primary" id="commentDelBtn">删除</button>
+        </div>
+      </div>
       <table class="media-table">
         <thead><tr>
           <th>mediaId</th><th>contentId</th><th>标题</th><th>类型</th><th>状态</th>
@@ -48,6 +55,20 @@ function render() {
 
   state.container.querySelector('#scanBtn').addEventListener('click', scan);
   state.container.querySelector('#filter').addEventListener('change', (e) => { state.filter = e.target.value; renderTable(); });
+  state.container.querySelector('#commentDelBtn').addEventListener('click', deleteComment);
+}
+
+async function deleteComment() {
+  const input = state.container.querySelector('#commentIdInput');
+  const value = input.value.trim();
+  if (!value) { showToast('请输入评论ID'); return; }
+  try {
+    await request(`api/admin/comment/delete?commentId=${value}`, { method: 'POST' });
+    showToast('删除成功');
+    input.value = '';
+  } catch (e) {
+    if (e.code !== 401) showToast(e.message || '删除失败');
+  }
 }
 
 async function init() {
@@ -65,6 +86,7 @@ function renderNoPermission() {
   const c = state.container;
   c.querySelector('#scanBtn').style.display = 'none';
   c.querySelector('.admin-toolbar').style.display = 'none';
+  c.querySelector('#commentTool').style.display = 'none';
   c.querySelector('thead').style.display = 'none';
   c.querySelector('#stats').innerHTML = '';
   c.querySelector('#tbody').innerHTML = '<tr><td colspan="9" class="admin-empty">无权限访问：该页面仅管理员可用</td></tr>';

@@ -224,13 +224,16 @@ public class ContentCacheManager implements Initializable, Disposable {
 
     public void startScheduler() {
         scheduler = Executors.newSingleThreadScheduledExecutor();
+        // 初始延迟=刷新周期：init() 已同步 refresh 一次，无需启动后 0 延迟再刷；
+        // 否则首帧异步 refresh 会在单测 init() 后立刻覆盖缓存（偶发竞态）
+        long refreshMinutes = AppConfig.getContentRefreshMinutes();
         scheduler.scheduleAtFixedRate(() -> {
             try {
                 refresh();
             } catch (Exception e) {
                 LOGGER.log(Level.WARNING, "缓存定时刷新异常", e);
             }
-        }, 0, AppConfig.getContentRefreshMinutes(), TimeUnit.MINUTES);
+        }, refreshMinutes, refreshMinutes, TimeUnit.MINUTES);
     }
 
     @Override
@@ -281,12 +284,19 @@ public class ContentCacheManager implements Initializable, Disposable {
             Long parentId = c.getParentId();
             if (parentId == null || parentId == 0) {
                 roots.add(c);
-            } else {
-                CommentCacheDTO parent = map.get(parentId);
-                if (parent != null) {
-                    parent.getChildren().add(c);
-                }
+                continue;
             }
+            // 楼中楼：回复一律挂主楼（沿 parent 链上溯到顶，防御存量脏数据）
+            CommentCacheDTO parent = map.get(parentId);
+            if (parent == null) {
+                continue; // 父缺失（理论不可达，迁移前已归一）
+            }
+            while (parent.getParentId() != null && parent.getParentId() != 0) {
+                CommentCacheDTO ancestor = map.get(parent.getParentId());
+                if (ancestor == null) break;
+                parent = ancestor;
+            }
+            parent.getChildren().add(c);
         }
         return roots;
     }
@@ -374,7 +384,10 @@ public class ContentCacheManager implements Initializable, Disposable {
     // ===== 评论树工具（缓存用）=====
 
     public List<CommentCacheDTO> getCommentTree(long contentId) {
-        return commentCache.getOrDefault(contentId, new ArrayList<>());
+        synchronized (commentCache) {
+            List<CommentCacheDTO> tree = commentCache.get(contentId);
+            return tree == null ? new ArrayList<>() : new ArrayList<>(tree);
+        }
     }
 
     public List<Long> collectCommentIds(List<CommentCacheDTO> tree) {
@@ -451,13 +464,15 @@ public class ContentCacheManager implements Initializable, Disposable {
     // ===== 评论缓存实时更新 =====
 
     public void addCommentToCache(long contentId, CommentCacheDTO newComment, Long parentId) {
-        List<CommentCacheDTO> tree = commentCache.get(contentId);
-        if (tree == null) return;
-        newComment.setChildren(new ArrayList<>());
-        if (parentId == null || parentId == 0) {
-            tree.add(newComment);
-        } else {
-            insertChildToTree(tree, parentId, newComment);
+        synchronized (commentCache) {
+            List<CommentCacheDTO> tree = commentCache.get(contentId);
+            if (tree == null) return;
+            newComment.setChildren(new ArrayList<>());
+            if (parentId == null || parentId == 0) {
+                tree.add(newComment);
+            } else {
+                insertChildToTree(tree, parentId, newComment);
+            }
         }
     }
 
@@ -477,6 +492,26 @@ public class ContentCacheManager implements Initializable, Disposable {
             }
         }
         return false;
+    }
+
+    /**
+     * 删除评论后同步缓存：主楼连楼内回复一起移除；楼内回复仅移除自己
+     * 与 getCommentTree/addCommentToCache 共用 commentCache 锁，防止并发读写同一 List
+     */
+    public void removeCommentFromCache(long contentId, long commentId, boolean isMain) {
+        synchronized (commentCache) {
+            List<CommentCacheDTO> tree = commentCache.get(contentId);
+            if (tree == null) return;
+            if (isMain) {
+                tree.removeIf(c -> c.getCommentId() == commentId);
+            } else {
+                for (CommentCacheDTO root : tree) {
+                    if (root.getChildren() != null) {
+                        root.getChildren().removeIf(c -> c.getCommentId() == commentId);
+                    }
+                }
+            }
+        }
     }
 
     // ===== 内存缓存实时同步 =====

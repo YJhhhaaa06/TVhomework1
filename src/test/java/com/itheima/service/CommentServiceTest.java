@@ -3,6 +3,7 @@ package com.itheima.service;
 import com.itheima.dao.CommentDao;
 import com.itheima.dao.ContentDao;
 import com.itheima.exception.ConflictException;
+import com.itheima.exception.ForbiddenException;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
 import com.itheima.model.cache.CommentCacheDTO;
@@ -21,6 +22,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import org.mockito.InOrder;
 
 class CommentServiceTest {
 
@@ -76,9 +78,120 @@ class CommentServiceTest {
         CommentCommand command = rootCommand();
         command.setParentId(99L);
         when(contentDao.isContentExist(conn, 3L)).thenReturn(true);
-        when(commentDao.isParentIdCorrect(conn, 99L, 3L)).thenReturn(false);
+        when(commentDao.isCommentExist(conn, 99L)).thenReturn(false);
 
         assertThrows(ConflictException.class, () -> service.addComment(command));
+    }
+
+    @Test
+    void addReplyToReplyResolvesToMainFloor() throws SQLException {
+        CommentCommand command = rootCommand();
+        command.setParentId(99L);
+        when(contentDao.isContentExist(conn, 3L)).thenReturn(true);
+        when(commentDao.isCommentExist(conn, 99L)).thenReturn(true);
+        // 被回复的 99 是楼内回复（其主楼为 5）=> 写入时应上溯挂到主楼 5
+        CommentCacheDTO reply = new CommentCacheDTO("bob", 99L, 3L, 8L, "child", 5L, 0);
+        when(commentDao.findCommentById(conn, 99L)).thenReturn(reply);
+        when(commentDao.addComment(conn, 3L, 7L, "hello", 5L)).thenReturn(100L);
+        CommentCacheDTO saved = new CommentCacheDTO("alice", 100L, 3L, 7L, "hello", 5L, 0);
+        when(commentDao.findCommentById(conn, 100L)).thenReturn(saved);
+
+        service.addComment(command);
+
+        verify(commentDao).addComment(conn, 3L, 7L, "hello", 5L);
+        verify(contentCacheManager).addCommentToCache(3L, saved, 5L);
+    }
+
+    @Test
+    void addReplyToDeletedCommentThrowsConflict() throws SQLException {
+        CommentCommand command = rootCommand();
+        command.setParentId(99L);
+        when(contentDao.isContentExist(conn, 3L)).thenReturn(true);
+        when(commentDao.isCommentExist(conn, 99L)).thenReturn(false);
+
+        assertThrows(ConflictException.class, () -> service.addComment(command));
+    }
+
+    // ===== 删除：用户自删 =====
+
+    @Test
+    void deleteOwnMainFloorCascadesAndDecrements() throws SQLException {
+        when(commentDao.isCommentExist(conn, 9L)).thenReturn(true);
+        CommentCacheDTO main = new CommentCacheDTO("alice", 9L, 3L, 7L, "root", null, 0);
+        when(commentDao.findCommentById(conn, 9L)).thenReturn(main);
+        when(commentDao.countFloorReplies(conn, 9L)).thenReturn(3);
+
+        service.deleteCommentByUser(9L, 7L);
+
+        verify(commentDao).softDeleteFloor(conn, 9L);
+        verify(contentDao).updateCommentCount(conn, 3L, -4);
+        verify(contentCacheManager).updateContentCommentCount(3L, -4);
+        verify(contentCacheManager).removeCommentFromCache(3L, 9L, true);
+    }
+
+    @Test
+    void deleteMainFloorCountsRepliesBeforeSoftDelete() throws SQLException {
+        // 回归守卫：必须先计数后软删，否则 countFloorReplies(is_deleted=0) 会数到 0 导致计数少扣
+        when(commentDao.isCommentExist(conn, 9L)).thenReturn(true);
+        CommentCacheDTO main = new CommentCacheDTO("alice", 9L, 3L, 7L, "root", null, 0);
+        when(commentDao.findCommentById(conn, 9L)).thenReturn(main);
+
+        service.deleteCommentByUser(9L, 7L);
+
+        InOrder inOrder = inOrder(commentDao);
+        inOrder.verify(commentDao).countFloorReplies(conn, 9L);
+        inOrder.verify(commentDao).softDeleteFloor(conn, 9L);
+    }
+
+    @Test
+    void deleteOwnReplyOnlyDeletesSelf() throws SQLException {
+        when(commentDao.isCommentExist(conn, 10L)).thenReturn(true);
+        CommentCacheDTO reply = new CommentCacheDTO("bob", 10L, 3L, 7L, "reply", 9L, 0);
+        when(commentDao.findCommentById(conn, 10L)).thenReturn(reply);
+
+        service.deleteCommentByUser(10L, 7L);
+
+        verify(commentDao).softDeleteOne(conn, 10L);
+        verify(contentDao).updateCommentCount(conn, 3L, -1);
+        verify(contentCacheManager).removeCommentFromCache(3L, 10L, false);
+    }
+
+    @Test
+    void deleteOthersCommentThrowsForbidden() throws SQLException {
+        when(commentDao.isCommentExist(conn, 9L)).thenReturn(true);
+        CommentCacheDTO main = new CommentCacheDTO("alice", 9L, 3L, 7L, "root", null, 0);
+        when(commentDao.findCommentById(conn, 9L)).thenReturn(main);
+
+        assertThrows(ForbiddenException.class, () -> service.deleteCommentByUser(9L, 8L));
+        verify(commentDao, never()).softDeleteFloor(any(), anyLong());
+    }
+
+    @Test
+    void deleteMissingCommentThrowsNotFound() throws SQLException {
+        when(commentDao.isCommentExist(conn, 999L)).thenReturn(false);
+
+        assertThrows(NotFoundException.class, () -> service.deleteCommentByUser(999L, 7L));
+    }
+
+    // ===== 删除：管理员 =====
+
+    @Test
+    void adminCanDeleteAnyComment() throws SQLException {
+        when(commentDao.isCommentExist(conn, 9L)).thenReturn(true);
+        CommentCacheDTO main = new CommentCacheDTO("alice", 9L, 3L, 7L, "root", null, 0);
+        when(commentDao.findCommentById(conn, 9L)).thenReturn(main);
+
+        service.deleteCommentByAdmin(9L);
+
+        verify(commentDao).softDeleteFloor(conn, 9L);
+        verify(contentCacheManager).removeCommentFromCache(3L, 9L, true);
+    }
+
+    @Test
+    void adminDeleteMissingCommentThrowsNotFound() throws SQLException {
+        when(commentDao.isCommentExist(conn, 999L)).thenReturn(false);
+
+        assertThrows(NotFoundException.class, () -> service.deleteCommentByAdmin(999L));
     }
 
     @Test

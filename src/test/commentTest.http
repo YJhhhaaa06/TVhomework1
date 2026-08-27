@@ -170,3 +170,34 @@ token: {{token}}
 ### 18. 未识别的 action（GET）
 GET http://localhost:8080/comment/unknown
 token: {{token}}
+
+### ==================== 删除评论（软删除，不可恢复；楼中楼规则） ====================
+
+### 19. 用户删除自己的主楼评论（整栋楼软删，含楼内回复）
+# 先在 /comment/show 中找到自己的主楼 commentId 填入
+POST http://localhost:8080/comment/delete?commentId=REPLACE_ME主楼commentId
+token: {{token}}
+
+### 20. 用户删除自己的楼内回复（仅软删自己，主楼保留）
+POST http://localhost:8080/comment/delete?commentId=REPLACE_ME回复commentId
+token: {{token}}
+
+### 21. 删除他人的评论（应 403）
+# commentId 填他人评论，token 使用登录用户自己的
+POST http://localhost:8080/comment/delete?commentId=REPLACE_ME他人commentId
+token: {{token}}
+
+### 22. 未登录删除评论（应 401）
+POST http://localhost:8080/comment/delete?commentId=1
+
+### 23. 删除不存在的评论（应 404）
+POST http://localhost:8080/comment/delete?commentId=999999999
+token: {{token}}
+
+### 24. 缺少 commentId 参数（应 400）
+POST http://localhost:8080/comment/delete
+token: {{token}}
+
+### 25. commentId 非数字（应 400）
+POST http://localhost:8080/comment/delete?commentId=abc
+token: {{token}}
