@@ -7,6 +7,7 @@ import com.itheima.exception.*;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.model.cache.CommentCacheDTO;
+import com.itheima.model.cache.ContentCacheDTO;
 import com.itheima.model.vo.CommentVO;
 import com.itheima.util.LogUtil;
 import com.itheima.util.TransactionTemplate;
@@ -74,6 +75,12 @@ public class CommentService {
         long contentId = commentCommand.getContentId();
         Long parentId = commentCommand.getParentId();
         String message = commentCommand.getMessage();
+
+        // 评论区开关门禁（作者关闭后不可发；内容不存在时 dto 为 null，交事务内 isContentExist 抛 404）
+        ContentCacheDTO contentDto = contentCacheManager.getContentFromCache(contentId);
+        if (contentDto != null && !contentDto.isCommentEnabled()) {
+            throw new ConflictException("评论区已关闭");
+        }
 
         // 楼中楼：parentId 一律指向主楼。被回复评论本身是回复时，上溯挂到其主楼 id
         // 用数组持有归一化结果，避免在 lambda 内改写被捕获变量（编译约束）

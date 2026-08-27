@@ -360,6 +360,7 @@ public class ContentCacheManager implements Initializable, Disposable {
         cVO.setCategoryId(dto.getCategoryId());
         cVO.setCommentCount(dto.getCommentCount());
         cVO.setLikeCount(dto.getLikeCount());
+        cVO.setCommentEnabled(dto.isCommentEnabled());
         cVO.setAuthorName(dto.getAuthorName());
         cVO.setCoverUrl(dto.getCoverUrl());
         cVO.setCreateTime(dto.getCreateTime());
@@ -374,6 +375,7 @@ public class ContentCacheManager implements Initializable, Disposable {
         cdVO.setCategoryId(dto.getCategoryId());
         cdVO.setCommentCount(dto.getCommentCount());
         cdVO.setLikeCount(dto.getLikeCount());
+        cdVO.setCommentEnabled(dto.isCommentEnabled());
         cdVO.setAuthorName(dto.getAuthorName());
         cdVO.setCoverUrl(dto.getCoverUrl());
         cdVO.setVideoUrl(dto.getVideoUrl());
@@ -544,6 +546,25 @@ public class ContentCacheManager implements Initializable, Disposable {
             for (ContentVO cvo : recommendList) {
                 if (cvo.getId() == contentId) {
                     cvo.setCommentCount(cvo.getCommentCount() + delta);
+                    break;
+                }
+            }
+        }
+    }
+
+    /**
+     * 作者开关评论区后实时同步内存中 content 的 commentEnabled
+     * 同时更新 contentCache 和 recommendList，避免等待定时刷新读到旧值
+     */
+    public void updateContentCommentEnabled(long contentId, boolean enabled) {
+        ContentCacheDTO dto = contentCache.get(contentId);
+        if (dto != null) {
+            dto.setCommentEnabled(enabled);
+        }
+        synchronized (recommendList) {
+            for (ContentVO cvo : recommendList) {
+                if (cvo.getId() == contentId) {
+                    cvo.setCommentEnabled(enabled);
                     break;
                 }
             }

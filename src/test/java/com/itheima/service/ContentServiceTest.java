@@ -2,6 +2,8 @@ package com.itheima.service;
 
 import com.itheima.dao.ContentDao;
 import com.itheima.dao.ContentMediaDao;
+import com.itheima.exception.ForbiddenException;
+import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
 import com.itheima.model.cache.ContentCacheDTO;
 import com.itheima.model.cache.CommentCacheDTO;
@@ -204,5 +206,57 @@ class ContentServiceTest {
         assertEquals(200L, id);
         verify(contentMediaDao, never()).addMedia(eq(conn), eq(200L), eq(null), anyInt(), anyInt());
         verify(contentMediaDao).addMedia(conn, 200L, "i1.jpg", 2, 1);
+    }
+
+    // ===== 评论区开关（C2）=====
+
+    @Test
+    void setCommentEnabledByAuthorUpdatesDbAndCache() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+
+        service.setCommentEnabled(1L, 7L, false);
+
+        verify(contentDao).updateCommentEnabled(conn, 1L, false);
+        verify(cache).updateContentCommentEnabled(1L, false);
+    }
+
+    @Test
+    void setCommentEnabledByOtherThrowsForbidden() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+
+        assertThrows(ForbiddenException.class, () -> service.setCommentEnabled(1L, 8L, false));
+        verify(contentDao, never()).updateCommentEnabled(any(), anyLong(), anyBoolean());
+        verify(cache, never()).updateContentCommentEnabled(anyLong(), anyBoolean());
+    }
+
+    @Test
+    void setCommentEnabledMissingContentThrowsNotFound() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(null);
+
+        assertThrows(NotFoundException.class, () -> service.setCommentEnabled(1L, 7L, false));
+        verify(contentDao, never()).updateCommentEnabled(any(), anyLong(), anyBoolean());
+    }
+
+    @Test
+    void setCommentEnabledSqlErrorThrowsServerException() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+        when(contentDao.updateCommentEnabled(conn, 1L, false))
+                .thenThrow(new SQLException("db down"));
+
+        assertThrows(ServerException.class, () -> service.setCommentEnabled(1L, 7L, false));
+        verify(cache, never()).updateContentCommentEnabled(anyLong(), anyBoolean());
+    }
+
+    @Test
+    void getCommentsForContentReturnsEmptyWhenCommentsDisabled() {
+        ContentCacheDTO dto = dto(3L);
+        dto.setCommentEnabled(false);
+        when(cache.getContentFromCache(3L)).thenReturn(dto);
+
+        List<CommentVO> result = service.getCommentsForContent(3L, null);
+
+        assertTrue(result.isEmpty());
+        verify(cache, never()).getCommentTree(anyLong());
+        verify(commentService, never()).convertToCommentVOList(anyList(), anyMap());
     }
 }

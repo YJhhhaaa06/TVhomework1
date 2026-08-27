@@ -21,6 +21,7 @@ public class ResultMap {
         dto.setCategoryId(rs.getInt("category_id"));
         dto.setCommentCount(rs.getInt("comment_count"));
         dto.setLikeCount(rs.getInt("like_count"));
+        dto.setCommentEnabled(rs.getInt("comment_enabled") != 0);
         dto.setAuthorName(rs.getString("username"));
         dto.setCreateTime(rs.getObject("create_time", LocalDateTime.class));
         return dto;

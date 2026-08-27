@@ -131,13 +131,43 @@ function renderMyList(list) {
   }
   const g = document.createElement('div');
   g.className = 'grid';
-  list.forEach((item, i) => g.appendChild(createVideoCard(item, { index: i })));
+  list.forEach((item, i) => {
+    const card = createVideoCard(item, { index: i });
+    addCommentToggle(card, item);
+    g.appendChild(card);
+  });
   grid.appendChild(g);
 }
 
 function appendMyList(list) {
   const g = state.container.querySelector('#myGrid .grid');
-  if (g) list.forEach((item) => g.appendChild(createVideoCard(item)));
+  if (g) {
+    list.forEach((item) => {
+      const card = createVideoCard(item);
+      addCommentToggle(card, item);
+      g.appendChild(card);
+    });
+  }
+}
+
+/** 我的投稿卡片上的「关闭/开启评论区」按钮（仅作者本人可见的本页自己作品） */
+function addCommentToggle(card, item) {
+  const toggle = document.createElement('button');
+  toggle.className = 'v-card-toggle';
+  toggle.textContent = item.commentEnabled === false ? '开启评论区' : '关闭评论区';
+  toggle.addEventListener('click', async (e) => {
+    e.stopPropagation(); // 卡片本身点击跳详情，按钮不触发跳转
+    const enabled = item.commentEnabled === false ? 1 : 0;
+    try {
+      await request(`content/commentEnabled?contentId=${item.id}&enabled=${enabled}`, { method: 'POST' });
+      item.commentEnabled = enabled === 1;
+      toggle.textContent = item.commentEnabled === false ? '开启评论区' : '关闭评论区';
+      showToast(enabled === 1 ? '评论区已开启' : '评论区已关闭');
+    } catch (err) {
+      showToast(err.message || '操作失败');
+    }
+  });
+  card.appendChild(toggle);
 }
 
 function renderMyLoadMore() {

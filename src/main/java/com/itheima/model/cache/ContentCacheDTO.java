@@ -12,6 +12,7 @@ public class ContentCacheDTO {
     private int categoryId;
     private int commentCount;
     private int likeCount;
+    private boolean commentEnabled = true;
     private String authorName;
     private String coverUrl;
     private String videoUrl;
@@ -83,6 +84,14 @@ public class ContentCacheDTO {
 
     public void setLikeCount(int likeCount) {
         this.likeCount = likeCount;
+    }
+
+    public boolean isCommentEnabled() {
+        return commentEnabled;
+    }
+
+    public void setCommentEnabled(boolean commentEnabled) {
+        this.commentEnabled = commentEnabled;
     }
 
     public String getAuthorName() {

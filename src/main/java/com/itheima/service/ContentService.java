@@ -96,7 +96,11 @@ public class ContentService {
     // ===== 评论查询（独立接口用）=====
 
     public List<CommentVO> getCommentsForContent(long contentId, Long userId) {
-        contentCacheManager.getContentFromCache(contentId);
+        ContentCacheDTO dto = contentCacheManager.getContentFromCache(contentId);
+        // 评论区开关：作者关闭后整体不可见（评论数据保留，重新开启即恢复）
+        if (dto != null && !dto.isCommentEnabled()) {
+            return new ArrayList<>();
+        }
         List<CommentCacheDTO> commentTree = contentCacheManager.getCommentTree(contentId);
         if (commentTree.isEmpty()) {
             return new ArrayList<>();
@@ -155,5 +159,32 @@ public class ContentService {
         String description = uc.getDescription();
         int categoryId = uc.getCategoryId();
         return contentDao.addContent(conn, userId, uc.getType(), title, description, categoryId);
+    }
+
+    // ===== 作者开关评论区（C2）=====
+
+    /**
+     * 作者本人开关自己作品的评论区。校验内容存在 + 所有权。
+     * 关闭后：/comment/add 拒绝、/comment/show 返回空；评论数据不删，重新开启即恢复。
+     */
+    public void setCommentEnabled(long contentId, long userId, boolean enabled) {
+        transactionTemplate.execute(conn -> {
+            try {
+                ContentCacheDTO dto = contentDao.findContent(conn, contentId);
+                if (dto == null) {
+                    throw new NotFoundException("内容不存在");
+                }
+                if (dto.getAuthorId() != userId) {
+                    throw new ForbiddenException("只能操作自己的作品");
+                }
+                contentDao.updateCommentEnabled(conn, contentId, enabled);
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "更新评论区开关失败, contentId=" + contentId, e);
+                throw new ServerException("数据库写入失败");
+            }
+            return null;
+        });
+        // 缓存同步放事务提交后
+        contentCacheManager.updateContentCommentEnabled(contentId, enabled);
     }
 }

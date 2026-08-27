@@ -201,3 +201,48 @@ token: {{token}}
 ### 25. commentId 非数字（应 400）
 POST http://localhost:8080/comment/delete?commentId=abc
 token: {{token}}
+
+### ==================== 评论区开关（作者本人，阶段二） ====================
+
+### 26. 作者关闭自己作品的评论区
+# contentId 填自己作品；只有作者本人能操作（应 200）
+POST http://localhost:8080/content/commentEnabled?contentId=REPLACE_ME作品contentId&enabled=0
+token: {{token}}
+
+### 27. 关闭后发评论（应 409 评论区已关闭）
+POST http://localhost:8080/comment/add
+token: {{token}}
+Content-Type: application/json
+
+{
+  "contentId": 1,
+  "message": "关闭状态下的评论"
+}
+
+### 28. 关闭后查询评论（应返回空列表 data: []）
+GET http://localhost:8080/comment/show?contentId=1
+token: {{token}}
+
+### 29. 作者再次开启评论区（应 200）
+POST http://localhost:8080/content/commentEnabled?contentId=REPLACE_ME作品contentId&enabled=1
+token: {{token}}
+
+### 30. 非作者开关他人评论区（应 403）
+# contentId 填他人作品，token 用自己（非作者）
+POST http://localhost:8080/content/commentEnabled?contentId=REPLACE_ME他人作品contentId&enabled=0
+token: {{token}}
+
+### 31. 未登录开关评论区（应 401）
+POST http://localhost:8080/content/commentEnabled?contentId=1&enabled=0
+
+### 32. 开关不存在的内容（应 404）
+POST http://localhost:8080/content/commentEnabled?contentId=999999999&enabled=0
+token: {{token}}
+
+### 33. enabled 缺失（应 400）
+POST http://localhost:8080/content/commentEnabled?contentId=1
+token: {{token}}
+
+### 34. enabled 非法值（应 400）
+POST http://localhost:8080/content/commentEnabled?contentId=1&enabled=2
+token: {{token}}

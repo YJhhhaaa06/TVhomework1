@@ -7,6 +7,7 @@ import com.itheima.exception.ForbiddenException;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
 import com.itheima.model.cache.CommentCacheDTO;
+import com.itheima.model.cache.ContentCacheDTO;
 import com.itheima.model.command.CommentCommand;
 import com.itheima.model.vo.CommentVO;
 import com.itheima.util.TransactionTemplate;
@@ -64,6 +65,17 @@ class CommentServiceTest {
         verify(contentDao).updateCommentCount(conn, 3L, 1);
         verify(contentCacheManager).updateContentCommentCount(3L, 1);
         verify(contentCacheManager).addCommentToCache(3L, saved, null);
+    }
+
+    @Test
+    void addCommentWhenCommentsDisabledThrowsConflict() throws SQLException {
+        CommentCommand command = rootCommand();
+        ContentCacheDTO dto = new ContentCacheDTO();
+        dto.setCommentEnabled(false);
+        when(contentCacheManager.getContentFromCache(3L)).thenReturn(dto);
+
+        assertThrows(ConflictException.class, () -> service.addComment(command));
+        verify(commentDao, never()).addComment(any(), anyLong(), anyLong(), anyString(), any());
     }
 
     @Test

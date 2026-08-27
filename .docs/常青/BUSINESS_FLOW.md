@@ -803,6 +803,41 @@ CommentVO 结构：
 
 ---
 
+#### 4.2.4 评论区开关（作者本人，阶段二）
+
+```
+┌──────────┐  POST /content/commentEnabled  ┌──────────────────┐
+│  客户端   │ ─────────────────────────────► │ ContentController │
+└──────────┘   ?contentId=X&enabled=0|1      └──────────────────┘
+                                                      │
+                                                      ▼
+                                              ┌──────────────────┐
+                                              │  ContentService   │
+                                              │  setCommentEnabled()
+                                              └──────────────────┘
+```
+
+| 步骤 | 操作 | 失败处理 |
+|------|------|----------|
+| 1 | 校验登录（AuthFilter 精确匹配 `/content/commentEnabled`） | 401 |
+| 2 | 查询内容（`comment_enabled` 随查询读取） | 不存在/已删除返回 NotFoundException（404） |
+| 3 | 校验 content.author_id == 操作者 userId | 否则 ForbiddenException（403） |
+| 4 | `UPDATE content SET comment_enabled=? WHERE id=?`（1=开, 0=关） | SQLException 回滚 |
+| 5 | 提交事务后同步内存缓存：contentCache / recommendList 的 commentEnabled | 失败只记录日志 |
+
+**语义**（与评论软删除彻底分离，不逐条动 comment.is_deleted）：
+
+| 状态 | 发表（/comment/add） | 查询（/comment/show） |
+|------|---------------------|----------------------|
+| 评论开启 | 正常 | 返回评论树 |
+| 评论关闭 | ConflictException（409「评论区已关闭」） | 返回空列表 |
+
+- 关闭仅隐藏：评论数据保留，重新开启后原评论恢复；已软删评论不受开关影响；`comment_count` 不因开关增减。
+- 数据载体：`content.comment_enabled TINYINT NOT NULL DEFAULT 1`；字段贯通 `ContentCacheDTO`（backfill/刷新）与 /start、/profile、详情等 VO。
+- 前端入口：创作中心「我的投稿」卡片「关闭/开启评论区」按钮（仅作者本人页面）；详情页按 `commentEnabled` 决定是否展示评论区入口/输入框。
+
+---
+
 ### 4.3 关注流程
 
 #### 4.3.1 关注用户
@@ -1071,6 +1106,7 @@ GET /feed?page=1&pageSize=10&token=xxx
 | `/api/admin/*` | 前缀 | ✓ |
 | `/comment/add` | 精确 | ✓ |
 | `/comment/delete` | 精确 | ✓ |
+| `/content/commentEnabled` | 精确 | ✓ |
 | `/user/changePassword` | 精确 | ✓ |
 | `/coupon/grab` | 精确 | ✓ |
 | `/coupon/my` | 精确 | ✓ |
@@ -1096,6 +1132,7 @@ GET /feed?page=1&pageSize=10&token=xxx
 |------|----------|----------|
 | 删除内容 | userId == content.authorId | ❌ 未校验（阶段四） |
 | 删除评论 | userId == comment.userId（管理员走 /api/admin/comment/delete） | ✓ 已校验（阶段一，软删除） |
+| 开关评论区 | userId == content.authorId | ✓ 已校验（阶段二） |
 | 修改密码 | userId == targetUserId | ✓ 已校验（通过 token） |
 | 修改用户名 | userId == targetUserId | ✓ 已校验（通过 token） |
 

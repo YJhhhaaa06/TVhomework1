@@ -29,6 +29,7 @@ public class AuthFilter implements Filter {
     private static final Set<String> PROTECTED_EXACT = Set.of(//精确的限制登录接口
             "/comment/add",  // 发表评论
             "/comment/delete",  // 删除评论
+            "/content/commentEnabled",  // 作者开关评论区
             "/user/changePassword",  // 修改密码
             "/coupon/grab",      // 优惠券抢购
             "/coupon/my"        // 我的优惠券

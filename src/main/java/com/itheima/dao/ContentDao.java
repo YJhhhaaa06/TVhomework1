@@ -54,6 +54,7 @@ public class ContentDao {
                    c.category_id,
                    c.comment_count,
                    c.like_count,
+                   c.comment_enabled,
                    c.create_time,
                    u.username,
                    u.id AS user_id
@@ -84,6 +85,7 @@ public class ContentDao {
                    c.category_id,
                    c.comment_count,
                    c.like_count,
+                   c.comment_enabled,
                    c.create_time,
                    u.username,
                    u.id AS user_id
@@ -284,6 +286,16 @@ public class ContentDao {
             ps.setInt(1, delta);
             ps.setLong(2, contentId);
             ps.executeUpdate();
+        }
+    }
+
+    /** 作者开关评论区（1-开, 0-关） */
+    public int updateCommentEnabled(Connection conn, long contentId, boolean enabled) throws SQLException {
+        String sql = "UPDATE content SET comment_enabled = ? WHERE id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, enabled ? 1 : 0);
+            ps.setLong(2, contentId);
+            return ps.executeUpdate();
         }
     }
 }

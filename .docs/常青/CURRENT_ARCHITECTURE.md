@@ -1,7 +1,7 @@
 # 当前系统架构地图
 
-> 版本：2.1
-> 最后更新：2026-08-18
+> 版本：2.2
+> 最后更新：2026-08-28
 > 维护说明：每次架构改动后必须更新本文档
 
 ---
@@ -132,7 +132,7 @@ com.itheima/
 
 **AuthFilter 保护路径**：
 - 前缀：`/api/upload`、`/api/admin`、`/follow`、`/like`、`/feed`
-- 精确：`/comment/add`、`/comment/delete`、`/user/changePassword`、`/coupon/grab`、`/coupon/my`
+- 精确：`/comment/add`、`/comment/delete`、`/content/commentEnabled`、`/user/changePassword`、`/coupon/grab`、`/coupon/my`
 - `/api/admin/*` 额外校验 `role == 1`，非管理员返回 403（每次请求查库）
 
 #### controller 包 — 控制器
@@ -154,6 +154,7 @@ com.itheima/
 | FollowController | /follow/* | 103 | 关注/取关 |
 | LikeController | /like/* | 127 | 点赞 |
 | CommentController | /comment/* | 98 | 评论 |
+| ContentController | /content/* | 90 | 内容管理：作者开关评论区（后续阶段扩展删除/编辑） |
 | CouponController | /coupon/* | 81 | 优惠券 |
 | UploadType | - | 72 | 上传类型枚举 |
 
@@ -162,7 +163,7 @@ com.itheima/
 | 类 | 行数 | 职责 | 依赖 |
 |----|------|------|------|
 | ContentCacheManager | 550 | 内容缓存管理（内存索引/评论树/实时计数） | ContentDao, ContentMediaDao, CommentDao, LikeCacheService, TransactionTemplate |
-| ContentService | 159 | 内容管理（查询与发布） | ContentDao, ContentMediaDao, CommentService, LikeService, ContentCacheManager, ContentStatusFiller, TransactionTemplate |
+| ContentService | 159 | 内容管理（查询与发布 + 作者开关评论区） | ContentDao, ContentMediaDao, CommentService, LikeService, ContentCacheManager, ContentStatusFiller, TransactionTemplate |
 | ContentStatusFiller | 105 | 内容状态填充（点赞/关注） | LikeService, FollowDao, TransactionTemplate |
 | LikeService | 315 | 点赞业务 | ContentDao, CommentDao, ContentLikeDao, CommentLikeDao, LikeCacheService, ContentCacheManager, TransactionTemplate |
 | LikeCacheService | 264 | Redis 点赞缓存 | - |
@@ -227,7 +228,7 @@ com.itheima/
 
 | 类 | 行数 | 类型 | 用途 |
 |----|------|------|------|
-| ContentCacheDTO | 127 | 缓存DTO | 内容缓存对象 |
+| ContentCacheDTO | 127 | 缓存DTO | 内容缓存对象（含 commentEnabled 评论区开关） |
 | CommentCacheDTO | 92 | 缓存DTO | 评论缓存对象（楼中楼两级：主楼 + 平铺 children） |
 
 > audit/ 子包
@@ -306,7 +307,7 @@ com.itheima/
 | 表名 | 说明 | 关键字段 |
 |------|------|----------|
 | users | 用户表 | id, username, hashed_password, phone, follow_count, follower_count, role（0=普通/1=管理员） |
-| content | 内容表 | id, user_id, title, description, type, category_id, comment_count, like_count, is_deleted, create_time, file_exists, last_verify_time |
+| content | 内容表 | id, user_id, title, description, type, category_id, comment_count, like_count, comment_enabled, is_deleted, create_time, file_exists, last_verify_time |
 | comment | 评论表 | id, content_id, user_id, message, parent_id, like_count, is_deleted |
 | follow | 关注关系表 | user_id, followed_user_id |
 | content_like | 内容点赞表 | user_id, content_id |
@@ -378,6 +379,7 @@ com.itheima/
 | POST | /comment/add | 发表评论 | ✓ |
 | GET | /comment/show | 查看评论 | ✗ |
 | POST | /comment/delete | 删除评论（软删除，仅自己） | ✓ |
+| POST | /content/commentEnabled | 作者开关自己作品的评论区（0=关/1=开） | ✓ |
 | POST | /follow/add | 关注 | ✓ |
 | POST | /follow/remove | 取关 | ✓ |
 | GET | /follow/following | 关注列表 | ✗ |
@@ -577,6 +579,7 @@ src/main/webapp/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-08-28 | 2.2 | 阶段二完成（C2 作者开关评论区）：content 表新增 comment_enabled；ContentCacheDTO/CacheManager 贯通该字段；新增 ContentController（POST /content/commentEnabled，作者所有权校验）；AuthFilter 新增精确保护；评论发表/查询按开关门禁（add 409 / show 空）；创作中心卡片开关按钮 + 详情页评论区门禁展示 |
 | 2026-08-18 | 2.1 | 目录结构更新：.docs/ 由平铺改为分层（常青/目标与任务/说明书/archive/temp），本文件随结构归档至 .docs/常青/，入口改为 .docs/INDEX.md |
 | 2026-08-14 | 2.0 | 前端重构（阶段九）：9 个独立 html 改为单页应用（SPA）——只留 index.html 外壳 + 原生 hash 路由 + static/js/views 视图模块（首页/关注流/详情/搜索/用户主页/创作中心/登录/券包/媒体运维），纯原生 HTML/CSS/JS、无构建工具，后端不动；新增首页分类下拉 + 换一换、关注流独立 #/follow、详情右侧相关推荐（/start 兜底）、创作中心「我的投稿」列表 |
 | 2026-08-10 | 1.9 | 阶段七完成：IocContainer 支持 @InjectConstructor 构造器注入（11 个服务类迁移，字段注入保留兼容）；新增 Initializable/Disposable 生命周期接口并接入容器（ContentCacheManager 迁移，AppShutDownListener 改走容器统一关闭，反射 shutdown 兼容保留）；MyConnectionPool 增加上限 20 与获取超时 5000ms（满池等待、超时抛 SQLException、失效连接从 allConnections 移除）；35/35 pytest 通过 |

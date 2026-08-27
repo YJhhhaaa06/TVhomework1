@@ -190,4 +190,37 @@ class ContentCacheManagerLifecycleTest {
         assertEquals(2, tree.get(0).getChildren().size(), "回复的回复也应平铺挂到主楼下");
         manager.destroy();
     }
+
+    // ===== 评论区开关（C2）=====
+
+    @Test
+    void toContentVOCarriesCommentEnabled() throws SQLException {
+        ContentCacheDTO dto = videoDto();
+        dto.setCommentEnabled(false);
+        when(contentDao.findAllContent(conn)).thenReturn(List.of(dto));
+        when(contentMediaDao.findMedia(conn, 1L)).thenReturn(mediaMap());
+        when(commentDao.getComments(conn, 1L)).thenReturn(List.of());
+
+        ContentCacheManager manager = newManager();
+        manager.init();
+
+        assertFalse(manager.toContentVO(dto).isCommentEnabled());
+        manager.destroy();
+    }
+
+    @Test
+    void updateContentCommentEnabledFlipsCachedDto() throws SQLException {
+        ContentCacheDTO dto = videoDto();
+        when(contentDao.findAllContent(conn)).thenReturn(List.of(dto));
+        when(contentMediaDao.findMedia(conn, 1L)).thenReturn(mediaMap());
+        when(commentDao.getComments(conn, 1L)).thenReturn(List.of());
+
+        ContentCacheManager manager = newManager();
+        manager.init();
+        assertTrue(manager.getContentFromCache(1L).isCommentEnabled());
+
+        manager.updateContentCommentEnabled(1L, false);
+        assertFalse(manager.getContentFromCache(1L).isCommentEnabled());
+        manager.destroy();
+    }
 }

@@ -168,10 +168,16 @@ function renderContent() {
 
   c.querySelector('#desc').textContent = item.description || '';
 
-  // 评论输入（登录后显示）
-  if (isLoggedIn()) c.querySelector('#commentInputRow').style.display = '';
-
-  renderComments();
+  // 评论区：作者关闭后整体不可见/不可发（数据保留，重新开启即恢复）
+  if (item.commentEnabled === false) {
+    c.querySelector('#commentInputRow').style.display = 'none';
+    c.querySelector('#commentHeader').textContent = '评论区已关闭';
+    c.querySelector('#commentList').innerHTML = '<div class="empty-comments">作者已关闭评论区</div>';
+  } else {
+    // 评论输入（登录后显示）
+    if (isLoggedIn()) c.querySelector('#commentInputRow').style.display = '';
+    renderComments();
+  }
 }
 
 function updateFollowBtn() {
