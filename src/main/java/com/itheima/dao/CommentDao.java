@@ -14,8 +14,8 @@ import java.util.List;
 public class CommentDao {
 
     //增
-    public long addComment(Connection conn,long contentId,long userId,String content,Long parentId)throws SQLException {
-        String sql = "insert into comment (content_id, user_id, content, parent_id) values (?, ?, ?, ?)";
+    public long addComment(Connection conn, long contentId, long userId, String content, Long parentId, Long replyToUserId) throws SQLException {
+        String sql = "insert into comment (content_id, user_id, content, parent_id, reply_to_user_id) values (?, ?, ?, ?, ?)";
         try (PreparedStatement pstmt = conn.prepareStatement(sql, PreparedStatement.RETURN_GENERATED_KEYS)) {
             pstmt.setLong(1, contentId);
             pstmt.setLong(2, userId);
@@ -24,6 +24,11 @@ public class CommentDao {
                 pstmt.setNull(4, java.sql.Types.BIGINT);
             } else {
                 pstmt.setLong(4, parentId);
+            }
+            if (replyToUserId == null) {
+                pstmt.setNull(5, java.sql.Types.BIGINT);
+            } else {
+                pstmt.setLong(5, replyToUserId);
             }
             pstmt.executeUpdate();
             try (ResultSet rs = pstmt.getGeneratedKeys()) {
@@ -36,7 +41,9 @@ public class CommentDao {
     }
 
     public CommentCacheDTO findCommentById(Connection conn, long commentId) throws SQLException {
-        String sql = "SELECT c.*, u.username FROM comment c LEFT JOIN users u ON c.user_id = u.id WHERE c.comment_id = ?";
+        String sql = "SELECT c.*, u.username, r.username AS reply_to_username FROM comment c " +
+                "LEFT JOIN users u ON c.user_id = u.id " +
+                "LEFT JOIN users r ON c.reply_to_user_id = r.id WHERE c.comment_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setLong(1, commentId);
             try (ResultSet rs = ps.executeQuery()) {
@@ -71,8 +78,9 @@ public class CommentDao {
 
     public  List<CommentCacheDTO> getComments(Connection conn, Long contentId) throws SQLException {
 
-        String sql = "SELECT c.*, u.username " +
+        String sql = "SELECT c.*, u.username, r.username AS reply_to_username " +
                 "FROM comment c LEFT JOIN users u ON c.user_id = u.id " +
+                "LEFT JOIN users r ON c.reply_to_user_id = r.id " +
                 "WHERE c.content_id=? AND c.is_deleted=0 ORDER BY c.comment_id";
 
         List<CommentCacheDTO> list = new ArrayList<>();

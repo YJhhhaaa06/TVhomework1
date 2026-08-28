@@ -9,6 +9,8 @@ public class CommentCacheDTO {
     private long userId;
     private String content;
     private Long parentId;
+    private Long replyToUserId;
+    private String replyToUsername;
     private int likeCount;
     private List<CommentCacheDTO> children;
 
@@ -72,6 +74,22 @@ public class CommentCacheDTO {
 
     public void setParentId(Long parentId) {
         this.parentId = parentId;
+    }
+
+    public Long getReplyToUserId() {
+        return replyToUserId;
+    }
+
+    public void setReplyToUserId(Long replyToUserId) {
+        this.replyToUserId = replyToUserId;
+    }
+
+    public String getReplyToUsername() {
+        return replyToUsername;
+    }
+
+    public void setReplyToUsername(String replyToUsername) {
+        this.replyToUsername = replyToUsername;
     }
 
     public int getLikeCount() {

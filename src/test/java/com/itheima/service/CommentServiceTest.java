@@ -23,6 +23,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 
 class CommentServiceTest {
@@ -33,6 +34,8 @@ class CommentServiceTest {
     private TransactionTemplate tt;
     private Connection conn;
     private CommentService service;
+    @SuppressWarnings("rawtypes")
+    private final ArgumentCaptor<CommentCacheDTO> commentCaptor = ArgumentCaptor.forClass(CommentCacheDTO.class);
 
     @BeforeEach
     void setUp() throws Exception {
@@ -56,7 +59,7 @@ class CommentServiceTest {
     void addRootCommentSuccessUpdatesCountsAndCache() throws SQLException {
         CommentCommand command = rootCommand();
         when(contentDao.isContentExist(conn, 3L)).thenReturn(true);
-        when(commentDao.addComment(conn, 3L, 7L, "hello", null)).thenReturn(5L);
+        when(commentDao.addComment(conn, 3L, 7L, "hello", null, null)).thenReturn(5L);
         CommentCacheDTO saved = new CommentCacheDTO("alice", 5L, 3L, 7L, "hello", null, 0);
         when(commentDao.findCommentById(conn, 5L)).thenReturn(saved);
 
@@ -75,7 +78,7 @@ class CommentServiceTest {
         when(contentCacheManager.getContentFromCache(3L)).thenReturn(dto);
 
         assertThrows(ConflictException.class, () -> service.addComment(command));
-        verify(commentDao, never()).addComment(any(), anyLong(), anyLong(), anyString(), any());
+        verify(commentDao, never()).addComment(any(), anyLong(), anyLong(), anyString(), any(), any());
     }
 
     @Test
@@ -101,17 +104,42 @@ class CommentServiceTest {
         command.setParentId(99L);
         when(contentDao.isContentExist(conn, 3L)).thenReturn(true);
         when(commentDao.isCommentExist(conn, 99L)).thenReturn(true);
-        // 被回复的 99 是楼内回复（其主楼为 5）=> 写入时应上溯挂到主楼 5
+        // 被回复的 99 是楼内回复（其主楼为 5，作者 8）=> 上溯挂主楼 5 且记录 @ 引用 8
         CommentCacheDTO reply = new CommentCacheDTO("bob", 99L, 3L, 8L, "child", 5L, 0);
         when(commentDao.findCommentById(conn, 99L)).thenReturn(reply);
-        when(commentDao.addComment(conn, 3L, 7L, "hello", 5L)).thenReturn(100L);
+        when(commentDao.addComment(conn, 3L, 7L, "hello", 5L, 8L)).thenReturn(100L);
         CommentCacheDTO saved = new CommentCacheDTO("alice", 100L, 3L, 7L, "hello", 5L, 0);
         when(commentDao.findCommentById(conn, 100L)).thenReturn(saved);
 
         service.addComment(command);
 
-        verify(commentDao).addComment(conn, 3L, 7L, "hello", 5L);
+        verify(commentDao).addComment(conn, 3L, 7L, "hello", 5L, 8L);
         verify(contentCacheManager).addCommentToCache(3L, saved, 5L);
+    }
+
+    @Test
+    void addReplyToReplySetsReplyToUserId() throws SQLException {
+        CommentCommand command = rootCommand();
+        command.setParentId(99L);
+        when(contentDao.isContentExist(conn, 3L)).thenReturn(true);
+        when(commentDao.isCommentExist(conn, 99L)).thenReturn(true);
+        // 被回复的 99 是楼内回复（其主楼为 5，作者 8）=> 上溯挂主楼 5 且 @ 目标为 8
+        CommentCacheDTO reply = new CommentCacheDTO("bob", 99L, 3L, 8L, "child", 5L, 0);
+        when(commentDao.findCommentById(conn, 99L)).thenReturn(reply);
+        when(commentDao.addComment(conn, 3L, 7L, "hello", 5L, 8L)).thenReturn(100L);
+        CommentCacheDTO saved = new CommentCacheDTO("alice", 100L, 3L, 7L, "hello", 5L, 0);
+        saved.setReplyToUserId(8L);
+        saved.setReplyToUsername("bob");
+        when(commentDao.findCommentById(conn, 100L)).thenReturn(saved);
+
+        service.addComment(command);
+
+        verify(commentDao).addComment(conn, 3L, 7L, "hello", 5L, 8L);
+        ArgumentCaptor<Long> parentIdCaptor = ArgumentCaptor.forClass(Long.class);
+        verify(contentCacheManager).addCommentToCache(eq(3L), commentCaptor.capture(), parentIdCaptor.capture());
+        assertEquals(5L, parentIdCaptor.getValue());
+        assertEquals(8L, commentCaptor.getValue().getReplyToUserId());
+        assertEquals("bob", commentCaptor.getValue().getReplyToUsername());
     }
 
     @Test
@@ -210,7 +238,7 @@ class CommentServiceTest {
     void addCommentSqlErrorThrowsServerException() throws SQLException {
         CommentCommand command = rootCommand();
         when(contentDao.isContentExist(conn, 3L)).thenReturn(true);
-        when(commentDao.addComment(conn, 3L, 7L, "hello", null))
+        when(commentDao.addComment(conn, 3L, 7L, "hello", null, null))
                 .thenThrow(new SQLException("db down"));
 
         assertThrows(ServerException.class, () -> service.addComment(command));
@@ -220,6 +248,8 @@ class CommentServiceTest {
     void convertToCommentVOListBuildsTreeWithLikedFlags() {
         CommentCacheDTO root = new CommentCacheDTO("alice", 1L, 3L, 7L, "root", null, 5);
         CommentCacheDTO child = new CommentCacheDTO("bob", 2L, 3L, 8L, "child", 1L, 2);
+        child.setReplyToUserId(8L);
+        child.setReplyToUsername("bob");
         root.setChildren(new ArrayList<>(List.of(child)));
 
         List<CommentVO> result = service.convertToCommentVOList(
@@ -228,6 +258,9 @@ class CommentServiceTest {
         assertEquals(1, result.size());
         assertTrue(result.get(0).getIsLiked());
         assertEquals(1, result.get(0).getChildren().size());
-        assertFalse(((CommentVO) result.get(0).getChildren().get(0)).getIsLiked());
+        CommentVO childVO = (CommentVO) result.get(0).getChildren().get(0);
+        assertFalse(childVO.getIsLiked());
+        assertEquals(8L, childVO.getReplyToUserId());
+        assertEquals("bob", childVO.getReplyToUsername());
     }
 }

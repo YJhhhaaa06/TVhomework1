@@ -57,6 +57,8 @@ public class CommentService {
         );
         Boolean liked = likedMap.get(ccVO.getCommentId());
         cVO.setIsLiked(liked != null && liked);
+        cVO.setReplyToUserId(ccVO.getReplyToUserId());
+        cVO.setReplyToUsername(ccVO.getReplyToUsername());
 
         if (ccVO.getChildren() != null) {
             List<CommentVO> childVOList = new ArrayList<>();
@@ -82,9 +84,11 @@ public class CommentService {
             throw new ConflictException("评论区已关闭");
         }
 
-        // 楼中楼：parentId 一律指向主楼。被回复评论本身是回复时，上溯挂到其主楼 id
+        // 楼中楼：parentId 一律指向主楼。被回复评论本身是回复时，上溯挂到其主楼 id，
+        // 并记录被回复评论作者（replyToUserId，用于楼中楼「回复 @xxx」展示）
         // 用数组持有归一化结果，避免在 lambda 内改写被捕获变量（编译约束）
         Long[] effectiveParentId = { parentId };
+        Long[] replyToUserId = { null };
         CommentCacheDTO newComment = transactionTemplate.execute(conn -> {
             if(!contentDao.isContentExist(conn,contentId)){
                 throw new NotFoundException("被评论的内容不存在");
@@ -98,11 +102,13 @@ public class CommentService {
                     throw new ConflictException("被回复评论不属于该视频或动态");
                 }
                 if (parent.getParentId() != null && parent.getParentId() != 0) {
+                    // 被回复的是楼内回复：上溯挂主楼，@ 目标是该回复作者
                     effectiveParentId[0] = parent.getParentId();
+                    replyToUserId[0] = parent.getUserId();
                 }
             }
             try {
-                long commentId = commentDao.addComment(conn, contentId, userId, message, effectiveParentId[0]);
+                long commentId = commentDao.addComment(conn, contentId, userId, message, effectiveParentId[0], replyToUserId[0]);
                 contentDao.updateCommentCount(conn, contentId, 1);
                 contentCacheManager.updateContentCommentCount(contentId, 1);
                 return commentDao.findCommentById(conn, commentId);

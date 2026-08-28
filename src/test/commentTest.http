@@ -28,6 +28,20 @@ Content-Type: application/json
 }
 
 
+### 2.1 回复楼内回复（parentId 传被回复的楼内回复 id，后端上溯挂主楼并记录 @ 引用）
+# 先用 /comment/show 找一条楼内回复的 commentId 填入；响应应带 replyToUserId/replyToUsername，
+# 且该评论在 /comment/show 中 parentId 归一化为主楼 id
+POST http://localhost:8080/comment/add
+token: {{token}}
+Content-Type: application/json
+
+{
+  "contentId": 1,
+  "message": "这是一条对楼内回复的回复",
+  "parentId": 46
+}
+
+
 ### ==================== 异常 — 鉴权 ====================
 
 ### 3. 缺少 token

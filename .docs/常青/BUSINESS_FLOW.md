@@ -709,7 +709,7 @@ POST /like/comment/add?commentId=456
 | 2 | 转换为 CommentCommand | - |
 | 3 | 开启事务 | - |
 | 4 | 检查内容是否存在 | 不存在返回 NotFoundException |
-| 5 | 如果是回复，查询被回复评论：不存在/不在该内容下 → Conflict；若被回复评论本身是回复，则上溯挂到其主楼 id | 不正确返回 ConflictException |
+| 5 | 如果是回复，查询被回复评论：不存在/不在该内容下 → Conflict；若被回复评论本身是回复，则上溯挂到其主楼 id，并记录 reply_to_user_id=被回复评论作者 id（楼中楼 @ 引用） | 不正确返回 ConflictException |
 | 6 | 插入 comment 表（楼中楼：回复一律 parent_id=主楼 id） | SQLException 回滚 |
 | 7 | 更新 content 表 comment_count +1 | SQLException 回滚 |
 | 8 | 提交事务 | - |
@@ -726,7 +726,7 @@ Content-Type: application/json
 请求体：
 {
     "contentId": 123,
-    "parentId": 0,       // 0/NULL=主楼（一级）；其他=楼内回复（一律填所在主楼 id；回复的回复也传主楼 id）
+    "parentId": 0,       // 0/NULL=主楼（一级）；其他=被回复的评论 id（主楼或楼内回复均可，回复楼内回复时后端自动上溯挂主楼）
     "message": "评论内容"
 }
 
@@ -758,6 +758,8 @@ CommentVO 结构：
     "username": "张三",
     "message": "评论内容",
     "parentId": 0,       // NULL=主楼；其他=所属主楼 id
+    "replyToUserId": 200,    // 楼中楼 @ 引用：被回复评论作者 id；NULL=主楼或直接回复主楼
+    "replyToUsername": "李四", // 被回复评论作者用户名（冗余存储，被 @ 评论被删后仍可展示）
     "likeCount": 5,
     "isLiked": false,
     "children": [...]  // 仅主楼有：楼内回复平铺列表（回复的回复也挂这里）

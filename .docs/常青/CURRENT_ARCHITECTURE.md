@@ -229,7 +229,7 @@ com.itheima/
 | 类 | 行数 | 类型 | 用途 |
 |----|------|------|------|
 | ContentCacheDTO | 127 | 缓存DTO | 内容缓存对象（含 commentEnabled 评论区开关） |
-| CommentCacheDTO | 92 | 缓存DTO | 评论缓存对象（楼中楼两级：主楼 + 平铺 children） |
+| CommentCacheDTO | 92 | 缓存DTO | 评论缓存对象（楼中楼两级：主楼 + 平铺 children；含 replyToUserId/replyToUsername @ 引用） |
 
 > audit/ 子包
 
@@ -308,7 +308,7 @@ com.itheima/
 |------|------|----------|
 | users | 用户表 | id, username, hashed_password, phone, follow_count, follower_count, role（0=普通/1=管理员） |
 | content | 内容表 | id, user_id, title, description, type, category_id, comment_count, like_count, comment_enabled, is_deleted, create_time, file_exists, last_verify_time |
-| comment | 评论表 | id, content_id, user_id, message, parent_id, like_count, is_deleted |
+| comment | 评论表 | id, content_id, user_id, message, parent_id, reply_to_user_id, like_count, is_deleted |
 | follow | 关注关系表 | user_id, followed_user_id |
 | content_like | 内容点赞表 | user_id, content_id |
 | comment_like | 评论点赞表 | user_id, comment_id |
@@ -579,6 +579,7 @@ src/main/webapp/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-08-28 | 2.3 | 评论楼中楼回复增强：comment 表新增 reply_to_user_id（楼中楼 @ 引用）；CommentCacheDTO/ResultMap/CommentDao/CommentService 贯通该字段（回复楼内回复时上溯挂主楼并记录被回复作者）；详情页楼内回复增加回复按钮 + 「回复 @xxx」展示；commentTest/pytest/单测同步 |
 | 2026-08-28 | 2.2 | 阶段二完成（C2 作者开关评论区）：content 表新增 comment_enabled；ContentCacheDTO/CacheManager 贯通该字段；新增 ContentController（POST /content/commentEnabled，作者所有权校验）；AuthFilter 新增精确保护；评论发表/查询按开关门禁（add 409 / show 空）；创作中心卡片开关按钮 + 详情页评论区门禁展示 |
 | 2026-08-18 | 2.1 | 目录结构更新：.docs/ 由平铺改为分层（常青/目标与任务/说明书/archive/temp），本文件随结构归档至 .docs/常青/，入口改为 .docs/INDEX.md |
 | 2026-08-14 | 2.0 | 前端重构（阶段九）：9 个独立 html 改为单页应用（SPA）——只留 index.html 外壳 + 原生 hash 路由 + static/js/views 视图模块（首页/关注流/详情/搜索/用户主页/创作中心/登录/券包/媒体运维），纯原生 HTML/CSS/JS、无构建工具，后端不动；新增首页分类下拉 + 换一换、关注流独立 #/follow、详情右侧相关推荐（/start 兜底）、创作中心「我的投稿」列表 |

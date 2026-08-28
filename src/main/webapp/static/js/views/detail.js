@@ -279,7 +279,13 @@ function createCommentItem(comment, isReply) {
 
   const text = document.createElement('span');
   text.className = 'comment-text';
-  text.textContent = comment.content || '';
+  if (isReply && comment.replyToUserId != null) {
+    const at = document.createElement('span');
+    at.className = 'comment-at';
+    at.textContent = '回复 @' + (comment.replyToUsername || comment.replyToUserId) + '：';
+    text.appendChild(at);
+  }
+  text.appendChild(document.createTextNode(comment.content || ''));
 
   const meta = document.createElement('div');
   meta.className = 'comment-meta';
@@ -288,13 +294,12 @@ function createCommentItem(comment, isReply) {
   likeBtn.innerHTML = '❤ ' + (comment.likeCount || 0);
   likeBtn.addEventListener('click', () => toggleCommentLike(comment, likeBtn));
   meta.appendChild(likeBtn);
-  if (!isReply) {
-    const replyBtn = document.createElement('button');
-    replyBtn.className = 'comment-reply-btn';
-    replyBtn.textContent = '回复';
-    replyBtn.addEventListener('click', () => setReply(comment));
-    meta.appendChild(replyBtn);
-  }
+  // 主楼与楼内回复均可回复（parentId 传该评论 id，后端自动上溯挂主楼）
+  const replyBtn = document.createElement('button');
+  replyBtn.className = 'comment-reply-btn';
+  replyBtn.textContent = '回复';
+  replyBtn.addEventListener('click', () => setReply(comment));
+  meta.appendChild(replyBtn);
   if (comment.userId === getUserId()) {
     const delBtn = document.createElement('button');
     delBtn.className = 'comment-delete-btn';

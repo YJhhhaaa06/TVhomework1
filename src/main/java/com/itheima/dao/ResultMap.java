@@ -39,6 +39,12 @@ public class ResultMap {
         } else {
             cm.setParentId(rs.getLong("parent_id"));
         }
+        if (rs.getObject("reply_to_user_id") == null) {
+            cm.setReplyToUserId(null);
+        } else {
+            cm.setReplyToUserId(rs.getLong("reply_to_user_id"));
+        }
+        cm.setReplyToUsername(rs.getString("reply_to_username"));
         cm.setLikeCount(rs.getInt("like_count"));
         return cm;
     }
