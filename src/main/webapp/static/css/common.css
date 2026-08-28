@@ -401,7 +401,7 @@ body.drawer-open .drawer-backdrop { opacity: 1; pointer-events: auto; }
   width: calc(100% - 22px);
   margin: 0 11px 11px;
   padding: 6px 0;
-  border: 1px solid var(--line-2, rgba(255,255,255,.12));
+  border: 1px solid var(--line);
   border-radius: 6px;
   background: transparent;
   color: var(--text-3);
