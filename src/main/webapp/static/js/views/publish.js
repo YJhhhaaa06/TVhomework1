@@ -6,6 +6,7 @@
 import { request } from '../api.js';
 import { isLoggedIn, getUserId } from '../auth.js';
 import { showToast, formatSize, createVideoCard, emptyBox, skeletonCards } from '../utils.js';
+import { openEditWorkModal } from '../editWork.js';
 
 const CATEGORIES = ['其他', '游戏', '音乐', '资讯', '动画', '娱乐', '动物', '体育', '鬼畜', '绘画'];
 
@@ -134,6 +135,7 @@ function renderMyList(list) {
   list.forEach((item, i) => {
     const card = createVideoCard(item, { index: i });
     addCommentToggle(card, item);
+    addEditEntry(card, item);
     g.appendChild(card);
   });
   grid.appendChild(g);
@@ -145,6 +147,7 @@ function appendMyList(list) {
     list.forEach((item) => {
       const card = createVideoCard(item);
       addCommentToggle(card, item);
+      addEditEntry(card, item);
       g.appendChild(card);
     });
   }
@@ -168,6 +171,25 @@ function addCommentToggle(card, item) {
     }
   });
   card.appendChild(toggle);
+}
+
+/** 我的投稿卡片上的「编辑」按钮：查看已上传内容并直接改标题/简介/替换或删除媒体 */
+function addEditEntry(card, item) {
+  const edit = document.createElement('button');
+  edit.className = 'v-card-toggle';
+  edit.textContent = '编辑';
+  edit.addEventListener('click', async (e) => {
+    e.stopPropagation(); // 卡片本身点击跳详情，按钮不触发跳转
+    try {
+      // ContentVO 不含 videoUrl/imageUrls，需拉全量内容
+      const full = await request(`search/IdSearch?contentId=${item.id}`);
+      if (!full) { showToast('内容不存在'); return; }
+      openEditWorkModal(full, () => loadMyContent(state.myPage));
+    } catch (err) {
+      showToast(err.message || '加载失败');
+    }
+  });
+  card.appendChild(edit);
 }
 
 function renderMyLoadMore() {

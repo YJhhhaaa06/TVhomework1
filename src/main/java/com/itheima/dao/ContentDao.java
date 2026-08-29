@@ -298,4 +298,15 @@ public class ContentDao {
             return ps.executeUpdate();
         }
     }
+
+    /** 作者编辑作品信息：更新标题与简介（A3，全文索引由 MySQL 自动维护） */
+    public int updateContentInfo(Connection conn, long contentId, String title, String description) throws SQLException {
+        String sql = "UPDATE content SET title = ?, description = ? WHERE id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, title);
+            ps.setString(2, description);
+            ps.setLong(3, contentId);
+            return ps.executeUpdate();
+        }
+    }
 }

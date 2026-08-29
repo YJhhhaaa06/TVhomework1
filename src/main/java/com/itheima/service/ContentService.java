@@ -10,6 +10,7 @@ import com.itheima.model.cache.CommentCacheDTO;
 import com.itheima.model.cache.ContentCacheDTO;
 import com.itheima.model.command.UploadCommand;
 import com.itheima.model.dto.PageResult;
+import com.itheima.model.entity.ContentMedia;
 import com.itheima.model.vo.CommentVO;
 import com.itheima.model.vo.ContentDetailVO;
 import com.itheima.model.vo.ContentVO;
@@ -18,6 +19,8 @@ import com.itheima.util.TransactionTemplate;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -186,5 +189,108 @@ public class ContentService {
         });
         // 缓存同步放事务提交后
         contentCacheManager.updateContentCommentEnabled(contentId, enabled);
+    }
+
+    // ===== 作者编辑作品（B1 扩展 + A3）=====
+
+    /**
+     * 作者本人替换自作品某条媒体（换源）。
+     * 校验所有权 → 更新 content_media（url/file_exists/last_verify_time）→ 返回旧 url 供清理旧文件。
+     * 事务提交后刷新内容缓存。
+     */
+    public String replaceMedia(long contentId, long userId, int type, int sort, String newUrl) {
+        String oldUrl = transactionTemplate.execute(conn -> {
+            try {
+                ContentMedia media = findOwnedMedia(conn, contentId, userId, type, sort);
+                String old = media.getUrl();
+                Timestamp ts = Timestamp.valueOf(LocalDateTime.now());
+                contentMediaDao.updateMediaUrl(conn, media.getMediaId(), newUrl, true, ts);
+                contentDao.updateFileExists(conn, contentId, true, ts);
+                return old;
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "替换媒体失败, contentId=" + contentId, e);
+                throw new ServerException("数据库写入失败");
+            }
+        });
+        contentCacheManager.refreshContent(contentId);
+        return oldUrl;
+    }
+
+    /**
+     * 作者本人删除自作品某条媒体（单图删除）。
+     * 仅允许删除图片（type==2）：视频文件与封面（含图文封面）为结构性资源只可替换不可删。
+     * 删除后对图片重排 sort，保持 1..n 连续。返回旧 url 供清理物理文件。
+     */
+    public String deleteMedia(long contentId, long userId, int type, int sort) {
+        if (type != 2) {
+            throw new ParamException("仅支持删除图片");
+        }
+        String oldUrl = transactionTemplate.execute(conn -> {
+            try {
+                ContentMedia media = findOwnedMedia(conn, contentId, userId, type, sort);
+                String old = media.getUrl();
+                contentMediaDao.deleteMediaByContentIdAndTypeSort(conn, contentId, type, sort);
+                if (type == 2) {
+                    contentMediaDao.compactImageSort(conn, contentId, sort);
+                }
+                return old;
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "删除媒体失败, contentId=" + contentId, e);
+                throw new ServerException("数据库写入失败");
+            }
+        });
+        contentCacheManager.refreshContent(contentId);
+        return oldUrl;
+    }
+
+    /**
+     * 作者本人编辑作品标题与简介（A3）。
+     * title 非空且 ≤50（对齐前端 maxlength），description ≤5000；全文索引由 MySQL 自动维护。
+     */
+    public void updateContentInfo(long contentId, long userId, String title, String description) {
+        String t = title == null ? "" : title.trim();
+        String d = description == null ? "" : description.trim();
+        if (t.isEmpty()) {
+            throw new ParamException("标题不能为空");
+        }
+        if (t.length() > 50) {
+            throw new ParamException("标题不超过50字");
+        }
+        if (d.length() > 5000) {
+            throw new ParamException("简介不超过5000字");
+        }
+        transactionTemplate.execute(conn -> {
+            try {
+                findOwnedContent(conn, contentId, userId);
+                contentDao.updateContentInfo(conn, contentId, t, d);
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "编辑作品信息失败, contentId=" + contentId, e);
+                throw new ServerException("数据库写入失败");
+            }
+            return null;
+        });
+        contentCacheManager.refreshContent(contentId);
+    }
+
+    /** 所有权校验（内容存在 + 作者本人），供编辑作品三类操作复用。 */
+    private ContentCacheDTO findOwnedContent(Connection conn, long contentId, long userId) throws SQLException {
+        ContentCacheDTO dto = contentDao.findContent(conn, contentId);
+        if (dto == null) {
+            throw new NotFoundException("内容不存在");
+        }
+        if (dto.getAuthorId() != userId) {
+            throw new ForbiddenException("只能操作自己的作品");
+        }
+        return dto;
+    }
+
+    /** 所有权校验 + 定位媒体行，供替换/删除复用。 */
+    private ContentMedia findOwnedMedia(Connection conn, long contentId, long userId, int type, int sort) throws SQLException {
+        findOwnedContent(conn, contentId, userId);
+        ContentMedia media = contentMediaDao.findMediaByContentTypeSort(conn, contentId, type, sort);
+        if (media == null) {
+            throw new NotFoundException("媒体资源不存在");
+        }
+        return media;
     }
 }

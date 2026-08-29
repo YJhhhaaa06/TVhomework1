@@ -148,22 +148,22 @@ com.itheima/
 | SearchController | /search | 127 | 搜索 |
 | FeedController | /feed | 64 | 关注动态流 |
 | ProfileController | /profile | 76 | 用户主页 |
-| UploadController | /api/upload/* | 164 | 上传视频/动态 |
+| UploadController | /api/upload/* | 197 | 上传视频/动态 + 作者换源 |
 | MediaAdminController | /api/admin/media/* | 71 | 媒体运维：扫描/恢复（仅管理员） |
 | AdminCommentController | /api/admin/comment/* | 46 | 评论运维：管理员删评论（仅管理员） |
 | FollowController | /follow/* | 103 | 关注/取关 |
 | LikeController | /like/* | 127 | 点赞 |
 | CommentController | /comment/* | 98 | 评论 |
-| ContentController | /content/* | 90 | 内容管理：作者开关评论区（后续阶段扩展删除/编辑） |
+| ContentController | /content/* | 160 | 内容管理：作者开关评论区 + 编辑标题/简介 + 删除单条媒体 |
 | CouponController | /coupon/* | 81 | 优惠券 |
-| UploadType | - | 72 | 上传类型枚举 |
+| UploadType | - | 84 | 上传类型枚举 |
 
 #### service 包 — 业务逻辑
 
 | 类 | 行数 | 职责 | 依赖 |
 |----|------|------|------|
-| ContentCacheManager | 550 | 内容缓存管理（内存索引/评论树/实时计数） | ContentDao, ContentMediaDao, CommentDao, LikeCacheService, TransactionTemplate |
-| ContentService | 159 | 内容管理（查询与发布 + 作者开关评论区） | ContentDao, ContentMediaDao, CommentService, LikeService, ContentCacheManager, ContentStatusFiller, TransactionTemplate |
+| ContentCacheManager | 653 | 内容缓存管理（内存索引/评论树/实时计数/编辑同步） | ContentDao, ContentMediaDao, CommentDao, LikeCacheService, TransactionTemplate |
+| ContentService | 292 | 内容管理（查询与发布 + 评论区开关 + 编辑作品：换源/删图/改文案） | ContentDao, ContentMediaDao, CommentService, LikeService, ContentCacheManager, ContentStatusFiller, TransactionTemplate |
 | ContentStatusFiller | 105 | 内容状态填充（点赞/关注） | LikeService, FollowDao, TransactionTemplate |
 | LikeService | 315 | 点赞业务 | ContentDao, CommentDao, ContentLikeDao, CommentLikeDao, LikeCacheService, ContentCacheManager, TransactionTemplate |
 | LikeCacheService | 264 | Redis 点赞缓存 | - |
@@ -172,7 +172,7 @@ com.itheima/
 | FollowService | 123 | 关注业务 | FollowDao, UserDao |
 | ProfileService | 97 | 用户主页 | UserDao, ContentDao, FollowDao, ContentCacheManager, LikeService, TransactionTemplate |
 | FeedService | 86 | 关注动态流 | FollowDao, ContentDao, ContentCacheManager, LikeService, TransactionTemplate |
-| FileUploadService | 78 | 文件上传 | - |
+| FileUploadService | 103 | 文件上传/按 URL 清理旧文件 | - |
 | MediaAuditService | 263 | 媒体完整性扫描与恢复 | ContentDao, ContentMediaDao |
 | CouponService | 74 | 优惠券抢购 | CouponDao |
 
@@ -181,12 +181,12 @@ com.itheima/
 | 类 | 行数 | 对应表 | 职责 |
 |----|------|--------|------|
 | UserDao | 224 | users | 用户 CRUD + 角色查询 |
-| ContentDao | 290 | content | 内容 CRUD + 全文搜索 + 媒体状态更新 |
+| ContentDao | 312 | content | 内容 CRUD + 全文搜索 + 媒体状态更新 + 编辑作品信息 |
 | CommentDao | 145 | comment | 评论 CRUD + 软删除（整楼/单条）+ 楼内回复计数 |
 | CouponDao | 114 | coupon, coupon_order | 优惠券 CRUD |
 | ContentLikeDao | 124 | content_like | 内容点赞 |
 | CommentLikeDao | 132 | comment_like | 评论点赞 |
-| ContentMediaDao | 99 | content_media | 内容媒体 + 媒体状态更新 |
+| ContentMediaDao | 153 | content_media | 内容媒体 + 媒体状态更新 + 换源/删除/删除后 sort 重排 |
 | FollowDao | 107 | follow | 关注关系 |
 | ResultMap | 66 | - | ResultSet → 对象映射 |
 
@@ -363,6 +363,9 @@ com.itheima/
 | GET | /feed | 关注动态流 | ✓ |
 | POST | /api/upload/video | 上传视频 | ✓ |
 | POST | /api/upload/post | 上传动态 | ✓ |
+| POST | /api/upload/replace | 作者换源（替换媒体，含单图替换） | ✓ |
+| POST | /content/update | 作者编辑标题/简介 | ✓ |
+| POST | /content/mediaDelete | 作者删除单条媒体（仅图文图片） | ✓ |
 
 ### 7.3 社交模块
 
@@ -423,6 +426,7 @@ src/main/webapp/
         ├── api.js             # request()：token 头 + {code,msg,data} 解包 + 401 跳登录
         ├── auth.js            # token/username/userId 存取、JWT sub 解码
         ├── utils.js           # 工具 + createVideoCard（字段降级收敛）
+        ├── editWork.js        # 编辑作品弹层（作者改标题/简介 + 替换/删除媒体，创作中心与详情共用）
         └── views/
             ├── home.js        # #/            首页（推荐流 + 换一换）
             ├── follow.js      # #/follow      关注流（/feed 分页）
@@ -474,7 +478,8 @@ src/main/webapp/
 | feedDetailTest.http | 20 | Feed/详情 |
 | searchCompleteTest.http | 15 | 搜索完整 |
 | startCompleteTest.http | 14 | 首页推荐完整 |
-| **合计** | **~265** | - |
+| editWorkTest.http | 21 | 编辑作品：换源/删图/改文案（阶段三） |
+| **合计** | **~286** | - |
 
 ### 9.1 pytest 自动化用例（tools/run_tests.py 驱动）
 
@@ -483,18 +488,19 @@ src/main/webapp/
 | test_smoke.py / test_consistency.py / test_boundary.py | 35 | 冒烟/一致性/边界（既有） |
 | test_comment_delete.py | 6 | 评论软删除（阶段一新增：自删主楼/回复、403/404/401、管理员删） |
 | test_admin.py | 11（1 条件跳过） | 管理员权限 401/403/200、媒体扫描/恢复（阶段八） |
+| test_edit_work.py | 21 | 编辑作品：换源（含图文单张替换）/删图/改文案的 200/403/401/400/404 + 文件落盘/旧文件删除（阶段三） |
 
 ### 9.2 JUnit 单元测试（阶段八新增，src/test/java）
 
 | 文件 | 用例数 | 覆盖模块 |
 |------|--------|----------|
 | service/UserServiceTest | 23 | 登录/注册/改密/改资料/isAdmin |
-| service/ContentServiceTest | 11 | 搜索/详情/评论查询/发布 |
+| service/ContentServiceTest | 26 | 搜索/详情/评论查询/发布/评论区开关/编辑作品（换源/删图/改文案，阶段三） |
 | service/LikeServiceTest | 14 | 点赞/取消/缓存优先/批量查询 |
 | service/CommentServiceTest | 13 | 评论归属/楼中楼归一化/软删除（自删+管理员删）/缓存更新 |
 | service/ContentCacheManagerLifecycleTest | 7 | 初始化/缓存命中/定时器关闭/刷新失败/评论缓存删除/两级归一化 |
 | util/MyConnectionPoolTest | 4 | 满池超时/归还重取/失效移除/关闭后拒绝 |
-| **合计** | **61** | - |
+| **合计** | **76** | - |
 
 > 构建输出：沙箱内 Maven 通过 `-Dstage8.buildDir` 指向 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（pom 默认 `./target`），原因是沙箱内 javac 无法把 worktree `target/classes` 作为 classpath（报"程序包不存在"）。
 > 离线仓库：新增测试依赖（junit/mockito/bytebuddy/surefire 等）的 `_remote.repositories` 已补 `>aliyun=` 来源行（只追加不删除），默认 aliyun 镜像下可离线解析。

@@ -4,11 +4,13 @@ import com.itheima.dao.ContentDao;
 import com.itheima.dao.ContentMediaDao;
 import com.itheima.exception.ForbiddenException;
 import com.itheima.exception.NotFoundException;
+import com.itheima.exception.ParamException;
 import com.itheima.exception.ServerException;
 import com.itheima.model.cache.ContentCacheDTO;
 import com.itheima.model.cache.CommentCacheDTO;
 import com.itheima.model.command.UploadCommand;
 import com.itheima.model.dto.PageResult;
+import com.itheima.model.entity.ContentMedia;
 import com.itheima.model.vo.ContentDetailVO;
 import com.itheima.model.vo.ContentVO;
 import com.itheima.model.vo.CommentVO;
@@ -18,6 +20,7 @@ import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -258,5 +261,143 @@ class ContentServiceTest {
         assertTrue(result.isEmpty());
         verify(cache, never()).getCommentTree(anyLong());
         verify(commentService, never()).convertToCommentVOList(anyList(), anyMap());
+    }
+
+    // ===== 编辑作品（阶段三）：换源 / 删图 / 改文案 =====
+
+    private ContentMedia media(long mediaId, long contentId, String url, int type, int sort) {
+        return new ContentMedia(mediaId, contentId, url, type, sort);
+    }
+
+    // ----- replaceMedia -----
+
+    @Test
+    void replaceMediaByAuthorUpdatesUrlAndRefreshesCache() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+        when(contentMediaDao.findMediaByContentTypeSort(conn, 1L, 3, 1))
+                .thenReturn(media(10L, 1L, "/upload/cover/old.png", 3, 1));
+
+        String oldUrl = service.replaceMedia(1L, 7L, 3, 1, "/upload/cover/new.png");
+
+        assertEquals("/upload/cover/old.png", oldUrl);
+        verify(contentMediaDao).updateMediaUrl(eq(conn), eq(10L), eq("/upload/cover/new.png"), eq(true), any(Timestamp.class));
+        verify(contentDao).updateFileExists(eq(conn), eq(1L), eq(true), any(Timestamp.class));
+        verify(cache).refreshContent(1L);
+    }
+
+    @Test
+    void replaceMediaByOtherThrowsForbidden() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+
+        assertThrows(ForbiddenException.class, () -> service.replaceMedia(1L, 8L, 3, 1, "/upload/cover/new.png"));
+        verify(contentMediaDao, never()).updateMediaUrl(any(), anyLong(), anyString(), anyBoolean(), any());
+        verify(cache, never()).refreshContent(anyLong());
+    }
+
+    @Test
+    void replaceMediaMissingContentThrowsNotFound() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(null);
+
+        assertThrows(NotFoundException.class, () -> service.replaceMedia(1L, 7L, 3, 1, "/upload/cover/new.png"));
+    }
+
+    @Test
+    void replaceMediaMissingMediaRowThrowsNotFound() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+        when(contentMediaDao.findMediaByContentTypeSort(conn, 1L, 3, 1)).thenReturn(null);
+
+        assertThrows(NotFoundException.class, () -> service.replaceMedia(1L, 7L, 3, 1, "/upload/cover/new.png"));
+    }
+
+    @Test
+    void replaceMediaSqlErrorThrowsServerException() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+        when(contentMediaDao.findMediaByContentTypeSort(conn, 1L, 3, 1))
+                .thenThrow(new SQLException("db down"));
+
+        assertThrows(ServerException.class, () -> service.replaceMedia(1L, 7L, 3, 1, "/upload/cover/new.png"));
+        verify(cache, never()).refreshContent(anyLong());
+    }
+
+    // ----- deleteMedia -----
+
+    @Test
+    void deleteMediaNonImageThrowsParamException() throws SQLException {
+        assertThrows(ParamException.class, () -> service.deleteMedia(1L, 7L, 1, 1));
+        verify(contentMediaDao, never()).deleteMediaByContentIdAndTypeSort(any(), anyLong(), anyInt(), anyInt());
+        verify(cache, never()).refreshContent(anyLong());
+    }
+
+    @Test
+    void deleteMediaImageByAuthorDeletesAndCompactsSort() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+        when(contentMediaDao.findMediaByContentTypeSort(conn, 1L, 2, 1))
+                .thenReturn(media(11L, 1L, "/upload/image/old.jpg", 2, 1));
+
+        String oldUrl = service.deleteMedia(1L, 7L, 2, 1);
+
+        assertEquals("/upload/image/old.jpg", oldUrl);
+        verify(contentMediaDao).deleteMediaByContentIdAndTypeSort(conn, 1L, 2, 1);
+        verify(contentMediaDao).compactImageSort(conn, 1L, 1);
+        verify(cache).refreshContent(1L);
+    }
+
+    @Test
+    void deleteMediaByOtherThrowsForbidden() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+
+        assertThrows(ForbiddenException.class, () -> service.deleteMedia(1L, 8L, 2, 1));
+        verify(contentMediaDao, never()).deleteMediaByContentIdAndTypeSort(any(), anyLong(), anyInt(), anyInt());
+    }
+
+    @Test
+    void deleteMediaMissingMediaRowThrowsNotFound() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+        when(contentMediaDao.findMediaByContentTypeSort(conn, 1L, 2, 1)).thenReturn(null);
+
+        assertThrows(NotFoundException.class, () -> service.deleteMedia(1L, 7L, 2, 1));
+    }
+
+    // ----- updateContentInfo -----
+
+    @Test
+    void updateContentInfoByAuthorUpdatesAndRefreshesCache() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+
+        service.updateContentInfo(1L, 7L, "新标题", "新简介");
+
+        verify(contentDao).updateContentInfo(conn, 1L, "新标题", "新简介");
+        verify(cache).refreshContent(1L);
+    }
+
+    @Test
+    void updateContentInfoBlankTitleThrowsParamException() throws SQLException {
+        assertThrows(ParamException.class, () -> service.updateContentInfo(1L, 7L, "   ", "d"));
+        verify(contentDao, never()).updateContentInfo(any(), anyLong(), anyString(), anyString());
+    }
+
+    @Test
+    void updateContentInfoTooLongTitleThrowsParamException() {
+        assertThrows(ParamException.class, () -> service.updateContentInfo(1L, 7L, "字".repeat(51), "d"));
+    }
+
+    @Test
+    void updateContentInfoTooLongDescriptionThrowsParamException() {
+        assertThrows(ParamException.class, () -> service.updateContentInfo(1L, 7L, "t", "字".repeat(5001)));
+    }
+
+    @Test
+    void updateContentInfoByOtherThrowsForbidden() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+
+        assertThrows(ForbiddenException.class, () -> service.updateContentInfo(1L, 8L, "t", "d"));
+        verify(contentDao, never()).updateContentInfo(any(), anyLong(), anyString(), anyString());
+    }
+
+    @Test
+    void updateContentInfoMissingContentThrowsNotFound() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(null);
+
+        assertThrows(NotFoundException.class, () -> service.updateContentInfo(1L, 7L, "t", "d"));
     }
 }

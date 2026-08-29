@@ -30,6 +30,8 @@ public class AuthFilter implements Filter {
             "/comment/add",  // 发表评论
             "/comment/delete",  // 删除评论
             "/content/commentEnabled",  // 作者开关评论区
+            "/content/update",  // 作者编辑标题/简介
+            "/content/mediaDelete",  // 作者删除单条媒体
             "/user/changePassword",  // 修改密码
             "/coupon/grab",      // 优惠券抢购
             "/coupon/my"        // 我的优惠券

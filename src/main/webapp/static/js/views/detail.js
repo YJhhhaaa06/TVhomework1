@@ -6,6 +6,7 @@ import { request } from '../api.js';
 import { isLoggedIn, getUserId } from '../auth.js';
 import { showToast, formatTime, formatNumber, emptyBox, initialChar, avatarColor } from '../utils.js';
 import { navigate } from '../router.js';
+import { openEditWorkModal } from '../editWork.js';
 
 let state = null;
 
@@ -46,6 +47,7 @@ function render() {
         </div>
         <div class="detail-actions">
           <button class="like-btn" id="likeBtn">❤ 点赞 <span id="likeCount">0</span></button>
+          <button class="edit-btn" id="editBtn" style="display:none">✏ 编辑</button>
         </div>
         <div class="detail-desc" id="desc"></div>
         <div class="comment-section">
@@ -166,6 +168,16 @@ function renderContent() {
   c.querySelector('#likeCount').textContent = item.likeCount || 0;
   likeBtn.addEventListener('click', toggleContentLike);
 
+  // 作者本人可编辑作品（改标题/简介 + 替换/删除媒体）；onclick 赋值避免重复渲染时监听叠加
+  const editBtn = c.querySelector('#editBtn');
+  if (item.authorId != null && item.authorId === getUserId()) {
+    editBtn.style.display = '';
+    editBtn.onclick = () => openEditWorkModal(item, reloadAfterEdit);
+  } else {
+    editBtn.style.display = 'none';
+    editBtn.onclick = null;
+  }
+
   c.querySelector('#desc').textContent = item.description || '';
 
   // 评论区：作者关闭后整体不可见/不可发（数据保留，重新开启即恢复）
@@ -177,6 +189,16 @@ function renderContent() {
     // 评论输入（登录后显示）
     if (isLoggedIn()) c.querySelector('#commentInputRow').style.display = '';
     renderComments();
+  }
+}
+
+// 编辑作品完成后重新拉取详情并渲染
+async function reloadAfterEdit() {
+  try {
+    state.content = await request(`search/IdSearch?contentId=${state.contentId}`);
+    renderContent();
+  } catch (e) {
+    if (e.code === 401 || e.code === 403) return;
   }
 }
 

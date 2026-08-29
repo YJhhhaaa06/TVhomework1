@@ -594,8 +594,35 @@ ContentDetailVO 包含：
 
 #### 权限
 
-- 当前：`/api/admin/*` 仅要求登录，无管理员角色。
-- 后续：上线管理员身份，并允许作者对自己的帖子和视频换源。
+- 当前：`/api/admin/*` 需 role==1（管理员）方可扫描/恢复。
+- 作者可对自己的帖子和视频换源、删图、改文案（见 3.8，阶段三已实现）。
+
+### 3.8 作者编辑作品流程（换源 / 删图 / 改文案）
+
+**入口**：创作中心「我的投稿」卡片或详情页（作者本人）的「编辑」按钮 → 编辑作品弹层（`static/js/editWork.js`），可看到已上传媒体缩略图与当前标题/简介，直接编辑，无需完整重新上传。
+
+#### 文案编辑（A3）
+
+1. 弹层修改标题/简介 → `POST /content/update?contentId=&title=&description=`。
+2. `ContentService.updateContentInfo`：校验内容存在（404）→ 作者本人（403）→ title 非空且 ≤50、简介 ≤5000 → `ContentDao.updateContentInfo`。
+3. 全文索引由 MySQL 自动维护（DML 即时生效）；事务后 `ContentCacheManager.refreshContent` 同步缓存（详情/搜索用新值）。
+
+#### 换源 / 替换媒体
+
+1. 弹层对目标媒体（视频文件 type=1/sort=1、封面 type=3/sort=1、图文第 i 张图 type=2/sort=i+1）选择新文件 → `POST /api/upload/replace?contentId=&type=&sort=` + file（multipart）。
+2. 新文件落盘（`FileUploadService.saveFile` 含后缀校验）→ `ContentService.replaceMedia` 校验所有权 → 更新 `content_media`（url、file_exists=1、last_verify_time）与 `content.file_exists=1` → 返回旧 url → Controller `FileUploadService.deleteFileByUrl` 清理旧文件（尽力而为）；任一步失败删除新文件回滚。
+3. 事务后 `refreshContent` 同步缓存，详情/首页卡片即时展示新源。
+
+#### 单图删除（仅图文图片）
+
+1. 弹层对图片（type=2）点删除 → 确认 → `POST /content/mediaDelete?contentId=&type=&sort=`。
+2. `ContentService.deleteMedia`：校验所有权 → 删除记录 → 对剩余图片 `compactImageSort` 重排 sort（保持 1..n 连续，保证前端 index+1 定位成立）→ 返回旧 url → Controller 清理物理文件。
+3. 事务后 `refreshContent` 同步缓存；媒体运维扫描（3.7）不再看到已删媒体。
+
+#### 权限
+
+- 三个接口均要求登录（AuthFilter 精确保护 `/content/update`、`/content/mediaDelete`；`/api/upload/*` 前缀保护）；所有权由 Service 校验，非作者一律 403。
+- 视频文件与封面（含图文封面）只可替换不可删除；仅图文图片（type=2）可删除，避免作品结构性资源失效。
 
 ---
 

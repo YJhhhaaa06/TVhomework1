@@ -463,6 +463,53 @@ public class ContentCacheManager implements Initializable, Disposable {
         }
     }
 
+    // ===== 作者编辑作品后同步缓存 =====
+
+    /**
+     * 换源/删图/改文案后同步内容缓存：
+     * 未缓存则直接按需回填；已缓存则重载整行（含 title/description）与媒体，并同步推荐列表封面。
+     * 不整体 evict，避免误清评论/点赞缓存。
+     */
+    public void refreshContent(long contentId) {
+        if (!contentCache.containsKey(contentId)) {
+            backfillContent(contentId);
+            return;
+        }
+        try {
+            ContentCacheDTO newDto = transactionTemplate.execute(conn -> {
+                try {
+                    ContentCacheDTO dto = contentDao.findContent(conn, contentId);
+                    if (dto == null) {
+                        return null;
+                    }
+                    Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, contentId);
+                    buildContentMedia(dto, mediaMap);
+                    return dto;
+                } catch (SQLException e) {
+                    LOGGER.log(Level.SEVERE, "刷新内容缓存失败, contentId=" + contentId, e);
+                    throw new ServerException("数据库读取失败");
+                }
+            });
+            if (newDto == null) {
+                evictContent(contentId);
+                return;
+            }
+            contentCache.put(contentId, newDto);
+            contentTimestamps.put(contentId, System.currentTimeMillis());
+            ContentVO cvo = toContentVO(newDto);
+            synchronized (recommendList) {
+                for (int i = 0; i < recommendList.size(); i++) {
+                    if (recommendList.get(i).getId() == contentId) {
+                        recommendList.set(i, cvo);
+                        break;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "刷新内容缓存异常, contentId=" + contentId, e);
+        }
+    }
+
     // ===== 评论缓存实时更新 =====
 
     public void addCommentToCache(long contentId, CommentCacheDTO newComment, Long parentId) {

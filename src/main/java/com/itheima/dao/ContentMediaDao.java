@@ -90,9 +90,63 @@ public class ContentMediaDao {
         }
     }
 
+    // 按 contentId + type + sort 定位单条媒体（作者编辑作品：换源/删除前置）
+    public ContentMedia findMediaByContentTypeSort(Connection conn, long contentId, int type, int sort) throws SQLException {
+        String sql = "select id,content_id,url,type,sort from content_media where content_id=? and type=? and sort=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, contentId);
+            pstmt.setInt(2, type);
+            pstmt.setInt(3, sort);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return ResultMap.buildContentMedia(rs);
+                }
+                return null;
+            }
+        }
+    }
 
+    // 换源：更新单条媒体记录的 url 与文件存在状态
+    public int updateMediaUrl(Connection conn, long mediaId, String url, boolean exists, Timestamp lastVerifyTime) throws SQLException {
+        String sql = "update content_media set url=?, file_exists=?, last_verify_time=? where id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, url);
+            pstmt.setInt(2, exists ? 1 : 0);
+            pstmt.setTimestamp(3, lastVerifyTime);
+            pstmt.setLong(4, mediaId);
+            return pstmt.executeUpdate();
+        }
+    }
 
+    // 按媒体 id 删除媒体记录（B2 底座，阶段四 A1 复用）
+    public int deleteMediaById(Connection conn, long mediaId) throws SQLException {
+        String sql = "delete from content_media where id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, mediaId);
+            return pstmt.executeUpdate();
+        }
+    }
 
+    // 按 contentId + type + sort 删除单条媒体记录（B2 底座，作者删错图用）
+    public int deleteMediaByContentIdAndTypeSort(Connection conn, long contentId, int type, int sort) throws SQLException {
+        String sql = "delete from content_media where content_id=? and type=? and sort=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, contentId);
+            pstmt.setInt(2, type);
+            pstmt.setInt(3, sort);
+            return pstmt.executeUpdate();
+        }
+    }
+
+    // 删除某张图后重排剩余图片的 sort，保持 1..n 连续（保证前端 index+1 定位成立）
+    public int compactImageSort(Connection conn, long contentId, int deletedSort) throws SQLException {
+        String sql = "update content_media set sort=sort-1 where content_id=? and type=2 and sort>?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, contentId);
+            pstmt.setInt(2, deletedSort);
+            return pstmt.executeUpdate();
+        }
+    }
 
 
 

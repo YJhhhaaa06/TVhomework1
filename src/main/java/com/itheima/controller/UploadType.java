@@ -54,6 +54,18 @@ public enum UploadType {
         return null;
     }
 
+    /**
+     * 按 media_type（content_media.type：1=视频,2=图片,3=封面）映射回上传类型，用于作者换源。
+     */
+    public static UploadType fromMediaType(int mediaType) {
+        for (UploadType type : values()) {
+            if (type.mediaType == mediaType) {
+                return type;
+            }
+        }
+        return null;
+    }
+
     public String getDir() {
         return dir;
     }
