@@ -647,6 +647,38 @@ ContentDetailVO 包含：
 
 ---
 
+### 3.10 隐藏/取消隐藏内容流程（管理员下架，A2）
+
+**入口**：管理员在 `#/admin` 管理页「内容下架管理（审核）」区块查看全部内容（含正常与已下架）清单，每行提供「下架/恢复」按钮。
+
+**权限**：`/api/admin/content/*` 已被 AuthFilter 的 `/api/admin/*` 前缀保护覆盖（需登录且 role==1，非管理员 403、未登录 401）；无所有权校验，管理员可操作任意内容。
+
+**清单**：`GET /api/admin/content/list` → `ContentService.listContentForAdmin` → `ContentDao.findContentForAdmin`（`WHERE c.is_deleted IN (0,2)`，不含已删除内容），返回 contentId/标题/作者/类型/是否下架。
+
+**下架**：`POST /api/admin/content/hide?contentId=X`
+
+1. `ContentService.hideContent`：`getContentStatus` 校验内容存在（404）→ 未被作者删除（409「内容已删除，无法下架」）→ 未处于下架态（409「内容已下架」）→ `updateContentDeletedState(conn, id, 2)`。
+2. 仅改 `content.is_deleted=2` 一个字段；**不动**评论/点赞/媒体记录/物理文件（隐藏≠删除）。
+3. 事务提交后 `ContentCacheManager.removeContent` 剔除缓存（索引/内容/评论/时间戳/推荐列表/Redis 内容点赞），前台即时不可见。
+
+**恢复**：`POST /api/admin/content/unhide?contentId=X`
+
+1. `ContentService.unhideContent`：校验存在（404）→ 未被删除（409）→ 当前处于下架态（409「内容未下架」）→ `updateContentDeletedState(conn, id, 0)`。
+2. 事务提交后 `ContentCacheManager.refreshContent` 回填缓存与索引，前台立即重新可见。
+
+**效果**：下架后内容在首页 `/start`（索引剔除）、搜索（`is_deleted=0` 过滤）、关注流 `/feed`、用户主页 `/profile`、作者本人「我的投稿」均不可见；详情 `/search/IdSearch` 返回 404。恢复后重新可见，且评论/点赞数/媒体数据完好。
+
+**与 A1 删除的差异**：
+
+| 维度 | A1 作者删除 | A2 管理员下架 |
+|------|------------|--------------|
+| 状态值 | is_deleted=1 | is_deleted=2 |
+| 操作者 | 作者本人 | 管理员（role==1） |
+| 关联数据 | 级联软删评论 / 物理删点赞 / 物理删媒体 / 删物理文件 | 全部保留 |
+| 可恢复 | 否 | 是（管理员恢复） |
+
+---
+
 ## 四、社交互动模块
 
 ### 4.1 点赞流程
@@ -1180,9 +1212,10 @@ GET /feed?page=1&pageSize=10&token=xxx
 
 | 操作 | 应该校验 | 当前状态 |
 |------|----------|----------|
-| 删除内容 | userId == content.authorId | ❌ 未校验（阶段四） |
+| 删除内容 | userId == content.authorId | ✓ 已校验（阶段四，作者本人软删除；管理员走 /api/admin/content/* 下架） |
 | 删除评论 | userId == comment.userId（管理员走 /api/admin/comment/delete） | ✓ 已校验（阶段一，软删除） |
 | 开关评论区 | userId == content.authorId | ✓ 已校验（阶段二） |
+| 下架/恢复内容 | 仅管理员（role==1，AuthFilter /api/admin/*） | ✓ 已校验（阶段五） |
 | 修改密码 | userId == targetUserId | ✓ 已校验（通过 token） |
 | 修改用户名 | userId == targetUserId | ✓ 已校验（通过 token） |
 

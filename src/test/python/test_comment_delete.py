@@ -58,7 +58,14 @@ def _run_sql(mysql_path, sql):
         "--execute",
         sql,
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=120,
+    )
     if proc.returncode != 0:
         raise RuntimeError("mysql 执行失败: " + (proc.stderr.strip() or proc.stdout.strip()))
 

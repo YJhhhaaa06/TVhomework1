@@ -1,7 +1,7 @@
 # 当前系统架构地图
 
-> 版本：2.2
-> 最后更新：2026-08-28
+> 版本：2.4
+> 最后更新：2026-08-29
 > 维护说明：每次架构改动后必须更新本文档
 
 ---
@@ -151,6 +151,7 @@ com.itheima/
 | UploadController | /api/upload/* | 197 | 上传视频/动态 + 作者换源 |
 | MediaAdminController | /api/admin/media/* | 71 | 媒体运维：扫描/恢复（仅管理员） |
 | AdminCommentController | /api/admin/comment/* | 46 | 评论运维：管理员删评论（仅管理员） |
+| AdminContentController | /api/admin/content/* | 46 | 内容审核：下架/恢复内容（A2，仅管理员） |
 | FollowController | /follow/* | 103 | 关注/取关 |
 | LikeController | /like/* | 127 | 点赞 |
 | CommentController | /comment/* | 98 | 评论 |
@@ -163,7 +164,7 @@ com.itheima/
 | 类 | 行数 | 职责 | 依赖 |
 |----|------|------|------|
 | ContentCacheManager | 653 | 内容缓存管理（内存索引/评论树/实时计数/编辑同步） | ContentDao, ContentMediaDao, CommentDao, LikeCacheService, TransactionTemplate |
-| ContentService | 292 | 内容管理（查询与发布 + 评论区开关 + 编辑作品：换源/删图/改文案） | ContentDao, ContentMediaDao, CommentService, LikeService, ContentCacheManager, ContentStatusFiller, TransactionTemplate |
+| ContentService | 292 | 内容管理（查询与发布 + 评论区开关 + 编辑作品：换源/删图/改文案 + 删除作品 + 管理员下架/恢复/审核清单） | ContentDao, ContentMediaDao, CommentService, LikeService, ContentCacheManager, ContentStatusFiller, TransactionTemplate |
 | ContentStatusFiller | 105 | 内容状态填充（点赞/关注） | LikeService, FollowDao, TransactionTemplate |
 | LikeService | 315 | 点赞业务 | ContentDao, CommentDao, ContentLikeDao, CommentLikeDao, LikeCacheService, ContentCacheManager, TransactionTemplate |
 | LikeCacheService | 264 | Redis 点赞缓存 | - |
@@ -181,7 +182,7 @@ com.itheima/
 | 类 | 行数 | 对应表 | 职责 |
 |----|------|--------|------|
 | UserDao | 224 | users | 用户 CRUD + 角色查询 |
-| ContentDao | 312 | content | 内容 CRUD + 全文搜索 + 媒体状态更新 + 编辑作品信息 |
+| ContentDao | 312 | content | 内容 CRUD + 全文搜索 + 媒体状态更新 + 编辑作品信息 + 内容状态读取/更新 + 管理端清单（A2） |
 | CommentDao | 145 | comment | 评论 CRUD + 软删除（整楼/单条）+ 楼内回复计数 |
 | CouponDao | 114 | coupon, coupon_order | 优惠券 CRUD |
 | ContentLikeDao | 124 | content_like | 内容点赞 |
@@ -223,6 +224,7 @@ com.itheima/
 | UploadResult | 31 | VO | 上传结果 |
 | ContentDetailVO | 25 | VO | 内容详情视图（继承 ContentCacheDTO） |
 | CommentVO | 21 | VO | 评论视图 |
+| AdminContentVO | 29 | VO | 管理端内容清单（A2 审核下架） |
 
 > cache/ 子包
 
@@ -316,6 +318,8 @@ com.itheima/
 | coupon | 优惠券表 | id, title, stock, begin_time, end_time |
 | coupon_order | 优惠券领取表 | coupon_id, user_id, coupon_code（唯一索引） |
 
+> `content.is_deleted` 语义：`0=正常 / 1=作者删除（A1，不可恢复）/ 2=管理员下架（A2，可恢复）`；前台可见性统一按 `is_deleted = 0` 过滤。
+
 ### 5.3 特殊索引
 
 - content 表：全文索引 `MATCH(title, description) AGAINST(? IN NATURAL LANGUAGE MODE)`
@@ -408,6 +412,14 @@ com.itheima/
 | POST | /api/admin/media/restore | 按数据库原文件名重新上传写回 | ✓ |
 | POST | /api/admin/comment/delete | 管理员删除任意评论（软删除） | ✓ |
 
+### 7.6 内容审核模块（仅管理员，A2，AuthFilter 校验 role==1）
+
+| 方法 | 路径 | 说明 | 需要登录 |
+|------|------|------|----------|
+| GET | /api/admin/content/list | 管理端内容清单（含正常与已下架，不含已删除） | ✓ |
+| POST | /api/admin/content/hide | 下架内容（is_deleted 0→2，仅改状态不动关联数据） | ✓ |
+| POST | /api/admin/content/unhide | 恢复内容（is_deleted 2→0） | ✓ |
+
 ---
 
 ## 八、前端页面
@@ -437,7 +449,7 @@ src/main/webapp/
             ├── publish.js     # #/publish     创作中心（我的投稿 + 投稿上传）
             ├── login.js       # #/login       登录/注册
             ├── coupon.js      # #/coupon      优惠券中心
-            └── admin.js       # #/admin       媒体运维 + 删评论工具（仅管理员）
+            └── admin.js       # #/admin       媒体运维 + 删评论工具 + 内容下架管理（仅管理员）
 ```
 
 ### 8.2 路由表
@@ -481,7 +493,8 @@ src/main/webapp/
 | startCompleteTest.http | 14 | 首页推荐完整 |
 | editWorkTest.http | 21 | 编辑作品：换源/删图/改文案（阶段三） |
 | deleteContentTest.http | 6 | 删除作品：作者删除/非作者/未登录/不存在/已删/缺参（阶段四） |
-| **合计** | **~292** | - |
+| hideContentTest.http | 10 | 内容审核下架/恢复：list/hide/unhide 的 200/409/403/401/404/400/未识别（阶段五） |
+| **合计** | **~302** | - |
 
 ### 9.1 pytest 自动化用例（tools/run_tests.py 驱动）
 
@@ -492,18 +505,19 @@ src/main/webapp/
 | test_admin.py | 11（1 条件跳过） | 管理员权限 401/403/200、媒体扫描/恢复（阶段八） |
 | test_edit_work.py | 21 | 编辑作品：换源（含图文单张替换）/删图/改文案的 200/403/401/400/404 + 文件落盘/旧文件删除（阶段三） |
 | test_delete_content.py | 7 | 删除作品：作者删视频/图文后详情 404 + 主页不展示 + 物理文件删除；非作者/未登录/不存在/已删/缺参（阶段四） |
+| test_hide_content.py | 15 | 内容审核下架/恢复：管理员下架视频/图文后详情 404 + 主页不列出 + 恢复后数据完好；hide/unhide/list 的 401/403/404/409/400/list 结构（阶段五） |
 
 ### 9.2 JUnit 单元测试（阶段八新增，src/test/java）
 
 | 文件 | 用例数 | 覆盖模块 |
 |------|--------|----------|
 | service/UserServiceTest | 23 | 登录/注册/改密/改资料/isAdmin |
-| service/ContentServiceTest | 30 | 搜索/详情/评论查询/发布/评论区开关/编辑作品（换源/删图/改文案）/删除作品（阶段四 +4 例） |
+| service/ContentServiceTest | 42 | 搜索/详情/评论查询/发布/评论区开关/编辑作品（换源/删图/改文案）/删除作品（阶段四 +4 例）/内容审核下架恢复（阶段五 +12 例） |
 | service/LikeServiceTest | 14 | 点赞/取消/缓存优先/批量查询 |
 | service/CommentServiceTest | 13 | 评论归属/楼中楼归一化/软删除（自删+管理员删）/缓存更新 |
 | service/ContentCacheManagerLifecycleTest | 7 | 初始化/缓存命中/定时器关闭/刷新失败/评论缓存删除/两级归一化 |
 | util/MyConnectionPoolTest | 4 | 满池超时/归还重取/失效移除/关闭后拒绝 |
-| **合计** | **80** | - |
+| **合计** | **92** | - |
 
 > 构建输出：沙箱内 Maven 通过 `-Dstage8.buildDir` 指向 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（pom 默认 `./target`），原因是沙箱内 javac 无法把 worktree `target/classes` 作为 classpath（报"程序包不存在"）。
 > 离线仓库：新增测试依赖（junit/mockito/bytebuddy/surefire 等）的 `_remote.repositories` 已补 `>aliyun=` 来源行（只追加不删除），默认 aliyun 镜像下可离线解析。
@@ -588,6 +602,7 @@ src/main/webapp/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-08-29 | 2.4 | 阶段五完成（A2 内容审核下架）：content.is_deleted 语义扩展为 0正常/1作者删除/2管理员下架（复用字段，无 DDL）；新增 AdminContentController（GET /api/admin/content/list、POST /api/admin/content/hide、POST /api/admin/content/unhide，AuthFilter /api/admin/* role==1 保护）；ContentDao 新增 getContentStatus/updateContentDeletedState/findContentForAdmin；ContentService 新增 listContentForAdmin/hideContent/unhideContent（下架剔除缓存、恢复回填缓存）；前端 admin.js 新增「内容下架管理（审核）」区块；BUSINESS_FLOW 新增 3.10。测试用例待后续补充 |
 | 2026-08-28 | 2.3 | 评论楼中楼回复增强：comment 表新增 reply_to_user_id（楼中楼 @ 引用）；CommentCacheDTO/ResultMap/CommentDao/CommentService 贯通该字段（回复楼内回复时上溯挂主楼并记录被回复作者）；详情页楼内回复增加回复按钮 + 「回复 @xxx」展示；commentTest/pytest/单测同步 |
 | 2026-08-28 | 2.2 | 阶段二完成（C2 作者开关评论区）：content 表新增 comment_enabled；ContentCacheDTO/CacheManager 贯通该字段；新增 ContentController（POST /content/commentEnabled，作者所有权校验）；AuthFilter 新增精确保护；评论发表/查询按开关门禁（add 409 / show 空）；创作中心卡片开关按钮 + 详情页评论区门禁展示 |
 | 2026-08-18 | 2.1 | 目录结构更新：.docs/ 由平铺改为分层（常青/目标与任务/说明书/archive/temp），本文件随结构归档至 .docs/常青/，入口改为 .docs/INDEX.md |

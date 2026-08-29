@@ -4,6 +4,7 @@ import com.itheima.dao.CommentDao;
 import com.itheima.dao.ContentDao;
 import com.itheima.dao.ContentLikeDao;
 import com.itheima.dao.ContentMediaDao;
+import com.itheima.exception.ConflictException;
 import com.itheima.exception.ForbiddenException;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ParamException;
@@ -13,6 +14,7 @@ import com.itheima.model.cache.CommentCacheDTO;
 import com.itheima.model.command.UploadCommand;
 import com.itheima.model.dto.PageResult;
 import com.itheima.model.entity.ContentMedia;
+import com.itheima.model.vo.AdminContentVO;
 import com.itheima.model.vo.ContentDetailVO;
 import com.itheima.model.vo.ContentVO;
 import com.itheima.model.vo.CommentVO;
@@ -458,5 +460,120 @@ class ContentServiceTest {
         assertThrows(ServerException.class, () -> service.deleteContent(1L, 7L));
         verify(contentDao, never()).softDeleteContent(any(), anyLong());
         verify(cache, never()).removeContent(anyLong());
+    }
+
+    // ===== 管理员下架/恢复内容（阶段五 A2）=====
+
+    @Test
+    void listContentForAdminReturnsDaoResult() throws SQLException {
+        AdminContentVO vo = new AdminContentVO();
+        vo.setId(1L);
+        vo.setHidden(false);
+        when(contentDao.findContentForAdmin(conn)).thenReturn(List.of(vo));
+
+        List<AdminContentVO> result = service.listContentForAdmin();
+
+        assertEquals(1, result.size());
+        assertEquals(1L, result.get(0).getId());
+        assertFalse(result.get(0).isHidden());
+    }
+
+    @Test
+    void listContentForAdminSqlErrorThrowsServerException() throws SQLException {
+        when(contentDao.findContentForAdmin(conn)).thenThrow(new SQLException("db down"));
+
+        assertThrows(ServerException.class, () -> service.listContentForAdmin());
+    }
+
+    @Test
+    void hideContentByAdminSetsState2AndEvictsCache() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenReturn(0);
+
+        service.hideContent(1L);
+
+        verify(contentDao).updateContentDeletedState(conn, 1L, 2);
+        verify(cache).removeContent(1L);
+    }
+
+    @Test
+    void hideContentMissingThrowsNotFound() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenReturn(-1);
+
+        assertThrows(NotFoundException.class, () -> service.hideContent(1L));
+        verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
+        verify(cache, never()).removeContent(anyLong());
+    }
+
+    @Test
+    void hideContentAlreadyDeletedThrowsConflict() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenReturn(1);
+
+        assertThrows(ConflictException.class, () -> service.hideContent(1L));
+        verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
+        verify(cache, never()).removeContent(anyLong());
+    }
+
+    @Test
+    void hideContentAlreadyHiddenThrowsConflict() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenReturn(2);
+
+        assertThrows(ConflictException.class, () -> service.hideContent(1L));
+        verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
+        verify(cache, never()).removeContent(anyLong());
+    }
+
+    @Test
+    void hideContentSqlErrorThrowsServerException() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenThrow(new SQLException("db down"));
+
+        assertThrows(ServerException.class, () -> service.hideContent(1L));
+        verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
+        verify(cache, never()).removeContent(anyLong());
+    }
+
+    @Test
+    void unhideContentByAdminSetsState0AndRefreshesCache() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenReturn(2);
+
+        service.unhideContent(1L);
+
+        verify(contentDao).updateContentDeletedState(conn, 1L, 0);
+        verify(cache).refreshContent(1L);
+    }
+
+    @Test
+    void unhideContentMissingThrowsNotFound() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenReturn(-1);
+
+        assertThrows(NotFoundException.class, () -> service.unhideContent(1L));
+        verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
+        verify(cache, never()).refreshContent(anyLong());
+    }
+
+    @Test
+    void unhideContentAlreadyDeletedThrowsConflict() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenReturn(1);
+
+        assertThrows(ConflictException.class, () -> service.unhideContent(1L));
+        verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
+        verify(cache, never()).refreshContent(anyLong());
+    }
+
+    @Test
+    void unhideContentNotHiddenThrowsConflict() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenReturn(0);
+
+        assertThrows(ConflictException.class, () -> service.unhideContent(1L));
+        verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
+        verify(cache, never()).refreshContent(anyLong());
+    }
+
+    @Test
+    void unhideContentSqlErrorThrowsServerException() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenThrow(new SQLException("db down"));
+
+        assertThrows(ServerException.class, () -> service.unhideContent(1L));
+        verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
+        verify(cache, never()).refreshContent(anyLong());
     }
 }

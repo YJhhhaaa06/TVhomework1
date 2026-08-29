@@ -13,6 +13,7 @@ import com.itheima.model.cache.ContentCacheDTO;
 import com.itheima.model.command.UploadCommand;
 import com.itheima.model.dto.PageResult;
 import com.itheima.model.entity.ContentMedia;
+import com.itheima.model.vo.AdminContentVO;
 import com.itheima.model.vo.CommentVO;
 import com.itheima.model.vo.ContentDetailVO;
 import com.itheima.model.vo.ContentVO;
@@ -322,6 +323,87 @@ public class ContentService {
             throw new ForbiddenException("只能操作自己的作品");
         }
         return dto;
+    }
+
+    // ===== 管理员下架/恢复内容（A2，审核）=====
+
+    /**
+     * 管理端内容清单：含正常与已下架，不含已删除(1)的内容。
+     * 权限（role==1）由 AuthFilter 在 /api/admin/* 统一校验。
+     */
+    public List<AdminContentVO> listContentForAdmin() {
+        return transactionTemplate.execute(conn -> {
+            try {
+                return contentDao.findContentForAdmin(conn);
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "查询管理端内容清单失败", e);
+                throw new ServerException("数据库读取失败");
+            }
+        });
+    }
+
+    /**
+     * 管理员下架内容（审核）：is_deleted 0→2。
+     * 仅改状态，不动评论/点赞/媒体记录与物理文件；提交后剔除缓存，前台即时不可见。
+     */
+    public void hideContent(long contentId) {
+        transactionTemplate.execute(conn -> {
+            try {
+                checkHideable(conn, contentId);
+                contentDao.updateContentDeletedState(conn, contentId, 2);
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "下架内容失败, contentId=" + contentId, e);
+                throw new ServerException("数据库写入失败");
+            }
+            return null;
+        });
+        contentCacheManager.removeContent(contentId);
+    }
+
+    /**
+     * 管理员恢复内容：is_deleted 2→0。
+     * 提交后回填缓存与索引，前台立即重新可见。
+     */
+    public void unhideContent(long contentId) {
+        transactionTemplate.execute(conn -> {
+            try {
+                checkUnhideable(conn, contentId);
+                contentDao.updateContentDeletedState(conn, contentId, 0);
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "恢复内容失败, contentId=" + contentId, e);
+                throw new ServerException("数据库写入失败");
+            }
+            return null;
+        });
+        contentCacheManager.refreshContent(contentId);
+    }
+
+    /** 下架前置校验：存在且未被删除、未处于下架态 */
+    private void checkHideable(Connection conn, long contentId) throws SQLException {
+        int state = contentDao.getContentStatus(conn, contentId);
+        if (state == -1) {
+            throw new NotFoundException("内容不存在");
+        }
+        if (state == 1) {
+            throw new ConflictException("内容已删除，无法下架");
+        }
+        if (state == 2) {
+            throw new ConflictException("内容已下架");
+        }
+    }
+
+    /** 恢复前置校验：存在且未被删除、当前处于下架态 */
+    private void checkUnhideable(Connection conn, long contentId) throws SQLException {
+        int state = contentDao.getContentStatus(conn, contentId);
+        if (state == -1) {
+            throw new NotFoundException("内容不存在");
+        }
+        if (state == 1) {
+            throw new ConflictException("内容已删除，无法恢复");
+        }
+        if (state == 0) {
+            throw new ConflictException("内容未下架");
+        }
     }
 
     /** 所有权校验 + 定位媒体行，供替换/删除复用。 */

@@ -3,6 +3,7 @@ import com.itheima.model.cache.CommentCacheDTO;
 import com.itheima.model.cache.ContentCacheDTO;
 import com.itheima.model.entity.ContentMedia;
 import com.itheima.model.entity.User;
+import com.itheima.model.vo.AdminContentVO;
 
 import java.time.LocalDateTime;
 
@@ -25,6 +26,17 @@ public class ResultMap {
         dto.setAuthorName(rs.getString("username"));
         dto.setCreateTime(rs.getObject("create_time", LocalDateTime.class));
         return dto;
+    }
+
+    /** 管理端内容清单（A2 审核下架）：hidden = is_deleted == 2 */
+    public static AdminContentVO buildAdminContent(ResultSet rs) throws SQLException {
+        AdminContentVO vo = new AdminContentVO();
+        vo.setId(rs.getLong("id"));
+        vo.setTitle(rs.getString("title"));
+        vo.setType(rs.getInt("type"));
+        vo.setAuthorName(rs.getString("author_name"));
+        vo.setHidden(rs.getInt("is_deleted") == 2);
+        return vo;
     }
 
     public static CommentCacheDTO buildComment(ResultSet rs) throws SQLException {
