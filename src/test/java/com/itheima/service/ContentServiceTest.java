@@ -1,6 +1,8 @@
 package com.itheima.service;
 
+import com.itheima.dao.CommentDao;
 import com.itheima.dao.ContentDao;
+import com.itheima.dao.ContentLikeDao;
 import com.itheima.dao.ContentMediaDao;
 import com.itheima.exception.ForbiddenException;
 import com.itheima.exception.NotFoundException;
@@ -22,6 +24,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -33,6 +36,8 @@ class ContentServiceTest {
 
     private ContentDao contentDao;
     private ContentMediaDao contentMediaDao;
+    private CommentDao commentDao;
+    private ContentLikeDao contentLikeDao;
     private CommentService commentService;
     private LikeService likeService;
     private ContentCacheManager cache;
@@ -45,14 +50,16 @@ class ContentServiceTest {
     void setUp() throws Exception {
         contentDao = mock(ContentDao.class);
         contentMediaDao = mock(ContentMediaDao.class);
+        commentDao = mock(CommentDao.class);
+        contentLikeDao = mock(ContentLikeDao.class);
         commentService = mock(CommentService.class);
         likeService = mock(LikeService.class);
         cache = mock(ContentCacheManager.class);
         filler = mock(ContentStatusFiller.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
-        service = new ContentService(contentDao, contentMediaDao, commentService,
-                likeService, cache, filler, tt);
+        service = new ContentService(contentDao, contentMediaDao, commentDao,
+                contentLikeDao, commentService, likeService, cache, filler, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);
@@ -399,5 +406,57 @@ class ContentServiceTest {
         when(contentDao.findContent(conn, 1L)).thenReturn(null);
 
         assertThrows(NotFoundException.class, () -> service.updateContentInfo(1L, 7L, "t", "d"));
+    }
+
+    // ===== 删除作品（阶段四 A1）=====
+
+    @Test
+    void deleteContentByAuthorCascadesAndEvictsCache() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+        // LinkedHashMap 保证按 type 1→3 顺序迭代，与 DAO 真实 ORDER BY type,sort 一致，避免 HashMap 顺序脆性
+        Map<Integer, List<ContentMedia>> mediaMap = new LinkedHashMap<>();
+        mediaMap.put(1, List.of(media(10L, 1L, "/upload/video/old.mp4", 1, 1)));
+        mediaMap.put(3, List.of(media(11L, 1L, "/upload/cover/old.png", 3, 1)));
+        when(contentMediaDao.findMedia(conn, 1L)).thenReturn(mediaMap);
+
+        List<String> urls = service.deleteContent(1L, 7L);
+
+        assertEquals(List.of("/upload/video/old.mp4", "/upload/cover/old.png"), urls);
+        verify(contentDao).softDeleteContent(conn, 1L);
+        verify(commentDao).softDeleteByContentId(conn, 1L);
+        verify(contentLikeDao).deleteByContentId(conn, 1L);
+        verify(contentMediaDao).deleteByContentId(conn, 1L);
+        verify(cache).removeContent(1L);
+    }
+
+    @Test
+    void deleteContentByOtherThrowsForbidden() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+
+        assertThrows(ForbiddenException.class, () -> service.deleteContent(1L, 8L));
+        verify(contentDao, never()).softDeleteContent(any(), anyLong());
+        verify(commentDao, never()).softDeleteByContentId(any(), anyLong());
+        verify(contentLikeDao, never()).deleteByContentId(any(), anyLong());
+        verify(contentMediaDao, never()).deleteByContentId(any(), anyLong());
+        verify(cache, never()).removeContent(anyLong());
+    }
+
+    @Test
+    void deleteContentMissingContentThrowsNotFound() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(null);
+
+        assertThrows(NotFoundException.class, () -> service.deleteContent(1L, 7L));
+        verify(contentDao, never()).softDeleteContent(any(), anyLong());
+        verify(cache, never()).removeContent(anyLong());
+    }
+
+    @Test
+    void deleteContentSqlErrorThrowsServerException() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+        when(contentMediaDao.findMedia(conn, 1L)).thenThrow(new SQLException("db down"));
+
+        assertThrows(ServerException.class, () -> service.deleteContent(1L, 7L));
+        verify(contentDao, never()).softDeleteContent(any(), anyLong());
+        verify(cache, never()).removeContent(anyLong());
     }
 }

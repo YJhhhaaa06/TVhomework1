@@ -150,6 +150,15 @@ public class CommentDao {
         }
     }
 
+    /** 删除内容时级联软删该内容全部评论（A1，一次覆盖主楼与楼内回复；对已单删评论幂等） */
+    public int softDeleteByContentId(Connection conn, long contentId) throws SQLException {
+        String sql = "UPDATE comment SET is_deleted = 1 WHERE content_id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, contentId);
+            return ps.executeUpdate();
+        }
+    }
+
 
 
 }

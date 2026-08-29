@@ -10,6 +10,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
+import java.util.List;
 
 /**
  * 内容管理接口（作者本人操作）。
@@ -18,6 +19,7 @@ import java.io.IOException;
  * - POST /content/commentEnabled?contentId=X&amp;enabled=0|1  作者开关自己作品的评论区
  * - POST /content/update?contentId=X&amp;title=&amp;description=  作者编辑标题/简介（A3）
  * - POST /content/mediaDelete?contentId=X&amp;type=&amp;sort=  作者删除单条媒体（单图删除）
+ * - POST /content/delete?contentId=X  作者删除自己作品（软删除 + 级联清理，A1）
  *
  * 后续阶段（四/六）的删除接口同域扩展（AuthFilter 对登录/所有权外校验逐接口加精确路径）。
  */
@@ -38,6 +40,8 @@ public class ContentController extends BaseServlet {
             updateContentInfo(req, resp);
         } else if ("/mediaDelete".equals(action)) {
             deleteMedia(req, resp);
+        } else if ("/delete".equals(action)) {
+            deleteContent(req, resp);
         } else {
             BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "未识别功能");
         }
@@ -95,6 +99,21 @@ public class ContentController extends BaseServlet {
         String oldUrl = contentService.deleteMedia(contentId, userId, type, sort);
         // 旧文件清理（尽力而为，DB 已提交）
         fileUploadService.deleteFileByUrl(oldUrl);
+        BaseServletUtil.writeSuccess(resp, "删除成功");
+    }
+
+    /** 作者删除整个作品：POST /content/delete?contentId=X（仅登录，AuthFilter 精确保护；所有权由 Service 校验） */
+    private void deleteContent(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        Long contentId = parseContentId(req, resp);
+        if (contentId == null) {
+            return;
+        }
+        Long userId = (Long) req.getAttribute("userId");
+        List<String> mediaUrls = contentService.deleteContent(contentId, userId);
+        // 物理文件清理（尽力而为，DB 已提交）
+        for (String url : mediaUrls) {
+            fileUploadService.deleteFileByUrl(url);
+        }
         BaseServletUtil.writeSuccess(resp, "删除成功");
     }
 

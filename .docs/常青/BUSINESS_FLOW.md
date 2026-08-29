@@ -624,6 +624,27 @@ ContentDetailVO 包含：
 - 三个接口均要求登录（AuthFilter 精确保护 `/content/update`、`/content/mediaDelete`；`/api/upload/*` 前缀保护）；所有权由 Service 校验，非作者一律 403。
 - 视频文件与封面（含图文封面）只可替换不可删除；仅图文图片（type=2）可删除，避免作品结构性资源失效。
 
+### 3.9 删除内容流程（作者本人，A1）
+
+**入口**：创作中心「我的投稿」顶部独立「删除」按钮 → 进入删除模式后各卡片右上角出现删除钮（默认卡片无删除按钮）→ 点击某张卡片 → 确认弹窗 → `POST /content/delete?contentId=`。
+
+```
+客户端点「删除」→ 进入删除模式 → 点某卡片 ✕ → 确认
+    → POST /content/delete?contentId=X（AuthFilter 登录保护）
+    → ContentService.deleteContent（事务）:
+        1. findOwnedContent：内容存在（404）+ 作者本人（403）
+        2. contentMediaDao.findMedia 收集全部媒体 url（供删物理文件）
+        3. contentDao.softDeleteContent：content.is_deleted = 1（软删）
+        4. commentDao.softDeleteByContentId：该内容全部评论软删（含主楼与楼内回复）
+        5. contentLikeDao.deleteByContentId：点赞记录物理删除
+        6. contentMediaDao.deleteByContentId：媒体记录物理删除
+    → 事务提交后 ContentCacheManager.removeContent 整体剔除缓存
+      （索引/内容/评论/时间戳/推荐列表/Redis 内容点赞）
+    → Controller 逐个 FileUploadService.deleteFileByUrl 删物理文件（尽力而为）
+```
+
+**效果**：删除后软删内容在首页 `/start`（索引剔除）、搜索（`is_deleted=0` 过滤）、关注流 `/feed`、用户主页 `/profile` 均不可见；详情 `/search/IdSearch` 返回 404「找不到对应内容」。删除不可恢复；非作者 403、未登录 401。
+
 ---
 
 ## 四、社交互动模块
@@ -1285,6 +1306,8 @@ userDao.updateFollowerCount(conn, followedUserId, 1);
 ---
 
 #### 问题7：内容删除未清理关联数据
+
+> ✅ **2026-08-29 已关闭**：阶段四 A1 已实现作者删除作品（`POST /content/delete`），软删内容并级联清理评论（软删）、点赞（物理删）、媒体记录（物理删）+ 物理文件删除 + 缓存剔除（见 3.9）。
 
 **位置**: `ContentService.deleteContent()`
 

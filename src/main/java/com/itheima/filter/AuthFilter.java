@@ -32,6 +32,7 @@ public class AuthFilter implements Filter {
             "/content/commentEnabled",  // 作者开关评论区
             "/content/update",  // 作者编辑标题/简介
             "/content/mediaDelete",  // 作者删除单条媒体
+            "/content/delete",  // 作者删除整个作品
             "/user/changePassword",  // 修改密码
             "/coupon/grab",      // 优惠券抢购
             "/coupon/my"        // 我的优惠券

@@ -77,6 +77,18 @@ public class ContentCacheManager implements Initializable, Disposable {
         likeCacheService.deleteContentLike(contentId);
     }
 
+    /**
+     * 删除内容后整体剔除缓存（A1）：
+     * 复用 evictContent 剔除索引/内容/评论/时间戳/Redis 内容点赞，并同步移除推荐列表中的对应项。
+     * recommendList 虽当前未被直接读取，但保持内存结构一致，防未来踩坑。
+     */
+    public void removeContent(long contentId) {
+        evictContent(contentId);
+        synchronized (recommendList) {
+            recommendList.removeIf(v -> v.getId() == contentId);
+        }
+    }
+
     private void cacheContent(long contentId, ContentCacheDTO detail, List<CommentCacheDTO> comments) {
         contentCache.put(contentId, detail);
         commentCache.put(contentId, comments);

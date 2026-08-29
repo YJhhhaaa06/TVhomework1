@@ -86,6 +86,20 @@ public class ContentLikeDao {
 
 
     /**
+     * 删除某个内容的所有点赞记录（A1 删除内容时级联清理）
+     * @param conn 数据库连接（由Service控制事务）
+     * @param contentId 内容ID
+     * @return 受影响的行数
+     */
+    public int deleteByContentId(Connection conn, long contentId) throws SQLException {
+        String sql = "DELETE FROM content_like WHERE content_id = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, contentId);
+            return pstmt.executeUpdate();
+        }
+    }
+
+    /**
      * 查询某个内容的所有点赞者（content 为中心，用于缓存回填）
      * @return 所有点赞了该内容的 userId 集合
      */

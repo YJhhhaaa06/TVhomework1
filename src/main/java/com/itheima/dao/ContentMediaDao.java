@@ -148,6 +148,15 @@ public class ContentMediaDao {
         }
     }
 
+    // 删除某个内容的所有媒体记录（A1 删除内容时级联清理，B2 落地）
+    public int deleteByContentId(Connection conn, long contentId) throws SQLException {
+        String sql = "delete from content_media where content_id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, contentId);
+            return pstmt.executeUpdate();
+        }
+    }
+
 
 
 }

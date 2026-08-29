@@ -309,4 +309,13 @@ public class ContentDao {
             return ps.executeUpdate();
         }
     }
+
+    /** 作者删除作品：软删（A1，复用现有 is_deleted 字段，无 DDL） */
+    public int softDeleteContent(Connection conn, long contentId) throws SQLException {
+        String sql = "UPDATE content SET is_deleted = 1 WHERE id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, contentId);
+            return ps.executeUpdate();
+        }
+    }
 }

@@ -1,7 +1,9 @@
 package com.itheima.service;
 
 import com.itheima.controller.UploadType;
+import com.itheima.dao.CommentDao;
 import com.itheima.dao.ContentDao;
+import com.itheima.dao.ContentLikeDao;
 import com.itheima.dao.ContentMediaDao;
 import com.itheima.exception.*;
 import com.itheima.ioc.annotation.Component;
@@ -29,6 +31,8 @@ import java.util.logging.Logger;
 public class ContentService {
     private final ContentDao contentDao;
     private final ContentMediaDao contentMediaDao;
+    private final CommentDao commentDao;
+    private final ContentLikeDao contentLikeDao;
     private final CommentService commentService;
     private final LikeService likeService;
     private final ContentCacheManager contentCacheManager;
@@ -39,12 +43,15 @@ public class ContentService {
 
     @InjectConstructor
     public ContentService(ContentDao contentDao, ContentMediaDao contentMediaDao,
+                          CommentDao commentDao, ContentLikeDao contentLikeDao,
                           CommentService commentService, LikeService likeService,
                           ContentCacheManager contentCacheManager,
                           ContentStatusFiller contentStatusFiller,
                           TransactionTemplate transactionTemplate) {
         this.contentDao = contentDao;
         this.contentMediaDao = contentMediaDao;
+        this.commentDao = commentDao;
+        this.contentLikeDao = contentLikeDao;
         this.commentService = commentService;
         this.likeService = likeService;
         this.contentCacheManager = contentCacheManager;
@@ -270,6 +277,39 @@ public class ContentService {
             return null;
         });
         contentCacheManager.refreshContent(contentId);
+    }
+
+    // ===== 作者删除作品（A1）=====
+
+    /**
+     * 作者本人删除自作品（软删除，不可恢复）。
+     * 校验所有权 → 软删内容 → 级联软删全部评论 → 物理删点赞记录 → 物理删媒体记录。
+     * 返回该内容全部媒体 url 供 Controller 清理物理文件；事务提交后整体剔除缓存。
+     */
+    public List<String> deleteContent(long contentId, long userId) {
+        List<String> mediaUrls = transactionTemplate.execute(conn -> {
+            try {
+                findOwnedContent(conn, contentId, userId);
+                List<String> urls = new ArrayList<>();
+                Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, contentId);
+                for (List<ContentMedia> list : mediaMap.values()) {
+                    for (ContentMedia m : list) {
+                        urls.add(m.getUrl());
+                    }
+                }
+                contentDao.softDeleteContent(conn, contentId);
+                commentDao.softDeleteByContentId(conn, contentId);
+                contentLikeDao.deleteByContentId(conn, contentId);
+                contentMediaDao.deleteByContentId(conn, contentId);
+                return urls;
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "删除内容失败, contentId=" + contentId, e);
+                throw new ServerException("数据库写入失败");
+            }
+        });
+        // 缓存同步放事务提交后
+        contentCacheManager.removeContent(contentId);
+        return mediaUrls;
     }
 
     /** 所有权校验（内容存在 + 作者本人），供编辑作品三类操作复用。 */

@@ -154,7 +154,7 @@ com.itheima/
 | FollowController | /follow/* | 103 | 关注/取关 |
 | LikeController | /like/* | 127 | 点赞 |
 | CommentController | /comment/* | 98 | 评论 |
-| ContentController | /content/* | 160 | 内容管理：作者开关评论区 + 编辑标题/简介 + 删除单条媒体 |
+| ContentController | /content/* | 179 | 内容管理：作者开关评论区 + 编辑标题/简介 + 删除单条媒体 + 删除整个作品 |
 | CouponController | /coupon/* | 81 | 优惠券 |
 | UploadType | - | 84 | 上传类型枚举 |
 
@@ -366,6 +366,7 @@ com.itheima/
 | POST | /api/upload/replace | 作者换源（替换媒体，含单图替换） | ✓ |
 | POST | /content/update | 作者编辑标题/简介 | ✓ |
 | POST | /content/mediaDelete | 作者删除单条媒体（仅图文图片） | ✓ |
+| POST | /content/delete | 作者删除自己作品（软删除 + 级联清理评论/点赞/媒体） | ✓ |
 
 ### 7.3 社交模块
 
@@ -479,7 +480,8 @@ src/main/webapp/
 | searchCompleteTest.http | 15 | 搜索完整 |
 | startCompleteTest.http | 14 | 首页推荐完整 |
 | editWorkTest.http | 21 | 编辑作品：换源/删图/改文案（阶段三） |
-| **合计** | **~286** | - |
+| deleteContentTest.http | 6 | 删除作品：作者删除/非作者/未登录/不存在/已删/缺参（阶段四） |
+| **合计** | **~292** | - |
 
 ### 9.1 pytest 自动化用例（tools/run_tests.py 驱动）
 
@@ -489,18 +491,19 @@ src/main/webapp/
 | test_comment_delete.py | 6 | 评论软删除（阶段一新增：自删主楼/回复、403/404/401、管理员删） |
 | test_admin.py | 11（1 条件跳过） | 管理员权限 401/403/200、媒体扫描/恢复（阶段八） |
 | test_edit_work.py | 21 | 编辑作品：换源（含图文单张替换）/删图/改文案的 200/403/401/400/404 + 文件落盘/旧文件删除（阶段三） |
+| test_delete_content.py | 7 | 删除作品：作者删视频/图文后详情 404 + 主页不展示 + 物理文件删除；非作者/未登录/不存在/已删/缺参（阶段四） |
 
 ### 9.2 JUnit 单元测试（阶段八新增，src/test/java）
 
 | 文件 | 用例数 | 覆盖模块 |
 |------|--------|----------|
 | service/UserServiceTest | 23 | 登录/注册/改密/改资料/isAdmin |
-| service/ContentServiceTest | 26 | 搜索/详情/评论查询/发布/评论区开关/编辑作品（换源/删图/改文案，阶段三） |
+| service/ContentServiceTest | 30 | 搜索/详情/评论查询/发布/评论区开关/编辑作品（换源/删图/改文案）/删除作品（阶段四 +4 例） |
 | service/LikeServiceTest | 14 | 点赞/取消/缓存优先/批量查询 |
 | service/CommentServiceTest | 13 | 评论归属/楼中楼归一化/软删除（自删+管理员删）/缓存更新 |
 | service/ContentCacheManagerLifecycleTest | 7 | 初始化/缓存命中/定时器关闭/刷新失败/评论缓存删除/两级归一化 |
 | util/MyConnectionPoolTest | 4 | 满池超时/归还重取/失效移除/关闭后拒绝 |
-| **合计** | **76** | - |
+| **合计** | **80** | - |
 
 > 构建输出：沙箱内 Maven 通过 `-Dstage8.buildDir` 指向 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（pom 默认 `./target`），原因是沙箱内 javac 无法把 worktree `target/classes` 作为 classpath（报"程序包不存在"）。
 > 离线仓库：新增测试依赖（junit/mockito/bytebuddy/surefire 等）的 `_remote.repositories` 已补 `>aliyun=` 来源行（只追加不删除），默认 aliyun 镜像下可离线解析。
