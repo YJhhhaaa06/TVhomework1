@@ -33,6 +33,9 @@ public class CommentController extends BaseServlet {
             case "/add":
                 addComment(req,resp);
                 break;
+            case "/delete":
+                deleteComment(req,resp);
+                break;
             default:
                 BaseServletUtil.writeError(resp,ErrorCode.PARAM_ERROR,"未识别功能");
         }
@@ -75,6 +78,25 @@ public class CommentController extends BaseServlet {
         Long userId = (Long) req.getAttribute("userId");
         List<?> comments = contentService.getCommentsForContent(contentId, userId);
         BaseServletUtil.writeSuccess(resp, comments);
+    }
+
+    /** 用户自删评论（软删除，不可恢复；AuthFilter 保证已登录） */
+    protected void deleteComment(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        String commentIdStr = req.getParameter("commentId");
+        if (commentIdStr == null || commentIdStr.isEmpty()) {
+            BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "commentId不能为空");
+            return;
+        }
+        long commentId;
+        try {
+            commentId = Long.parseLong(commentIdStr);
+        } catch (NumberFormatException e) {
+            BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "commentId格式错误");
+            return;
+        }
+        Long userId = (Long) req.getAttribute("userId");
+        commentService.deleteCommentByUser(commentId, userId);
+        BaseServletUtil.writeSuccess(resp, "删除成功");
     }
 
 }

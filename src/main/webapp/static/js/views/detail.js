@@ -3,9 +3,10 @@
 // ============================================================================
 
 import { request } from '../api.js';
-import { isLoggedIn } from '../auth.js';
+import { isLoggedIn, getUserId } from '../auth.js';
 import { showToast, formatTime, formatNumber, emptyBox, initialChar, avatarColor } from '../utils.js';
 import { navigate } from '../router.js';
+import { openEditWorkModal } from '../editWork.js';
 
 let state = null;
 
@@ -46,6 +47,7 @@ function render() {
         </div>
         <div class="detail-actions">
           <button class="like-btn" id="likeBtn">❤ 点赞 <span id="likeCount">0</span></button>
+          <button class="edit-btn" id="editBtn" style="display:none">✏ 编辑</button>
         </div>
         <div class="detail-desc" id="desc"></div>
         <div class="comment-section">
@@ -166,12 +168,38 @@ function renderContent() {
   c.querySelector('#likeCount').textContent = item.likeCount || 0;
   likeBtn.addEventListener('click', toggleContentLike);
 
+  // 作者本人可编辑作品（改标题/简介 + 替换/删除媒体）；onclick 赋值避免重复渲染时监听叠加
+  const editBtn = c.querySelector('#editBtn');
+  if (item.authorId != null && item.authorId === getUserId()) {
+    editBtn.style.display = '';
+    editBtn.onclick = () => openEditWorkModal(item, reloadAfterEdit);
+  } else {
+    editBtn.style.display = 'none';
+    editBtn.onclick = null;
+  }
+
   c.querySelector('#desc').textContent = item.description || '';
 
-  // 评论输入（登录后显示）
-  if (isLoggedIn()) c.querySelector('#commentInputRow').style.display = '';
+  // 评论区：作者关闭后整体不可见/不可发（数据保留，重新开启即恢复）
+  if (item.commentEnabled === false) {
+    c.querySelector('#commentInputRow').style.display = 'none';
+    c.querySelector('#commentHeader').textContent = '评论区已关闭';
+    c.querySelector('#commentList').innerHTML = '<div class="empty-comments">作者已关闭评论区</div>';
+  } else {
+    // 评论输入（登录后显示）
+    if (isLoggedIn()) c.querySelector('#commentInputRow').style.display = '';
+    renderComments();
+  }
+}
 
-  renderComments();
+// 编辑作品完成后重新拉取详情并渲染
+async function reloadAfterEdit() {
+  try {
+    state.content = await request(`search/IdSearch?contentId=${state.contentId}`);
+    renderContent();
+  } catch (e) {
+    if (e.code === 401 || e.code === 403) return;
+  }
 }
 
 function updateFollowBtn() {
@@ -229,7 +257,7 @@ function createSideItem(item) {
   return el;
 }
 
-// ---------- 评论渲染（树形） ----------
+// ---------- 评论渲染（楼中楼：主楼 + 楼内回复平铺，回复仅一级） ----------
 function renderComments() {
   const c = state.container;
   const list = c.querySelector('#commentList');
@@ -240,7 +268,7 @@ function renderComments() {
     list.innerHTML = '<div class="empty-comments">暂无评论，快来抢沙发吧</div>';
     return;
   }
-  state.comments.forEach((cm) => list.appendChild(createCommentItem(cm, 0)));
+  state.comments.forEach((cm) => list.appendChild(createCommentItem(cm, false)));
 }
 
 function countTotal(list) {
@@ -249,12 +277,12 @@ function countTotal(list) {
   return n;
 }
 
-function createCommentItem(comment, level) {
+function createCommentItem(comment, isReply) {
   const wrapper = document.createElement('div');
-  wrapper.className = 'comment-item' + (level > 0 ? ' reply-indent' : '');
+  wrapper.className = 'comment-item' + (isReply ? ' reply-indent' : '');
 
   const body = document.createElement('div');
-  body.className = 'comment-body level-' + Math.min(level, 2);
+  body.className = 'comment-body ' + (isReply ? 'level-1' : 'level-0');
 
   const nameWrap = document.createElement('span');
   nameWrap.style.cursor = 'pointer';
@@ -273,7 +301,13 @@ function createCommentItem(comment, level) {
 
   const text = document.createElement('span');
   text.className = 'comment-text';
-  text.textContent = comment.content || '';
+  if (isReply && comment.replyToUserId != null) {
+    const at = document.createElement('span');
+    at.className = 'comment-at';
+    at.textContent = '回复 @' + (comment.replyToUsername || comment.replyToUserId) + '：';
+    text.appendChild(at);
+  }
+  text.appendChild(document.createTextNode(comment.content || ''));
 
   const meta = document.createElement('div');
   meta.className = 'comment-meta';
@@ -281,20 +315,45 @@ function createCommentItem(comment, level) {
   likeBtn.className = 'comment-like' + (comment.isLiked ? ' liked' : '');
   likeBtn.innerHTML = '❤ ' + (comment.likeCount || 0);
   likeBtn.addEventListener('click', () => toggleCommentLike(comment, likeBtn));
+  meta.appendChild(likeBtn);
+  // 主楼与楼内回复均可回复（parentId 传该评论 id，后端自动上溯挂主楼）
   const replyBtn = document.createElement('button');
   replyBtn.className = 'comment-reply-btn';
   replyBtn.textContent = '回复';
   replyBtn.addEventListener('click', () => setReply(comment));
-  meta.appendChild(likeBtn);
   meta.appendChild(replyBtn);
+  if (comment.userId === getUserId()) {
+    const delBtn = document.createElement('button');
+    delBtn.className = 'comment-delete-btn';
+    delBtn.textContent = '删除';
+    delBtn.addEventListener('click', () => deleteComment(comment));
+    meta.appendChild(delBtn);
+  }
 
   body.appendChild(nameWrap);
   body.appendChild(text);
   body.appendChild(meta);
   wrapper.appendChild(body);
 
-  if (comment.children && comment.children.length) {
-    comment.children.forEach((child) => wrapper.appendChild(createCommentItem(child, level + 1)));
+  // 主楼下方：楼内回复折叠列表
+  if (!isReply && comment.children && comment.children.length) {
+    const toggle = document.createElement('div');
+    toggle.className = 'comment-replies-toggle';
+    toggle.textContent = '共 ' + comment.children.length + ' 条回复 ▾';
+    toggle.addEventListener('click', () => {
+      const box = wrapper.querySelector('.comment-replies');
+      const expanded = box.style.display !== 'none';
+      box.style.display = expanded ? 'none' : 'block';
+      toggle.textContent = '共 ' + comment.children.length + ' 条回复 ' + (expanded ? '▸' : '▾');
+    });
+
+    const repliesBox = document.createElement('div');
+    repliesBox.className = 'comment-replies';
+    repliesBox.style.display = 'none';
+    comment.children.forEach((child) => repliesBox.appendChild(createCommentItem(child, true)));
+
+    wrapper.appendChild(toggle);
+    wrapper.appendChild(repliesBox);
   }
   return wrapper;
 }
@@ -303,6 +362,24 @@ function createCommentItem(comment, level) {
 function requireLogin() {
   if (!isLoggedIn()) { showToast('请先登录'); return false; }
   return true;
+}
+
+async function deleteComment(comment) {
+  if (!requireLogin()) return;
+  const removed = comment.parentId ? 1 : 1 + (comment.children || []).length;
+  try {
+    await request(`comment/delete?commentId=${comment.commentId}`, { method: 'POST' });
+    showToast('删除成功');
+    state.comments = await request(`comment/show?contentId=${state.contentId}`);
+    if (state.content) {
+      state.content.commentCount = Math.max(0, (state.content.commentCount || 0) - removed);
+      state.container.querySelector('#stats').textContent =
+        `❤ ${formatNumber(state.content.likeCount || 0)} · 💬 ${formatNumber(state.content.commentCount || 0)} · ${formatTime(state.content.createTime)}`;
+    }
+    renderComments();
+  } catch (e) {
+    showToast(e.message || '删除失败');
+  }
 }
 
 async function toggleContentLike() {

@@ -1,0 +1,33 @@
+### ==================== 变量 ====================
+# 先用 loginTest.http 登录一个管理员账号，再替换下面的 token
+# 管理员 = 用 tools/admin.py --promote <userId|手机号> 提升后的账号
+@adminToken = REPLACE_ME_请粘贴管理员token
+# 普通用户 token（用于验证 403）
+@userToken = REPLACE_ME_请粘贴普通用户token
+
+
+### ==================== 管理员删除评论（软删除，不可恢复） ====================
+
+### 1. 管理员删除任意评论（应 200）
+# 先在 /comment/show?contentId=X 中找到 commentId 填入
+POST http://localhost:8080/api/admin/comment/delete?commentId=REPLACE_ME
+token: {{adminToken}}
+
+### 2. 非管理员调用（应 403）
+POST http://localhost:8080/api/admin/comment/delete?commentId=REPLACE_ME
+token: {{userToken}}
+
+### 3. 未登录调用（应 401）
+POST http://localhost:8080/api/admin/comment/delete?commentId=1
+
+### 4. 删除不存在的评论（应 404）
+POST http://localhost:8080/api/admin/comment/delete?commentId=999999999
+token: {{adminToken}}
+
+### 5. 缺少 commentId 参数（应 400）
+POST http://localhost:8080/api/admin/comment/delete
+token: {{adminToken}}
+
+### 6. 未识别的 action（应 404）
+POST http://localhost:8080/api/admin/comment/unknown
+token: {{adminToken}}

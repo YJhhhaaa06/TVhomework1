@@ -1,12 +1,20 @@
 package com.itheima.service;
 
+import com.itheima.dao.CommentDao;
 import com.itheima.dao.ContentDao;
+import com.itheima.dao.ContentLikeDao;
 import com.itheima.dao.ContentMediaDao;
+import com.itheima.exception.ConflictException;
+import com.itheima.exception.ForbiddenException;
+import com.itheima.exception.NotFoundException;
+import com.itheima.exception.ParamException;
 import com.itheima.exception.ServerException;
 import com.itheima.model.cache.ContentCacheDTO;
 import com.itheima.model.cache.CommentCacheDTO;
 import com.itheima.model.command.UploadCommand;
 import com.itheima.model.dto.PageResult;
+import com.itheima.model.entity.ContentMedia;
+import com.itheima.model.vo.AdminContentVO;
 import com.itheima.model.vo.ContentDetailVO;
 import com.itheima.model.vo.ContentVO;
 import com.itheima.model.vo.CommentVO;
@@ -16,7 +24,9 @@ import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -28,6 +38,8 @@ class ContentServiceTest {
 
     private ContentDao contentDao;
     private ContentMediaDao contentMediaDao;
+    private CommentDao commentDao;
+    private ContentLikeDao contentLikeDao;
     private CommentService commentService;
     private LikeService likeService;
     private ContentCacheManager cache;
@@ -40,14 +52,16 @@ class ContentServiceTest {
     void setUp() throws Exception {
         contentDao = mock(ContentDao.class);
         contentMediaDao = mock(ContentMediaDao.class);
+        commentDao = mock(CommentDao.class);
+        contentLikeDao = mock(ContentLikeDao.class);
         commentService = mock(CommentService.class);
         likeService = mock(LikeService.class);
         cache = mock(ContentCacheManager.class);
         filler = mock(ContentStatusFiller.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
-        service = new ContentService(contentDao, contentMediaDao, commentService,
-                likeService, cache, filler, tt);
+        service = new ContentService(contentDao, contentMediaDao, commentDao,
+                contentLikeDao, commentService, likeService, cache, filler, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);
@@ -204,5 +218,362 @@ class ContentServiceTest {
         assertEquals(200L, id);
         verify(contentMediaDao, never()).addMedia(eq(conn), eq(200L), eq(null), anyInt(), anyInt());
         verify(contentMediaDao).addMedia(conn, 200L, "i1.jpg", 2, 1);
+    }
+
+    // ===== 评论区开关（C2）=====
+
+    @Test
+    void setCommentEnabledByAuthorUpdatesDbAndCache() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+
+        service.setCommentEnabled(1L, 7L, false);
+
+        verify(contentDao).updateCommentEnabled(conn, 1L, false);
+        verify(cache).updateContentCommentEnabled(1L, false);
+    }
+
+    @Test
+    void setCommentEnabledByOtherThrowsForbidden() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+
+        assertThrows(ForbiddenException.class, () -> service.setCommentEnabled(1L, 8L, false));
+        verify(contentDao, never()).updateCommentEnabled(any(), anyLong(), anyBoolean());
+        verify(cache, never()).updateContentCommentEnabled(anyLong(), anyBoolean());
+    }
+
+    @Test
+    void setCommentEnabledMissingContentThrowsNotFound() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(null);
+
+        assertThrows(NotFoundException.class, () -> service.setCommentEnabled(1L, 7L, false));
+        verify(contentDao, never()).updateCommentEnabled(any(), anyLong(), anyBoolean());
+    }
+
+    @Test
+    void setCommentEnabledSqlErrorThrowsServerException() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+        when(contentDao.updateCommentEnabled(conn, 1L, false))
+                .thenThrow(new SQLException("db down"));
+
+        assertThrows(ServerException.class, () -> service.setCommentEnabled(1L, 7L, false));
+        verify(cache, never()).updateContentCommentEnabled(anyLong(), anyBoolean());
+    }
+
+    @Test
+    void getCommentsForContentReturnsEmptyWhenCommentsDisabled() {
+        ContentCacheDTO dto = dto(3L);
+        dto.setCommentEnabled(false);
+        when(cache.getContentFromCache(3L)).thenReturn(dto);
+
+        List<CommentVO> result = service.getCommentsForContent(3L, null);
+
+        assertTrue(result.isEmpty());
+        verify(cache, never()).getCommentTree(anyLong());
+        verify(commentService, never()).convertToCommentVOList(anyList(), anyMap());
+    }
+
+    // ===== 编辑作品（阶段三）：换源 / 删图 / 改文案 =====
+
+    private ContentMedia media(long mediaId, long contentId, String url, int type, int sort) {
+        return new ContentMedia(mediaId, contentId, url, type, sort);
+    }
+
+    // ----- replaceMedia -----
+
+    @Test
+    void replaceMediaByAuthorUpdatesUrlAndRefreshesCache() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+        when(contentMediaDao.findMediaByContentTypeSort(conn, 1L, 3, 1))
+                .thenReturn(media(10L, 1L, "/upload/cover/old.png", 3, 1));
+
+        String oldUrl = service.replaceMedia(1L, 7L, 3, 1, "/upload/cover/new.png");
+
+        assertEquals("/upload/cover/old.png", oldUrl);
+        verify(contentMediaDao).updateMediaUrl(eq(conn), eq(10L), eq("/upload/cover/new.png"), eq(true), any(Timestamp.class));
+        verify(contentDao).updateFileExists(eq(conn), eq(1L), eq(true), any(Timestamp.class));
+        verify(cache).refreshContent(1L);
+    }
+
+    @Test
+    void replaceMediaByOtherThrowsForbidden() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+
+        assertThrows(ForbiddenException.class, () -> service.replaceMedia(1L, 8L, 3, 1, "/upload/cover/new.png"));
+        verify(contentMediaDao, never()).updateMediaUrl(any(), anyLong(), anyString(), anyBoolean(), any());
+        verify(cache, never()).refreshContent(anyLong());
+    }
+
+    @Test
+    void replaceMediaMissingContentThrowsNotFound() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(null);
+
+        assertThrows(NotFoundException.class, () -> service.replaceMedia(1L, 7L, 3, 1, "/upload/cover/new.png"));
+    }
+
+    @Test
+    void replaceMediaMissingMediaRowThrowsNotFound() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+        when(contentMediaDao.findMediaByContentTypeSort(conn, 1L, 3, 1)).thenReturn(null);
+
+        assertThrows(NotFoundException.class, () -> service.replaceMedia(1L, 7L, 3, 1, "/upload/cover/new.png"));
+    }
+
+    @Test
+    void replaceMediaSqlErrorThrowsServerException() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+        when(contentMediaDao.findMediaByContentTypeSort(conn, 1L, 3, 1))
+                .thenThrow(new SQLException("db down"));
+
+        assertThrows(ServerException.class, () -> service.replaceMedia(1L, 7L, 3, 1, "/upload/cover/new.png"));
+        verify(cache, never()).refreshContent(anyLong());
+    }
+
+    // ----- deleteMedia -----
+
+    @Test
+    void deleteMediaNonImageThrowsParamException() throws SQLException {
+        assertThrows(ParamException.class, () -> service.deleteMedia(1L, 7L, 1, 1));
+        verify(contentMediaDao, never()).deleteMediaByContentIdAndTypeSort(any(), anyLong(), anyInt(), anyInt());
+        verify(cache, never()).refreshContent(anyLong());
+    }
+
+    @Test
+    void deleteMediaImageByAuthorDeletesAndCompactsSort() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+        when(contentMediaDao.findMediaByContentTypeSort(conn, 1L, 2, 1))
+                .thenReturn(media(11L, 1L, "/upload/image/old.jpg", 2, 1));
+
+        String oldUrl = service.deleteMedia(1L, 7L, 2, 1);
+
+        assertEquals("/upload/image/old.jpg", oldUrl);
+        verify(contentMediaDao).deleteMediaByContentIdAndTypeSort(conn, 1L, 2, 1);
+        verify(contentMediaDao).compactImageSort(conn, 1L, 1);
+        verify(cache).refreshContent(1L);
+    }
+
+    @Test
+    void deleteMediaByOtherThrowsForbidden() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+
+        assertThrows(ForbiddenException.class, () -> service.deleteMedia(1L, 8L, 2, 1));
+        verify(contentMediaDao, never()).deleteMediaByContentIdAndTypeSort(any(), anyLong(), anyInt(), anyInt());
+    }
+
+    @Test
+    void deleteMediaMissingMediaRowThrowsNotFound() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+        when(contentMediaDao.findMediaByContentTypeSort(conn, 1L, 2, 1)).thenReturn(null);
+
+        assertThrows(NotFoundException.class, () -> service.deleteMedia(1L, 7L, 2, 1));
+    }
+
+    // ----- updateContentInfo -----
+
+    @Test
+    void updateContentInfoByAuthorUpdatesAndRefreshesCache() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+
+        service.updateContentInfo(1L, 7L, "新标题", "新简介");
+
+        verify(contentDao).updateContentInfo(conn, 1L, "新标题", "新简介");
+        verify(cache).refreshContent(1L);
+    }
+
+    @Test
+    void updateContentInfoBlankTitleThrowsParamException() throws SQLException {
+        assertThrows(ParamException.class, () -> service.updateContentInfo(1L, 7L, "   ", "d"));
+        verify(contentDao, never()).updateContentInfo(any(), anyLong(), anyString(), anyString());
+    }
+
+    @Test
+    void updateContentInfoTooLongTitleThrowsParamException() {
+        assertThrows(ParamException.class, () -> service.updateContentInfo(1L, 7L, "字".repeat(51), "d"));
+    }
+
+    @Test
+    void updateContentInfoTooLongDescriptionThrowsParamException() {
+        assertThrows(ParamException.class, () -> service.updateContentInfo(1L, 7L, "t", "字".repeat(5001)));
+    }
+
+    @Test
+    void updateContentInfoByOtherThrowsForbidden() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+
+        assertThrows(ForbiddenException.class, () -> service.updateContentInfo(1L, 8L, "t", "d"));
+        verify(contentDao, never()).updateContentInfo(any(), anyLong(), anyString(), anyString());
+    }
+
+    @Test
+    void updateContentInfoMissingContentThrowsNotFound() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(null);
+
+        assertThrows(NotFoundException.class, () -> service.updateContentInfo(1L, 7L, "t", "d"));
+    }
+
+    // ===== 删除作品（阶段四 A1）=====
+
+    @Test
+    void deleteContentByAuthorCascadesAndEvictsCache() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+        // LinkedHashMap 保证按 type 1→3 顺序迭代，与 DAO 真实 ORDER BY type,sort 一致，避免 HashMap 顺序脆性
+        Map<Integer, List<ContentMedia>> mediaMap = new LinkedHashMap<>();
+        mediaMap.put(1, List.of(media(10L, 1L, "/upload/video/old.mp4", 1, 1)));
+        mediaMap.put(3, List.of(media(11L, 1L, "/upload/cover/old.png", 3, 1)));
+        when(contentMediaDao.findMedia(conn, 1L)).thenReturn(mediaMap);
+
+        List<String> urls = service.deleteContent(1L, 7L);
+
+        assertEquals(List.of("/upload/video/old.mp4", "/upload/cover/old.png"), urls);
+        verify(contentDao).softDeleteContent(conn, 1L);
+        verify(commentDao).softDeleteByContentId(conn, 1L);
+        verify(contentLikeDao).deleteByContentId(conn, 1L);
+        verify(contentMediaDao).deleteByContentId(conn, 1L);
+        verify(cache).removeContent(1L);
+    }
+
+    @Test
+    void deleteContentByOtherThrowsForbidden() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+
+        assertThrows(ForbiddenException.class, () -> service.deleteContent(1L, 8L));
+        verify(contentDao, never()).softDeleteContent(any(), anyLong());
+        verify(commentDao, never()).softDeleteByContentId(any(), anyLong());
+        verify(contentLikeDao, never()).deleteByContentId(any(), anyLong());
+        verify(contentMediaDao, never()).deleteByContentId(any(), anyLong());
+        verify(cache, never()).removeContent(anyLong());
+    }
+
+    @Test
+    void deleteContentMissingContentThrowsNotFound() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(null);
+
+        assertThrows(NotFoundException.class, () -> service.deleteContent(1L, 7L));
+        verify(contentDao, never()).softDeleteContent(any(), anyLong());
+        verify(cache, never()).removeContent(anyLong());
+    }
+
+    @Test
+    void deleteContentSqlErrorThrowsServerException() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+        when(contentMediaDao.findMedia(conn, 1L)).thenThrow(new SQLException("db down"));
+
+        assertThrows(ServerException.class, () -> service.deleteContent(1L, 7L));
+        verify(contentDao, never()).softDeleteContent(any(), anyLong());
+        verify(cache, never()).removeContent(anyLong());
+    }
+
+    // ===== 管理员下架/恢复内容（阶段五 A2）=====
+
+    @Test
+    void listContentForAdminReturnsDaoResult() throws SQLException {
+        AdminContentVO vo = new AdminContentVO();
+        vo.setId(1L);
+        vo.setHidden(false);
+        when(contentDao.findContentForAdmin(conn)).thenReturn(List.of(vo));
+
+        List<AdminContentVO> result = service.listContentForAdmin();
+
+        assertEquals(1, result.size());
+        assertEquals(1L, result.get(0).getId());
+        assertFalse(result.get(0).isHidden());
+    }
+
+    @Test
+    void listContentForAdminSqlErrorThrowsServerException() throws SQLException {
+        when(contentDao.findContentForAdmin(conn)).thenThrow(new SQLException("db down"));
+
+        assertThrows(ServerException.class, () -> service.listContentForAdmin());
+    }
+
+    @Test
+    void hideContentByAdminSetsState2AndEvictsCache() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenReturn(0);
+
+        service.hideContent(1L);
+
+        verify(contentDao).updateContentDeletedState(conn, 1L, 2);
+        verify(cache).removeContent(1L);
+    }
+
+    @Test
+    void hideContentMissingThrowsNotFound() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenReturn(-1);
+
+        assertThrows(NotFoundException.class, () -> service.hideContent(1L));
+        verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
+        verify(cache, never()).removeContent(anyLong());
+    }
+
+    @Test
+    void hideContentAlreadyDeletedThrowsConflict() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenReturn(1);
+
+        assertThrows(ConflictException.class, () -> service.hideContent(1L));
+        verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
+        verify(cache, never()).removeContent(anyLong());
+    }
+
+    @Test
+    void hideContentAlreadyHiddenThrowsConflict() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenReturn(2);
+
+        assertThrows(ConflictException.class, () -> service.hideContent(1L));
+        verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
+        verify(cache, never()).removeContent(anyLong());
+    }
+
+    @Test
+    void hideContentSqlErrorThrowsServerException() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenThrow(new SQLException("db down"));
+
+        assertThrows(ServerException.class, () -> service.hideContent(1L));
+        verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
+        verify(cache, never()).removeContent(anyLong());
+    }
+
+    @Test
+    void unhideContentByAdminSetsState0AndRefreshesCache() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenReturn(2);
+
+        service.unhideContent(1L);
+
+        verify(contentDao).updateContentDeletedState(conn, 1L, 0);
+        verify(cache).refreshContent(1L);
+    }
+
+    @Test
+    void unhideContentMissingThrowsNotFound() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenReturn(-1);
+
+        assertThrows(NotFoundException.class, () -> service.unhideContent(1L));
+        verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
+        verify(cache, never()).refreshContent(anyLong());
+    }
+
+    @Test
+    void unhideContentAlreadyDeletedThrowsConflict() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenReturn(1);
+
+        assertThrows(ConflictException.class, () -> service.unhideContent(1L));
+        verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
+        verify(cache, never()).refreshContent(anyLong());
+    }
+
+    @Test
+    void unhideContentNotHiddenThrowsConflict() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenReturn(0);
+
+        assertThrows(ConflictException.class, () -> service.unhideContent(1L));
+        verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
+        verify(cache, never()).refreshContent(anyLong());
+    }
+
+    @Test
+    void unhideContentSqlErrorThrowsServerException() throws SQLException {
+        when(contentDao.getContentStatus(conn, 1L)).thenThrow(new SQLException("db down"));
+
+        assertThrows(ServerException.class, () -> service.unhideContent(1L));
+        verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
+        verify(cache, never()).refreshContent(anyLong());
     }
 }

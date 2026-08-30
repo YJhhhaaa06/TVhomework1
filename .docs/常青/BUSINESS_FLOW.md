@@ -550,7 +550,7 @@ GET /search?keyword=关键词&page=1&pageSize=10&token=xxx（可选）
 
 ### 3.6 查看内容详情流程
 
-> **前端交互（2026-08-14 重构后）**：详情为 SPA 视图 `#/video/:id`（原 `detail.html?contentId=` 已删除）；详情端点实为 `GET /search/IdSearch`（**无 `/detail`**）；右侧新增「相关推荐」栏，本轮用 `/start` 推荐流兜底（后端暂无推荐接口）；评论为树形，支持回复/点赞；视频类型用 `videoUrl` 播放，图文类型展示 `coverUrl` + `imageUrls` 画廊。
+> **前端交互（2026-08-14 重构后）**：详情为 SPA 视图 `#/video/:id`（原 `detail.html?contentId=` 已删除）；详情端点实为 `GET /search/IdSearch`（**无 `/detail`**）；右侧新增「相关推荐」栏，本轮用 `/start` 推荐流兜底（后端暂无推荐接口）；评论为**楼中楼两级**（2026-08-28 阶段一：主楼 + 楼内回复折叠列表），支持回复（仅主楼下）/点赞/删除（自己的评论，管理员走运维页）；视频类型用 `videoUrl` 播放，图文类型展示 `coverUrl` + `imageUrls` 画廊。
 
 ```
 GET /search/IdSearch?contentId=123&token=xxx（可选）
@@ -594,8 +594,88 @@ ContentDetailVO 包含：
 
 #### 权限
 
-- 当前：`/api/admin/*` 仅要求登录，无管理员角色。
-- 后续：上线管理员身份，并允许作者对自己的帖子和视频换源。
+- 当前：`/api/admin/*` 需 role==1（管理员）方可扫描/恢复。
+- 作者可对自己的帖子和视频换源、删图、改文案（见 3.8，阶段三已实现）。
+
+### 3.8 作者编辑作品流程（换源 / 删图 / 改文案）
+
+**入口**：创作中心「我的投稿」卡片或详情页（作者本人）的「编辑」按钮 → 编辑作品弹层（`static/js/editWork.js`），可看到已上传媒体缩略图与当前标题/简介，直接编辑，无需完整重新上传。
+
+#### 文案编辑（A3）
+
+1. 弹层修改标题/简介 → `POST /content/update?contentId=&title=&description=`。
+2. `ContentService.updateContentInfo`：校验内容存在（404）→ 作者本人（403）→ title 非空且 ≤50、简介 ≤5000 → `ContentDao.updateContentInfo`。
+3. 全文索引由 MySQL 自动维护（DML 即时生效）；事务后 `ContentCacheManager.refreshContent` 同步缓存（详情/搜索用新值）。
+
+#### 换源 / 替换媒体
+
+1. 弹层对目标媒体（视频文件 type=1/sort=1、封面 type=3/sort=1、图文第 i 张图 type=2/sort=i+1）选择新文件 → `POST /api/upload/replace?contentId=&type=&sort=` + file（multipart）。
+2. 新文件落盘（`FileUploadService.saveFile` 含后缀校验）→ `ContentService.replaceMedia` 校验所有权 → 更新 `content_media`（url、file_exists=1、last_verify_time）与 `content.file_exists=1` → 返回旧 url → Controller `FileUploadService.deleteFileByUrl` 清理旧文件（尽力而为）；任一步失败删除新文件回滚。
+3. 事务后 `refreshContent` 同步缓存，详情/首页卡片即时展示新源。
+
+#### 单图删除（仅图文图片）
+
+1. 弹层对图片（type=2）点删除 → 确认 → `POST /content/mediaDelete?contentId=&type=&sort=`。
+2. `ContentService.deleteMedia`：校验所有权 → 删除记录 → 对剩余图片 `compactImageSort` 重排 sort（保持 1..n 连续，保证前端 index+1 定位成立）→ 返回旧 url → Controller 清理物理文件。
+3. 事务后 `refreshContent` 同步缓存；媒体运维扫描（3.7）不再看到已删媒体。
+
+#### 权限
+
+- 三个接口均要求登录（AuthFilter 精确保护 `/content/update`、`/content/mediaDelete`；`/api/upload/*` 前缀保护）；所有权由 Service 校验，非作者一律 403。
+- 视频文件与封面（含图文封面）只可替换不可删除；仅图文图片（type=2）可删除，避免作品结构性资源失效。
+
+### 3.9 删除内容流程（作者本人，A1）
+
+**入口**：创作中心「我的投稿」顶部独立「删除」按钮 → 进入删除模式后各卡片右上角出现删除钮（默认卡片无删除按钮）→ 点击某张卡片 → 确认弹窗 → `POST /content/delete?contentId=`。
+
+```
+客户端点「删除」→ 进入删除模式 → 点某卡片 ✕ → 确认
+    → POST /content/delete?contentId=X（AuthFilter 登录保护）
+    → ContentService.deleteContent（事务）:
+        1. findOwnedContent：内容存在（404）+ 作者本人（403）
+        2. contentMediaDao.findMedia 收集全部媒体 url（供删物理文件）
+        3. contentDao.softDeleteContent：content.is_deleted = 1（软删）
+        4. commentDao.softDeleteByContentId：该内容全部评论软删（含主楼与楼内回复）
+        5. contentLikeDao.deleteByContentId：点赞记录物理删除
+        6. contentMediaDao.deleteByContentId：媒体记录物理删除
+    → 事务提交后 ContentCacheManager.removeContent 整体剔除缓存
+      （索引/内容/评论/时间戳/推荐列表/Redis 内容点赞）
+    → Controller 逐个 FileUploadService.deleteFileByUrl 删物理文件（尽力而为）
+```
+
+**效果**：删除后软删内容在首页 `/start`（索引剔除）、搜索（`is_deleted=0` 过滤）、关注流 `/feed`、用户主页 `/profile` 均不可见；详情 `/search/IdSearch` 返回 404「找不到对应内容」。删除不可恢复；非作者 403、未登录 401。
+
+---
+
+### 3.10 隐藏/取消隐藏内容流程（管理员下架，A2）
+
+**入口**：管理员在 `#/admin` 管理页「内容下架管理（审核）」区块查看全部内容（含正常与已下架）清单，每行提供「下架/恢复」按钮。
+
+**权限**：`/api/admin/content/*` 已被 AuthFilter 的 `/api/admin/*` 前缀保护覆盖（需登录且 role==1，非管理员 403、未登录 401）；无所有权校验，管理员可操作任意内容。
+
+**清单**：`GET /api/admin/content/list` → `ContentService.listContentForAdmin` → `ContentDao.findContentForAdmin`（`WHERE c.is_deleted IN (0,2)`，不含已删除内容），返回 contentId/标题/作者/类型/是否下架。
+
+**下架**：`POST /api/admin/content/hide?contentId=X`
+
+1. `ContentService.hideContent`：`getContentStatus` 校验内容存在（404）→ 未被作者删除（409「内容已删除，无法下架」）→ 未处于下架态（409「内容已下架」）→ `updateContentDeletedState(conn, id, 2)`。
+2. 仅改 `content.is_deleted=2` 一个字段；**不动**评论/点赞/媒体记录/物理文件（隐藏≠删除）。
+3. 事务提交后 `ContentCacheManager.removeContent` 剔除缓存（索引/内容/评论/时间戳/推荐列表/Redis 内容点赞），前台即时不可见。
+
+**恢复**：`POST /api/admin/content/unhide?contentId=X`
+
+1. `ContentService.unhideContent`：校验存在（404）→ 未被删除（409）→ 当前处于下架态（409「内容未下架」）→ `updateContentDeletedState(conn, id, 0)`。
+2. 事务提交后 `ContentCacheManager.refreshContent` 回填缓存与索引，前台立即重新可见。
+
+**效果**：下架后内容在首页 `/start`（索引剔除）、搜索（`is_deleted=0` 过滤）、关注流 `/feed`、用户主页 `/profile`、作者本人「我的投稿」均不可见；详情 `/search/IdSearch` 返回 404。恢复后重新可见，且评论/点赞数/媒体数据完好。
+
+**与 A1 删除的差异**：
+
+| 维度 | A1 作者删除 | A2 管理员下架 |
+|------|------------|--------------|
+| 状态值 | is_deleted=1 | is_deleted=2 |
+| 操作者 | 作者本人 | 管理员（role==1） |
+| 关联数据 | 级联软删评论 / 物理删点赞 / 物理删媒体 / 删物理文件 | 全部保留 |
+| 可恢复 | 否 | 是（管理员恢复） |
 
 ---
 
@@ -709,8 +789,8 @@ POST /like/comment/add?commentId=456
 | 2 | 转换为 CommentCommand | - |
 | 3 | 开启事务 | - |
 | 4 | 检查内容是否存在 | 不存在返回 NotFoundException |
-| 5 | 如果是回复，检查父评论归属正确 | 不正确返回 ConflictException |
-| 6 | 插入 comment 表 | SQLException 回滚 |
+| 5 | 如果是回复，查询被回复评论：不存在/不在该内容下 → Conflict；若被回复评论本身是回复，则上溯挂到其主楼 id，并记录 reply_to_user_id=被回复评论作者 id（楼中楼 @ 引用） | 不正确返回 ConflictException |
+| 6 | 插入 comment 表（楼中楼：回复一律 parent_id=主楼 id） | SQLException 回滚 |
 | 7 | 更新 content 表 comment_count +1 | SQLException 回滚 |
 | 8 | 提交事务 | - |
 | 9 | 查询新评论详情 | - |
@@ -726,7 +806,7 @@ Content-Type: application/json
 请求体：
 {
     "contentId": 123,
-    "parentId": 0,       // 0=顶级评论，其他=回复
+    "parentId": 0,       // 0/NULL=主楼（一级）；其他=被回复的评论 id（主楼或楼内回复均可，回复楼内回复时后端自动上溯挂主楼）
     "message": "评论内容"
 }
 
@@ -745,7 +825,7 @@ Content-Type: application/json
 GET /comment/show?contentId=123&token=xxx（可选）
 
 步骤：
-1. 从缓存获取评论树
+1. 从缓存获取评论树（楼中楼两级：主楼 + 楼内回复平铺挂主楼）
 2. 如果已登录，批量查询点赞状态
 3. 转换为 CommentVO 树
 4. 返回评论列表
@@ -757,12 +837,86 @@ CommentVO 结构：
     "userId": 100,
     "username": "张三",
     "message": "评论内容",
-    "parentId": 0,
+    "parentId": 0,       // NULL=主楼；其他=所属主楼 id
+    "replyToUserId": 200,    // 楼中楼 @ 引用：被回复评论作者 id；NULL=主楼或直接回复主楼
+    "replyToUsername": "李四", // 被回复评论作者用户名（冗余存储，被 @ 评论被删后仍可展示）
     "likeCount": 5,
     "isLiked": false,
-    "children": [...]  // 子评论
+    "children": [...]  // 仅主楼有：楼内回复平铺列表（回复的回复也挂这里）
 }
 ```
+
+---
+
+#### 4.2.3 删除评论（软删除，不可恢复；楼中楼规则）
+
+```
+┌──────────┐  POST /comment/delete  ┌──────────────────┐
+│  客户端   │ ─────────────────────► │ CommentController │
+└──────────┘   ?commentId=           └──────────────────┘
+                                              │
+                                              ▼
+                                      ┌──────────────────┐
+                                      │  CommentService   │
+                                      │  deleteCommentByUser()
+                                      └──────────────────┘
+```
+
+| 步骤 | 操作 | 失败处理 |
+|------|------|----------|
+| 1 | 校验登录（AuthFilter 精确匹配 `/comment/delete`） | 401 |
+| 2 | 检查评论存在且未删除 | 不存在返回 NotFoundException（404） |
+| 3 | 校验 userId == comment.userId | 否则 ForbiddenException（403） |
+| 4 | 删**主楼**（parent_id IS NULL）：整栋软删 `WHERE comment_id=? OR parent_id=?`；deletedCount = 1+楼内回复数 | - |
+| 5 | 删**回复**：仅软删自己 `WHERE comment_id=?`；deletedCount = 1 | - |
+| 6 | content 表 comment_count -= deletedCount | SQLException 回滚 |
+| 7 | 提交事务后同步内存缓存：contentCache.commentCount 递减 + removeCommentFromCache | 失败只记录日志 |
+
+> **管理员删除**：`POST /api/admin/comment/delete?commentId=X`（AuthFilter 校验 role==1）。逻辑同步骤 4-7，跳过步骤 3 的所有权校验。
+>
+> 删除规则汇总（楼中楼 v0.4 定案）：
+>
+> | 删除对象 | 规则 | SQL 形态 |
+> |---------|------|---------|
+> | 主楼 | 整栋楼软删 | `UPDATE comment SET is_deleted=1 WHERE comment_id=? OR parent_id=?` |
+> | 回复 | 只删自己 | `UPDATE comment SET is_deleted=1 WHERE comment_id=?` |
+>
+> 均**不可恢复**；自删与管理员删不区分删除者，无恢复入口。
+
+---
+
+#### 4.2.4 评论区开关（作者本人，阶段二）
+
+```
+┌──────────┐  POST /content/commentEnabled  ┌──────────────────┐
+│  客户端   │ ─────────────────────────────► │ ContentController │
+└──────────┘   ?contentId=X&enabled=0|1      └──────────────────┘
+                                                      │
+                                                      ▼
+                                              ┌──────────────────┐
+                                              │  ContentService   │
+                                              │  setCommentEnabled()
+                                              └──────────────────┘
+```
+
+| 步骤 | 操作 | 失败处理 |
+|------|------|----------|
+| 1 | 校验登录（AuthFilter 精确匹配 `/content/commentEnabled`） | 401 |
+| 2 | 查询内容（`comment_enabled` 随查询读取） | 不存在/已删除返回 NotFoundException（404） |
+| 3 | 校验 content.author_id == 操作者 userId | 否则 ForbiddenException（403） |
+| 4 | `UPDATE content SET comment_enabled=? WHERE id=?`（1=开, 0=关） | SQLException 回滚 |
+| 5 | 提交事务后同步内存缓存：contentCache / recommendList 的 commentEnabled | 失败只记录日志 |
+
+**语义**（与评论软删除彻底分离，不逐条动 comment.is_deleted）：
+
+| 状态 | 发表（/comment/add） | 查询（/comment/show） |
+|------|---------------------|----------------------|
+| 评论开启 | 正常 | 返回评论树 |
+| 评论关闭 | ConflictException（409「评论区已关闭」） | 返回空列表 |
+
+- 关闭仅隐藏：评论数据保留，重新开启后原评论恢复；已软删评论不受开关影响；`comment_count` 不因开关增减。
+- 数据载体：`content.comment_enabled TINYINT NOT NULL DEFAULT 1`；字段贯通 `ContentCacheDTO`（backfill/刷新）与 /start、/profile、详情等 VO。
+- 前端入口：创作中心「我的投稿」卡片「关闭/开启评论区」按钮（仅作者本人页面）；详情页按 `commentEnabled` 决定是否展示评论区入口/输入框。
 
 ---
 
@@ -1033,6 +1187,8 @@ GET /feed?page=1&pageSize=10&token=xxx
 | `/feed` | 前缀 | ✓ |
 | `/api/admin/*` | 前缀 | ✓ |
 | `/comment/add` | 精确 | ✓ |
+| `/comment/delete` | 精确 | ✓ |
+| `/content/commentEnabled` | 精确 | ✓ |
 | `/user/changePassword` | 精确 | ✓ |
 | `/coupon/grab` | 精确 | ✓ |
 | `/coupon/my` | 精确 | ✓ |
@@ -1056,8 +1212,10 @@ GET /feed?page=1&pageSize=10&token=xxx
 
 | 操作 | 应该校验 | 当前状态 |
 |------|----------|----------|
-| 删除内容 | userId == content.authorId | ❌ 未校验 |
-| 删除评论 | userId == comment.userId | ❌ 未校验 |
+| 删除内容 | userId == content.authorId | ✓ 已校验（阶段四，作者本人软删除；管理员走 /api/admin/content/* 下架） |
+| 删除评论 | userId == comment.userId（管理员走 /api/admin/comment/delete） | ✓ 已校验（阶段一，软删除） |
+| 开关评论区 | userId == content.authorId | ✓ 已校验（阶段二） |
+| 下架/恢复内容 | 仅管理员（role==1，AuthFilter /api/admin/*） | ✓ 已校验（阶段五） |
 | 修改密码 | userId == targetUserId | ✓ 已校验（通过 token） |
 | 修改用户名 | userId == targetUserId | ✓ 已校验（通过 token） |
 
@@ -1181,6 +1339,8 @@ userDao.updateFollowerCount(conn, followedUserId, 1);
 ---
 
 #### 问题7：内容删除未清理关联数据
+
+> ✅ **2026-08-29 已关闭**：阶段四 A1 已实现作者删除作品（`POST /content/delete`），软删内容并级联清理评论（软删）、点赞（物理删）、媒体记录（物理删）+ 物理文件删除 + 缓存剔除（见 3.9）。
 
 **位置**: `ContentService.deleteContent()`
 

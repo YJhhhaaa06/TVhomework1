@@ -12,6 +12,8 @@ import java.io.File;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import com.itheima.util.LogUtil;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -21,6 +23,9 @@ public class FileUploadService {
 
     private static final Logger LOGGER =
             LogUtil.getLogger(FileUploadService.class);
+
+    private static final Pattern UPLOAD_URL_PATTERN =
+            Pattern.compile("^/upload/(video|image|cover)/([A-Za-z0-9._-]+)$");
 
     public UploadResult saveFile(Part part, UploadType type) throws IOException {
         // 1. 校验
@@ -55,6 +60,26 @@ public class FileUploadService {
         } catch (Exception e) {
             LOGGER.log(Level.WARNING, "文件删除失败, path=" + absolutePath, e);
         }
+    }
+
+    /**
+     * 按上传 URL（/upload/{video|image|cover}/{文件名}）删除物理文件，尽力而为。
+     * URL 非法或文件不存在时静默忽略（作者换源/删图清理旧文件用）。
+     */
+    public void deleteFileByUrl(String url) {
+        if (url == null) return;
+        String path = resolveAbsolutePath(url);
+        if (path == null) return;
+        deleteFileQuietly(path);
+    }
+
+    private String resolveAbsolutePath(String url) {
+        Matcher matcher = UPLOAD_URL_PATTERN.matcher(url);
+        if (!matcher.matches()) return null;
+        String dir = matcher.group(1);
+        String fileName = matcher.group(2);
+        if (fileName.contains("..")) return null;
+        return getBasePath() + File.separator + dir + File.separator + fileName;
     }
 
     private void validate(Part part, UploadType type) {//校验

@@ -6,6 +6,7 @@
 import { request } from '../api.js';
 import { isLoggedIn, getUserId } from '../auth.js';
 import { showToast, formatSize, createVideoCard, emptyBox, skeletonCards } from '../utils.js';
+import { openEditWorkModal } from '../editWork.js';
 
 const CATEGORIES = ['其他', '游戏', '音乐', '资讯', '动画', '娱乐', '动物', '体育', '鬼畜', '绘画'];
 
@@ -21,7 +22,7 @@ export function mount(container) {
   state = {
     container, locked: false, tab: 'mine',
     type: 1, category: 0, videoFile: null, coverFile: null, imageFiles: [],
-    myPage: 1, myTotalPages: 0,
+    myPage: 1, myTotalPages: 0, deleteMode: false,
   };
   crop = { scale: 1, offX: 0, offY: 0, natW: 0, natH: 0, originalName: 'cover.jpg' };
   render();
@@ -43,6 +44,9 @@ function render() {
       </div>
 
       <div id="minePane">
+        <div class="mine-toolbar">
+          <button class="mine-delete-btn" id="myDeleteModeBtn">删除</button>
+        </div>
         <div class="home-content" id="myGrid"></div>
         <div class="load-more" id="myLoadMore"></div>
       </div>
@@ -80,6 +84,7 @@ function render() {
 
   c.querySelectorAll('#ccTabs .type-tab').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
   c.querySelectorAll('#uploadPane .type-tab').forEach((b) => b.addEventListener('click', () => switchType(Number(b.dataset.type))));
+  c.querySelector('#myDeleteModeBtn').addEventListener('click', toggleDeleteMode);
   buildCategoryGrid();
   renderFileSection();
   c.querySelector('#submitBtn').addEventListener('click', doPublish);
@@ -131,13 +136,95 @@ function renderMyList(list) {
   }
   const g = document.createElement('div');
   g.className = 'grid';
-  list.forEach((item, i) => g.appendChild(createVideoCard(item, { index: i })));
+  list.forEach((item, i) => {
+    const card = createVideoCard(item, { index: i });
+    addCommentToggle(card, item);
+    addEditEntry(card, item);
+    if (state.deleteMode) addDeleteEntry(card, item);
+    g.appendChild(card);
+  });
   grid.appendChild(g);
 }
 
 function appendMyList(list) {
   const g = state.container.querySelector('#myGrid .grid');
-  if (g) list.forEach((item) => g.appendChild(createVideoCard(item)));
+  if (g) {
+    list.forEach((item) => {
+      const card = createVideoCard(item);
+      addCommentToggle(card, item);
+      addEditEntry(card, item);
+      if (state.deleteMode) addDeleteEntry(card, item);
+      g.appendChild(card);
+    });
+  }
+}
+
+/** 独立「删除」入口：点击进入/退出删除模式（进入后各卡片才显示删除按钮，默认不常驻） */
+function toggleDeleteMode() {
+  state.deleteMode = !state.deleteMode;
+  const btn = state.container.querySelector('#myDeleteModeBtn');
+  btn.textContent = state.deleteMode ? '完成' : '删除';
+  btn.classList.toggle('active', state.deleteMode);
+  loadMyContent(state.myPage); // 重渲染以显示/隐藏卡片删除按钮
+}
+
+/** 删除模式下卡片右上角的删除按钮：确认后删除该投稿 */
+function addDeleteEntry(card, item) {
+  const del = document.createElement('button');
+  del.className = 'v-card-delete';
+  del.textContent = '✕';
+  del.title = '删除该作品';
+  del.addEventListener('click', async (e) => {
+    e.stopPropagation(); // 卡片本身点击跳详情，按钮不触发跳转
+    if (!window.confirm('确定删除该作品吗？删除后不可恢复')) return;
+    try {
+      await request(`content/delete?contentId=${item.id}`, { method: 'POST' });
+      showToast('删除成功');
+      loadMyContent(state.myPage); // 保持删除模式，便于连续删除
+    } catch (err) {
+      showToast(err.message || '删除失败');
+    }
+  });
+  card.querySelector('.v-card-cover').appendChild(del);
+}
+
+/** 我的投稿卡片上的「关闭/开启评论区」按钮（仅作者本人可见的本页自己作品） */
+function addCommentToggle(card, item) {
+  const toggle = document.createElement('button');
+  toggle.className = 'v-card-toggle';
+  toggle.textContent = item.commentEnabled === false ? '开启评论区' : '关闭评论区';
+  toggle.addEventListener('click', async (e) => {
+    e.stopPropagation(); // 卡片本身点击跳详情，按钮不触发跳转
+    const enabled = item.commentEnabled === false ? 1 : 0;
+    try {
+      await request(`content/commentEnabled?contentId=${item.id}&enabled=${enabled}`, { method: 'POST' });
+      item.commentEnabled = enabled === 1;
+      toggle.textContent = item.commentEnabled === false ? '开启评论区' : '关闭评论区';
+      showToast(enabled === 1 ? '评论区已开启' : '评论区已关闭');
+    } catch (err) {
+      showToast(err.message || '操作失败');
+    }
+  });
+  card.appendChild(toggle);
+}
+
+/** 我的投稿卡片上的「编辑」按钮：查看已上传内容并直接改标题/简介/替换或删除媒体 */
+function addEditEntry(card, item) {
+  const edit = document.createElement('button');
+  edit.className = 'v-card-toggle';
+  edit.textContent = '编辑';
+  edit.addEventListener('click', async (e) => {
+    e.stopPropagation(); // 卡片本身点击跳详情，按钮不触发跳转
+    try {
+      // ContentVO 不含 videoUrl/imageUrls，需拉全量内容
+      const full = await request(`search/IdSearch?contentId=${item.id}`);
+      if (!full) { showToast('内容不存在'); return; }
+      openEditWorkModal(full, () => loadMyContent(state.myPage));
+    } catch (err) {
+      showToast(err.message || '加载失败');
+    }
+  });
+  card.appendChild(edit);
 }
 
 function renderMyLoadMore() {

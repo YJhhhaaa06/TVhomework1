@@ -2,6 +2,7 @@ package com.itheima.dao;
 
 import com.itheima.ioc.annotation.Component;
 import com.itheima.model.cache.ContentCacheDTO;
+import com.itheima.model.vo.AdminContentVO;
 
 import java.sql.*;
 import java.util.ArrayList;
@@ -54,6 +55,7 @@ public class ContentDao {
                    c.category_id,
                    c.comment_count,
                    c.like_count,
+                   c.comment_enabled,
                    c.create_time,
                    u.username,
                    u.id AS user_id
@@ -84,6 +86,7 @@ public class ContentDao {
                    c.category_id,
                    c.comment_count,
                    c.like_count,
+                   c.comment_enabled,
                    c.create_time,
                    u.username,
                    u.id AS user_id
@@ -285,5 +288,78 @@ public class ContentDao {
             ps.setLong(2, contentId);
             ps.executeUpdate();
         }
+    }
+
+    /** 作者开关评论区（1-开, 0-关） */
+    public int updateCommentEnabled(Connection conn, long contentId, boolean enabled) throws SQLException {
+        String sql = "UPDATE content SET comment_enabled = ? WHERE id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, enabled ? 1 : 0);
+            ps.setLong(2, contentId);
+            return ps.executeUpdate();
+        }
+    }
+
+    /** 作者编辑作品信息：更新标题与简介（A3，全文索引由 MySQL 自动维护） */
+    public int updateContentInfo(Connection conn, long contentId, String title, String description) throws SQLException {
+        String sql = "UPDATE content SET title = ?, description = ? WHERE id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, title);
+            ps.setString(2, description);
+            ps.setLong(3, contentId);
+            return ps.executeUpdate();
+        }
+    }
+
+    /** 作者删除作品：软删（A1，复用现有 is_deleted 字段，无 DDL） */
+    public int softDeleteContent(Connection conn, long contentId) throws SQLException {
+        String sql = "UPDATE content SET is_deleted = 1 WHERE id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, contentId);
+            return ps.executeUpdate();
+        }
+    }
+
+    /** 读取内容当前 is_deleted 状态（A2）：0 正常 / 1 作者删除 / 2 管理员下架；不存在返回 -1 */
+    public int getContentStatus(Connection conn, long contentId) throws SQLException {
+        String sql = "SELECT is_deleted FROM content WHERE id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, contentId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1);
+                }
+                return -1;
+            }
+        }
+    }
+
+    /** 设置内容 is_deleted 状态（A2）：0 正常 / 1 作者删除 / 2 管理员下架 */
+    public int updateContentDeletedState(Connection conn, long contentId, int state) throws SQLException {
+        String sql = "UPDATE content SET is_deleted = ? WHERE id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, state);
+            ps.setLong(2, contentId);
+            return ps.executeUpdate();
+        }
+    }
+
+    /** 管理端内容清单（A2）：含正常与已下架，不含已删除(1)的内容 */
+    public List<AdminContentVO> findContentForAdmin(Connection conn) throws SQLException {
+        List<AdminContentVO> list = new ArrayList<>();
+        String sql = """
+                SELECT c.id, c.title, c.type, c.is_deleted, u.username AS author_name
+                FROM content c
+                JOIN users u ON c.user_id = u.id
+                WHERE c.is_deleted IN (0, 2)
+                ORDER BY c.create_time DESC, c.id DESC
+                """;
+        try (PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                list.add(ResultMap.buildAdminContent(rs));
+            }
+        }
+        return list;
     }
 }

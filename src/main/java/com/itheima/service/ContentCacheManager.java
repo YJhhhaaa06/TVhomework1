@@ -77,6 +77,18 @@ public class ContentCacheManager implements Initializable, Disposable {
         likeCacheService.deleteContentLike(contentId);
     }
 
+    /**
+     * 删除内容后整体剔除缓存（A1）：
+     * 复用 evictContent 剔除索引/内容/评论/时间戳/Redis 内容点赞，并同步移除推荐列表中的对应项。
+     * recommendList 虽当前未被直接读取，但保持内存结构一致，防未来踩坑。
+     */
+    public void removeContent(long contentId) {
+        evictContent(contentId);
+        synchronized (recommendList) {
+            recommendList.removeIf(v -> v.getId() == contentId);
+        }
+    }
+
     private void cacheContent(long contentId, ContentCacheDTO detail, List<CommentCacheDTO> comments) {
         contentCache.put(contentId, detail);
         commentCache.put(contentId, comments);
@@ -224,13 +236,16 @@ public class ContentCacheManager implements Initializable, Disposable {
 
     public void startScheduler() {
         scheduler = Executors.newSingleThreadScheduledExecutor();
+        // 初始延迟=刷新周期：init() 已同步 refresh 一次，无需启动后 0 延迟再刷；
+        // 否则首帧异步 refresh 会在单测 init() 后立刻覆盖缓存（偶发竞态）
+        long refreshMinutes = AppConfig.getContentRefreshMinutes();
         scheduler.scheduleAtFixedRate(() -> {
             try {
                 refresh();
             } catch (Exception e) {
                 LOGGER.log(Level.WARNING, "缓存定时刷新异常", e);
             }
-        }, 0, AppConfig.getContentRefreshMinutes(), TimeUnit.MINUTES);
+        }, refreshMinutes, refreshMinutes, TimeUnit.MINUTES);
     }
 
     @Override
@@ -281,12 +296,19 @@ public class ContentCacheManager implements Initializable, Disposable {
             Long parentId = c.getParentId();
             if (parentId == null || parentId == 0) {
                 roots.add(c);
-            } else {
-                CommentCacheDTO parent = map.get(parentId);
-                if (parent != null) {
-                    parent.getChildren().add(c);
-                }
+                continue;
             }
+            // 楼中楼：回复一律挂主楼（沿 parent 链上溯到顶，防御存量脏数据）
+            CommentCacheDTO parent = map.get(parentId);
+            if (parent == null) {
+                continue; // 父缺失（理论不可达，迁移前已归一）
+            }
+            while (parent.getParentId() != null && parent.getParentId() != 0) {
+                CommentCacheDTO ancestor = map.get(parent.getParentId());
+                if (ancestor == null) break;
+                parent = ancestor;
+            }
+            parent.getChildren().add(c);
         }
         return roots;
     }
@@ -350,6 +372,7 @@ public class ContentCacheManager implements Initializable, Disposable {
         cVO.setCategoryId(dto.getCategoryId());
         cVO.setCommentCount(dto.getCommentCount());
         cVO.setLikeCount(dto.getLikeCount());
+        cVO.setCommentEnabled(dto.isCommentEnabled());
         cVO.setAuthorName(dto.getAuthorName());
         cVO.setCoverUrl(dto.getCoverUrl());
         cVO.setCreateTime(dto.getCreateTime());
@@ -364,6 +387,7 @@ public class ContentCacheManager implements Initializable, Disposable {
         cdVO.setCategoryId(dto.getCategoryId());
         cdVO.setCommentCount(dto.getCommentCount());
         cdVO.setLikeCount(dto.getLikeCount());
+        cdVO.setCommentEnabled(dto.isCommentEnabled());
         cdVO.setAuthorName(dto.getAuthorName());
         cdVO.setCoverUrl(dto.getCoverUrl());
         cdVO.setVideoUrl(dto.getVideoUrl());
@@ -374,7 +398,10 @@ public class ContentCacheManager implements Initializable, Disposable {
     // ===== 评论树工具（缓存用）=====
 
     public List<CommentCacheDTO> getCommentTree(long contentId) {
-        return commentCache.getOrDefault(contentId, new ArrayList<>());
+        synchronized (commentCache) {
+            List<CommentCacheDTO> tree = commentCache.get(contentId);
+            return tree == null ? new ArrayList<>() : new ArrayList<>(tree);
+        }
     }
 
     public List<Long> collectCommentIds(List<CommentCacheDTO> tree) {
@@ -448,16 +475,65 @@ public class ContentCacheManager implements Initializable, Disposable {
         }
     }
 
+    // ===== 作者编辑作品后同步缓存 =====
+
+    /**
+     * 换源/删图/改文案后同步内容缓存：
+     * 未缓存则直接按需回填；已缓存则重载整行（含 title/description）与媒体，并同步推荐列表封面。
+     * 不整体 evict，避免误清评论/点赞缓存。
+     */
+    public void refreshContent(long contentId) {
+        if (!contentCache.containsKey(contentId)) {
+            backfillContent(contentId);
+            return;
+        }
+        try {
+            ContentCacheDTO newDto = transactionTemplate.execute(conn -> {
+                try {
+                    ContentCacheDTO dto = contentDao.findContent(conn, contentId);
+                    if (dto == null) {
+                        return null;
+                    }
+                    Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, contentId);
+                    buildContentMedia(dto, mediaMap);
+                    return dto;
+                } catch (SQLException e) {
+                    LOGGER.log(Level.SEVERE, "刷新内容缓存失败, contentId=" + contentId, e);
+                    throw new ServerException("数据库读取失败");
+                }
+            });
+            if (newDto == null) {
+                evictContent(contentId);
+                return;
+            }
+            contentCache.put(contentId, newDto);
+            contentTimestamps.put(contentId, System.currentTimeMillis());
+            ContentVO cvo = toContentVO(newDto);
+            synchronized (recommendList) {
+                for (int i = 0; i < recommendList.size(); i++) {
+                    if (recommendList.get(i).getId() == contentId) {
+                        recommendList.set(i, cvo);
+                        break;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "刷新内容缓存异常, contentId=" + contentId, e);
+        }
+    }
+
     // ===== 评论缓存实时更新 =====
 
     public void addCommentToCache(long contentId, CommentCacheDTO newComment, Long parentId) {
-        List<CommentCacheDTO> tree = commentCache.get(contentId);
-        if (tree == null) return;
-        newComment.setChildren(new ArrayList<>());
-        if (parentId == null || parentId == 0) {
-            tree.add(newComment);
-        } else {
-            insertChildToTree(tree, parentId, newComment);
+        synchronized (commentCache) {
+            List<CommentCacheDTO> tree = commentCache.get(contentId);
+            if (tree == null) return;
+            newComment.setChildren(new ArrayList<>());
+            if (parentId == null || parentId == 0) {
+                tree.add(newComment);
+            } else {
+                insertChildToTree(tree, parentId, newComment);
+            }
         }
     }
 
@@ -477,6 +553,26 @@ public class ContentCacheManager implements Initializable, Disposable {
             }
         }
         return false;
+    }
+
+    /**
+     * 删除评论后同步缓存：主楼连楼内回复一起移除；楼内回复仅移除自己
+     * 与 getCommentTree/addCommentToCache 共用 commentCache 锁，防止并发读写同一 List
+     */
+    public void removeCommentFromCache(long contentId, long commentId, boolean isMain) {
+        synchronized (commentCache) {
+            List<CommentCacheDTO> tree = commentCache.get(contentId);
+            if (tree == null) return;
+            if (isMain) {
+                tree.removeIf(c -> c.getCommentId() == commentId);
+            } else {
+                for (CommentCacheDTO root : tree) {
+                    if (root.getChildren() != null) {
+                        root.getChildren().removeIf(c -> c.getCommentId() == commentId);
+                    }
+                }
+            }
+        }
     }
 
     // ===== 内存缓存实时同步 =====
@@ -509,6 +605,25 @@ public class ContentCacheManager implements Initializable, Disposable {
             for (ContentVO cvo : recommendList) {
                 if (cvo.getId() == contentId) {
                     cvo.setCommentCount(cvo.getCommentCount() + delta);
+                    break;
+                }
+            }
+        }
+    }
+
+    /**
+     * 作者开关评论区后实时同步内存中 content 的 commentEnabled
+     * 同时更新 contentCache 和 recommendList，避免等待定时刷新读到旧值
+     */
+    public void updateContentCommentEnabled(long contentId, boolean enabled) {
+        ContentCacheDTO dto = contentCache.get(contentId);
+        if (dto != null) {
+            dto.setCommentEnabled(enabled);
+        }
+        synchronized (recommendList) {
+            for (ContentVO cvo : recommendList) {
+                if (cvo.getId() == contentId) {
+                    cvo.setCommentEnabled(enabled);
                     break;
                 }
             }

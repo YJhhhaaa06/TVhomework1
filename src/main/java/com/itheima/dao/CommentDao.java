@@ -14,8 +14,8 @@ import java.util.List;
 public class CommentDao {
 
     //增
-    public long addComment(Connection conn,long contentId,long userId,String content,Long parentId)throws SQLException {
-        String sql = "insert into comment (content_id, user_id, content, parent_id) values (?, ?, ?, ?)";
+    public long addComment(Connection conn, long contentId, long userId, String content, Long parentId, Long replyToUserId) throws SQLException {
+        String sql = "insert into comment (content_id, user_id, content, parent_id, reply_to_user_id) values (?, ?, ?, ?, ?)";
         try (PreparedStatement pstmt = conn.prepareStatement(sql, PreparedStatement.RETURN_GENERATED_KEYS)) {
             pstmt.setLong(1, contentId);
             pstmt.setLong(2, userId);
@@ -24,6 +24,11 @@ public class CommentDao {
                 pstmt.setNull(4, java.sql.Types.BIGINT);
             } else {
                 pstmt.setLong(4, parentId);
+            }
+            if (replyToUserId == null) {
+                pstmt.setNull(5, java.sql.Types.BIGINT);
+            } else {
+                pstmt.setLong(5, replyToUserId);
             }
             pstmt.executeUpdate();
             try (ResultSet rs = pstmt.getGeneratedKeys()) {
@@ -36,7 +41,9 @@ public class CommentDao {
     }
 
     public CommentCacheDTO findCommentById(Connection conn, long commentId) throws SQLException {
-        String sql = "SELECT c.*, u.username FROM comment c LEFT JOIN users u ON c.user_id = u.id WHERE c.comment_id = ?";
+        String sql = "SELECT c.*, u.username, r.username AS reply_to_username FROM comment c " +
+                "LEFT JOIN users u ON c.user_id = u.id " +
+                "LEFT JOIN users r ON c.reply_to_user_id = r.id WHERE c.comment_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setLong(1, commentId);
             try (ResultSet rs = ps.executeQuery()) {
@@ -69,33 +76,11 @@ public class CommentDao {
         }
     }
 
-    public boolean isParentIdCorrect(Connection conn,long parentId,long contentId) throws SQLException {
-        String sql="SELECT COUNT(*) " +
-                "FROM comment " +
-                "WHERE comment_id = ? " +
-                "AND content_id = ? " +
-                "  AND is_deleted = 0";
-        try (PreparedStatement pstmt=conn.prepareStatement(sql)){
-            pstmt.setLong(1,parentId);
-            pstmt.setLong(2,contentId);
-
-            try (ResultSet rs= pstmt.executeQuery()){
-                if (rs.next()) {
-                    int count = rs.getInt(1);
-                    // 数量>0：父评论存在且归属正确
-                    return count > 0;
-                }
-            }
-            return false;
-
-        }
-
-    }
-
     public  List<CommentCacheDTO> getComments(Connection conn, Long contentId) throws SQLException {
 
-        String sql = "SELECT c.*, u.username " +
+        String sql = "SELECT c.*, u.username, r.username AS reply_to_username " +
                 "FROM comment c LEFT JOIN users u ON c.user_id = u.id " +
+                "LEFT JOIN users r ON c.reply_to_user_id = r.id " +
                 "WHERE c.content_id=? AND c.is_deleted=0 ORDER BY c.comment_id";
 
         List<CommentCacheDTO> list = new ArrayList<>();
@@ -125,6 +110,52 @@ public class CommentDao {
             ps.setInt(1, delta);
             ps.setLong(2, commentId);
             ps.executeUpdate();
+        }
+    }
+
+    //删（软删除，均不可恢复；楼中楼规则：删主楼整栋楼、删回复只删自己）
+
+    /** 删主楼：整栋楼软删（主楼 + 楼内回复） */
+    public void softDeleteFloor(Connection conn, long mainCommentId) throws SQLException {
+        String sql = "UPDATE comment SET is_deleted = 1 WHERE comment_id = ? OR parent_id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, mainCommentId);
+            ps.setLong(2, mainCommentId);
+            ps.executeUpdate();
+        }
+    }
+
+    /** 删回复：仅软删自己 */
+    public void softDeleteOne(Connection conn, long commentId) throws SQLException {
+        String sql = "UPDATE comment SET is_deleted = 1 WHERE comment_id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, commentId);
+            ps.executeUpdate();
+        }
+    }
+
+    /** 统计主楼未删除的楼内回复数。
+     *  口径：单删回复时 comment_count 已 -1；删主楼时再扣 "1(主楼) + 剩余未删回复数"，
+     *  与递增口径对称，避免对已单删回复二次扣减导致负数。 */
+    public int countFloorReplies(Connection conn, long mainCommentId) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM comment WHERE parent_id = ? AND is_deleted = 0";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, mainCommentId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1);
+                }
+            }
+            return 0;
+        }
+    }
+
+    /** 删除内容时级联软删该内容全部评论（A1，一次覆盖主楼与楼内回复；对已单删评论幂等） */
+    public int softDeleteByContentId(Connection conn, long contentId) throws SQLException {
+        String sql = "UPDATE comment SET is_deleted = 1 WHERE content_id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, contentId);
+            return ps.executeUpdate();
         }
     }
 
