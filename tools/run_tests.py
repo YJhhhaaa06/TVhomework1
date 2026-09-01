@@ -26,17 +26,22 @@ import time
 import urllib.request
 from pathlib import Path
 
+def _env(name: str, default: str) -> str:
+    """读取 TV_* 环境变量覆盖沙盒路径；未设置时用默认值（与 conftest.py 的 TV_* 模式一致）。"""
+    return os.environ.get(name, default)
+
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEST_DIR = PROJECT_ROOT / "src" / "test" / "python"
-STAGE8_TARGET = Path(r"D:\data\projects\VideoPlatform\stone\temp\stage8-target")
+STAGE8_TARGET = Path(_env("TV_STAGE8_TARGET", r"D:\data\projects\VideoPlatform\stone\temp\stage8-target"))
 WAR_FILE = STAGE8_TARGET / "untitled-1.0-SNAPSHOT.war"
 
-MAVEN_CMD = Path(r"D:\IDE\IDEA\IntelliJ IDEA 2025.3.2\plugins\maven\lib\maven3\bin\mvn.cmd")
-JAVA_HOME = Path(r"D:\dev\DevTools\jdk\openjdk-25.0.2")
-CATALINA_HOME = Path(r"D:\dev\DevTools\tomcat\apache-tomcat-10.1.54")
-CATALINA_BASE = Path(r"D:\data\projects\VideoPlatform\stone\temp\tomcat-test-18080")
-M2_REPO = Path(r"D:\dev\WorkSpace\VideoPlatform\maven")
-PYTEST_DEPS = Path(r"D:\dev\WorkSpace\VideoPlatform\temp\pytest-deps")
+MAVEN_CMD = Path(_env("TV_MAVEN_CMD", r"D:\IDE\IDEA\IntelliJ IDEA 2025.3.2\plugins\maven\lib\maven3\bin\mvn.cmd"))
+JAVA_HOME = Path(_env("TV_JAVA_HOME", r"D:\dev\DevTools\jdk\openjdk-25.0.2"))
+CATALINA_HOME = Path(_env("TV_CATALINA_HOME", r"D:\dev\DevTools\tomcat\apache-tomcat-10.1.54"))
+CATALINA_BASE = Path(_env("TV_CATALINA_BASE", r"D:\data\projects\VideoPlatform\stone\temp\tomcat-test-18080"))
+M2_REPO = Path(_env("TV_M2_REPO", r"D:\dev\WorkSpace\VideoPlatform\maven"))
+PYTEST_DEPS = Path(_env("TV_PYTEST_DEPS", r"D:\dev\WorkSpace\VideoPlatform\temp\pytest-deps"))
 
 HTTP_PORT = 18080
 SHUTDOWN_PORT = 18005
