@@ -70,9 +70,8 @@ untitled/
 │   │       └── static/              # 前端资源（css/common.css + js/ 基础设施与视图模块）
 │   │
 │   └── test/
-│       ├── *.http                   # HTTP 测试文件（17个）
-│       ├── java/com/itheima/        # JUnit 单元测试（61 例，阶段八新增）
-│       └── python/                  # pytest 测试脚本（45 例 + 1 条件跳过）
+│       ├── java/com/itheima/        # JUnit 单元测试（113 例）
+│       └── python/                  # pytest 端到端脚本（103 例）
 │
 ├── ssm_*/                           # 空壳子模块（待删除）
 └── logs/                            # 运行日志
@@ -472,29 +471,7 @@ src/main/webapp/
 
 ## 九、测试文件
 
-| 文件 | 用例数 | 覆盖模块 |
-|------|--------|----------|
-| loginTest.http | 22 | 登录、注册 |
-| likeTest.http | 24 | 点赞 |
-| commentTest.http | 25 | 评论（新增删除小节） |
-| adminCommentTest.http | 6 | 管理员删评论（阶段一新增） |
-| followTest.http | 11 | 关注 |
-| couponTest.http | 9 | 优惠券 |
-| feedTest.http | ~10 | Feed 流 |
-| searchTest.http | ~15 | 搜索 |
-| startTest.http | ~8 | 首页推荐 |
-| changePasswordTest.http | ~12 | 修改密码 |
-| uploadTest.http | ~20 | 上传 |
-| dataConsistencyTest.http | 23 | 数据一致性 |
-| userProfileTest.http | 23 | 用户资料修改 |
-| followListTest.http | 19 | 关注/粉丝列表 |
-| feedDetailTest.http | 20 | Feed/详情 |
-| searchCompleteTest.http | 15 | 搜索完整 |
-| startCompleteTest.http | 14 | 首页推荐完整 |
-| editWorkTest.http | 21 | 编辑作品：换源/删图/改文案（阶段三） |
-| deleteContentTest.http | 6 | 删除作品：作者删除/非作者/未登录/不存在/已删/缺参（阶段四） |
-| hideContentTest.http | 10 | 内容审核下架/恢复：list/hide/unhide 的 200/409/403/401/404/400/未识别（阶段五） |
-| **合计** | **~302** | - |
+> 2026-09-01 起测试体系 = **JUnit（服务层单元基准，113 例）+ pytest（端到端，103 例）** 两套；`.http` 文件已全部移除（不纳入测试体系、调试价值有限，见 TEST_AUTOMATION.md 〇节）。
 
 ### 9.1 pytest 自动化用例（tools/run_tests.py 驱动）
 
