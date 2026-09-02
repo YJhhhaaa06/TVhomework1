@@ -51,6 +51,18 @@ BASE_URL = f"http://127.0.0.1:{HTTP_PORT}"
 START_TIMEOUT_SECONDS = 90
 STOP_TIMEOUT_SECONDS = 25
 
+# ---- 测试库连接（独立测试库 TVDatabase_test，docker mysql8.4:3307）----
+TEST_DB_HOST = os.environ.get("TV_DB_HOST", "127.0.0.1")
+TEST_DB_PORT = os.environ.get("TV_DB_PORT", "3307")
+TEST_DB_USER = os.environ.get("TV_DB_USER", "root")
+TEST_DB_PASSWORD = os.environ.get("TV_DB_PASSWORD", "ROOT123")
+TEST_DB_NAME = os.environ.get("TV_DB_NAME", "TVDatabase_test")
+TEST_DB_URL = os.environ.get(
+    "TV_DB_URL",
+    f"jdbc:mysql://{TEST_DB_HOST}:{TEST_DB_PORT}/{TEST_DB_NAME}"
+    "?useSSL=false&serverTimezone=Asia/Shanghai",
+)
+
 PID_FILE = CATALINA_BASE / "logs" / "tomcat.pid"
 RUN_LOG = CATALINA_BASE / "logs" / "run.log"
 TOMCAT_STDOUT = CATALINA_BASE / "logs" / "tomcat_stdout.log"
@@ -75,6 +87,10 @@ def base_env() -> dict:
     env["JAVA_HOME"] = str(JAVA_HOME)
     env["CATALINA_HOME"] = str(CATALINA_HOME)
     env["CATALINA_BASE"] = str(CATALINA_BASE)
+    # 测试库连接覆盖（AppConfig 支持 db.* -> DB_* 环境变量）
+    env["DB_URL"] = TEST_DB_URL
+    env["DB_USERNAME"] = TEST_DB_USER
+    env["DB_PASSWORD"] = TEST_DB_PASSWORD
     return env
 
 
@@ -372,6 +388,33 @@ def cmd_stop(_args) -> int:
 # test
 # ---------------------------------------------------------------------------
 
+def _cleanup_test_db() -> None:
+    """跑完测试后自动清理测试库数据库数据（media 文件由 cleanup_orphan_media.py 另行处理）。"""
+    cleanup_script = PROJECT_ROOT / "tools" / "cleanup_data.py"
+    if not cleanup_script.exists():
+        log("警告: 缺少 tools/cleanup_data.py，跳过测试库清理")
+        return
+    env = os.environ.copy()
+    env["DB_HOST"] = TEST_DB_HOST
+    env["DB_PORT"] = TEST_DB_PORT
+    env["DB_USER"] = TEST_DB_USER
+    env["DB_PASSWORD"] = TEST_DB_PASSWORD
+    env["DB_NAME"] = TEST_DB_NAME
+    proc = subprocess.run(
+        [sys.executable, str(cleanup_script), "--execute", "--no-backup"],
+        cwd=str(PROJECT_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=300,
+    )
+    if proc.returncode != 0:
+        log(f"警告: 测试库清理失败 exit={proc.returncode} (输出尾部见下)")
+        print((proc.stderr or proc.stdout or "").splitlines()[-5:], file=sys.stderr)
+
+
 def cmd_test(_args) -> int:
     require(PYTEST_DEPS)
     if not app_ready():
@@ -384,11 +427,18 @@ def cmd_test(_args) -> int:
         os.pathsep + existing_pythonpath if existing_pythonpath else ""
     )
     env["TV_BASE_URL"] = BASE_URL
+    # 测试库连接参数透传给 pytest（admin.py / test_comment_delete.py 通过 DB_* 读取）
+    env["DB_HOST"] = TEST_DB_HOST
+    env["DB_PORT"] = TEST_DB_PORT
+    env["DB_USER"] = TEST_DB_USER
+    env["DB_PASSWORD"] = TEST_DB_PASSWORD
+    env["DB_NAME"] = TEST_DB_NAME
 
     cmd = [sys.executable, "-m", "pytest", str(TEST_DIR), "-v", "--tb=short"]
     log("开始 pytest ...")
     result = subprocess.run(cmd, cwd=str(PROJECT_ROOT), env=env)
     log(f"pytest 结束，exit={result.returncode}")
+    _cleanup_test_db()
     return result.returncode
 
 

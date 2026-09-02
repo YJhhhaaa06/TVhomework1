@@ -65,7 +65,7 @@
 
 > 覆盖机制：上述路径均可在 `tools/run_tests*.py` 中通过同名 `TV_*` 环境变量覆盖（T1 落地，与 conftest.py 的 TV\_BASE\_URL 等先例一致）。HTTP 端口 18080/shutdown 18005 属安全隔离设计，**不可覆盖**。
 
-外部服务依赖：MySQL80（TVDatabase）和 Redis 必须运行中。
+外部服务依赖：生产库 MySQL80（TVDatabase:3306）+ **独立测试库 Docker MySQL8.4（TVDatabase\_test:3307）** + Redis，均需运行中。
 
 ***
 
@@ -169,19 +169,48 @@ build ──> start ──> test ──> finally: stop
 
 ***
 
-## 六、数据副作用与清理
+## 六、数据副作用与隔离
 
-每次运行都会真实写入数据：
+pytest 端到端用例运行在**独立测试库** `TVDatabase_test`（Docker MySQL 127.0.0.1:3307，连接由 `run_tests.py` 通过 `DB_URL/DB_USERNAME/DB_PASSWORD` 环境变量注入，`AppConfig` 自动读取，不改 app.properties）：
 
 - 注册用户（`testA_*`、`testB_*`、`smoke_user_*`、`timing_*` 等）
 
-- 上传测试视频/图片（写入 `D:\data\projects\VideoPlatform\stone`）
+- 上传测试视频/图片（仍写入 `D:\data\projects\VideoPlatform\stone`）
 
 - 评论、点赞、关注记录
 
 - 抢优惠券（消耗库存）
 
-清理测试数据的 SQL 见 `TEST_GUIDE.md` 6.2 节。若重构期间频繁跑测试，建议后续建立独立测试库，避免污染开发数据。
+**自动清理**：`run_tests.py test/all` 结束后自动清理**测试库**数据库数据（pytest\_/smoke\_ 前缀 content 及关联记录，等价 `DB_* 指向测试库 + cleanup_data.py --execute --no-backup`）。**生产库 TVDatabase 不再产生测试残留**。
+
+**媒体文件**：pytest 上传的媒体文件仍落 stone 目录，孤儿媒体由 `tools/cleanup_orphan_media.py` 按需清理（用户手动执行，不在自动清理范围内）。
+
+**管理员链路**：`test_admin.py` / `test_hide_content.py` / `test_comment_delete.py` 的管理员操作通过 `DB_*` 环境变量连测试库（`run_tests.py cmd_test` 注入），`tools/admin.py` 与测试内直接 SQL 均遵守该约定；admin.py 人工命令行调用不设环境变量时默认仍连 3306 生产库（向后兼容）。
+
+### 6.1 测试库初始化与重建
+
+- 一次初始化/表结构更新后重建：`python tools\init_test_db.py`（默认取 `.docs/DBBackup` 下最新 `db.sql`，或 `--dump` 指定；DROP+CREATE 后导入）。
+
+- 测试库连接参数可用 `TV_DB_HOST/TV_DB_PORT/TV_DB_USER/TV_DB_PASSWORD/TV_DB_NAME/TV_DB_URL` 环境变量覆盖（默认 127.0.0.1:3307 / root / ROOT123 / TVDatabase\_test）。
+
+- 安全门禁：`init_test_db.py` 拒绝操作 `DB_PORT=3306`，防止误 DROP 生产库。
+
+- 清理报告：`cleanup_data.py --execute` 生成的 `CLEANUP_REPORT_*.md` 写入 `.docs/temp/`（已在 .gitignore，不入库）。
+
+### 6.2 完整性校验统一工具（tools/check\_integrity.py）
+
+脏数据排查单一入口（默认 dry-run 只读，绝不移动/删除文件；计数漂移修复需显式 `--fix`）：一次列出**孤儿记录**（content\_media/content\_like/comment/comment\_like/comment\_media/楼中楼孤儿回复）、**孤儿媒体文件**（磁盘无库引用）、**库引用缺失文件**（库 URL 指向的磁盘文件不存在）、**重复引用**（content\_media/comment\_media 无唯一键）、**计数漂移**（content.like\_count / content.comment\_count / comment.like\_count / users.follow\_count / users.follower\_count 与关联表实际记录数不一致）。
+
+```powershell
+python tools\check_integrity.py                          # 生产库（默认 3306），报告落 .docs/temp/INTEGRITY_REPORT_*.md
+python tools\check_integrity.py --no-media               # 跳过磁盘媒体检查（只查库内）
+python tools\check_integrity.py --fix                    # 显式修复计数漂移（仅重算漂移行计数列，单事务，失败自动回滚）
+DB_PORT=3307 DB_PASSWORD=ROOT123 DB_NAME=TVDatabase_test python tools\check_integrity.py   # 查测试库
+```
+
+退出码：0 完成 / 1 参数或其它错误（含 `--fix` 失败已回滚）/ 2 mysql 客户端不可用 / 3 数据库连接或健康门禁失败（未触碰任何数据）/ 5 疑似配置错误（库内存在媒体记录但磁盘与被引用 URL 无重叠或媒体目录缺失）。
+
+**职责边界**：`check_integrity.py` 默认只做只读检查并输出报告；计数漂移可经显式 `--fix` 单事务重算修复（不删行、不动文件，逻辑与 CountRepairTool 一致）；其余清理按报告另行执行 `cleanup_data.py`（测试污染/孤儿 content\_media/comment\_like）或 `cleanup_orphan_media.py`（孤儿媒体移回收站）；其余检查项（孤儿 comment/content\_like/comment\_media/楼中楼、重复引用、库引用缺失文件）cleanup 暂不支持，需人工或后续工具处理。
 
 ***
 
