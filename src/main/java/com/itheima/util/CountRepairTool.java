@@ -4,6 +4,15 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 
+/**
+ * 计数修复工具（运维用，可批量重算各类计数字段）。
+ *
+ * 自 T4 起，相同能力由 tools/check_integrity.py 的统一入口提供：
+ *   - 计数漂移只读检查：python tools/check_integrity.py
+ *   - 计数修复：        python tools/check_integrity.py --fix
+ * 运维优先使用统一工具（dry-run 默认 + 显式 --fix + 单事务 + 报告落 .docs/temp/）；
+ * 本类保留，供直连调试或与统一工具结果交叉验证。SQL 语义一致，勿在此处新增漂移场景。
+ */
 public class CountRepairTool {
 
     public static void main(String[] args) {
