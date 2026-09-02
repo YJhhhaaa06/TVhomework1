@@ -145,6 +145,20 @@ pytest 端到端用例运行在**独立测试库** `TVDatabase_test`（Docker My
 - 安全门禁：`init_test_db.py` 拒绝操作 `DB_PORT=3306`，防止误 DROP 生产库。
 - 清理报告：`cleanup_data.py --execute` 生成的 `CLEANUP_REPORT_*.md` 写入 `.docs/temp/`（已在 .gitignore，不入库）。
 
+### 6.2 完整性校验统一工具（tools/check_integrity.py）
+
+脏数据排查单一入口（只读，dry-run 默认，绝不写库/移动文件）：一次列出**孤儿记录**（content_media/content_like/comment/comment_like/comment_media/楼中楼孤儿回复）、**孤儿媒体文件**（磁盘无库引用）、**库引用缺失文件**（库 URL 指向的磁盘文件不存在）、**重复引用**（content_media/comment_media 无唯一键）。
+
+```powershell
+python tools\check_integrity.py                          # 生产库（默认 3306），报告落 .docs/temp/INTEGRITY_REPORT_*.md
+python tools\check_integrity.py --no-media               # 跳过磁盘媒体检查（只查库内）
+DB_PORT=3307 DB_PASSWORD=ROOT123 DB_NAME=TVDatabase_test python tools\check_integrity.py   # 查测试库
+```
+
+退出码：0 完成 / 1 参数或其它错误 / 2 mysql 客户端不可用 / 3 数据库连接或健康门禁失败（未触碰任何数据）/ 5 疑似配置错误（库内存在媒体记录但磁盘与被引用 URL 无重叠或媒体目录缺失）。
+
+**职责边界**：`check_integrity.py` 只做只读检查并输出报告；清理按报告另行执行 `cleanup_data.py`（测试污染/孤儿 content_media/comment_like）或 `cleanup_orphan_media.py`（孤儿媒体移回收站）；其余检查项（孤儿 comment/content_like/comment_media/楼中楼、重复引用、库引用缺失文件）cleanup 暂不支持，需人工或后续工具处理。
+
 ---
 
 ## 七、给其他 agent 的快速操作指南
