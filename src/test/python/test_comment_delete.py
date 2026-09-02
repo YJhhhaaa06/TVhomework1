@@ -13,8 +13,10 @@ test_comment_delete.py - 阶段一 C1 评论软删除（楼中楼规则）验收
 说明：
 - 每个用例自建评论（消息带 uuid 保证唯一），删除后净零残留。
 - 管理员用例依赖本机 mysql 客户端（模式同 tools/admin.py），不可用时自动 skip。
+- 管理员用例连接的库由 DB_* 环境变量决定（测试时由 run_tests.py 注入指向测试库）。
 """
 
+import os
 import shutil
 import subprocess
 import uuid
@@ -23,11 +25,11 @@ from pathlib import Path
 import pytest
 import requests
 
-MYSQL_HOST = "127.0.0.1"
-MYSQL_PORT = "3306"
-MYSQL_USER = "root"
-MYSQL_PASSWORD = "MySQL"
-DB_NAME = "tvdatabase"
+MYSQL_HOST = os.environ.get("DB_HOST", "127.0.0.1")
+MYSQL_PORT = os.environ.get("DB_PORT", "3306")
+MYSQL_USER = os.environ.get("DB_USER", "root")
+MYSQL_PASSWORD = os.environ.get("DB_PASSWORD", "MySQL")
+DB_NAME = os.environ.get("DB_NAME", "tvdatabase")
 
 _COMMON_MYSQL_PATHS = [
     Path(r"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe"),
@@ -68,6 +70,15 @@ def _run_sql(mysql_path, sql):
     )
     if proc.returncode != 0:
         raise RuntimeError("mysql 执行失败: " + (proc.stderr.strip() or proc.stdout.strip()))
+    return proc.stdout.strip()
+
+
+def _query_role(mysql_path, user_id):
+    """回查用户当前 role，用于校验提升/降级真实生效。"""
+    out = _run_sql(mysql_path, f"SELECT role FROM users WHERE id = {user_id}")
+    if not out or not out.isdigit():
+        raise RuntimeError(f"回查角色失败: user_id={user_id}, output={out!r}")
+    return int(out)
 
 
 @pytest.fixture(scope="module")
@@ -79,8 +90,14 @@ def admin_token_b(base_url, user_b, token_b):
     user_id = user_b["id"]
     try:
         _run_sql(mysql, f"UPDATE users SET role = 1 WHERE id = {user_id}")
-    except RuntimeError:
-        pytest.skip("无法提升管理员，跳过管理员删除用例")
+        role_after = _query_role(mysql, user_id)
+        if role_after != 1:
+            pytest.fail(
+                f"管理员提升未生效（role={role_after}），"
+                f"可能连接了错误的库（当前 DB_PORT={MYSQL_PORT} DB_NAME={DB_NAME}）"
+            )
+    except RuntimeError as exc:
+        pytest.skip(f"无法提升管理员（{exc}），跳过管理员删除用例")
     yield token_b
     try:
         _run_sql(mysql, f"UPDATE users SET role = 0 WHERE id = {user_id}")

@@ -18,7 +18,7 @@
     3  备份文件缺失/为空/内容校验失败
 
 环境变量（可选）：
-    DB_HOST / DB_PORT / DB_USER / DB_PASSWORD
+    DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from pathlib import Path
 
 AUTO_BACKUP_ROOT = Path(r"D:\dev\WorkSpace\VideoPlatform\auto_backup")
 
-DB_NAME = "tvdatabase"
+DB_NAME = os.environ.get("DB_NAME", "tvdatabase")
 DB_HOST = os.environ.get("DB_HOST", "127.0.0.1")
 DB_PORT = os.environ.get("DB_PORT", "3306")
 DB_USER = os.environ.get("DB_USER", "root")

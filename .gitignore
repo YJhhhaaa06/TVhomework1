@@ -48,6 +48,7 @@ out/artifacts/MyApp/com/itheima/controller/Test3.class
 ### 本地/临时文档（不提交） ###
 .docs/temp/
 .docs/DBbackups/
+.docs/DBBackup/
 .docs/说明书/DATABASE.md
 .docs/说明书/AVAILABLE_TOOLS.md
 

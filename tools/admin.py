@@ -11,6 +11,8 @@
     * 只提升/降级已有用户；新建管理员 = 先用注册接口建号再 --promote
       （脚本不做 Python BCrypt 哈希）。
     * --promote/--demote 是普通 UPDATE，不修改表结构，执行前无需整库备份。
+    * 连接可用环境变量覆盖：DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME
+      （默认 127.0.0.1:3306 / root / MySQL / tvdatabase，对应生产库）。
 
 退出码：
     0  成功
@@ -22,16 +24,19 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-MYSQL_HOST = "127.0.0.1"
-MYSQL_PORT = "3306"
-MYSQL_USER = "root"
-MYSQL_PASSWORD = "MySQL"
-DB_NAME = "tvdatabase"
+# 连接参数可用环境变量覆盖（DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME），
+# 默认 3306 生产库，保持人工命令行调用行为不变；测试时由 run_tests.py 注入指向测试库。
+MYSQL_HOST = os.environ.get("DB_HOST", "127.0.0.1")
+MYSQL_PORT = os.environ.get("DB_PORT", "3306")
+MYSQL_USER = os.environ.get("DB_USER", "root")
+MYSQL_PASSWORD = os.environ.get("DB_PASSWORD", "MySQL")
+DB_NAME = os.environ.get("DB_NAME", "tvdatabase")
 
 COMMON_MYSQL_PATHS = [
     Path(r"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe"),
