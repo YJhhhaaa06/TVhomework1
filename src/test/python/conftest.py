@@ -19,6 +19,10 @@ import requests
 # 默认指向 run_tests 启动的独立测试实例（18080，连测试库 3307），避免手动跑 pytest 误连 IDEA 8080 生产实例
 BASE_URL = os.environ.get("TV_BASE_URL", "http://127.0.0.1:18080")
 
+# 基线种子内容标题前缀（与 tools/init_test_db.py 的 SEED_CONTENT_TITLE_PREFIX 保持一致，
+# 两处需同步修改）。避开 pytest_/smoke_ 前缀，以免被 cleanup_data.py 自动清理删除。
+SEED_COMMENT_CONTENT_PREFIX = "seed_baseline"
+
 # Test user credentials - use UUID for guaranteed uniqueness across runs
 # Phone must be 11 digits starting with 1, so use digits only
 _unique = uuid.uuid4().hex[:8]
@@ -285,19 +289,21 @@ def sample_post_content_id(token_a, test_files):
 
 @pytest.fixture(scope="session")
 def sample_comment_id(base_url, token_a):
-    """Return a commentId from an existing content that already has comments.
+    """Return a stable commentId from the baseline seed content.
 
-    The app keeps an in-memory comment cache populated at startup; comments
-    added to freshly uploaded content are not visible until a cache refresh,
-    so consistency tests reuse an existing comment instead of creating one.
+    Baseline content (title prefix SEED_COMMENT_CONTENT_PREFIX) is created by
+    tools/init_test_db.py on every test-DB rebuild, so its comments exist in the
+    cache loaded at app startup. Locate it deterministically via /search/keywordSearch
+    (MATCH on title/description, is_deleted=0, seed created last at init); fall back
+    to scanning the homepage for any content with comments if the search misses.
     """
-    resp = requests.get(f"{base_url}/start", params={"limit": 50}, timeout=10)
-    body = resp.json()
-    assert body.get("code") == 200, f"Homepage failed: {body}"
+    def _comment_id_of_content(content_id, strict=False):
+        """取内容首条评论 id。
 
-    for item in body.get("data", []):
-        if item.get("commentCount", 0) > 0:
-            content_id = item["id"]
+        strict=True（兜底分支，保持旧语义）：detail/comment 接口非 200 即抛断言；
+        strict=False（基线分支）：仅探测，任何失败返回 None 以便回退。
+        """
+        try:
             resp = requests.get(
                 f"{base_url}/search/IdSearch",
                 params={"contentId": content_id},
@@ -305,7 +311,10 @@ def sample_comment_id(base_url, token_a):
                 timeout=10,
             )
             body = resp.json()
-            assert body.get("code") == 200, f"Content detail failed: {body}"
+            if strict:
+                assert body.get("code") == 200, f"Content detail failed: {body}"
+            elif body.get("code") != 200:
+                return None
 
             resp = requests.get(
                 f"{base_url}/comment/show",
@@ -314,10 +323,39 @@ def sample_comment_id(base_url, token_a):
                 timeout=10,
             )
             body = resp.json()
-            assert body.get("code") == 200, f"Comment list failed: {body}"
+            if strict:
+                assert body.get("code") == 200, f"Comment list failed: {body}"
+            elif body.get("code") != 200:
+                return None
             comments = body.get("data", [])
-            if comments:
-                return comments[0]["commentId"]
+            return comments[0]["commentId"] if comments else None
+        except (requests.RequestException, KeyError, TypeError, ValueError):
+            return None
+
+    # 1) 基线种子内容：关键字搜索确定性定位（种子标题唯一，创建时间最新 -> 排在首屏）
+    resp = requests.get(
+        f"{base_url}/search/keywordSearch",
+        params={"keyword": SEED_COMMENT_CONTENT_PREFIX, "page": 1, "pageSize": 50},
+        timeout=10,
+    )
+    body = resp.json()
+    if body.get("code") == 200:
+        items = (body.get("data") or {}).get("list") or []
+        for item in items:
+            if str(item.get("title", "")).startswith(SEED_COMMENT_CONTENT_PREFIX):
+                comment_id = _comment_id_of_content(item.get("id"))
+                if comment_id is not None:
+                    return comment_id
+
+    # 2) 兜底：扫描首页任意带评论的内容（兼容未种子化/旧数据），保持原严格断言
+    resp = requests.get(f"{base_url}/start", params={"limit": 50}, timeout=10)
+    body = resp.json()
+    assert body.get("code") == 200, f"Homepage failed: {body}"
+    for item in body.get("data", []):
+        if item.get("commentCount", 0) > 0:
+            comment_id = _comment_id_of_content(item["id"], strict=True)
+            if comment_id is not None:
+                return comment_id
 
     pytest.skip("No content with comments found in database")
 

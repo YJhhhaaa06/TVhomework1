@@ -2,11 +2,13 @@
 """用生产库备份覆盖重建独立测试库 TVDatabase_test（Python，符合 AGENTS.md 脚本约定）。
 
 用途：
-    表结构/需求变更后，从 .docs/DBBackup 下最新的生产库备份 db.sql
-    （或用 --dump 显式指定）覆盖重建测试库，保证测试数据底座跟随生产结构。
+    表结构/需求变更后，从 .docs/archive/DBbackups 下最新的生产库备份 db.sql
+    （或用 --dump 显式指定）覆盖重建测试库，保证测试数据底座跟随生产结构；
+    导入完成后自动追加【基线种子】（1 个管理员 + 1 条含评论链的基线内容），
+    种子内容与维护约定见 .docs/说明书/TEST_SEED.md。
 
 用法：
-    python tools/init_test_db.py                          # 默认：.docs/DBBackup 下最新 db.sql -> 3307 测试库
+    python tools/init_test_db.py                          # 默认：.docs/archive/DBbackups 最新 db.sql -> 3307 测试库
     python tools/init_test_db.py --dump path/to/db.sql    # 显式指定备份文件
 
 连接（可用环境变量覆盖，默认指向测试库）：
@@ -18,10 +20,10 @@
     * 无备份文件可用时不 DROP 任何库，直接报错退出。
 
 退出码：
-    0  成功
+    0  成功（含基线种子应用与校验通过）
     1  参数/环境错误
     2  mysql 客户端不可用
-    3  导入或校验失败
+    3  导入、种子或校验失败
 """
 
 from __future__ import annotations
@@ -34,7 +36,15 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_DBBACKUP_DIR = PROJECT_ROOT / ".docs" / "DBBackup"
+DEFAULT_DBBACKUP_DIR = PROJECT_ROOT / ".docs" / "archive" / "DBbackups"
+
+# ---- 基线种子（T3，详见 .docs/说明书/TEST_SEED.md）----
+SEED_ADMIN_ID = 1  # 提升现有用户（一号员工）为管理员，不新建账号
+SEED_CONTENT_TITLE_PREFIX = "seed_baseline"
+SEED_CONTENT_TITLE = "seed_baseline_test_content"
+# 基线内容标题 LIKE 模式（\_ 转义下划线）。刻意避开 pytest_/smoke_ 前缀：
+# 否则会被 cleanup_data.py 按测试内容自动清理删除。
+_SEED_LIKE = f"{SEED_CONTENT_TITLE_PREFIX}\\_%"
 
 # 默认指向测试库（docker mysql8.4:3307）
 DB_HOST = os.environ.get("DB_HOST", "127.0.0.1")
@@ -70,7 +80,7 @@ def mysql_base_cmd(mysql: Path) -> list:
 
 
 def latest_backup_sql() -> Path | None:
-    """定位 .docs/DBBackup/<时间戳>/db.sql 中修改时间最新的那份。"""
+    """定位 .docs/archive/DBbackups/<时间戳>/db.sql 中修改时间最新的那份。"""
     if not DEFAULT_DBBACKUP_DIR.exists():
         return None
     matches = sorted(
@@ -81,13 +91,91 @@ def latest_backup_sql() -> Path | None:
     return matches[0] if matches else None
 
 
+def apply_baseline_seed(base: list[str]) -> tuple[bool, str]:
+    """导入备份后追加固定基线种子（幂等，可重复 init；见 .docs/说明书/TEST_SEED.md）。
+
+    基线内容：
+        * 管理员：users.id=SEED_ADMIN_ID 提升为 role=1（现有用户，不新建账号）。
+        * 基线内容：一条**type=2 图文**（无 content_media 行）+ 3 条评论链（主楼 /
+          回复 / 楼中楼@）。必须用图文：缓存构建 buildContentMedia 对 type=1 视频
+          强制要求 content_media 视频行，缺失会抛「资源已丢失」导致应用启动失败；
+          图文允许无媒体行（纯文字内容，媒体扫描视为完整）。标题避开
+          pytest_/smoke_ 前缀，避免被 cleanup_data.py 自动清理。
+    返回 (是否成功, 摘要或错误文本)。
+    """
+    seed_sql = (
+        # 1) 管理员基线（幂等 UPDATE）
+        f"UPDATE `users` SET `role` = 1 WHERE `id` = {SEED_ADMIN_ID}; "
+        # 2) 幂等清理旧种子（输入 dump 若已含种子则先删除，防止重复插入）
+        f"DELETE FROM `comment` WHERE `content_id` IN "
+        f"(SELECT `id` FROM `content` WHERE `title` LIKE '{_SEED_LIKE}'); "
+        f"DELETE FROM `content` WHERE `title` LIKE '{_SEED_LIKE}'; "
+        # 3) 基线内容：type=2 图文（无 content_media 行：缓存构建对图文不要求媒体行，
+        #    纯文字内容由媒体扫描视为完整，file_exists 回写 1）；
+        #    comment_count 显式设值（=3），避免计数漂移
+        "INSERT INTO `content` "
+        "(`user_id`,`type`,`title`,`description`,`category_id`,`comment_count`,"
+        "`like_count`,`is_deleted`,`create_time`,`update_time`,`file_exists`,"
+        "`last_verify_time`,`comment_enabled`) "
+        f"VALUES ({SEED_ADMIN_ID}, 2, '{SEED_CONTENT_TITLE}', "
+        "'T3 baseline seed content with comments', 0, 3, 0, 0, NOW(), NOW(), 1, NULL, 1); "
+        "SET @cid := LAST_INSERT_ID(); "
+        # 4) 主楼评论（作者=基线管理员）
+        "INSERT INTO `comment` (`content_id`,`user_id`,`content`,`parent_id`,`reply_to_user_id`) "
+        f"VALUES (@cid, {SEED_ADMIN_ID}, 'seed baseline comment main', NULL, NULL); "
+        "SET @c1 := LAST_INSERT_ID(); "
+        # 5) 回复（作者=库内既有用户 id=2）
+        "INSERT INTO `comment` (`content_id`,`user_id`,`content`,`parent_id`,`reply_to_user_id`) "
+        "VALUES (@cid, 2, 'seed baseline reply', @c1, NULL); "
+        "SET @c2 := LAST_INSERT_ID(); "
+        # 6) 楼中楼（parent=回复，@回复作者=2）
+        "INSERT INTO `comment` (`content_id`,`user_id`,`content`,`parent_id`,`reply_to_user_id`) "
+        f"VALUES (@cid, {SEED_ADMIN_ID}, 'seed baseline reply-to-reply', @c2, 2);"
+    )
+    proc = subprocess.run(
+        base + ["--default-character-set=utf8mb4", "--database", DB_NAME,
+                "--execute", seed_sql],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip()
+        return False, tail[:500] if tail else "mysql 执行失败（无输出）"
+
+    verify_sql = (
+        f"SELECT `role` FROM `users` WHERE `id` = {SEED_ADMIN_ID}; "
+        f"SELECT COUNT(*) FROM `comment` WHERE `content_id` IN "
+        f"(SELECT `id` FROM `content` WHERE `title` LIKE '{_SEED_LIKE}'); "
+        f"SELECT `title` FROM `content` WHERE `title` LIKE '{_SEED_LIKE}' LIMIT 1;"
+    )
+    proc = subprocess.run(
+        base + ["--batch", "--skip-column-names", "--database", DB_NAME,
+                "--execute", verify_sql],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if proc.returncode != 0:
+        return False, (proc.stderr or proc.stdout or "").strip()[:500]
+    lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+    admin_role = lines[0] if len(lines) > 0 else "?"
+    comment_cnt = lines[1] if len(lines) > 1 else "?"
+    seed_title = lines[2] if len(lines) > 2 else "?"
+    report = (f"管理员 id={SEED_ADMIN_ID} role={admin_role}；"
+              f"基线内容 '{seed_title}' 评论 {comment_cnt} 条")
+    if admin_role != "1" or comment_cnt != "3" or seed_title != SEED_CONTENT_TITLE:
+        return False, "校验不通过: " + report
+    return True, report
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="用生产库备份覆盖重建独立测试库（默认 .docs/DBBackup 最新 db.sql）"
+        description="用生产库备份覆盖重建独立测试库（默认 .docs/archive/DBbackups 最新 db.sql，导入后追加基线种子）"
     )
     parser.add_argument(
         "--dump", type=str, default=None,
-        help="生产库备份 sql 文件路径（默认自动选取 .docs/DBBackup 下最新 db.sql）",
+        help="生产库备份 sql 文件路径（默认自动选取 .docs/archive/DBbackups 下最新 db.sql）",
     )
     args = parser.parse_args()
 
@@ -109,7 +197,7 @@ def main() -> int:
     else:
         dump_path = latest_backup_sql()
         if dump_path is None:
-            print("错误: .docs/DBBackup 下没有备份 sql，请用 --dump 指定，或先运行 tools/backup.py")
+            print("错误: .docs/archive/DBbackups 下没有备份 sql，请用 --dump 指定，或先运行 tools/backup.py 并迁移备份到该目录")
             return 1
     print(f"使用备份: {dump_path}")
 
@@ -158,7 +246,16 @@ def main() -> int:
         print(check.stderr.strip() or check.stdout.strip())
         return 3
     count = (check.stdout or "").strip()
+
+    # 4) 追加基线种子（1 个管理员 + 1 条含评论链的基线内容，幂等）
+    ok, detail = apply_baseline_seed(base)
+    if not ok:
+        print("错误: 基线种子失败")
+        print(detail)
+        return 3
+
     print(f"初始化完成: {DB_HOST}:{DB_PORT}/{DB_NAME} content 行数 = {count}")
+    print(f"基线种子: {detail}")
     return 0
 
 

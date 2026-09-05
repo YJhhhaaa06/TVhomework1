@@ -238,11 +238,11 @@ pytest 端到端用例运行在**独立测试库** `TVDatabase_test`（Docker My
 
 **媒体文件**：pytest 上传的媒体文件仍落 stone 目录，孤儿媒体由 `tools/cleanup_orphan_media.py` 按需清理（用户手动执行，不在自动清理范围内）。
 
-**管理员链路**：`test_admin.py` / `test_hide_content.py` / `test_comment_delete.py` 的管理员操作通过 `DB_*` 环境变量连测试库（`run_tests.py cmd_test` 注入），`tools/admin.py` 与测试内直接 SQL 均遵守该约定；admin.py 人工命令行调用不设环境变量时默认仍连 3306 生产库（向后兼容）。
+**管理员链路**：`test_admin.py` / `test_hide_content.py` / `test_comment_delete.py` 的管理员操作通过 `DB_*` 环境变量连测试库（`run_tests.py cmd_test` 注入），`tools/admin.py` 与测试内直接 SQL 均遵守该约定；admin.py 人工命令行调用不设环境变量时默认仍连 3306 生产库（向后兼容）。测试库重建后由基线种子提供 `users.id=1` 管理员（role=1，见 TEST_SEED.md）；三个 admin 用例仍各自动态"注册/挑选 + 提升 + 降级"自建自清，不依赖该种子账号。
 
 ### 6.1 测试库初始化与重建
 
-- 一次初始化/表结构更新后重建：`python tools\init_test_db.py`（默认取 `.docs/DBBackup` 下最新 `db.sql`，或 `--dump` 指定；DROP+CREATE 后导入）。
+- 一次初始化/表结构更新后重建：`python tools\init_test_db.py`（默认取 `.docs/archive/DBbackups` 下最新 `db.sql`，或 `--dump` 指定；DROP+CREATE 后导入，并**自动追加基线种子**：提升 `users.id=1` 为管理员 + 一条 `seed_baseline_*` 内容及评论链，内容与维护约定见 TEST_SEED.md）。
 
 - 测试库连接参数可用 `TV_DB_HOST/TV_DB_PORT/TV_DB_USER/TV_DB_PASSWORD/TV_DB_NAME/TV_DB_URL` 环境变量覆盖（默认 127.0.0.1:3307 / root / ROOT123 / TVDatabase\_test）。
 
