@@ -11,7 +11,9 @@
     python tools/init_test_db.py                          # 默认：.docs/archive/DBbackups 最新 db.sql -> 3307 测试库
     python tools/init_test_db.py --dump path/to/db.sql    # 显式指定备份文件
 
-连接（可用环境变量覆盖，默认指向测试库）：
+连接（统一来源 tools/env/，T6）：
+    固定读 test.conf（本脚本语义=重建测试库，不读 active.conf、不开 prod 后门）；
+    环境变量 DB_* 优先级最高。
     DB_HOST=127.0.0.1 / DB_PORT=3307 / DB_USER=root / DB_PASSWORD=ROOT123
     DB_NAME=TVDatabase_test
 
@@ -29,7 +31,7 @@
 from __future__ import annotations
 
 import argparse
-import os
+import db_config
 import shutil
 import subprocess
 import sys
@@ -46,12 +48,14 @@ SEED_CONTENT_TITLE = "seed_baseline_test_content"
 # 否则会被 cleanup_data.py 按测试内容自动清理删除。
 _SEED_LIKE = f"{SEED_CONTENT_TITLE_PREFIX}\\_%"
 
-# 默认指向测试库（docker mysql8.4:3307）
-DB_HOST = os.environ.get("DB_HOST", "127.0.0.1")
-DB_PORT = os.environ.get("DB_PORT", "3307")
-DB_USER = os.environ.get("DB_USER", "root")
-DB_PASSWORD = os.environ.get("DB_PASSWORD", "ROOT123")
-DB_NAME = os.environ.get("DB_NAME", "TVDatabase_test")
+# 连接参数统一来源 tools/env/（T6）：本脚本固定重建测试库 → 强制 test.conf，
+# 绝对不读 active.conf / prod（与下方 3306 安全门禁互为双保险）。
+db_config.use(force_test=True)
+DB_HOST = db_config.DB_HOST
+DB_PORT = db_config.DB_PORT
+DB_USER = db_config.DB_USER
+DB_PASSWORD = db_config.DB_PASSWORD
+DB_NAME = db_config.DB_NAME
 
 COMMON_MYSQL_PATHS = [
     Path(r"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe"),

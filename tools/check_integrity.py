@@ -24,9 +24,10 @@
     python tools/check_integrity.py --no-media             # 跳过磁盘媒体检查，只查库内检查项
     python tools/check_integrity.py --fix                  # 显式修复计数漂移（单事务；其余仍只读）
 
-连接参数（可用环境变量覆盖，默认指向生产库）：
+连接参数（统一来源 tools/env/，T6）：
     DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME
-    （默认 127.0.0.1:3306 / root / MySQL / tvdatabase）
+    （默认当前激活环境 active.conf；环境变量优先级最高。
+    测试库场景建议 --no-media：共享 stone 下磁盘与测试库引用无重叠会触发 exit 5）
 
 退出码：
     0  检查完成（是否发现脏数据以报告为准）
@@ -47,17 +48,21 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import db_config
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REPORT_DIR = PROJECT_ROOT / ".docs" / "temp"
 APP_PROPERTIES = PROJECT_ROOT / "src" / "main" / "resources" / "app.properties"
 
 DEFAULT_UPLOAD_ROOT = Path("D:/data/projects/VideoPlatform/stone")
 
-MYSQL_HOST = os.environ.get("DB_HOST", "127.0.0.1")
-MYSQL_PORT = os.environ.get("DB_PORT", "3306")
-MYSQL_USER = os.environ.get("DB_USER", "root")
-MYSQL_PASSWORD = os.environ.get("DB_PASSWORD", "MySQL")
-DB_NAME = os.environ.get("DB_NAME", "tvdatabase")
+# 连接参数统一来源 tools/env/（T6：默认 active.conf 当前环境，环境变量 DB_* 优先）
+db_config.use()
+MYSQL_HOST = db_config.DB_HOST
+MYSQL_PORT = db_config.DB_PORT
+MYSQL_USER = db_config.DB_USER
+MYSQL_PASSWORD = db_config.DB_PASSWORD
+DB_NAME = db_config.DB_NAME
 
 COMMON_MYSQL_PATHS = [
     Path(r"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe"),

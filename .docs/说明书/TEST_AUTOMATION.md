@@ -36,6 +36,17 @@ python tools\run_tests.py test     # 只跑 pytest（要求 18080 已就绪）
 python tools\run_tests.py stop     # 只关停独立 Tomcat
 ```
 
+运维脚本统一入口（T6，2026-09-05）：
+
+```powershell
+python tools\tv.py                               # 帮助 + 当前环境（tools/env/active.conf）
+python tools\tv.py env test|prod                 # 持久切换环境（复制覆盖 active.conf）
+python tools\tv.py --env test|prod <子命令>      # 本次命令临时用指定环境（不写盘）
+python tools\tv.py admin|cleanup|integrity|backup|init-test-db|test|cleanup-orphan-media [参数...]
+```
+
+手动运维脚本（admin / cleanup / integrity / backup）默认连接**当前激活环境**（默认 test 测试库 3307），不再默认生产库；生产操作需先 `tv.py env prod`（持久）或 `--env prod`（临时）并在写操作时二次确认。测试库口令在 `tools/env/test.conf`（追踪）；生产口令放 `tools/env/prod.conf`（.gitignore 排除，模板 `prod.conf.example`）。`init-test-db` 与 `test` 固定测试库、拒绝 prod 语境；`cleanup-orphan-media` 仅允许 prod 语境（共享 stone 目录跨库误判风险）。
+
 前置检查与失败排查见 §七；主会话收口执行方式（日志落盘、latest.json 复核）见 §九。
 
 > **手动跑 pytest 的注意**（T1 收尾，2026-09-05）：conftest 默认 `BASE_URL` 已指向 `http://127.0.0.1:18080`（测试实例），不再默认 8080 生产实例；不经 run\_tests 直接手动 `pytest` 前，需先 `python tools\run_tests.py start` 拉起 18080 实例，否则连接会被拒绝（快速失败，不会误连生产）。
@@ -238,13 +249,13 @@ pytest 端到端用例运行在**独立测试库** `TVDatabase_test`（Docker My
 
 **媒体文件**：pytest 上传的媒体文件仍落 stone 目录，孤儿媒体由 `tools/cleanup_orphan_media.py` 按需清理（用户手动执行，不在自动清理范围内）。
 
-**管理员链路**：`test_admin.py` / `test_hide_content.py` / `test_comment_delete.py` 的管理员操作通过 `DB_*` 环境变量连测试库（`run_tests.py cmd_test` 注入），`tools/admin.py` 与测试内直接 SQL 均遵守该约定；admin.py 人工命令行调用不设环境变量时默认仍连 3306 生产库（向后兼容）。测试库重建后由基线种子提供 `users.id=1` 管理员（role=1，见 TEST_SEED.md）；三个 admin 用例仍各自动态"注册/挑选 + 提升 + 降级"自建自清，不依赖该种子账号。
+**管理员链路**：`test_admin.py` / `test_hide_content.py` / `test_comment_delete.py` 的管理员操作通过 `DB_*` 环境变量连测试库（`run_tests.py cmd_test` 注入），`tools/admin.py` 与测试内直接 SQL 均遵守该约定；人工命令行调用 admin.py（或经 `tv.py admin`）默认连接 tools/env 当前激活环境（默认测试库，T6 起不再默认生产库），生产操作需显式 `tv.py env prod` 并二次确认。测试库重建后由基线种子提供 `users.id=1` 管理员（role=1，见 TEST_SEED.md）；三个 admin 用例仍各自动态"注册/挑选 + 提升 + 降级"自建自清，不依赖该种子账号。
 
 ### 6.1 测试库初始化与重建
 
 - 一次初始化/表结构更新后重建：`python tools\init_test_db.py`（默认取 `.docs/archive/DBbackups` 下最新 `db.sql`，或 `--dump` 指定；DROP+CREATE 后导入，并**自动追加基线种子**：提升 `users.id=1` 为管理员 + 一条 `seed_baseline_*` 内容及评论链，内容与维护约定见 TEST_SEED.md）。
 
-- 测试库连接参数可用 `TV_DB_HOST/TV_DB_PORT/TV_DB_USER/TV_DB_PASSWORD/TV_DB_NAME/TV_DB_URL` 环境变量覆盖（默认 127.0.0.1:3307 / root / ROOT123 / TVDatabase\_test）。
+- 测试库连接参数默认取自 `tools/env/test.conf`（T6：init\_test\_db 固定读 test.conf，不读 active.conf、不开 prod 后门）；仍可用 `DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME` 环境变量覆盖。run\_tests 体系另持独立覆盖机制：`TV_DB_HOST/TV_DB_PORT/TV_DB_USER/TV_DB_PASSWORD/TV_DB_NAME/TV_DB_URL`（默认 127.0.0.1:3307 / root / ROOT123 / TVDatabase\_test）。
 
 - 安全门禁：`init_test_db.py` 拒绝操作 `DB_PORT=3306`，防止误 DROP 生产库。
 
@@ -255,11 +266,13 @@ pytest 端到端用例运行在**独立测试库** `TVDatabase_test`（Docker My
 脏数据排查单一入口（默认 dry-run 只读，绝不移动/删除文件；计数漂移修复需显式 `--fix`）：一次列出**孤儿记录**（content\_media/content\_like/comment/comment\_like/comment\_media/楼中楼孤儿回复）、**孤儿媒体文件**（磁盘无库引用）、**库引用缺失文件**（库 URL 指向的磁盘文件不存在）、**重复引用**（content\_media/comment\_media 无唯一键）、**计数漂移**（content.like\_count / content.comment\_count / comment.like\_count / users.follow\_count / users.follower\_count 与关联表实际记录数不一致）。
 
 ```powershell
-python tools\check_integrity.py                          # 生产库（默认 3306），报告落 .docs/temp/INTEGRITY_REPORT_*.md
-python tools\check_integrity.py --no-media               # 跳过磁盘媒体检查（只查库内）
-python tools\check_integrity.py --fix                    # 显式修复计数漂移（仅重算漂移行计数列，单事务，失败自动回滚）
-DB_PORT=3307 DB_PASSWORD=ROOT123 DB_NAME=TVDatabase_test python tools\check_integrity.py   # 查测试库
+python tools\tv.py integrity                             # 完整性检查（默认当前激活环境，默认测试库），报告落 .docs/temp/INTEGRITY_REPORT_*.md
+python tools\tv.py integrity --no-media                  # 跳过磁盘媒体检查（只查库内）
+python tools\tv.py integrity --fix                       # 显式修复计数漂移（prod 下需二次确认）
+python tools\tv.py --env prod integrity                  # 本次检查生产库（临时，不改 active.conf）
 ```
+
+> 测试库场景建议 `--no-media`：测试/生产共享 stone 媒体目录，连测试库时磁盘与被引用 URL 无重叠会触发 exit 5 疑似配置错误告警（T6）。
 
 退出码：0 完成 / 1 参数或其它错误（含 `--fix` 失败已回滚）/ 2 mysql 客户端不可用 / 3 数据库连接或健康门禁失败（未触碰任何数据）/ 5 疑似配置错误（库内存在媒体记录但磁盘与被引用 URL 无重叠或媒体目录缺失）。
 
@@ -322,6 +335,8 @@ DB_PORT=3307 DB_PASSWORD=ROOT123 DB_NAME=TVDatabase_test python tools\check_inte
 - pytest 用例自包含（T4，2026-09-05）：用例应自建自清（独立建立数据 + finally 清理），不写共享 fixture（sample_content_id/sample_post_content_id）；同文件/跨文件不得存在运行顺序依赖（如 C-01→C-02 点赞状态、edit_work 换源永久替换共享媒体）。例外：对共享 fixture 的临时改动（如改文案）必须 finally 复原，净零残留方可。
 
 - 断言不锁定中文文案（T5，2026-09-05）：端到端用例断言 code + 稳定字段，不写 `"xxx" in msg` 类中文子串匹配；被断言响应稳定字段需在响应中恒定存在；后端文案措辞调整不应翻转测试结果。
+
+- 统一 db 配置（T6，2026-09-05）：库操作脚本（admin / cleanup_data / check\_integrity / backup / cleanup\_orphan\_media / init\_test\_db）的连接参数统一经 `tools/db_config.py` 读取 `tools/env/`（`rg "environ.get\(\"DB_" tools` 应仅 db_config.py 一处）。`test.conf` 追踪；`prod.conf`（含生产口令）与 `active.conf`（当前生效）被 .gitignore 排除，模板见 `prod.conf.example`。修改连接参数：改对应 `*.conf` 后运行 `python tools\tv.py env <name>` 重新激活（active.conf 由切换命令生成，手工编辑无效）。run\_tests 体系的 TEST\_DB\_\* 属安全边界，与本配置独立双份维护，改动时注意同步 test.conf。经 `tv.py` 执行时以声明环境（active / \-\-env）配置为准：tv.py 会把对应 conf 注入子进程环境变量、覆盖继承的 DB\_\* 残留（保证"声明环境 == 实际连接库"，防环境变量残留绕过 prod 确认/禁 test 护栏）；因此不要在 tv.py 前残留 DB\_\* 期望被脚本读取。直接运行脚本（不经 tv.py）时环境变量优先级不变。
 
 ## 九、上下文收口执行方式（主会话推荐入口）
 

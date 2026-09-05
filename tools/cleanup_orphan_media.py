@@ -33,6 +33,15 @@
     python tools/cleanup_orphan_media.py --quarantine --only <子串>  # 只回收相对URL含子串的孤儿
     python tools/cleanup_orphan_media.py --quarantine --yes-empty-db  # content_media 为空时显式确认
 
+连接参数（统一来源 tools/env/，T6）：
+    DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME
+    （默认当前激活环境 active.conf；环境变量优先级最高）
+
+安全提示（重要）：本脚本会【移动磁盘媒体文件】（移入 stone/_trash/ 回收站）。
+    测试与生产共享 stone 媒体目录，若连接测试库运行，生产库引用的媒体文件
+    在测试库中查不到引用会被误判为孤儿 → 误伤生产内容。因此仅允许在
+    prod 环境执行（tv.py 已拦截 test 环境）；执行时确认当前 stone 属于所选环境。
+
 退出码：
     0  成功 / dry-run 完成
     1  其它错误
@@ -53,17 +62,22 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import db_config
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 APP_PROPERTIES = PROJECT_ROOT / "src" / "main" / "resources" / "app.properties"
 REPORT_DIR = PROJECT_ROOT / ".docs" / "temp"
 
 DEFAULT_UPLOAD_ROOT = Path("D:/data/projects/VideoPlatform/stone")
 
-MYSQL_HOST = os.environ.get("DB_HOST", "127.0.0.1")
-MYSQL_PORT = os.environ.get("DB_PORT", "3306")
-MYSQL_USER = os.environ.get("DB_USER", "root")
-MYSQL_PASSWORD = os.environ.get("DB_PASSWORD", "MySQL")
-DB_NAME = "tvdatabase"
+# 连接参数统一来源 tools/env/（T6：默认 active.conf 当前环境，环境变量 DB_* 优先；
+# 本脚本会移动磁盘媒体文件，tv.py 已禁止在 test 环境执行）
+db_config.use()
+MYSQL_HOST = db_config.DB_HOST
+MYSQL_PORT = db_config.DB_PORT
+MYSQL_USER = db_config.DB_USER
+MYSQL_PASSWORD = db_config.DB_PASSWORD
+DB_NAME = db_config.DB_NAME
 
 COMMON_MYSQL_PATHS = [
     Path(r"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe"),

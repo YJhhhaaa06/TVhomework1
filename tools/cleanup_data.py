@@ -18,9 +18,9 @@
     python tools/cleanup_data.py --execute --no-backup   # 执行清理但跳过备份（测试库等可重建场景）
     python tools/cleanup_data.py --execute --drop-legacy   # 再删除遗留表
 
-连接参数（可用环境变量覆盖）：
+连接参数（统一来源 tools/env/，T6）：
     DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME
-    （默认 127.0.0.1:3306 / root / MySQL / tvdatabase，对应生产库）
+    （默认当前激活环境 active.conf；环境变量优先级最高）
 
 报告：--execute 执行后，CLEANUP_REPORT_*.md 写入 .docs/temp/。
 
@@ -41,14 +41,18 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import db_config
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REPORT_DIR = PROJECT_ROOT / ".docs" / "temp"
 
-MYSQL_HOST = os.environ.get("DB_HOST", "127.0.0.1")
-MYSQL_PORT = os.environ.get("DB_PORT", "3306")
-MYSQL_USER = os.environ.get("DB_USER", "root")
-MYSQL_PASSWORD = os.environ.get("DB_PASSWORD", "MySQL")
-DB_NAME = os.environ.get("DB_NAME", "tvdatabase")
+# 连接参数统一来源 tools/env/（T6：默认 active.conf 当前环境，环境变量 DB_* 优先）
+db_config.use()
+MYSQL_HOST = db_config.DB_HOST
+MYSQL_PORT = db_config.DB_PORT
+MYSQL_USER = db_config.DB_USER
+MYSQL_PASSWORD = db_config.DB_PASSWORD
+DB_NAME = db_config.DB_NAME
 
 COMMON_MYSQL_PATHS = [
     Path(r"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe"),

@@ -1,0 +1,4 @@
+# 当前生效配置（复制自 test/prod，状态文件不入库）
+active.conf
+# 生产真实配置（含生产口令，仅在本地存在，复制自 prod.conf.example 后填写）
+prod.conf
