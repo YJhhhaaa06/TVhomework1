@@ -38,6 +38,8 @@ python tools\run_tests.py stop     # 只关停独立 Tomcat
 
 前置检查与失败排查见 §七；主会话收口执行方式（日志落盘、latest.json 复核）见 §九。
 
+> **手动跑 pytest 的注意**（T1 收尾，2026-09-05）：conftest 默认 `BASE_URL` 已指向 `http://127.0.0.1:18080`（测试实例），不再默认 8080 生产实例；不经 run_tests 直接手动 `pytest` 前，需先 `python tools\run_tests.py start` 拉起 18080 实例，否则连接会被拒绝（快速失败，不会误连生产）。
+
 ### 章节目录（导航）
 
 | 章节 | 内容 |

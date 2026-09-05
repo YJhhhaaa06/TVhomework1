@@ -16,7 +16,8 @@ import uuid
 import pytest
 import requests
 
-BASE_URL = os.environ.get("TV_BASE_URL", "http://localhost:8080")
+# 默认指向 run_tests 启动的独立测试实例（18080，连测试库 3307），避免手动跑 pytest 误连 IDEA 8080 生产实例
+BASE_URL = os.environ.get("TV_BASE_URL", "http://127.0.0.1:18080")
 
 # Test user credentials - use UUID for guaranteed uniqueness across runs
 # Phone must be 11 digits starting with 1, so use digits only
