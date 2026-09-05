@@ -89,7 +89,7 @@ def get_content_detail(base_url, content_id, token):
 class TestContentLikeConsistency:
 
     def test_C01_like_count_increments(self, base_url, token_b, sample_content_id):
-        """C-01: After liking, likeCount should increase by 1."""
+        """C-01: After liking, likeCount should increase by 1. 测后 unlike 复原（自建自清）。"""
         before = get_content_like_count(base_url, sample_content_id, token_b)
 
         # Like
@@ -106,10 +106,34 @@ class TestContentLikeConsistency:
         assert after == before + 1, \
             f"likeCount should be {before + 1} after like, got {after}"
 
+        # 清理：unlike 复原，保证用例自包含、不依赖/不污染其他用例
+        cleanup = requests.post(
+            f"{base_url}/like/content/remove",
+            headers={"token": token_b, "Content-Type": "application/x-www-form-urlencoded"},
+            data={"contentId": str(sample_content_id)},
+            timeout=10,
+        )
+        assert cleanup.json().get("code") == 200, f"Unlike cleanup failed: {cleanup.json()}"
+
     def test_C02_unlike_count_decrements(self, base_url, token_b, sample_content_id):
-        """C-02: After unliking, likeCount should decrease by 1."""
-        # We're in the state where userB has already liked (from C-01).
+        """C-02: After unliking, likeCount should decrease by 1.
+
+        自包含：用例内先 like 建立点赞状态，再 unlike 验证 -1（不再依赖 C-01 先跑）。
+        """
         count_before = get_content_like_count(base_url, sample_content_id, token_b)
+
+        # 自建点赞状态
+        like_resp = requests.post(
+            f"{base_url}/like/content/add",
+            headers={"token": token_b, "Content-Type": "application/x-www-form-urlencoded"},
+            data={"contentId": str(sample_content_id)},
+            timeout=10,
+        )
+        like_body = like_resp.json()
+        assert like_body.get("code") == 200, f"Like setup failed: {like_body}"
+        count_liked = get_content_like_count(base_url, sample_content_id, token_b)
+        assert count_liked == count_before + 1, \
+            f"Like setup should make count {count_before + 1}, got {count_liked}"
 
         # Cancel the like.
         resp = requests.post(
@@ -122,8 +146,9 @@ class TestContentLikeConsistency:
         assert body.get("code") == 200, f"Unlike failed: {body}"
 
         count_after = get_content_like_count(base_url, sample_content_id, token_b)
-        assert count_after == count_before - 1, \
-            f"likeCount should be {count_before - 1} after unlike, got {count_after}"
+        assert count_after == count_liked - 1, \
+            f"likeCount should be {count_liked - 1} after unlike, got {count_after}"
+        assert count_after == count_before, "unlike 应完全复原（净零残留）"
 
         # Also verify like status is false
         status = get_content_like_status(base_url, sample_content_id, token_b)
@@ -164,7 +189,7 @@ class TestCommentLikeConsistency:
     def test_C04_comment_like_count_increments(
         self, base_url, token_b, sample_comment_id
     ):
-        """C-04: After liking a comment, likeCount should increase by 1."""
+        """C-04: After liking a comment, likeCount should increase by 1. 测后 unlike 复原（自建自清）。"""
         comment_id = sample_comment_id
 
         before = get_comment_like_count(base_url, comment_id, token_b)
@@ -183,16 +208,40 @@ class TestCommentLikeConsistency:
         assert after == before + 1, \
             f"Comment likeCount should be {before + 1}, got {after}"
 
+        # 清理：unlike 复原，保证用例自包含
+        cleanup = requests.post(
+            f"{base_url}/like/comment/remove",
+            headers={"token": token_b, "Content-Type": "application/x-www-form-urlencoded"},
+            data={"commentId": str(comment_id)},
+            timeout=10,
+        )
+        assert cleanup.json().get("code") == 200, f"Unlike comment cleanup failed: {cleanup.json()}"
+
     def test_C05_comment_unlike_count_restores(
         self, base_url, token_b, sample_comment_id
     ):
-        """C-05: After unliking a comment, likeCount should decrease by 1."""
+        """C-05: After unliking a comment, likeCount should decrease by 1.
+
+        自包含：用例内先 like 建立点赞状态，再 unlike 验证 -1（不再依赖 C-04 先跑）。
+        """
         comment_id = sample_comment_id
 
-        # Record count before unlike (userB liked this comment in C-04)
         count_before = get_comment_like_count(base_url, comment_id, token_b)
 
-        # Unlike the comment (from state where userB liked it in C-04)
+        # 自建点赞状态
+        like_resp = requests.post(
+            f"{base_url}/like/comment/add",
+            headers={"token": token_b, "Content-Type": "application/x-www-form-urlencoded"},
+            data={"commentId": str(comment_id)},
+            timeout=10,
+        )
+        like_body = like_resp.json()
+        assert like_body.get("code") == 200, f"Like comment setup failed: {like_body}"
+        count_liked = get_comment_like_count(base_url, comment_id, token_b)
+        assert count_liked == count_before + 1, \
+            f"Comment likeCount should be {count_before + 1} after like, got {count_liked}"
+
+        # Unlike the comment
         resp = requests.post(
             f"{base_url}/like/comment/remove",
             headers={"token": token_b, "Content-Type": "application/x-www-form-urlencoded"},
@@ -203,8 +252,9 @@ class TestCommentLikeConsistency:
         assert body.get("code") == 200, f"Unlike comment failed: {body}"
 
         count_after = get_comment_like_count(base_url, comment_id, token_b)
-        assert count_after == count_before - 1, \
-            f"Comment likeCount should be {count_before - 1} after unlike, got {count_after}"
+        assert count_after == count_liked - 1, \
+            f"Comment likeCount should be {count_liked - 1} after unlike, got {count_after}"
+        assert count_after == count_before, "unlike 应完全复原（净零残留）"
 
 
 # ---------------------------------------------------------------------------
@@ -216,8 +266,9 @@ class TestFollowCountConsistency:
 
     def test_C06_C07_follow_count_increments(self, base_url, token_b, token_a, user_a_id, user_b_id):
         """C-06: After userB follows userA, userB's followCount +1.
-        C-07: After userB follows userA, userA's followerCount +1.
+        C-07: After userA is followed by userB, userA's followerCount +1.
         Merged to verify both counts using proper before/after delta.
+        测后 unfollow 复原（自建自清）。
         """
         # Record before state for both users
         profile_b_before = get_profile(base_url, user_b_id, token_b)
@@ -247,15 +298,37 @@ class TestFollowCountConsistency:
         assert follower_count_after == follower_count_before + 1, \
             f"userA followerCount should be {follower_count_before + 1}, got {follower_count_after}"
 
+        # 清理：unfollow 复原，保证用例自包含
+        cleanup = requests.post(
+            f"{base_url}/follow/remove",
+            headers={"token": token_b, "Content-Type": "application/x-www-form-urlencoded"},
+            data={"followedUserId": str(user_a_id)},
+            timeout=10,
+        )
+        assert cleanup.json().get("code") == 200, f"Unfollow cleanup failed: {cleanup.json()}"
+
     def test_C08_unfollow_count_restores(
         self, base_url, token_b, token_a, user_a_id, user_b_id
     ):
-        """C-08: After unfollowing, both followCount and followerCount restore."""
+        """C-08: After unfollowing, both followCount and followerCount restore.
+
+        自包含：用例内先 follow 建立关注状态，再 unfollow 验证复原（不再依赖 C-06/C-07 先跑）。
+        """
         # Record before unfollow
         profile_b_before = get_profile(base_url, user_b_id, token_b)
         profile_a_before = get_profile(base_url, user_a_id, token_a)
         follow_count_before = profile_b_before.get("followCount", 0)
         follower_count_before = profile_a_before.get("followerCount", 0)
+
+        # 自建关注状态
+        follow_resp = requests.post(
+            f"{base_url}/follow/add",
+            headers={"token": token_b, "Content-Type": "application/x-www-form-urlencoded"},
+            data={"followedUserId": str(user_a_id)},
+            timeout=10,
+        )
+        follow_body = follow_resp.json()
+        assert follow_body.get("code") == 200, f"Follow setup failed: {follow_body}"
 
         # Unfollow
         resp = requests.post(
@@ -271,10 +344,10 @@ class TestFollowCountConsistency:
         profile_b_after = get_profile(base_url, user_b_id, token_b)
         profile_a_after = get_profile(base_url, user_a_id, token_a)
 
-        assert profile_b_after.get("followCount", 0) == follow_count_before - 1, \
-            f"userB followCount should decrease by 1: {follow_count_before} -> {profile_b_after.get('followCount', 0)}"
-        assert profile_a_after.get("followerCount", 0) == follower_count_before - 1, \
-            f"userA followerCount should decrease by 1: {follower_count_before} -> {profile_a_after.get('followerCount', 0)}"
+        assert profile_b_after.get("followCount", 0) == follow_count_before, \
+            f"userB followCount should restore to {follow_count_before}, got {profile_b_after.get('followCount', 0)}"
+        assert profile_a_after.get("followerCount", 0) == follower_count_before, \
+            f"userA followerCount should restore to {follower_count_before}, got {profile_a_after.get('followerCount', 0)}"
 
 
 # ---------------------------------------------------------------------------

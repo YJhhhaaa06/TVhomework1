@@ -11,11 +11,10 @@ test_edit_work.py - 阶段三「编辑作品」验收测试（换源 / 单图删
    媒体行不存在 404、删视频封面（type!=2）400（后端守卫）
 
 说明：
-- 复用 conftest fixtures：token_a/token_b、test_files、sample_content_id（视频）、sample_post_content_id（图文）。
-- 替换类用例允许变更共享 fixture 的媒体（仍是合法内容）；删图类用用例内新建的图文避免破坏共享 fixture；
-  文案类用例用 finally 复原原 title/description，避免影响搜索/详情类测试。
-- 顺序依赖：本文件（字母序在 test_consistency 之后、test_smoke 之前）会永久替换共享 fixture 的媒体，
-  依赖「后续消费媒体值的用例按当前值读取」这一约定；新增此类用例时注意。
+- 修改类（换源/删图）用例一律「用例内自建内容 + finally 清理」，绝不写共享 fixture
+  （sample_content_id/sample_post_content_id），用例运行不依赖任何文件顺序（T4，2026-09-05）。
+- 文案编辑用例对共享 fixture 改文案后 finally 复原，净零残留；边界用例只读共享 fixture
+  （403/401/404/400 路径不改写数据）。
 - 兼容非根上下文部署：详情/上传 URL 带 contextPath 前缀时，resolve_upload_path 剥离前缀后再定位本地文件。
 """
 
@@ -115,6 +114,35 @@ def upload_post(base_url, token, title, image_paths):
     return resp.json()
 
 
+def upload_video(base_url, token, title, test_files):
+    """用例内新建独立视频（封面+视频），返回响应 JSON。"""
+    headers = {"token": token}
+    with open(test_files["video"], "rb") as vf, open(test_files["cover"], "rb") as cf:
+        resp = requests.post(
+            f"{base_url}/api/upload/video",
+            headers=headers,
+            data={"title": title, "description": "edit_work_test", "categoryId": "1"},
+            files={
+                "video": ("test_video.mp4", vf, "video/mp4"),
+                "cover": ("test_cover.png", cf, "image/png"),
+            },
+            timeout=30,
+        )
+    return resp.json()
+
+
+def delete_content(base_url, token, content_id):
+    """删除内容（finally 清理用）。已删/不存在返回 404，不抛错。"""
+    headers = {"token": token} if token else {}
+    resp = requests.post(
+        f"{base_url}/content/delete",
+        params={"contentId": content_id},
+        headers=headers,
+        timeout=10,
+    )
+    return resp.json()
+
+
 def resolve_upload_path(url):
     """/{contextPath}/upload/{dir}/{file} -> STONE_DIR/{dir}/{file}（剥离 contextPath 前缀，兼容非根部署）"""
     if not url or "/upload/" not in url:
@@ -127,62 +155,82 @@ def resolve_upload_path(url):
 
 
 # ---------------------------------------------------------------------------
-# 换源（可安全变更共享 fixture）
+# 换源（用例内自建内容 + finally 清理，不写共享 fixture）
 # ---------------------------------------------------------------------------
 
 @pytest.mark.consistency
 class TestReplaceMedia:
 
     def test_replace_cover_updates_detail_and_old_file_removed(
-        self, base_url, token_a, sample_content_id, test_files
+        self, base_url, token_a, test_files
     ):
-        cid = sample_content_id
-        before = get_detail(base_url, cid, token_a)
-        old_cover = before["coverUrl"]
-        old_path = resolve_upload_path(old_cover)
-        assert old_path and os.path.isfile(old_path), f"旧封面文件应存在: {old_path}"
+        # 用例内自建视频，不写共享 fixture；finally 删内容自清
+        title = f"editrep_cover_{_unique}"
+        up = upload_video(base_url, token_a, title, test_files)
+        assert up.get("code") == 200, f"新建视频失败: {up}"
+        cid = up["data"]["contentId"]
+        try:
+            before = get_detail(base_url, cid, token_a)
+            old_cover = before["coverUrl"]
+            old_path = resolve_upload_path(old_cover)
+            assert old_path and os.path.isfile(old_path), f"旧封面文件应存在: {old_path}"
 
-        result = replace_media(base_url, token_a, cid, 3, 1, test_files["cover"])
-        assert result.get("code") == 200, f"替换封面失败: {result}"
-        new_url = result["data"]["url"]
-        assert new_url != old_cover, "封面 URL 应变化"
+            result = replace_media(base_url, token_a, cid, 3, 1, test_files["cover"])
+            assert result.get("code") == 200, f"替换封面失败: {result}"
+            new_url = result["data"]["url"]
+            assert new_url != old_cover, "封面 URL 应变化"
 
-        detail = get_detail(base_url, cid, token_a)
-        # 详情 URL 带 contextPath 前缀，用 endswith 兼容非根部署
-        assert detail["coverUrl"].endswith(new_url), f"详情封面应为新 URL: {detail['coverUrl']}"
-        new_path = resolve_upload_path(new_url)
-        assert new_path and os.path.isfile(new_path), f"新封面文件应落盘: {new_path}"
-        assert not os.path.exists(old_path), f"旧封面文件应已删除: {old_path}"
+            detail = get_detail(base_url, cid, token_a)
+            # 详情 URL 带 contextPath 前缀，用 endswith 兼容非根部署
+            assert detail["coverUrl"].endswith(new_url), f"详情封面应为新 URL: {detail['coverUrl']}"
+            new_path = resolve_upload_path(new_url)
+            assert new_path and os.path.isfile(new_path), f"新封面文件应落盘: {new_path}"
+            assert not os.path.exists(old_path), f"旧封面文件应已删除: {old_path}"
+        finally:
+            delete_content(base_url, token_a, cid)
 
     def test_replace_video_updates_detail(
-        self, base_url, token_a, sample_content_id, test_files
+        self, base_url, token_a, test_files
     ):
-        cid = sample_content_id
-        old_video = get_detail(base_url, cid, token_a)["videoUrl"]
+        title = f"editrep_video_{_unique}"
+        up = upload_video(base_url, token_a, title, test_files)
+        assert up.get("code") == 200, f"新建视频失败: {up}"
+        cid = up["data"]["contentId"]
+        try:
+            old_video = get_detail(base_url, cid, token_a)["videoUrl"]
 
-        result = replace_media(base_url, token_a, cid, 1, 1, test_files["video"])
-        assert result.get("code") == 200, f"替换视频失败: {result}"
+            result = replace_media(base_url, token_a, cid, 1, 1, test_files["video"])
+            assert result.get("code") == 200, f"替换视频失败: {result}"
 
-        detail = get_detail(base_url, cid, token_a)
-        assert detail["videoUrl"] != old_video, "视频 URL 应变化"
-        new_path = resolve_upload_path(detail["videoUrl"])
-        assert new_path and os.path.isfile(new_path), "新视频文件应落盘"
+            detail = get_detail(base_url, cid, token_a)
+            assert detail["videoUrl"] != old_video, "视频 URL 应变化"
+            new_path = resolve_upload_path(detail["videoUrl"])
+            assert new_path and os.path.isfile(new_path), "新视频文件应落盘"
+        finally:
+            delete_content(base_url, token_a, cid)
 
     def test_replace_single_image_in_post(
-        self, base_url, token_a, sample_post_content_id, test_files
+        self, base_url, token_a, test_files
     ):
-        cid = sample_post_content_id
-        old_images = get_detail(base_url, cid, token_a).get("imageUrls") or []
-        assert old_images, "图文应至少有一张图"
-        old_first = old_images[0]
+        # 用例内自建图文（1 张图即可），finally 删内容自清
+        title = f"editrep_post_{_unique}"
+        up = upload_post(base_url, token_a, title, [test_files["image"]])
+        assert up.get("code") == 200, f"新建图文失败: {up}"
+        cid = up["data"]["contentId"]
+        try:
+            old_images = get_detail(base_url, cid, token_a).get("imageUrls") or []
+            assert old_images, "图文应至少有一张图"
+            old_first = old_images[0]
 
-        result = replace_media(base_url, token_a, cid, 2, 1, test_files["image"])
-        assert result.get("code") == 200, f"替换单图失败: {result}"
+            result = replace_media(base_url, token_a, cid, 2, 1, test_files["image"])
+            assert result.get("code") == 200, f"替换单图失败: {result}"
 
-        detail = get_detail(base_url, cid, token_a)
-        images = detail.get("imageUrls") or []
-        assert len(images) == len(old_images), "替换不应改变图片数量"
-        assert images[0] != old_first, "第 1 张图 URL 应变化"
+            detail = get_detail(base_url, cid, token_a)
+            images = detail.get("imageUrls") or []
+            assert len(images) == len(old_images), "替换不应改变图片数量"
+            assert images[0] != old_first, "第 1 张图 URL 应变化"
+        finally:
+            delete_content(base_url, token_a, cid)
 
 
 # ---------------------------------------------------------------------------
@@ -302,30 +350,33 @@ class TestEditTextBoundary:
 class TestDeleteImage:
 
     def test_author_deletes_images(self, base_url, token_a, test_files):
-        # 用例内新建图文（2 张图），避免破坏共享 fixture
+        # 用例内新建图文（2 张图），避免写共享 fixture；finally 删内容自清
         title = f"editdel_{_unique}"
         up = upload_post(base_url, token_a, title, [test_files["image"], test_files["image"]])
         assert up.get("code") == 200, f"新建图文失败: {up}"
         cid = up["data"]["contentId"]
 
-        detail = get_detail(base_url, cid, token_a)
-        images = detail.get("imageUrls") or []
-        assert len(images) == 2, "新图文应有 2 张图"
-        second = images[1]
+        try:
+            detail = get_detail(base_url, cid, token_a)
+            images = detail.get("imageUrls") or []
+            assert len(images) == 2, "新图文应有 2 张图"
+            second = images[1]
 
-        # 删第 1 张 -> 剩原第 2 张（sort 重排后仍为第 1 位）
-        result = delete_media(base_url, token_a, cid, 2, 1)
-        assert result.get("code") == 200, f"删除图片失败: {result}"
-        detail = get_detail(base_url, cid, token_a)
-        images = detail.get("imageUrls") or []
-        assert len(images) == 1, "删 1 张后应剩 1 张"
-        assert images[0] == second, "剩余应为原第 2 张"
+            # 删第 1 张 -> 剩原第 2 张（sort 重排后仍为第 1 位）
+            result = delete_media(base_url, token_a, cid, 2, 1)
+            assert result.get("code") == 200, f"删除图片失败: {result}"
+            detail = get_detail(base_url, cid, token_a)
+            images = detail.get("imageUrls") or []
+            assert len(images) == 1, "删 1 张后应剩 1 张"
+            assert images[0] == second, "剩余应为原第 2 张"
 
-        # 删剩余
-        result = delete_media(base_url, token_a, cid, 2, 1)
-        assert result.get("code") == 200, f"删除最后一张失败: {result}"
-        detail = get_detail(base_url, cid, token_a)
-        assert not (detail.get("imageUrls") or []), "删除全部图片后 imageUrls 应为空"
+            # 删剩余
+            result = delete_media(base_url, token_a, cid, 2, 1)
+            assert result.get("code") == 200, f"删除最后一张失败: {result}"
+            detail = get_detail(base_url, cid, token_a)
+            assert not (detail.get("imageUrls") or []), "删除全部图片后 imageUrls 应为空"
+        finally:
+            delete_content(base_url, token_a, cid)
 
 
 @pytest.mark.boundary
