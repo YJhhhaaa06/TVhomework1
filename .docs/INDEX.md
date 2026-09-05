@@ -38,30 +38,14 @@
 
 | 文档 | 何时读 |
 |------|--------|
-| 说明书/TEST_GUIDE.md | 需要手动运行测试时 |
-| 说明书/TEST_AUTOMATION.md | 使用 tools/run_tests*.py 一键测试时 |
-| 说明书/ACCEPTANCE_CRITERIA.md | 编写/核对验收测试时 |
+| 说明书/TEST_AUTOMATION.md | **跑测试唯一权威入口**（分层定位/脚本用法/排查，含快速上手） |
 | 说明书/DATABASE.md | 涉及表结构/建表时（本机/敏感，勿删，不追踪） |
 | 说明书/AVAILABLE_TOOLS.md | 需要外部工具路径时（本机路径，勿删，不追踪） |
 
 ## 历史存档（archive/，勿读，追踪可追溯）
 
-| 文件 | 内容 |
-|------|------|
-| archive/目标与任务/260830/下一阶段功能梳理.md | 已完成：7 项候选功能（含楼中楼评论模式与数据模型决策） |
-| archive/目标与任务/260830/下一阶段计划.md | 已完成：7 阶段执行计划 |
-| archive/目标与任务/260902-test-refactor/下一周期需求与痛点.md | 已完成：test-refactor 周期（测试体系可靠化+脏数据治理）需求与痛点，决策 C/D 已结转至新版 |
-| archive/目标与任务/260902-test-refactor/下一周期任务清单.md | 已完成：test-refactor 周期任务 T1-T5 详情与周期约定 G1-G10（约定已结转至新版） |
-| archive/目标与任务/ARCHITECTURE_PLAN.md | 已完成：架构目标与路线图 |
-| archive/目标与任务/CURRENT_TASK.md | 已完成：历史任务清单 |
-| archive/报告/项目分析报告.md | 早期项目分析 |
-| archive/报告/TEST_COVERAGE.md | 7-23 测试覆盖报告 |
-
-archive/ 下另有 `常青/`、`说明书/`、`报告/` 等子目录，未来被替换的旧版本按类别归档于此，保留结构便于追溯。
+这里不记录
 
 ## 临时文档（temp/，勿读，可随时删除，永不追踪）
 
-- HANDOFF_2026-08-09 / 08-10 / 08-14 等 5 份会话交接
-- DISASTER_RECOVERY_PLAN、DISASTER_CHECK_REPORT（灾后事件，已完结）
-- DATABASE_SCHEMA_2026-08-08.sql、TVdatabase_backup_2026-08-08.sql（快照/备份，可再生成）
-- CLEANUP_REPORT_2026-08-09.md、REMOVE_CODE.md（一次性事件记录）
+这里不记录

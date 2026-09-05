@@ -6,6 +6,49 @@
 
 本文档供后续会话或其他 agent 直接复用，包含设计说明、使用方式、前置条件、安全边界与已知坑。
 
+> **跑测试的唯一权威入口**：T1 文档收口后，旧版 TEST_GUIDE / ACCEPTANCE_CRITERIA 已归档至 `.docs/archive/说明书/`（勿读），所有"怎么跑测试"的问题以本文档为准。
+
+***
+
+## 概念速览 / 快速上手（2026-09-05，T1 文档收口）
+
+### 概念速览
+
+| 项 | 内容 |
+|----|------|
+| 两层测试 | JUnit（`src/test/java`）= 服务层单元基准（mock，不碰 DB/HTTP）；pytest（`src/test/python`）= 端到端验收（真实 MySQL/Redis/Tomcat）。归属判据见 §〇.2 |
+| 测试环境 | 独立 Tomcat **18080**（与 IDEA 8080 隔离，端口不可覆盖）+ 独立测试库 Docker MySQL `TVDatabase_test`（127.0.0.1:3307）+ Redis（6379） |
+| 数据隔离 | pytest 用例全部落在测试库 3307，生产库 TVDatabase 不再产生测试残留（见 §六） |
+
+### 快速上手
+
+```powershell
+python tools\run_tests_report.py all       # 全量端到端：build -> start -> test -> stop（输出自动落盘）
+python tools\run_tests_report.py junit     # 全量单元：mvn -o test
+```
+
+单步操作（分步调试用）：
+
+```powershell
+python tools\run_tests.py build    # 只做 Maven 离线打包
+python tools\run_tests.py start    # 只启动独立 Tomcat（18080，后台保持）
+python tools\run_tests.py test     # 只跑 pytest（要求 18080 已就绪）
+python tools\run_tests.py stop     # 只关停独立 Tomcat
+```
+
+前置检查与失败排查见 §七；主会话收口执行方式（日志落盘、latest.json 复核）见 §九。
+
+### 章节目录（导航）
+
+| 章节 | 内容 |
+|------|------|
+| 〇 | 测试分层与定位（JUnit vs pytest、去重判据 C1-C3） |
+| 一~五 | 脚本解决的问题、前置条件与路径常量、使用方式与退出码、设计、沙盒限制与踩坑 |
+| 六 | 数据副作用与隔离（测试库 3307、自动清理、完整性校验） |
+| 七 | 给其他 agent 的快速操作指南 |
+| 八 | 维护约定 |
+| 九 | 上下文收口执行方式（run_tests_report.py） |
+
 ***
 
 ## 〇、测试分层与定位（T1，2026-09-01）

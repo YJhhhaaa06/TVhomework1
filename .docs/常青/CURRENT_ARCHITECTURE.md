@@ -49,13 +49,12 @@ untitled/
 │   │   └── BUSINESS_FLOW.md         # 业务流程文档
 │   ├── 目标与任务/                   # 当前目标与任务（暂空）
 │   ├── 说明书/                       # 按需读的参考手册
-│   │   ├── TEST_GUIDE.md            # 测试运行指南
-│   │   ├── TEST_AUTOMATION.md       # 测试自动化脚本说明
-│   │   ├── ACCEPTANCE_CRITERIA.md   # 验收标准
+│   │   ├── TEST_AUTOMATION.md       # 测试自动化脚本说明（跑测试唯一权威入口）
 │   │   ├── DATABASE.md              # 数据库建表语句（本机，不追踪）
 │   │   └── AVAILABLE_TOOLS.md       # 工具路径清单（本机，不追踪）
 │   ├── archive/                     # 历史存档（追踪可追溯，勿读）
 │   │   ├── 目标与任务/               # 已完成：ARCHITECTURE_PLAN、CURRENT_TASK
+│   │   ├── 说明书/                  # 已归档：TEST_GUIDE、ACCEPTANCE_CRITERIA（T1 文档收口）
 │   │   └── 报告/                    # 项目分析报告、TEST_COVERAGE
 │   └── temp/                        # 临时文档（永不追踪，可删）
 │
