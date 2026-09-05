@@ -23,6 +23,11 @@ BASE_URL = os.environ.get("TV_BASE_URL", "http://127.0.0.1:18080")
 # 两处需同步修改）。避开 pytest_/smoke_ 前缀，以免被 cleanup_data.py 自动清理删除。
 SEED_COMMENT_CONTENT_PREFIX = "seed_baseline"
 
+# E-09b 过期券测试（T5）：测试库重建自 .docs/archive/DBbackups 最新 db.sql，
+# 其中 coupon id=6 为历史过期券（begin 2026-05-12 / end 2026-05-15，库存 998），
+# end_time 恒小于当前时间，grab 必 409 且不产生订单/库存消耗；备份更新后需核对本常量。
+EXPIRED_COUPON_ID = 6
+
 # Test user credentials - use UUID for guaranteed uniqueness across runs
 # Phone must be 11 digits starting with 1, so use digits only
 _unique = uuid.uuid4().hex[:8]
@@ -377,3 +382,12 @@ def available_coupon_id(base_url):
             coupon = coupons[0]
             return coupon.get("id") or coupon.get("couponId")
     return None
+
+
+@pytest.fixture(scope="session")
+def expired_coupon_id():
+    """返回一张确定已过期的优惠券 id（conftest.EXPIRED_COUPON_ID，来自 db.sql 历史行）。
+
+    已过期券 grab 必 409（deductStock 的 end_time >= NOW() 不满足），不落订单、不耗库存。
+    """
+    return EXPIRED_COUPON_ID

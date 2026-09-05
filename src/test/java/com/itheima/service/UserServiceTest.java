@@ -1,7 +1,6 @@
 package com.itheima.service;
 
 import com.itheima.dao.UserDao;
-import com.itheima.exception.AuthException;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.DatabaseException;
 import com.itheima.exception.DuplicatePhoneException;
@@ -111,10 +110,10 @@ class UserServiceTest {
     }
 
     @Test
-    void registerDuplicatePhoneThrowsAuthException() throws SQLException {
+    void registerDuplicatePhoneThrowsDuplicatePhoneException() throws SQLException {
         when(userDao.isPhoneUsed(conn, "13800000001")).thenReturn(true);
 
-        assertThrows(AuthException.class, () ->
+        assertThrows(DuplicatePhoneException.class, () ->
                 service.registerAsUser(RegisterCommand.getInstance("13800000001", "abc123", "bob")));
     }
 

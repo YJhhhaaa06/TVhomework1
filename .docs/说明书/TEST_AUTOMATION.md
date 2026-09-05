@@ -321,6 +321,8 @@ DB_PORT=3307 DB_PASSWORD=ROOT123 DB_NAME=TVDatabase_test python tools\check_inte
 
 - pytest 用例自包含（T4，2026-09-05）：用例应自建自清（独立建立数据 + finally 清理），不写共享 fixture（sample_content_id/sample_post_content_id）；同文件/跨文件不得存在运行顺序依赖（如 C-01→C-02 点赞状态、edit_work 换源永久替换共享媒体）。例外：对共享 fixture 的临时改动（如改文案）必须 finally 复原，净零残留方可。
 
+- 断言不锁定中文文案（T5，2026-09-05）：端到端用例断言 code + 稳定字段，不写 `"xxx" in msg` 类中文子串匹配；被断言响应稳定字段需在响应中恒定存在；后端文案措辞调整不应翻转测试结果。
+
 ## 九、上下文收口执行方式（主会话推荐入口）
 
 > 文件：`tools/run_tests_report.py`
