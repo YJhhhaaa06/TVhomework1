@@ -60,8 +60,16 @@ TEST_DB_NAME = os.environ.get("TV_DB_NAME", "TVDatabase_test")
 TEST_DB_URL = os.environ.get(
     "TV_DB_URL",
     f"jdbc:mysql://{TEST_DB_HOST}:{TEST_DB_PORT}/{TEST_DB_NAME}"
-    "?useSSL=false&serverTimezone=Asia/Shanghai",
+    "?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true",
 )
+
+# ---- 环境预检 / pytest 超时 ----
+REDIS_PORT = 6379  # 业务 app.properties 固定 localhost:6379，无环境变量覆盖
+EXIT_ENV_NOT_READY = 10   # 测试环境未就绪（3307/6379 探不通），秒级退出
+EXIT_PYTEST_TIMEOUT = 11  # pytest 执行超时被杀
+# 用户决策（2026-09-05）：pytest 阶段正常仅 ~3s，大头在编译/部署/关停（不在刹车范围），
+# 60s 已是 ~20 倍裕量，足以切断卡死且几乎不误杀；TV_PYTEST_TIMEOUT 可覆盖（验证用短超时模拟挂起）
+PYTEST_TIMEOUT_SECONDS = int(os.environ.get("TV_PYTEST_TIMEOUT", "60"))
 
 PID_FILE = CATALINA_BASE / "logs" / "tomcat.pid"
 RUN_LOG = CATALINA_BASE / "logs" / "run.log"
@@ -117,6 +125,21 @@ def app_ready() -> bool:
             return resp.status == 200
     except Exception:
         return False
+
+
+def precheck_env() -> None:
+    """start 前纯 socket 探测测试库(3307)/Redis(6379)；不通即秒级快速失败（exit 10）。"""
+    checks = [
+        (TEST_DB_PORT, "MySQL 测试库(3307, TVDatabase_test)"),
+        (str(REDIS_PORT), "Redis(6379)"),
+    ]
+    missing = [(port, name) for port, name in checks if not port_open(int(port))]
+    if missing:
+        for port, name in missing:
+            log(f"测试环境未就绪: {name} 端口 {port} 不可达")
+        log("提示: 请先启动 docker mysql-test / redis 后重试（预检不阻塞、不影响未知进程）")
+        sys.exit(EXIT_ENV_NOT_READY)
+    log("测试环境预检通过: MySQL(3307) / Redis(6379) 可达")
 
 
 def run_hidden(cmd: list, **kwargs) -> subprocess.CompletedProcess:
@@ -282,6 +305,8 @@ def prepare_base() -> None:
 def _start_server():
     require(JAVA_HOME / "bin" / "java.exe", CATALINA_HOME / "bin" / "catalina.bat", WAR_FILE)
 
+    precheck_env()
+
     if app_ready():
         log(f"{BASE_URL} 上已有本应用在运行，直接复用")
         return None
@@ -435,9 +460,27 @@ def cmd_test(_args) -> int:
     env["DB_NAME"] = TEST_DB_NAME
 
     cmd = [sys.executable, "-m", "pytest", str(TEST_DIR), "-v", "--tb=short"]
-    log("开始 pytest ...")
-    result = subprocess.run(cmd, cwd=str(PROJECT_ROOT), env=env)
+    log(f"开始 pytest（超时上限 {PYTEST_TIMEOUT_SECONDS}s）...")
+    try:
+        result = subprocess.run(
+            cmd, cwd=str(PROJECT_ROOT), env=env,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=PYTEST_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        log(f"pytest 超时（>{PYTEST_TIMEOUT_SECONDS}s）已强制终止")
+        tail = (exc.stdout or "")[-4000:]
+        if tail:
+            log("pytest 输出尾部摘要（便于定位卡点）:")
+            print(tail)
+        _cleanup_test_db()
+        return EXIT_PYTEST_TIMEOUT
+
     log(f"pytest 结束，exit={result.returncode}")
+    if result.stdout:
+        print(result.stdout)  # 保持输出可见性（run_tests_report 仍会整体捕获落盘）
+    if result.stderr:
+        print(result.stderr, file=sys.stderr)
     _cleanup_test_db()
     return result.returncode
 

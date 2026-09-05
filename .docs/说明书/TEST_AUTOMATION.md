@@ -6,7 +6,7 @@
 
 本文档供后续会话或其他 agent 直接复用，包含设计说明、使用方式、前置条件、安全边界与已知坑。
 
-> **跑测试的唯一权威入口**：T1 文档收口后，旧版 TEST_GUIDE / ACCEPTANCE_CRITERIA 已归档至 `.docs/archive/说明书/`（勿读），所有"怎么跑测试"的问题以本文档为准。
+> **跑测试的唯一权威入口**：T1 文档收口后，旧版 TEST\_GUIDE / ACCEPTANCE\_CRITERIA 已归档至 `.docs/archive/说明书/`（勿读），所有"怎么跑测试"的问题以本文档为准。
 
 ***
 
@@ -14,11 +14,11 @@
 
 ### 概念速览
 
-| 项 | 内容 |
-|----|------|
+| 项    | 内容                                                                                                                  |
+| ---- | ------------------------------------------------------------------------------------------------------------------- |
 | 两层测试 | JUnit（`src/test/java`）= 服务层单元基准（mock，不碰 DB/HTTP）；pytest（`src/test/python`）= 端到端验收（真实 MySQL/Redis/Tomcat）。归属判据见 §〇.2 |
-| 测试环境 | 独立 Tomcat **18080**（与 IDEA 8080 隔离，端口不可覆盖）+ 独立测试库 Docker MySQL `TVDatabase_test`（127.0.0.1:3307）+ Redis（6379） |
-| 数据隔离 | pytest 用例全部落在测试库 3307，生产库 TVDatabase 不再产生测试残留（见 §六） |
+| 测试环境 | 独立 Tomcat **18080**（与 IDEA 8080 隔离，端口不可覆盖）+ 独立测试库 Docker MySQL `TVDatabase_test`（127.0.0.1:3307）+ Redis（6379）       |
+| 数据隔离 | pytest 用例全部落在测试库 3307，生产库 TVDatabase 不再产生测试残留（见 §六）                                                                 |
 
 ### 快速上手
 
@@ -38,18 +38,18 @@ python tools\run_tests.py stop     # 只关停独立 Tomcat
 
 前置检查与失败排查见 §七；主会话收口执行方式（日志落盘、latest.json 复核）见 §九。
 
-> **手动跑 pytest 的注意**（T1 收尾，2026-09-05）：conftest 默认 `BASE_URL` 已指向 `http://127.0.0.1:18080`（测试实例），不再默认 8080 生产实例；不经 run_tests 直接手动 `pytest` 前，需先 `python tools\run_tests.py start` 拉起 18080 实例，否则连接会被拒绝（快速失败，不会误连生产）。
+> **手动跑 pytest 的注意**（T1 收尾，2026-09-05）：conftest 默认 `BASE_URL` 已指向 `http://127.0.0.1:18080`（测试实例），不再默认 8080 生产实例；不经 run\_tests 直接手动 `pytest` 前，需先 `python tools\run_tests.py start` 拉起 18080 实例，否则连接会被拒绝（快速失败，不会误连生产）。
 
 ### 章节目录（导航）
 
-| 章节 | 内容 |
-|------|------|
-| 〇 | 测试分层与定位（JUnit vs pytest、去重判据 C1-C3） |
-| 一~五 | 脚本解决的问题、前置条件与路径常量、使用方式与退出码、设计、沙盒限制与踩坑 |
-| 六 | 数据副作用与隔离（测试库 3307、自动清理、完整性校验） |
-| 七 | 给其他 agent 的快速操作指南 |
-| 八 | 维护约定 |
-| 九 | 上下文收口执行方式（run_tests_report.py） |
+| 章节   | 内容                                    |
+| ---- | ------------------------------------- |
+| 〇    | 测试分层与定位（JUnit vs pytest、去重判据 C1-C3）   |
+| 一\~五 | 脚本解决的问题、前置条件与路径常量、使用方式与退出码、设计、沙盒限制与踩坑 |
+| 六    | 数据副作用与隔离（测试库 3307、自动清理、完整性校验）         |
+| 七    | 给其他 agent 的快速操作指南                     |
+| 八    | 维护约定                                  |
+| 九    | 上下文收口执行方式（run\_tests\_report.py）      |
 
 ***
 
@@ -59,10 +59,10 @@ python tools\run_tests.py stop     # 只关停独立 Tomcat
 
 ### 0.1 两层定位
 
-| 层                         | 定位           | 运行方式                                                  | 断言形态与边界                                                                               |
-| ------------------------- | ------------ | ----------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| JUnit（`src/test/java`）    | **服务层单元基准**  | `python tools\run_tests_report.py junit`（mvn -o test） | Mock DAO/缓存，**不碰数据库/HTTP**；验证逻辑契约（计算/异常类型/DAO 调用契约/缓存联动）                              |
-| pytest（`src/test/python`） | **端到端验收**    | `python tools\run_tests_report.py all`                | 真实 MySQL/Redis/Tomcat；验证 HTTP 入口行为（401/400/403/404/409…）与跨层副作用（落库、缓存失效、物理文件删除、跨接口可见性） |
+| 层                         | 定位          | 运行方式                                                  | 断言形态与边界                                                                               |
+| ------------------------- | ----------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| JUnit（`src/test/java`）    | **服务层单元基准** | `python tools\run_tests_report.py junit`（mvn -o test） | Mock DAO/缓存，**不碰数据库/HTTP**；验证逻辑契约（计算/异常类型/DAO 调用契约/缓存联动）                              |
+| pytest（`src/test/python`） | **端到端验收**   | `python tools\run_tests_report.py all`                | 真实 MySQL/Redis/Tomcat；验证 HTTP 入口行为（401/400/403/404/409…）与跨层副作用（落库、缓存失效、物理文件删除、跨接口可见性） |
 
 ### 0.2 去重判据（C1-C3，按行为形态单选）
 
@@ -76,8 +76,8 @@ python tools\run_tests.py stop     # 只关停独立 Tomcat
 
 ### 0.3 实测用例基数（2026-09-01）
 
-| 体系     | 数量             |
-| ------ | -------------- |
+| 体系     | 数量                 |
+| ------ | ------------------ |
 | JUnit  | 113 例（surefire 实跑） |
 | pytest | 103 例（`def test_`） |
 
@@ -139,6 +139,10 @@ python tools\run_tests.py stop     # 只关停独立 Tomcat
 | 5 / 6 | Tomcat 提前退出 / 启动超时  |
 | 7     | 停止失败且无法确认进程归属，需人工检查 |
 | 8     | 测试前置不满足（18080 未就绪）  |
+| 10    | 测试环境未就绪（MySQL 3307 / Redis 6379 探测失败，秒级退出） |
+| 11    | pytest 执行超时（默认 60s，`TV_PYTEST_TIMEOUT` 可覆盖）被强制终止 |
+
+> 补充（哪类失败本就快，T2 于 2026-09-05 确认）：Maven 编译失败与 Tomcat 提前退出本就秒级失败（exit = mvn 返回码 / 5，不空等）；10 号专门解决「DB/Redis 未就绪导致应用不就绪的空等」；90s 就绪超时（6）保留为兜底。
 
 ***
 
@@ -152,6 +156,8 @@ build ──> start ──> test ──> finally: stop
 
 `all` 持有自己启动的 `Popen` 对象，`finally` 保证即使 pytest 失败也会执行 `stop`。
 
+pytest 阶段有整体超时刹车（T2，2026-09-05）：`subprocess.run(timeout=…)`，默认 60s、`TV_PYTEST_TIMEOUT` 可覆盖；超时即强制终止 pytest 进程并报错（exit 11），`all` 的 `finally` 仍保证 `stop`，不会留下 18080 实例。
+
 ### 4.2 启动
 
 - 用 `subprocess.Popen(["cmd", "/c", "call", "catalina.bat", "run"])` 拉起，`CREATE_NO_WINDOW` 隐藏窗口。
@@ -159,6 +165,8 @@ build ──> start ──> test ──> finally: stop
 - 把包装进程 PID 写入 `CATALINA_BASE\logs\tomcat.pid`。
 
 - 轮询 `http://127.0.0.1:18080/start`，就绪后返回。
+
+- **启动前环境预检**（T2，2026-09-05）：纯 socket 探测测试库 MySQL(3307) 与 Redis(6379)，不通即报「测试环境未就绪」并秒级退出（exit 10），不再空等至启动超时（6）。
 
 - 启动前检查：18080 若已有本应用则复用；若被未知程序占用则拒绝启动。
 
@@ -216,7 +224,7 @@ build ──> start ──> test ──> finally: stop
 
 ## 六、数据副作用与隔离
 
-pytest 端到端用例运行在**独立测试库** `TVDatabase_test`（Docker MySQL 127.0.0.1:3307，连接由 `run_tests.py` 通过 `DB_URL/DB_USERNAME/DB_PASSWORD` 环境变量注入，`AppConfig` 自动读取，不改 app.properties）：
+pytest 端到端用例运行在**独立测试库** `TVDatabase_test`（Docker MySQL 127.0.0.1:3307，连接由 `run_tests.py` 通过 `DB_URL/DB_USERNAME/DB_PASSWORD` 环境变量注入，`AppConfig` 自动读取，不改 app.properties；默认 JDBC 串含 `allowPublicKeyRetrieval=true`，适配测试库 MySQL8 caching\_sha2 认证，T2 返工 2026-09-05）：
 
 - 注册用户（`testA_*`、`testB_*`、`smoke_user_*`、`timing_*` 等）
 
@@ -270,7 +278,14 @@ DB_PORT=3307 DB_PASSWORD=ROOT123 DB_NAME=TVDatabase_test python tools\check_inte
    Test-Path 'D:\dev\DevTools\tomcat\apache-tomcat-10.1.54\bin\catalina.bat'
    ```
 
-2. 确认 18080 空闲：
+2. 确认测试环境外部依赖就绪（3307 测试库 / 6379 Redis，T2 起 `start/all` 会自动预检并秒级报错）：
+
+   ```powershell
+   Test-NetConnection 127.0.0.1 -Port 3307 | Select-Object TcpTestSucceeded
+   Test-NetConnection 127.0.0.1 -Port 6379 | Select-Object TcpTestSucceeded
+   ```
+
+3. 确认 18080 空闲：
 
    ```powershell
    try { Invoke-WebRequest -Uri 'http://127.0.0.1:18080/start' -UseBasicParsing -TimeoutSec 3 } catch { '空闲' }
@@ -292,7 +307,7 @@ DB_PORT=3307 DB_PASSWORD=ROOT123 DB_NAME=TVDatabase_test python tools\check_inte
 
    - 若 `stop` 提示无法确认归属，不要扩大强杀范围，把 PID 和端口信息交给用户人工处理。
 
-5. 不要修改脚本的安全边界：8080 隔离、进程归属校验、不删除用户数据。
+6. 不要修改脚本的安全边界：8080 隔离、进程归属校验、不删除用户数据。
 
 ***
 
