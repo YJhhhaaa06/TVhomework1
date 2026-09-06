@@ -10,6 +10,7 @@
 
 安全约定:
     * 只使用独立 Tomcat 运行目录与端口 18080，绝不触碰 IDE 在 8080 的实例。
+    * CATALINA_BASE 与 CATALINA_HOME 相等或互为祖先时拒绝启动（防误配覆盖 Tomcat 本体）。
     * 只终止本脚本自己启动的进程（PID 文件 + 命令行双重确认），否则拒绝强杀。
     * 不删除任何用户数据；只覆盖自己的 ROOT.war 和日志。
 """
@@ -350,6 +351,26 @@ def _is_safe_trash_target(src: Path, dst: Path) -> bool:
     return True
 
 
+def _is_safe_catalina_base(base: Path, home: Path) -> bool:
+    """CATALINA_BASE 与 CATALINA_HOME 重叠判定（纯函数）：相等或互为祖先 → 拒绝。
+
+    prepare_base 会对 base 执行 mkdir / 改写 server.xml / copy2 覆盖 webapps/ROOT.war，
+    若 base 与 home 重叠（例如 TV_CATALINA_BASE 被误配成 Tomcat 本体或 IDE 8080
+    实例目录），上述写操作会直接覆盖 Tomcat 自身/生产部署产物，不可恢复
+    （无回收站）。normcase + resolve 消除盘符大小写/分隔符差异。
+
+    注意：home 本身也可被 TV_CATALINA_HOME 覆盖，"被期望的 Tomcat 本体"由用户
+    配置决定；本门禁只防 base 与 home 重叠这一确定性误配，不防指向其它未知
+    生产 Tomcat（无已知名单可查）。默认场景 base 与 home 完全分离，判定放行。
+    """
+    base_res, home_res = base.resolve(), home.resolve()
+    return not (
+        base_res == home_res
+        or base_res in home_res.parents
+        or home_res in base_res.parents
+    )
+
+
 def _evict_media_dir(src: Path, dst_root: Path) -> Path:
     """把整目录移动到回收站（只移不删，同盘即原子 rename；不删除任何文件）。
 
@@ -458,6 +479,14 @@ def verify_war_context(war: Path) -> bool:
     return bool(bases) and all(b == target for b in bases)
 
 def prepare_base() -> None:
+    # 门禁：base 与 home 重叠（相等/互为祖先）→ 拒绝，防误配 TV_CATALINA_BASE
+    # 覆盖 Tomcat 本体或生产部署产物（对比媒体目录的三重门禁；这里无回收站兜底）
+    if not _is_safe_catalina_base(CATALINA_BASE, CATALINA_HOME):
+        log(f"拒绝启动: CATALINA_BASE {CATALINA_BASE} 与 CATALINA_HOME {CATALINA_HOME} "
+            "相等或互为祖先（疑似误配为 Tomcat 本体/实例目录）。为避免覆盖 Tomcat "
+            "自身部署产物（server.xml / webapps/ROOT.war，无回收站、不可恢复）已中止；"
+            "请修正 TV_CATALINA_BASE 后重试")
+        sys.exit(12)
     CATALINA_BASE.mkdir(parents=True, exist_ok=True)
     for name in ("conf", "logs", "temp", "webapps", "work"):
         (CATALINA_BASE / name).mkdir(exist_ok=True)
