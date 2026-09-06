@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import socket
 import subprocess
 import sys
 import time
 import urllib.request
+import zipfile
 from pathlib import Path
 
 def _env(name: str, default: str) -> str:
@@ -42,6 +44,24 @@ CATALINA_HOME = Path(_env("TV_CATALINA_HOME", r"D:\dev\DevTools\tomcat\apache-to
 CATALINA_BASE = Path(_env("TV_CATALINA_BASE", r"D:\data\projects\VideoPlatform\stone\temp\tomcat-test-18080"))
 M2_REPO = Path(_env("TV_M2_REPO", r"D:\dev\WorkSpace\VideoPlatform\maven"))
 PYTEST_DEPS = Path(_env("TV_PYTEST_DEPS", r"D:\dev\WorkSpace\VideoPlatform\temp\pytest-deps"))
+# T2 媒体目录隔离：测试实例上传落盘与 /upload 挂载的独立目录（与生产 stone 隔离）。
+# 默认值需与 tools/media_paths.py 的 TEST_MEDIA_ROOT_DEFAULT、
+# src/test/python/conftest.py 的 STONE_DIR 默认值三处同步修改。
+#
+# ⚠️ 清空白名单（安全关键，勿乱改）：本脚本的破坏性流程【只允许移动本常量指向的目录】
+# （整目录移入回收站 test_trash，只移不删；不会删除任何文件）。
+#  - TV_TEST_MEDIA_ROOT 覆盖值如与本常量不一致 → start 直接 exit 12 拒绝，绝不动其它目录；
+#  - 想改换被移动的目录，唯一途径是把本常量改成那个目录（必须经用户明示后人工修改，勿作随手调整）；
+#  - 即使改了本常量，生产媒体根（见 _media_dir_is_production）仍会被第二道门禁拦截。
+DEFAULT_TEST_MEDIA_ROOT = Path(r"D:\data\projects\VideoPlatform\media-test")
+TEST_MEDIA_ROOT = Path(_env("TV_TEST_MEDIA_ROOT", str(DEFAULT_TEST_MEDIA_ROOT)))
+# 测试媒体回收站（T2 只移不删落点）：每次 fresh-start 把旧 media-test 整体移入此处
+# （<media-test>-<时间戳>/），由用户手动删除以释放空间。默认与 media-test 同级；
+# env TV_TEST_TRASH_ROOT 可覆盖，但落点会校验（不得命中生产根/与 src 重叠，否则 exit 12）。
+TEST_TRASH_ROOT = Path(_env("TV_TEST_TRASH_ROOT", r"D:\data\projects\VideoPlatform\test_trash"))
+MEDIA_DIRS = ("video", "image", "cover")  # 与 FileUploadService / MediaAuditService 一致
+# 生产媒体根兜底（清空黑名单第一道门禁）：与 tools/media_paths.py 的 PROD_UPLOAD_ROOT_DEFAULT 一致
+PROD_UPLOAD_ROOT_DEFAULT = Path("D:/data/projects/VideoPlatform/stone")
 
 HTTP_PORT = 18080
 SHUTDOWN_PORT = 18005
@@ -99,6 +119,9 @@ def base_env() -> dict:
     env["DB_URL"] = TEST_DB_URL
     env["DB_USERNAME"] = TEST_DB_USER
     env["DB_PASSWORD"] = TEST_DB_PASSWORD
+    # T2 媒体目录隔离：upload.path -> UPLOAD_PATH 环境变量覆盖（AppConfig 统一机制），
+    # 使测试实例上传落盘指向独立 media-test；与 WAR context.xml 的 /upload 挂载保持一致。
+    env["UPLOAD_PATH"] = _norm_media_path(TEST_MEDIA_ROOT)
     return env
 
 
@@ -268,10 +291,180 @@ def cmd_build(_args) -> int:
 # start / stop
 # ---------------------------------------------------------------------------
 
+def _norm_media_path(path) -> str:
+    """归一化为 AppShutDownListener.normalizePath 的比对口径：\\ -> /，去尾部 /。
+
+    用于 UPLOAD_PATH 注入值、context.xml base 改写与回读校验三处保持一致。
+    """
+    text = str(path).replace("\\", "/")
+    while text.endswith("/"):
+        text = text[:-1]
+    return text
+
+
+def _production_media_roots() -> list:
+    """生产媒体根集合（清空门禁用）：app.properties 的 upload.path + 默认生产 stone。"""
+    roots = [PROD_UPLOAD_ROOT_DEFAULT.resolve()]
+    props_path = PROJECT_ROOT / "src" / "main" / "resources" / "app.properties"
+    try:
+        for raw in props_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if line.startswith("upload.path="):
+                roots.append(Path(line.split("=", 1)[1].strip()).resolve())
+    except OSError:
+        pass
+    return roots
+
+
+def _media_dir_is_production(test_root: Path) -> bool:
+    """TEST_MEDIA_ROOT 是否命中生产媒体根（相等或为其子目录）——门禁判定（纯函数）。"""
+    test_root = test_root.resolve()
+    for prod in _production_media_roots():
+        if test_root == prod or prod in test_root.parents:
+            return True
+    return False
+
+
+def _is_allowlisted_media_root(test_root: Path) -> bool:
+    """清空白名单判定（纯函数）：路径（归一化后）必须等于硬编码白名单目录
+    DEFAULT_TEST_MEDIA_ROOT；对不上即拒绝，没有任何确认/覆盖通道可以绕过
+    （删除权仅存在于硬编码白名单）。
+
+    os.path.normcase + resolve 消除盘符大小写/分隔符差异，防止同一目录因写法不同被放行。
+    """
+    return os.path.normcase(str(test_root.resolve())) == os.path.normcase(
+        str(DEFAULT_TEST_MEDIA_ROOT.resolve())
+    )
+
+
+def _is_safe_trash_target(src: Path, dst: Path) -> bool:
+    """回收站落点安全判定（纯函数）：dst 不得命中生产媒体根，不得与 src 相等/互为祖先
+    后代（防把回收站移进生产目录 / 与测试目录嵌套递归：如回收站建在 media-test 内部，
+    下次移动会把回收站一起移走并产生嵌套）。"""
+    src, dst = src.resolve(), dst.resolve()
+    for prod in _production_media_roots():
+        if dst == prod or prod in dst.parents:
+            return False
+    if src == dst or src in dst.parents or dst in src.parents:
+        return False
+    return True
+
+
+def _evict_media_dir(src: Path, dst_root: Path) -> Path:
+    """把整目录移动到回收站（只移不删，同盘即原子 rename；不删除任何文件）。
+
+    返回回收目标路径；调用方负责先通过 _is_safe_trash_target 校验。
+    健壮性：同名目标已存在时追加 -dupN 后缀（避免嵌套）；移动失败（权限/占用）时
+    统一 exit 12 且源目录仍在原位；跨盘移动退化为拷贝+删除（较慢），执行前日志提示。
+    """
+    dst_root.mkdir(parents=True, exist_ok=True)
+    if os.path.splitdrive(str(src))[0].lower() != os.path.splitdrive(str(dst_root))[0].lower():
+        log(f"注意: 回收站与测试媒体目录不在同一磁盘，移动将退化为拷贝+删除（较慢）: {src} -> {dst_root}")
+    stamp = time.strftime("%Y%m%d-%H%M%S-") + f"{time.time_ns() % 1_000_000:06d}"
+    target = dst_root / f"{src.name}-{stamp}"
+    dup = 0
+    while target.exists():
+        dup += 1
+        target = dst_root / f"{src.name}-{stamp}-dup{dup}"
+    try:
+        shutil.move(str(src), str(target))
+    except OSError as exc:
+        log(f"测试媒体目录移动失败（源目录仍在原位，未删除任何文件）: {src} -> {target}: {exc}")
+        sys.exit(12)
+    return target
+
+
+def init_test_media_dir() -> None:
+    """fresh-start 语义下「移动式回收 + 重建」测试媒体目录（T2，像测试库 init）。
+
+    仅在 prepare_base（已确认无运行中的本脚本实例，复用/外来进程路径不会走到）调用。
+    行为：把旧 media-test 整目录移入回收站 test_trash（只移不删，用户可手动删除），
+    再重建空目录 video/image/cover。
+    门禁（防误移动设计，破坏权只信任硬编码白名单）：
+      1) 白名单：源目录（归一化后）不等于 DEFAULT_TEST_MEDIA_ROOT（硬编码白名单）→
+         拒绝并 exit 12（env 覆盖到任何其它目录都无法移动，也无人工确认通道）；
+      2) 生产黑名单（保险）：源命中生产媒体根 → 拒绝并 exit 12；
+      3) 回收站落点校验：test_trash 命中生产根或与源目录重叠/嵌套 → 拒绝并 exit 12。
+
+    注意：要移动别的目录 = 人工把 DEFAULT_TEST_MEDIA_ROOT 改成目标目录；除此以外
+    没有任何方法能让本流程作用于其它路径。本流程【永不删除】任何文件。
+    """
+    if not _is_allowlisted_media_root(TEST_MEDIA_ROOT):
+        log(f"拒绝: 媒体目录 {TEST_MEDIA_ROOT} 不在白名单内"
+            f"（唯一允许 {DEFAULT_TEST_MEDIA_ROOT}），为避免误移动其它目录已中止；"
+            "如确需改换，必须人工修改 run_tests.py 的 DEFAULT_TEST_MEDIA_ROOT")
+        sys.exit(12)
+    if _media_dir_is_production(TEST_MEDIA_ROOT):
+        log(f"拒绝启动: 媒体目录 {TEST_MEDIA_ROOT} 命中生产媒体根，为避免移动生产内容已中止")
+        sys.exit(12)
+    if TEST_MEDIA_ROOT.is_dir():
+        if not _is_safe_trash_target(TEST_MEDIA_ROOT, TEST_TRASH_ROOT):
+            log(f"拒绝启动: 测试媒体回收站落点不合法（命中生产根或与 media-test 重叠/嵌套）: {TEST_TRASH_ROOT}")
+            sys.exit(12)
+        evicted = _evict_media_dir(TEST_MEDIA_ROOT, TEST_TRASH_ROOT)
+        log(f"测试媒体目录已回收（只移不删）: {evicted}；如需释放空间请手动删除该目录")
+    for name in MEDIA_DIRS:
+        (TEST_MEDIA_ROOT / name).mkdir(parents=True, exist_ok=True)
+
+
+def patch_war_context(war: Path) -> None:
+    """改写部署用 ROOT.war 内 META-INF/context.xml 的 PostResources base 为媒体测试目录。
+
+    使 /upload 挂载与 UPLOAD_PATH 注入值同指 media-test（AppShutDownListener
+    启动时会强校验两者一致，故必须同时改写；不改源码 context.xml，避免影响生产 8080）。
+    只改写 <PostResources .../> 标签内的 base 属性（支持单引号/双引号），
+    不触碰其它 XML 元素。
+    """
+    target = _norm_media_path(TEST_MEDIA_ROOT)
+    tmp = war.with_name(war.name + ".patched")
+    try:
+        with zipfile.ZipFile(war, "r") as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                if item.filename == "META-INF/context.xml":
+                    text = data.decode("utf-8")
+                    text = re.sub(
+                        r'(<PostResources\b[^>]*?\bbase=)(["\'])([^"\']*)\2',
+                        lambda m: m.group(1) + m.group(2) + target + m.group(2),
+                        text,
+                        flags=re.S,
+                    )
+                    data = text.encode("utf-8")
+                zout.writestr(item, data)
+        os.replace(tmp, war)
+    except (OSError, zipfile.BadZipFile, KeyError, UnicodeDecodeError) as exc:
+        log(f"改写 ROOT.war 媒体挂载失败，拒绝启动: {exc}")
+        sys.exit(9)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+
+
+def verify_war_context(war: Path) -> bool:
+    """回读校验（仿 server.xml 模式）：ROOT.war 内 context.xml 的 PostResources base
+    必须全部等于媒体测试目录（不得残留生产 stone base），违规则拒绝启动。
+    支持单引号/双引号属性写法。"""
+    target = _norm_media_path(TEST_MEDIA_ROOT)
+    try:
+        with zipfile.ZipFile(war, "r") as zf:
+            text = zf.read("META-INF/context.xml").decode("utf-8")
+    except (KeyError, OSError, zipfile.BadZipFile):
+        return False
+    found = re.findall(r'<PostResources\b[^>]*?\bbase=(["\'])([^"\']*)\1', text, flags=re.S)
+    bases = [value for _quote, value in found]
+    return bool(bases) and all(b == target for b in bases)
+
 def prepare_base() -> None:
     CATALINA_BASE.mkdir(parents=True, exist_ok=True)
     for name in ("conf", "logs", "temp", "webapps", "work"):
         (CATALINA_BASE / name).mkdir(exist_ok=True)
+
+    # T2 媒体隔离：fresh-start 移动式回收旧测试媒体 + 重建（只移不删，类似测试库 init 语义）
+    init_test_media_dir()
+    log(f"已就绪测试媒体目录: {TEST_MEDIA_ROOT}（fresh-start 移动式回收重建，只移不删）")
 
     server_xml = CATALINA_BASE / "conf" / "server.xml"
     if not server_xml.exists():
@@ -298,8 +491,16 @@ def prepare_base() -> None:
         log(f"server.xml 端口校验失败，拒绝启动（防止误用 8080）: {server_xml}")
         sys.exit(9)
 
-    shutil.copy2(WAR_FILE, CATALINA_BASE / "webapps" / "ROOT.war")
-    log("已部署 ROOT.war")
+    root_war = CATALINA_BASE / "webapps" / "ROOT.war"
+    shutil.copy2(WAR_FILE, root_war)
+    # T2 媒体隔离：改写 ROOT.war 内 context.xml 的 /upload 挂载 base 并回读校验，
+    # 使其与 UPLOAD_PATH 注入一致（AppShutDownListener 启动校验兜底）。
+    patch_war_context(root_war)
+    if not verify_war_context(root_war):
+        log(f"ROOT.war 媒体挂载校验失败（context.xml base != {_norm_media_path(TEST_MEDIA_ROOT)}），"
+            "拒绝启动（防止传 A 目录取 B 目录）")
+        sys.exit(9)
+    log("已部署 ROOT.war（/upload 挂载指向测试媒体目录）")
 
 
 def _start_server():
@@ -452,6 +653,8 @@ def cmd_test(_args) -> int:
         os.pathsep + existing_pythonpath if existing_pythonpath else ""
     )
     env["TV_BASE_URL"] = BASE_URL
+    # T2 媒体隔离：测试侧文件落盘断言（STONE_DIR）指向独立媒体测试目录，兜底 env 缺失场景
+    env["TV_STONE_DIR"] = _norm_media_path(TEST_MEDIA_ROOT)
     # 测试库连接参数透传给 pytest（admin.py / test_comment_delete.py 通过 DB_* 读取）
     env["DB_HOST"] = TEST_DB_HOST
     env["DB_PORT"] = TEST_DB_PORT

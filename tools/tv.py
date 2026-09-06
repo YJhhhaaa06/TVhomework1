@@ -175,8 +175,9 @@ def run_subcommand(cmd: str, args: list[str], env_override: str | None) -> int:
               f"请先 `python tools/tv.py env test` 或加 `--env test`", file=sys.stderr)
         return 1
     if cmd in PROD_ONLY_CMDS and effective_env != "prod":
-        print(f"错误: {cmd} 会移动磁盘媒体文件，测试/生产共享 stone 目录，"
-              f"在测试库语境会把生产引用误判为孤儿；仅允许 prod 语境执行", file=sys.stderr)
+        print(f"错误: {cmd} 会移动磁盘媒体文件；测试/生产媒体目录已隔离"
+              f"（T2：18080 测试实例落 media-test，生命周期由 run_tests 自动管理），"
+              f"本工具为保护真实内容的回收工具，仅允许 prod 语境执行", file=sys.stderr)
         return 1
 
     # ---- 配置可用性检查（横幅前，失败即友好退出）----

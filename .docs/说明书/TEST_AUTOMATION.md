@@ -18,7 +18,7 @@
 | ---- | ------------------------------------------------------------------------------------------------------------------- |
 | 两层测试 | JUnit（`src/test/java`）= 服务层单元基准（mock，不碰 DB/HTTP）；pytest（`src/test/python`）= 端到端验收（真实 MySQL/Redis/Tomcat）。归属判据见 §〇.2 |
 | 测试环境 | 独立 Tomcat **18080**（与 IDEA 8080 隔离，端口不可覆盖）+ 独立测试库 Docker MySQL `TVDatabase_test`（127.0.0.1:3307）+ Redis（6379）       |
-| 数据隔离 | pytest 用例全部落在测试库 3307，生产库 TVDatabase 不再产生测试残留（见 §六）                                                                 |
+| 数据隔离 | pytest 用例全部落在测试库 3307，生产库 TVDatabase 不再产生测试残留（见 §六）；媒体落独立测试目录 media-test（T2，与生产 stone 隔离），旧测试媒体只移不删地回收至 test_trash       |
 
 ### 快速上手
 
@@ -45,11 +45,11 @@ python tools\tv.py --env test|prod <子命令>      # 本次命令临时用指�
 python tools\tv.py admin|cleanup|integrity|backup|init-test-db|test|cleanup-orphan-media [参数...]
 ```
 
-手动运维脚本（admin / cleanup / integrity / backup）默认连接**当前激活环境**（默认 test 测试库 3307），不再默认生产库；生产操作需先 `tv.py env prod`（持久）或 `--env prod`（临时）并在写操作时二次确认。测试库口令在 `tools/env/test.conf`（追踪）；生产口令放 `tools/env/prod.conf`（.gitignore 排除，模板 `prod.conf.example`）。`init-test-db` 与 `test` 固定测试库、拒绝 prod 语境；`cleanup-orphan-media` 仅允许 prod 语境（共享 stone 目录跨库误判风险）。
+手动运维脚本（admin / cleanup / integrity / backup）默认连接**当前激活环境**（默认 test 测试库 3307），不再默认生产库；生产操作需先 `tv.py env prod`（持久）或 `--env prod`（临时）并在写操作时二次确认。测试库口令在 `tools/env/test.conf`（追踪）；生产口令放 `tools/env/prod.conf`（.gitignore 排除，模板 `prod.conf.example`）。`init-test-db` 与 `test` 固定测试库、拒绝 prod 语境；`cleanup-orphan-media` 仅允许 prod 语境（T2 起测试/生产媒体目录已隔离，本工具为保护真实内容的回收工具）。
 
 前置检查与失败排查见 §七；主会话收口执行方式（日志落盘、latest.json 复核）见 §九。
 
-> **手动跑 pytest 的注意**（T1 收尾，2026-09-05）：conftest 默认 `BASE_URL` 已指向 `http://127.0.0.1:18080`（测试实例），不再默认 8080 生产实例；不经 run\_tests 直接手动 `pytest` 前，需先 `python tools\run_tests.py start` 拉起 18080 实例，否则连接会被拒绝（快速失败，不会误连生产）。
+> **手动跑 pytest 的注意**（T1 收尾，2026-09-05）：conftest 默认 `BASE_URL` 已指向 `http://127.0.0.1:18080`（测试实例），不再默认 8080 生产实例；不经 run\_tests 直接手动 `pytest` 前，需先 `python tools\run_tests.py start` 拉起 18080 实例，否则连接会被拒绝（快速失败，不会误连生产）。T2 起 `STONE_DIR` 默认已指向独立测试媒体目录 `media-test`（不经 run_tests 手动跑时文件断言亦不会指向生产）。
 
 ### 章节目录（导航）
 
@@ -117,6 +117,8 @@ python tools\tv.py admin|cleanup|integrity|backup|init-test-db|test|cleanup-orph
 | 独立 Tomcat 运行目录 | `D:\data\projects\VideoPlatform\stone\temp\tomcat-test-18080`                             | TV\_CATALINA\_BASE    | CATALINA\_BASE，含 conf/webapps/logs                         |
 | 构建输出目录（war）    | `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（其下 `untitled-1.0-SNAPSHOT.war`） | TV\_STAGE8\_TARGET    | 由 `build` 生成                                               |
 | 测试报告目录         | `D:\data\projects\VideoPlatform\stone\temp\test-reports`                                  | TV\_TEST\_REPORT\_DIR | run\_tests\_report.py 完整日志与 latest.json 落盘位置               |
+| 测试媒体目录         | `D:\data\projects\VideoPlatform\media-test`（video/image/cover）                          | TV\_TEST\_MEDIA\_ROOT | T2 起 18080 测试实例上传落盘 + `/upload` 挂载指向此处，与生产 stone 隔离；**白名单硬编码于 run_tests.py**：仅该目录会被移动式回收（整目录移入 test_trash，只移不删），env 覆盖为其它路径/命中生产根均拒绝（exit 12）  |
+| 测试媒体回收站         | `D:\data\projects\VideoPlatform\test_trash`（含 `<media-test>-<时间戳>/` 历史快照）                       | TV\_TEST\_TRASH\_ROOT | 旧 media-test 移动式回收落点（不删除任何文件，用户手动清理）；落点命中生产根或与 media-test 重叠/嵌套时拒绝（exit 12）  |
 | 测试代码           | 项目 `src\test\python`                                                                      | 无                     | pytest 用例 + conftest.py + pytest.ini                       |
 
 > 覆盖机制：上述路径均可在 `tools/run_tests*.py` 中通过同名 `TV_*` 环境变量覆盖（T1 落地，与 conftest.py 的 TV\_BASE\_URL 等先例一致）。HTTP 端口 18080/shutdown 18005 属安全隔离设计，**不可覆盖**。
@@ -150,8 +152,10 @@ python tools\run_tests.py stop     # 只关停独立 Tomcat
 | 5 / 6 | Tomcat 提前退出 / 启动超时  |
 | 7     | 停止失败且无法确认进程归属，需人工检查 |
 | 8     | 测试前置不满足（18080 未就绪）  |
+| 9     | 配置/挂载回读校验失败（server.xml 端口或 ROOT.war 媒体挂载改写后校验不符，拒绝启动） |
 | 10    | 测试环境未就绪（MySQL 3307 / Redis 6379 探测失败，秒级退出） |
 | 11    | pytest 执行超时（默认 60s，`TV_PYTEST_TIMEOUT` 可覆盖）被强制终止 |
+| 12    | 媒体目录门禁拒绝（破坏权只信任硬编码白名单，任一失败 exit 12）：① 移动源（归一化后）不等于 run_tests.py 硬编码的 `DEFAULT_TEST_MEDIA_ROOT`（白名单）——env 覆盖到任何其它目录均无法移动、无人工确认通道；② 移动源命中生产媒体根（app.properties upload.path / 默认生产 stone 或其子目录）——白名单被人工改动指向生产时的第二道保险；③ 回收站落点（`TEST_TRASH_ROOT`）命中生产根或与移动源重叠/嵌套 |
 
 > 补充（哪类失败本就快，T2 于 2026-09-05 确认）：Maven 编译失败与 Tomcat 提前退出本就秒级失败（exit = mvn 返回码 / 5，不空等）；10 号专门解决「DB/Redis 未就绪导致应用不就绪的空等」；90s 就绪超时（6）保留为兜底。
 
@@ -239,7 +243,7 @@ pytest 端到端用例运行在**独立测试库** `TVDatabase_test`（Docker My
 
 - 注册用户（`testA_*`、`testB_*`、`smoke_user_*`、`timing_*` 等）
 
-- 上传测试视频/图片（仍写入 `D:\data\projects\VideoPlatform\stone`）
+- 上传测试视频/图片（T2 起落独立测试媒体目录 `D:\data\projects\VideoPlatform\media-test`，不再写入生产 stone）
 
 - 评论、点赞、关注记录
 
@@ -247,7 +251,7 @@ pytest 端到端用例运行在**独立测试库** `TVDatabase_test`（Docker My
 
 **自动清理**：`run_tests.py test/all` 结束后自动清理**测试库**数据库数据（pytest\_/smoke\_ 前缀 content 及关联记录，等价 `DB_* 指向测试库 + cleanup_data.py --execute --no-backup`）。**生产库 TVDatabase 不再产生测试残留**。
 
-**媒体文件**：pytest 上传的媒体文件仍落 stone 目录，孤儿媒体由 `tools/cleanup_orphan_media.py` 按需清理（用户手动执行，不在自动清理范围内）。
+**媒体文件**（T2 起）：pytest 上传的媒体文件落 `media-test`（`run_tests.py start` fresh-start 时把旧 media-test 整目录**移动式回收**至 `test_trash`——只移不删、由用户手动清理，再重建空目录；生命周期由 run_tests 管理，不产生孤儿残留）；生产 stone 不再接收测试文件。`cleanup_orphan_media.py` 为保护真实内容的回收工具，仍仅限 prod 语境执行（媒体根按库判定，见其 docstring）。
 
 **管理员链路**：`test_admin.py` / `test_hide_content.py` / `test_comment_delete.py` 的管理员操作通过 `DB_*` 环境变量连测试库（`run_tests.py cmd_test` 注入），`tools/admin.py` 与测试内直接 SQL 均遵守该约定；人工命令行调用 admin.py（或经 `tv.py admin`）默认连接 tools/env 当前激活环境（默认测试库，T6 起不再默认生产库），生产操作需显式 `tv.py env prod` 并二次确认。测试库重建后由基线种子提供 `users.id=1` 管理员（role=1，见 TEST_SEED.md）；三个 admin 用例仍各自动态"注册/挑选 + 提升 + 降级"自建自清，不依赖该种子账号。
 
@@ -272,7 +276,7 @@ python tools\tv.py integrity --fix                       # 显式修复计数漂
 python tools\tv.py --env prod integrity                  # 本次检查生产库（临时，不改 active.conf）
 ```
 
-> 测试库场景建议 `--no-media`：测试/生产共享 stone 媒体目录，连测试库时磁盘与被引用 URL 无重叠会触发 exit 5 疑似配置错误告警（T6）。
+> 测试库场景（T2 起）：媒体根按库判定已指向 `media-test`（与连接库对应），可安全扫描，不会误扫生产；仍可用 `--no-media` 只查库内检查项。
 
 退出码：0 完成 / 1 参数或其它错误（含 `--fix` 失败已回滚）/ 2 mysql 客户端不可用 / 3 数据库连接或健康门禁失败（未触碰任何数据）/ 5 疑似配置错误（库内存在媒体记录但磁盘与被引用 URL 无重叠或媒体目录缺失）。
 

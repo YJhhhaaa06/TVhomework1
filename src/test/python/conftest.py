@@ -49,7 +49,10 @@ USER_B = {
 }
 
 # Storage directory on server (used to verify file uploads exist)
-STONE_DIR = os.environ.get("TV_STONE_DIR", "D:/data/projects/VideoPlatform/stone")
+# T2 媒体隔离：默认指向测试实例落盘/挂载的独立媒体目录（与生产 stone 隔离）。
+# 与 tools/run_tests.py 的 TEST_MEDIA_ROOT、tools/media_paths.py 的
+# TEST_MEDIA_ROOT_DEFAULT 默认值保持一致（三处需同步修改）。
+STONE_DIR = os.environ.get("TV_STONE_DIR", "D:/data/projects/VideoPlatform/media-test")
 
 # Real media files for upload tests (configurable via TV_TEST_RESOURCE_DIR)
 TEST_RESOURCE_DIR = os.environ.get(

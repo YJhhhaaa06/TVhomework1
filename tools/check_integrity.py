@@ -27,7 +27,8 @@
 连接参数（统一来源 tools/env/，T6）：
     DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME
     （默认当前激活环境 active.conf；环境变量优先级最高。
-    测试库场景建议 --no-media：共享 stone 下磁盘与测试库引用无重叠会触发 exit 5）
+    媒体根按库判定（T2）：测试库已指向 media-test 可安全扫描；仍可用
+    --no-media 只查库内检查项）
 
 退出码：
     0  检查完成（是否发现脏数据以报告为准）
@@ -49,12 +50,10 @@ from datetime import datetime
 from pathlib import Path
 
 import db_config
+from media_paths import resolve_upload_root
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REPORT_DIR = PROJECT_ROOT / ".docs" / "temp"
-APP_PROPERTIES = PROJECT_ROOT / "src" / "main" / "resources" / "app.properties"
-
-DEFAULT_UPLOAD_ROOT = Path("D:/data/projects/VideoPlatform/stone")
 
 # 连接参数统一来源 tools/env/（T6：默认 active.conf 当前环境，环境变量 DB_* 优先）
 db_config.use()
@@ -207,34 +206,6 @@ def run_sql(mysql: Path, sql: str) -> str:
     if proc.returncode != 0:
         raise RuntimeError("mysql 执行失败: " + (proc.stderr.strip() or proc.stdout.strip()))
     return proc.stdout
-
-
-def read_app_properties(path: Path) -> dict[str, str]:
-    """解析 app.properties（key=value，# 注释），文件缺失或解析失败返回空。"""
-    props: dict[str, str] = {}
-    if not path.is_file():
-        return props
-    try:
-        for raw in path.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            props[key.strip()] = value.strip()
-    except OSError:
-        return props
-    return props
-
-
-def resolve_upload_root() -> Path:
-    """上传根目录：app.properties 的 upload.path > 环境变量 TV_STONE_DIR > 默认值（均解析为绝对路径）。"""
-    props = read_app_properties(APP_PROPERTIES)
-    if props.get("upload.path"):
-        return Path(props["upload.path"]).resolve()
-    env = os.environ.get("TV_STONE_DIR")
-    if env:
-        return Path(env).resolve()
-    return DEFAULT_UPLOAD_ROOT
 
 
 def is_symlink_like(entry: Path) -> bool:
@@ -451,7 +422,7 @@ def main() -> int:
     suspect = False
 
     if not args.no_media:
-        root = resolve_upload_root()
+        root = resolve_upload_root(DB_NAME)
         if root.is_dir() and all((root / d).is_dir() for d in MEDIA_DIRS):
             media_scanned = True
             print(f"上传根目录: {root}")
@@ -584,7 +555,7 @@ def main() -> int:
         "",
         f"> 时间：{now.strftime('%Y-%m-%d %H:%M:%S')}",
         f"> 连接：{MYSQL_HOST}:{MYSQL_PORT}/{DB_NAME}（计数复查{'已' if count_total_after is not None else '未'}执行）",
-        f"> 上传根目录：{resolve_upload_root()}" if media_scanned else "> 上传根目录：-（未扫描媒体）",
+        f"> 上传根目录：{resolve_upload_root(DB_NAME)}" if media_scanned else "> 上传根目录：-（未扫描媒体）",
         mode_line,
         "",
         "## 汇总",
