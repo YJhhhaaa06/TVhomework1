@@ -25,15 +25,19 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# 沙盒路径常量收敛：复用 run_tests.py 的默认值+环境变量覆盖，避免两处改一处漏
+from run_tests import (
+    HTTP_PORT,
+    JAVA_HOME,
+    MAVEN_CMD,
+    M2_REPO,
+    STAGE8_TARGET,
+    WAR_FILE,
+)
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RUN_TESTS_SCRIPT = PROJECT_ROOT / "tools" / "run_tests.py"
-REPORT_DIR = Path(r"D:\data\projects\VideoPlatform\stone\temp\test-reports")
-STAGE8_TARGET = Path(r"D:\data\projects\VideoPlatform\stone\temp\stage8-target")
-WAR_FILE = STAGE8_TARGET / "untitled-1.0-SNAPSHOT.war"
-HTTP_PORT = 18080
-JAVA_HOME = Path(r"D:\dev\DevTools\jdk\openjdk-25.0.2")
-MAVEN_CMD = Path(r"D:\IDE\IDEA\IntelliJ IDEA 2025.3.2\plugins\maven\lib\maven3\bin\mvn.cmd")
-M2_REPO = Path(r"D:\dev\WorkSpace\VideoPlatform\maven")
+REPORT_DIR = Path(os.environ.get("TV_TEST_REPORT_DIR", r"D:\data\projects\VideoPlatform\stone\temp\test-reports"))
 VALID_PHASES = ("build", "start", "test", "stop", "all", "junit")
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)

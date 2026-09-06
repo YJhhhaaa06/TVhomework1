@@ -1300,6 +1300,12 @@ ContentService.updateContentLikeCount(contentId, 1);
 
 **建议**: 考虑使用消息队列保证最终一致性
 
+**状态（2026-09-02 T4）**: 计数漂移已提供统一校验与修复入口——`tools/check_integrity.py`
+默认 dry-run 校验 content.like_count / comment.like_count / content.comment_count /
+users.follow_count / users.follower_count，显式 `--fix` 单事务重算漂移行（改的只是冗余计数列，
+不触碰业务数据，逻辑与 CountRepairTool 一致）。应用层"事务内 ±1 + 事务外缓存 + 定时刷新兜底"
+的业务实现本次未改（P5 缓存一致性仍按既有定时刷新兜底，缓存改造属后续周期）。
+
 ---
 
 #### 问题5：优惠券抢购无用户限流

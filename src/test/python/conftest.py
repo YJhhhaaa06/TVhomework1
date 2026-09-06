@@ -6,17 +6,33 @@ Provides:
 - base_url fixture
 - Two test users (userA, userB) with registration + login
 - Content creation (video upload) fixture
-- Available coupon fixture (skip if none)
+- Available coupon fixture (fixed seed coupon, fail if seed missing)
 - Test file fixtures for upload tests
 """
 
 import os
 import shutil
+import sys
 import uuid
 import pytest
 import requests
 
-BASE_URL = os.environ.get("TV_BASE_URL", "http://localhost:8080")
+# 默认指向 run_tests 启动的独立测试实例（18080，连测试库 3307），避免手动跑 pytest 误连 IDEA 8080 生产实例
+BASE_URL = os.environ.get("TV_BASE_URL", "http://127.0.0.1:18080")
+
+# 基线种子内容标题前缀（与 tools/init_test_db.py 的 SEED_CONTENT_TITLE_PREFIX 保持一致，
+# 两处需同步修改）。避开 pytest_/smoke_ 前缀，以免被 cleanup_data.py 自动清理删除。
+SEED_COMMENT_CONTENT_PREFIX = "seed_baseline"
+
+# T1 固定券种子标题前缀（与 tools/init_test_db.py 的 SEED_COUPON_TITLE_PREFIX 保持一致，
+# 两处需同步修改）：基线种子固定一张高库存/远期券（end 2099、库存 999999），
+# 确定可抢、永不耗尽，供 available_coupon_id 确定性命中，消灭 coupon 用例静默 skip。
+SEED_COUPON_TITLE_PREFIX = "seed_baseline_coupon"
+
+# E-09b 过期券测试（T5）：测试库重建自 .docs/archive/DBbackups 最新 db.sql，
+# 其中 coupon id=6 为历史过期券（begin 2026-05-12 / end 2026-05-15，库存 998），
+# end_time 恒小于当前时间，grab 必 409 且不产生订单/库存消耗；备份更新后需核对本常量。
+EXPIRED_COUPON_ID = 6
 
 # Test user credentials - use UUID for guaranteed uniqueness across runs
 # Phone must be 11 digits starting with 1, so use digits only
@@ -34,12 +50,18 @@ USER_B = {
 }
 
 # Storage directory on server (used to verify file uploads exist)
-STONE_DIR = os.environ.get("TV_STONE_DIR", "D:/data/projects/VideoPlatform/stone")
+# T2 媒体隔离：默认指向测试实例落盘/挂载的独立媒体目录（与生产 stone 隔离）。
+# 与 tools/run_tests.py 的 TEST_MEDIA_ROOT、tools/media_paths.py 的
+# TEST_MEDIA_ROOT_DEFAULT 默认值保持一致（三处需同步修改）。
+STONE_DIR = os.environ.get("TV_STONE_DIR", "D:/data/projects/VideoPlatform/media-test")
 
 # Real media files for upload tests (configurable via TV_TEST_RESOURCE_DIR)
 TEST_RESOURCE_DIR = os.environ.get(
     "TV_TEST_RESOURCE_DIR", r"D:\dev\WorkSpace\VideoPlatform\TestResource"
 )
+
+# T3/N2：真实媒体缺失降级为合成媒体时，stderr 一次性显式警告（不再静默）。模块级 flag 防刷屏。
+_WARNED_SYNTHETIC_MEDIA = False
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +127,17 @@ def create_test_files():
     real_files = _copy_real_test_files(test_dir)
     if real_files:
         return real_files
+
+    # T3/N2：不再静默降级——stderr 一次性显式警告后走合成保底（素材缺失时不连带挂掉上传用例）
+    global _WARNED_SYNTHETIC_MEDIA
+    if not _WARNED_SYNTHETIC_MEDIA:
+        _WARNED_SYNTHETIC_MEDIA = True
+        print(
+            f"[N2] 警告: 真实测试媒体缺失（TV_TEST_RESOURCE_DIR={TEST_RESOURCE_DIR} "
+            "下缺 test_video.mp4/test_cover.png/test_image.jpg），"
+            "改用 1KB 合成媒体（显式可见，不再静默降级）",
+            file=sys.stderr,
+        )
 
     MIN_SIZE = 1024  # 1 KB minimum
 
@@ -284,57 +317,82 @@ def sample_post_content_id(token_a, test_files):
 
 @pytest.fixture(scope="session")
 def sample_comment_id(base_url, token_a):
-    """Return a commentId from an existing content that already has comments.
+    """Return a stable commentId from the baseline seed content.
 
-    The app keeps an in-memory comment cache populated at startup; comments
-    added to freshly uploaded content are not visible until a cache refresh,
-    so consistency tests reuse an existing comment instead of creating one.
+    Baseline content (title prefix SEED_COMMENT_CONTENT_PREFIX) is created by
+    tools/init_test_db.py on every test-DB rebuild, so its comments exist in the
+    cache loaded at app startup. Locate it deterministically via /search/keywordSearch
+    (MATCH on title/description, is_deleted=0, seed created last at init).
+    T3/N2 收紧：缺种子/定位失败直接 fail（快速失败优于静默降级/首页兜底扫描，
+    风格与 available_coupon_id 一致）。
     """
-    resp = requests.get(f"{base_url}/start", params={"limit": 50}, timeout=10)
+    def _comment_id_of_content(content_id):
+        """取内容首条评论 id；detail/comment 接口失败即抛断言（严格路径，无探测回退）。"""
+        resp = requests.get(
+            f"{base_url}/search/IdSearch",
+            params={"contentId": content_id},
+            headers={"token": token_a},
+            timeout=10,
+        )
+        body = resp.json()
+        assert body.get("code") == 200, f"Content detail failed: {body}"
+
+        resp = requests.get(
+            f"{base_url}/comment/show",
+            params={"contentId": content_id},
+            headers={"token": token_a},
+            timeout=10,
+        )
+        body = resp.json()
+        assert body.get("code") == 200, f"Comment list failed: {body}"
+        comments = body.get("data", [])
+        return comments[0]["commentId"] if comments else None
+
+    # 基线种子内容：关键字搜索确定性定位（种子标题唯一，创建时间最新 -> 排在首屏）
+    resp = requests.get(
+        f"{base_url}/search/keywordSearch",
+        params={"keyword": SEED_COMMENT_CONTENT_PREFIX, "page": 1, "pageSize": 50},
+        timeout=10,
+    )
     body = resp.json()
-    assert body.get("code") == 200, f"Homepage failed: {body}"
-
-    for item in body.get("data", []):
-        if item.get("commentCount", 0) > 0:
-            content_id = item["id"]
-            resp = requests.get(
-                f"{base_url}/search/IdSearch",
-                params={"contentId": content_id},
-                headers={"token": token_a},
-                timeout=10,
-            )
-            body = resp.json()
-            assert body.get("code") == 200, f"Content detail failed: {body}"
-
-            resp = requests.get(
-                f"{base_url}/comment/show",
-                params={"contentId": content_id},
-                headers={"token": token_a},
-                timeout=10,
-            )
-            body = resp.json()
-            assert body.get("code") == 200, f"Comment list failed: {body}"
-            comments = body.get("data", [])
-            if comments:
-                return comments[0]["commentId"]
-
-    pytest.skip("No content with comments found in database")
+    assert body.get("code") == 200, f"搜索种子内容失败: {body}"
+    items = (body.get("data") or {}).get("list") or []
+    for item in items:
+        if str(item.get("title", "")).startswith(SEED_COMMENT_CONTENT_PREFIX):
+            comment_id = _comment_id_of_content(item.get("id"))
+            if comment_id is not None:
+                return comment_id
+    pytest.fail(
+        f"测试库缺少基线种子评论（标题前缀 {SEED_COMMENT_CONTENT_PREFIX}），"
+        f"请先重建测试库: python tools/init_test_db.py"
+    )
 
 
 @pytest.fixture(scope="session")
 def available_coupon_id(base_url):
-    """Fetch available coupons. Returns the first couponId, or None if none available.
+    """返回固定券种子（标题前缀 SEED_COUPON_TITLE_PREFIX）的 couponId。
 
-    Tests that require a coupon should use:
-        @pytest.mark.skipif(available_coupon_id is None, reason="No coupons available")
-    But since fixtures can't be used in marks, tests should handle None inside.
+    T1 起固定券种子由 init_test_db.py 幂等追加（高库存 999999、end 2099-12-31），
+    /coupon/list 中按标题前缀确定性命中该券；缺失说明测试库未重建/种子失效，
+    直接 fail（快速失败优于静默 skip，N2 收紧方向）。
     """
     resp = requests.get(f"{BASE_URL}/coupon/list", timeout=10)
     result = resp.json()
-    if result.get("code") == 200 and result.get("data"):
-        coupons = result["data"]
-        if isinstance(coupons, list) and len(coupons) > 0:
-            # Return the first coupon's id
-            coupon = coupons[0]
+    assert result.get("code") == 200, f"Coupon list failed: {result}"
+    coupons = result.get("data") or []
+    for coupon in coupons:
+        if str(coupon.get("title", "")).startswith(SEED_COUPON_TITLE_PREFIX):
             return coupon.get("id") or coupon.get("couponId")
-    return None
+    pytest.fail(
+        f"测试库缺少固定券种子（标题前缀 {SEED_COUPON_TITLE_PREFIX}），"
+        f"请先重建测试库: python tools/init_test_db.py"
+    )
+
+
+@pytest.fixture(scope="session")
+def expired_coupon_id():
+    """返回一张确定已过期的优惠券 id（conftest.EXPIRED_COUPON_ID，来自 db.sql 历史行）。
+
+    已过期券 grab 必 409（deductStock 的 end_time >= NOW() 不满足），不落订单、不耗库存。
+    """
+    return EXPIRED_COUPON_ID

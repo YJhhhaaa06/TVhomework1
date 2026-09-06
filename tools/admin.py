@@ -11,6 +11,9 @@
     * 只提升/降级已有用户；新建管理员 = 先用注册接口建号再 --promote
       （脚本不做 Python BCrypt 哈希）。
     * --promote/--demote 是普通 UPDATE，不修改表结构，执行前无需整库备份。
+    * 连接参数统一来源 tools/env/（T6：默认当前激活环境 active.conf）。
+      环境变量 DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME 优先级最高；
+      生产操作需先 `python tools/tv.py env prod` 并二次确认。
 
 退出码：
     0  成功
@@ -22,16 +25,19 @@
 from __future__ import annotations
 
 import argparse
+import db_config
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-MYSQL_HOST = "127.0.0.1"
-MYSQL_PORT = "3306"
-MYSQL_USER = "root"
-MYSQL_PASSWORD = "MySQL"
-DB_NAME = "tvdatabase"
+# 连接参数统一来源 tools/env/（T6：默认 active.conf 当前环境，环境变量 DB_* 优先）
+db_config.use()
+MYSQL_HOST = db_config.DB_HOST
+MYSQL_PORT = db_config.DB_PORT
+MYSQL_USER = db_config.DB_USER
+MYSQL_PASSWORD = db_config.DB_PASSWORD
+DB_NAME = db_config.DB_NAME
 
 COMMON_MYSQL_PATHS = [
     Path(r"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe"),

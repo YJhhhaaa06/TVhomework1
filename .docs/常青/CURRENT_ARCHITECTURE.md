@@ -49,13 +49,12 @@ untitled/
 │   │   └── BUSINESS_FLOW.md         # 业务流程文档
 │   ├── 目标与任务/                   # 当前目标与任务（暂空）
 │   ├── 说明书/                       # 按需读的参考手册
-│   │   ├── TEST_GUIDE.md            # 测试运行指南
-│   │   ├── TEST_AUTOMATION.md       # 测试自动化脚本说明
-│   │   ├── ACCEPTANCE_CRITERIA.md   # 验收标准
+│   │   ├── TEST_AUTOMATION.md       # 测试自动化脚本说明（跑测试唯一权威入口）
 │   │   ├── DATABASE.md              # 数据库建表语句（本机，不追踪）
 │   │   └── AVAILABLE_TOOLS.md       # 工具路径清单（本机，不追踪）
 │   ├── archive/                     # 历史存档（追踪可追溯，勿读）
 │   │   ├── 目标与任务/               # 已完成：ARCHITECTURE_PLAN、CURRENT_TASK
+│   │   ├── 说明书/                  # 已归档：TEST_GUIDE、ACCEPTANCE_CRITERIA（T1 文档收口）
 │   │   └── 报告/                    # 项目分析报告、TEST_COVERAGE
 │   └── temp/                        # 临时文档（永不追踪，可删）
 │
@@ -70,9 +69,8 @@ untitled/
 │   │       └── static/              # 前端资源（css/common.css + js/ 基础设施与视图模块）
 │   │
 │   └── test/
-│       ├── *.http                   # HTTP 测试文件（17个）
-│       ├── java/com/itheima/        # JUnit 单元测试（61 例，阶段八新增）
-│       └── python/                  # pytest 测试脚本（45 例 + 1 条件跳过）
+│       ├── java/com/itheima/        # JUnit 单元测试（113 例）
+│       └── python/                  # pytest 端到端脚本（103 例）
 │
 ├── ssm_*/                           # 空壳子模块（待删除）
 └── logs/                            # 运行日志
@@ -472,29 +470,7 @@ src/main/webapp/
 
 ## 九、测试文件
 
-| 文件 | 用例数 | 覆盖模块 |
-|------|--------|----------|
-| loginTest.http | 22 | 登录、注册 |
-| likeTest.http | 24 | 点赞 |
-| commentTest.http | 25 | 评论（新增删除小节） |
-| adminCommentTest.http | 6 | 管理员删评论（阶段一新增） |
-| followTest.http | 11 | 关注 |
-| couponTest.http | 9 | 优惠券 |
-| feedTest.http | ~10 | Feed 流 |
-| searchTest.http | ~15 | 搜索 |
-| startTest.http | ~8 | 首页推荐 |
-| changePasswordTest.http | ~12 | 修改密码 |
-| uploadTest.http | ~20 | 上传 |
-| dataConsistencyTest.http | 23 | 数据一致性 |
-| userProfileTest.http | 23 | 用户资料修改 |
-| followListTest.http | 19 | 关注/粉丝列表 |
-| feedDetailTest.http | 20 | Feed/详情 |
-| searchCompleteTest.http | 15 | 搜索完整 |
-| startCompleteTest.http | 14 | 首页推荐完整 |
-| editWorkTest.http | 21 | 编辑作品：换源/删图/改文案（阶段三） |
-| deleteContentTest.http | 6 | 删除作品：作者删除/非作者/未登录/不存在/已删/缺参（阶段四） |
-| hideContentTest.http | 10 | 内容审核下架/恢复：list/hide/unhide 的 200/409/403/401/404/400/未识别（阶段五） |
-| **合计** | **~302** | - |
+> 2026-09-01 起测试体系 = **JUnit（服务层单元基准，113 例）+ pytest（端到端，103 例）** 两套；`.http` 文件已全部移除（不纳入测试体系、调试价值有限，见 TEST_AUTOMATION.md 〇节）。
 
 ### 9.1 pytest 自动化用例（tools/run_tests.py 驱动）
 
@@ -506,6 +482,8 @@ src/main/webapp/
 | test_edit_work.py | 21 | 编辑作品：换源（含图文单张替换）/删图/改文案的 200/403/401/400/404 + 文件落盘/旧文件删除（阶段三） |
 | test_delete_content.py | 7 | 删除作品：作者删视频/图文后详情 404 + 主页不展示 + 物理文件删除；非作者/未登录/不存在/已删/缺参（阶段四） |
 | test_hide_content.py | 15 | 内容审核下架/恢复：管理员下架视频/图文后详情 404 + 主页不列出 + 恢复后数据完好；hide/unhide/list 的 401/403/404/409/400/list 结构（阶段五） |
+
+> T2 媒体隔离（2026-09-06）：18080 测试实例媒体落盘（`UPLOAD_PATH` env 注入 `media-test`）与 `/upload` 挂载（run_tests 对部署的 ROOT.war 内 context.xml 做 zip 补丁改写 base）同指 `D:\data\projects\VideoPlatform\media-test`，`AppShutDownListener` 启动强校验保持两者一致；生产 8080 实例仍用 app.properties upload.path 不受影响。旧测试媒体在 fresh-start 时整目录**移动式回收**至 `test_trash`（只移不删，用户手动清理）后重建白名单目录 media-test（白名单硬编码于 run_tests.py，防误移动）。工具链媒体根按库判定（tools/media_paths.py）：测试库 → media-test，生产 → upload.path。
 
 ### 9.2 JUnit 单元测试（阶段八新增，src/test/java）
 

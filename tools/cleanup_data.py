@@ -15,7 +15,14 @@
     python tools/cleanup_data.py                      # 只读预览
     python tools/cleanup_data.py --exclude 100        # 预览时排除 content 100
     python tools/cleanup_data.py --execute            # 执行 DML 清理（自动先备份）
+    python tools/cleanup_data.py --execute --no-backup   # 执行清理但跳过备份（测试库等可重建场景）
     python tools/cleanup_data.py --execute --drop-legacy   # 再删除遗留表
+
+连接参数（统一来源 tools/env/，T6）：
+    DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME
+    （默认当前激活环境 active.conf；环境变量优先级最高）
+
+报告：--execute 执行后，CLEANUP_REPORT_*.md 写入 .docs/temp/。
 
 退出码：
     0  成功 / 预览完成
@@ -27,20 +34,25 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-REPORT_DIR = PROJECT_ROOT / ".docs"
+import db_config
 
-MYSQL_HOST = "127.0.0.1"
-MYSQL_PORT = "3306"
-MYSQL_USER = "root"
-MYSQL_PASSWORD = "MySQL"
-DB_NAME = "tvdatabase"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+REPORT_DIR = PROJECT_ROOT / ".docs" / "temp"
+
+# 连接参数统一来源 tools/env/（T6：默认 active.conf 当前环境，环境变量 DB_* 优先）
+db_config.use()
+MYSQL_HOST = db_config.DB_HOST
+MYSQL_PORT = db_config.DB_PORT
+MYSQL_USER = db_config.DB_USER
+MYSQL_PASSWORD = db_config.DB_PASSWORD
+DB_NAME = db_config.DB_NAME
 
 COMMON_MYSQL_PATHS = [
     Path(r"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe"),
@@ -96,6 +108,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="TASK-007 数据清理（默认只读预览）")
     parser.add_argument("--execute", action="store_true", help="真正执行 DML 清理")
     parser.add_argument("--drop-legacy", action="store_true", help="同时 DROP 遗留表 video/videoinfo（需配合 --execute）")
+    parser.add_argument("--no-backup", action="store_true", help="执行前跳过自动备份（用于测试库等可重建场景）")
     parser.add_argument("--exclude", type=int, nargs="*", default=[], help="排除的 content id（如 --exclude 100）")
     args = parser.parse_args()
 
@@ -166,19 +179,30 @@ def main() -> int:
         print("未执行任何写操作。确认后请运行: python tools/cleanup_data.py --execute [--drop-legacy]")
         return 0
 
-    # ---- 执行前自动备份 ----
-    backup = subprocess.run(
-        [sys.executable, str(PROJECT_ROOT / "tools" / "backup.py")],
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-    if backup.returncode != 0:
-        print("错误: 执行前备份失败，已中止清理")
-        print(backup.stdout)
-        print(backup.stderr)
-        return 3
-    print("执行前备份完成，开始清理 ...")
+    # ---- 执行前自动备份（--no-backup 跳过，用于测试库等可重建场景）----
+    if not args.no_backup:
+        # 显式传递与清理目标一致的连接参数，保证 backup 与 cleanup 指向同一库
+        backup_env = os.environ.copy()
+        backup_env["DB_HOST"] = MYSQL_HOST
+        backup_env["DB_PORT"] = MYSQL_PORT
+        backup_env["DB_USER"] = MYSQL_USER
+        backup_env["DB_PASSWORD"] = MYSQL_PASSWORD
+        backup_env["DB_NAME"] = DB_NAME
+        backup = subprocess.run(
+            [sys.executable, str(PROJECT_ROOT / "tools" / "backup.py")],
+            capture_output=True,
+            text=True,
+            env=backup_env,
+            timeout=600,
+        )
+        if backup.returncode != 0:
+            print("错误: 执行前备份失败，已中止清理")
+            print(backup.stdout)
+            print(backup.stderr)
+            return 3
+        print("执行前备份完成，开始清理 ...")
+    else:
+        print("--no-backup 已指定，跳过执行前备份，开始清理 ...")
 
     # ---- DML（单事务，失败回滚）----
     ids = ",".join(str(i) for i in test_ids) if test_ids else "0"

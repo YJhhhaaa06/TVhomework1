@@ -48,8 +48,13 @@ out/artifacts/MyApp/com/itheima/controller/Test3.class
 ### 本地/临时文档（不提交） ###
 .docs/temp/
 .docs/DBbackups/
+.docs/DBBackup/
+.docs/archive/DBbackups/
 .docs/说明书/DATABASE.md
 .docs/说明书/AVAILABLE_TOOLS.md
+
+### 覆盖率地图（生成物，可随时由 tools/gen_coverage_map.py 重新生成） ###
+.docs/报告/
 
 ### TRAE 工具内部文档（不提交） ###
 .trae/
