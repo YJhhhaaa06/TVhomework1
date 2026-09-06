@@ -17,7 +17,7 @@
    - **幂等**：种子 SQL 先按标题 DELETE 旧行再 INSERT，重复 init 不重复插入；`coupon_order` 外键 `ON DELETE CASCADE` 会级联清掉指向它的订单，无残留。
    - **断言约定**：用例只锁相对差值（抢后库存 = 抢前 - 1），不锁绝对库存；每用例最多抢一次（E-09 用 userA、C-10 用 userB 错开）。
    - **过期券 E-09b 不受影响**：仍用历史过期券 coupon id=6（conftest `EXPIRED_COUPON_ID`），grab 必 409 语义不动。
-4. **消费方**：conftest 的 `sample_comment_id` 经 `/search/keywordSearch` 用种子标题前缀确定性定位基线评论（`/start` 为随机推荐不可靠；首页扫描仅作兜底），供 test_consistency C-04/C-05 评论点赞计数；`available_coupon_id` 按 `SEED_COUPON_TITLE_PREFIX` 命中国定券（缺失直接 fail）；`user_a/user_b/sample_content_id` 等均为动态自建，不依赖种子。
+4. **消费方**：conftest 的 `sample_comment_id` 经 `/search/keywordSearch` 用种子标题前缀确定性定位基线评论（N2 收紧：缺种子/定位失败直接 fail 并提示重建测试库，已移除首页 `/start` 扫描兜底），供 test_consistency C-04/C-05 评论点赞计数；`available_coupon_id` 按 `SEED_COUPON_TITLE_PREFIX` 命中国定券（缺失直接 fail）；`user_a/user_b/sample_content_id` 等均为动态自建，不依赖种子。
 
 ## 二、重建 / 复现
 

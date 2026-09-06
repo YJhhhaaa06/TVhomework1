@@ -12,6 +12,7 @@ Provides:
 
 import os
 import shutil
+import sys
 import uuid
 import pytest
 import requests
@@ -58,6 +59,9 @@ STONE_DIR = os.environ.get("TV_STONE_DIR", "D:/data/projects/VideoPlatform/media
 TEST_RESOURCE_DIR = os.environ.get(
     "TV_TEST_RESOURCE_DIR", r"D:\dev\WorkSpace\VideoPlatform\TestResource"
 )
+
+# T3/N2：真实媒体缺失降级为合成媒体时，stderr 一次性显式警告（不再静默）。模块级 flag 防刷屏。
+_WARNED_SYNTHETIC_MEDIA = False
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +127,17 @@ def create_test_files():
     real_files = _copy_real_test_files(test_dir)
     if real_files:
         return real_files
+
+    # T3/N2：不再静默降级——stderr 一次性显式警告后走合成保底（素材缺失时不连带挂掉上传用例）
+    global _WARNED_SYNTHETIC_MEDIA
+    if not _WARNED_SYNTHETIC_MEDIA:
+        _WARNED_SYNTHETIC_MEDIA = True
+        print(
+            f"[N2] 警告: 真实测试媒体缺失（TV_TEST_RESOURCE_DIR={TEST_RESOURCE_DIR} "
+            "下缺 test_video.mp4/test_cover.png/test_image.jpg），"
+            "改用 1KB 合成媒体（显式可见，不再静默降级）",
+            file=sys.stderr,
+        )
 
     MIN_SIZE = 1024  # 1 KB minimum
 
@@ -307,70 +322,50 @@ def sample_comment_id(base_url, token_a):
     Baseline content (title prefix SEED_COMMENT_CONTENT_PREFIX) is created by
     tools/init_test_db.py on every test-DB rebuild, so its comments exist in the
     cache loaded at app startup. Locate it deterministically via /search/keywordSearch
-    (MATCH on title/description, is_deleted=0, seed created last at init); fall back
-    to scanning the homepage for any content with comments if the search misses.
+    (MATCH on title/description, is_deleted=0, seed created last at init).
+    T3/N2 收紧：缺种子/定位失败直接 fail（快速失败优于静默降级/首页兜底扫描，
+    风格与 available_coupon_id 一致）。
     """
-    def _comment_id_of_content(content_id, strict=False):
-        """取内容首条评论 id。
+    def _comment_id_of_content(content_id):
+        """取内容首条评论 id；detail/comment 接口失败即抛断言（严格路径，无探测回退）。"""
+        resp = requests.get(
+            f"{base_url}/search/IdSearch",
+            params={"contentId": content_id},
+            headers={"token": token_a},
+            timeout=10,
+        )
+        body = resp.json()
+        assert body.get("code") == 200, f"Content detail failed: {body}"
 
-        strict=True（兜底分支，保持旧语义）：detail/comment 接口非 200 即抛断言；
-        strict=False（基线分支）：仅探测，任何失败返回 None 以便回退。
-        """
-        try:
-            resp = requests.get(
-                f"{base_url}/search/IdSearch",
-                params={"contentId": content_id},
-                headers={"token": token_a},
-                timeout=10,
-            )
-            body = resp.json()
-            if strict:
-                assert body.get("code") == 200, f"Content detail failed: {body}"
-            elif body.get("code") != 200:
-                return None
+        resp = requests.get(
+            f"{base_url}/comment/show",
+            params={"contentId": content_id},
+            headers={"token": token_a},
+            timeout=10,
+        )
+        body = resp.json()
+        assert body.get("code") == 200, f"Comment list failed: {body}"
+        comments = body.get("data", [])
+        return comments[0]["commentId"] if comments else None
 
-            resp = requests.get(
-                f"{base_url}/comment/show",
-                params={"contentId": content_id},
-                headers={"token": token_a},
-                timeout=10,
-            )
-            body = resp.json()
-            if strict:
-                assert body.get("code") == 200, f"Comment list failed: {body}"
-            elif body.get("code") != 200:
-                return None
-            comments = body.get("data", [])
-            return comments[0]["commentId"] if comments else None
-        except (requests.RequestException, KeyError, TypeError, ValueError):
-            return None
-
-    # 1) 基线种子内容：关键字搜索确定性定位（种子标题唯一，创建时间最新 -> 排在首屏）
+    # 基线种子内容：关键字搜索确定性定位（种子标题唯一，创建时间最新 -> 排在首屏）
     resp = requests.get(
         f"{base_url}/search/keywordSearch",
         params={"keyword": SEED_COMMENT_CONTENT_PREFIX, "page": 1, "pageSize": 50},
         timeout=10,
     )
     body = resp.json()
-    if body.get("code") == 200:
-        items = (body.get("data") or {}).get("list") or []
-        for item in items:
-            if str(item.get("title", "")).startswith(SEED_COMMENT_CONTENT_PREFIX):
-                comment_id = _comment_id_of_content(item.get("id"))
-                if comment_id is not None:
-                    return comment_id
-
-    # 2) 兜底：扫描首页任意带评论的内容（兼容未种子化/旧数据），保持原严格断言
-    resp = requests.get(f"{base_url}/start", params={"limit": 50}, timeout=10)
-    body = resp.json()
-    assert body.get("code") == 200, f"Homepage failed: {body}"
-    for item in body.get("data", []):
-        if item.get("commentCount", 0) > 0:
-            comment_id = _comment_id_of_content(item["id"], strict=True)
+    assert body.get("code") == 200, f"搜索种子内容失败: {body}"
+    items = (body.get("data") or {}).get("list") or []
+    for item in items:
+        if str(item.get("title", "")).startswith(SEED_COMMENT_CONTENT_PREFIX):
+            comment_id = _comment_id_of_content(item.get("id"))
             if comment_id is not None:
                 return comment_id
-
-    pytest.skip("No content with comments found in database")
+    pytest.fail(
+        f"测试库缺少基线种子评论（标题前缀 {SEED_COMMENT_CONTENT_PREFIX}），"
+        f"请先重建测试库: python tools/init_test_db.py"
+    )
 
 
 @pytest.fixture(scope="session")
