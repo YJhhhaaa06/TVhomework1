@@ -27,6 +27,12 @@ python tools\run_tests_report.py all       # 全量端到端：build -> start ->
 python tools\run_tests_report.py junit     # 全量单元：mvn -o test
 ```
 
+> junit 链（`mvn -o test`）产出变化（T4，2026-09-06）：pom 已挂 jacoco-maven-plugin 0.8.15（prepare-agent + report），
+> 每次 junit 运行会额外生成 `jacoco.exec` 与 `site/jacoco/`（覆盖率报告，供 `tools\gen_coverage_map.py` 引用，
+> 落 stage8-target 或 ./target 取较新）；
+> 离线副本 `D:\dev\WorkSpace\VideoPlatform\maven` 已含 jacoco 及其 ASM/插件依赖，离线解析不失败；不影响通过与否。
+> 覆盖率地图（`.docs/报告/覆盖率地图.md`）为生成物、不入库，需要时 rerun `python tools\gen_coverage_map.py`。
+
 单步操作（分步调试用）：
 
 ```powershell
