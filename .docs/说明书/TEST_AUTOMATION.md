@@ -36,7 +36,7 @@ python tools\run_tests.py test     # 只跑 pytest（要求 18080 已就绪）
 python tools\run_tests.py stop     # 只关停独立 Tomcat
 ```
 
-运维脚本统一入口（T6，2026-09-05）：
+运维脚本统一入口（T6，2026-09-05，最推荐）：
 
 ```powershell
 python tools\tv.py                               # 帮助 + 当前环境（tools/env/active.conf）
