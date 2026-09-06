@@ -175,12 +175,10 @@ class TestIdempotency:
     ):
         """E-09: Grab the same coupon twice -> second time returns 409.
 
-        首抢（正常抢）必 200：available_coupon_id 为当前唯一有效券（end 远期、库存充足），
-        且 token_a 每次会话新建用户、从未领取过；再抢同券撞 coupon_order 唯一键 -> 409。
+        首抢（正常抢）必 200：available_coupon_id 命中 T1 固定券种子（高库存 999999、
+        end 2099、begin 过去），且 token_a 每次会话新建用户、从未领取过；再抢同券撞
+        coupon_order 唯一键 -> 409。缺失种子券由 fixture 直接 fail（不再静默 skip）。
         """
-        if available_coupon_id is None:
-            pytest.skip("No available coupons in the system")
-
         # First grab
         resp1 = requests.post(
             f"{base_url}/coupon/grab",

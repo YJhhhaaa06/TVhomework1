@@ -6,7 +6,7 @@ Provides:
 - base_url fixture
 - Two test users (userA, userB) with registration + login
 - Content creation (video upload) fixture
-- Available coupon fixture (skip if none)
+- Available coupon fixture (fixed seed coupon, fail if seed missing)
 - Test file fixtures for upload tests
 """
 
@@ -22,6 +22,11 @@ BASE_URL = os.environ.get("TV_BASE_URL", "http://127.0.0.1:18080")
 # 基线种子内容标题前缀（与 tools/init_test_db.py 的 SEED_CONTENT_TITLE_PREFIX 保持一致，
 # 两处需同步修改）。避开 pytest_/smoke_ 前缀，以免被 cleanup_data.py 自动清理删除。
 SEED_COMMENT_CONTENT_PREFIX = "seed_baseline"
+
+# T1 固定券种子标题前缀（与 tools/init_test_db.py 的 SEED_COUPON_TITLE_PREFIX 保持一致，
+# 两处需同步修改）：基线种子固定一张高库存/远期券（end 2099、库存 999999），
+# 确定可抢、永不耗尽，供 available_coupon_id 确定性命中，消灭 coupon 用例静默 skip。
+SEED_COUPON_TITLE_PREFIX = "seed_baseline_coupon"
 
 # E-09b 过期券测试（T5）：测试库重建自 .docs/archive/DBbackups 最新 db.sql，
 # 其中 coupon id=6 为历史过期券（begin 2026-05-12 / end 2026-05-15，库存 998），
@@ -367,21 +372,23 @@ def sample_comment_id(base_url, token_a):
 
 @pytest.fixture(scope="session")
 def available_coupon_id(base_url):
-    """Fetch available coupons. Returns the first couponId, or None if none available.
+    """返回固定券种子（标题前缀 SEED_COUPON_TITLE_PREFIX）的 couponId。
 
-    Tests that require a coupon should use:
-        @pytest.mark.skipif(available_coupon_id is None, reason="No coupons available")
-    But since fixtures can't be used in marks, tests should handle None inside.
+    T1 起固定券种子由 init_test_db.py 幂等追加（高库存 999999、end 2099-12-31），
+    /coupon/list 中按标题前缀确定性命中该券；缺失说明测试库未重建/种子失效，
+    直接 fail（快速失败优于静默 skip，N2 收紧方向）。
     """
     resp = requests.get(f"{BASE_URL}/coupon/list", timeout=10)
     result = resp.json()
-    if result.get("code") == 200 and result.get("data"):
-        coupons = result["data"]
-        if isinstance(coupons, list) and len(coupons) > 0:
-            # Return the first coupon's id
-            coupon = coupons[0]
+    assert result.get("code") == 200, f"Coupon list failed: {result}"
+    coupons = result.get("data") or []
+    for coupon in coupons:
+        if str(coupon.get("title", "")).startswith(SEED_COUPON_TITLE_PREFIX):
             return coupon.get("id") or coupon.get("couponId")
-    return None
+    pytest.fail(
+        f"测试库缺少固定券种子（标题前缀 {SEED_COUPON_TITLE_PREFIX}），"
+        f"请先重建测试库: python tools/init_test_db.py"
+    )
 
 
 @pytest.fixture(scope="session")

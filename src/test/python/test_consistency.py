@@ -393,10 +393,12 @@ class TestCouponStockConsistency:
     def test_C10_coupon_stock_decrements(
         self, base_url, token_b, available_coupon_id
     ):
-        """C-10: After grabbing a coupon, stock should decrease by 1."""
-        if available_coupon_id is None:
-            pytest.skip("No available coupons in the system")
+        """C-10: After grabbing a coupon, stock should decrease by 1.
 
+        T1 起 available_coupon_id 命中固定券种子（高库存/远期），stock_before 必命中列表；
+        userB 每次会话新建、从未抢过该券，grab 必 200（不再有"已抢过/找不到"skip 分支）。
+        断言方向只锁相对差值（before-1），不锁绝对库存。
+        """
         # Record current stock from list
         resp_list = requests.get(f"{base_url}/coupon/list", timeout=10)
         list_body = resp_list.json()
@@ -409,8 +411,8 @@ class TestCouponStockConsistency:
                 stock_before = coupon.get("stock") or coupon.get("remainCount")
                 break
 
-        if stock_before is None:
-            pytest.skip(f"Coupon {available_coupon_id} not found in list response")
+        assert stock_before is not None, \
+            f"Coupon {available_coupon_id} not found in list response"
 
         # Use userB so this test does not collide with E-09 (userA) in a
         # combined run.
@@ -421,11 +423,6 @@ class TestCouponStockConsistency:
             timeout=10,
         )
         body = resp.json()
-
-        if body.get("code") == 409:
-            # Already grabbed - still verify the endpoint works
-            pytest.skip("Coupon already grabbed by this user - cannot verify stock decrease")
-
         assert body.get("code") == 200, f"Grab coupon failed: {body}"
 
         # Check stock decreased
@@ -440,6 +437,7 @@ class TestCouponStockConsistency:
                 stock_after = coupon.get("stock") or coupon.get("remainCount")
                 break
 
-        if stock_after is not None and stock_before is not None:
-            assert stock_after == stock_before - 1, \
-                f"Stock should be {stock_before - 1} after grab, got {stock_after}"
+        assert stock_after is not None, \
+            f"Coupon {available_coupon_id} not found in list after grab"
+        assert stock_after == stock_before - 1, \
+            f"Stock should be {stock_before - 1} after grab, got {stock_after}"

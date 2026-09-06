@@ -4,7 +4,7 @@
 用途：
     表结构/需求变更后，从 .docs/archive/DBbackups 下最新的生产库备份 db.sql
     （或用 --dump 显式指定）覆盖重建测试库，保证测试数据底座跟随生产结构；
-    导入完成后自动追加【基线种子】（1 个管理员 + 1 条含评论链的基线内容），
+    导入完成后自动追加【基线种子】（1 个管理员 + 1 条含评论链的基线内容 + 1 张固定券），
     种子内容与维护约定见 .docs/说明书/TEST_SEED.md。
 
 用法：
@@ -40,13 +40,23 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DBBACKUP_DIR = PROJECT_ROOT / ".docs" / "archive" / "DBbackups"
 
-# ---- 基线种子（T3，详见 .docs/说明书/TEST_SEED.md）----
+# ---- 基线种子（详见 .docs/说明书/TEST_SEED.md）----
 SEED_ADMIN_ID = 1  # 提升现有用户（一号员工）为管理员，不新建账号
 SEED_CONTENT_TITLE_PREFIX = "seed_baseline"
 SEED_CONTENT_TITLE = "seed_baseline_test_content"
 # 基线内容标题 LIKE 模式（\_ 转义下划线）。刻意避开 pytest_/smoke_ 前缀：
 # 否则会被 cleanup_data.py 按测试内容自动清理删除。
 _SEED_LIKE = f"{SEED_CONTENT_TITLE_PREFIX}\\_%"
+
+# ---- 固定券种子（T1，N1）：一张"确定有货"的高库存券 ----
+# 供 conftest.available_coupon_id 按标题前缀确定性命中，消灭 coupon 用例静默 skip。
+# 与 src/test/python/conftest.py 的 SEED_COUPON_TITLE_PREFIX 保持一致，两处需同步修改。
+SEED_COUPON_TITLE_PREFIX = "seed_baseline_coupon"
+SEED_COUPON_TITLE = "seed_baseline_coupon"
+SEED_COUPON_STOCK = 999999  # 高库存：测试多次抢购也不会耗尽，断言只锁相对差值
+# begin 固定早于当前时间（可抢）、end 固定远期（永不过期）——环境固定资源，确定性参照
+SEED_COUPON_BEGIN_TIME = "2026-01-01 00:00:00"
+SEED_COUPON_END_TIME = "2099-12-31 23:59:59"
 
 # 连接参数统一来源 tools/env/（T6）：本脚本固定重建测试库 → 强制 test.conf，
 # 绝对不读 active.conf / prod（与下方 3306 安全门禁互为双保险）。
@@ -105,6 +115,9 @@ def apply_baseline_seed(base: list[str]) -> tuple[bool, str]:
           强制要求 content_media 视频行，缺失会抛「资源已丢失」导致应用启动失败；
           图文允许无媒体行（纯文字内容，媒体扫描视为完整）。标题避开
           pytest_/smoke_ 前缀，避免被 cleanup_data.py 自动清理。
+        * 固定券（T1，N1）：一张高库存（SEED_COUPON_STOCK）、begin 固定过去、
+          end 固定远期（2099）的券，确定可抢、永不耗尽；供 conftest
+          available_coupon_id 按标题前缀确定性命中（见 TEST_SEED.md）。
     返回 (是否成功, 摘要或错误文本)。
     """
     seed_sql = (
@@ -135,6 +148,13 @@ def apply_baseline_seed(base: list[str]) -> tuple[bool, str]:
         # 6) 楼中楼（parent=回复，@回复作者=2）
         "INSERT INTO `comment` (`content_id`,`user_id`,`content`,`parent_id`,`reply_to_user_id`) "
         f"VALUES (@cid, {SEED_ADMIN_ID}, 'seed baseline reply-to-reply', @c2, 2);"
+        # 7) 固定券种子（T1，N1）：高库存 + begin 过去 + end 远期，确定可抢、永不耗尽。
+        #    幂等：先按标题删除旧种子（避免重复插入；coupon_order 外键 ON DELETE CASCADE
+        #    会级联清掉指向它的订单，无残留），再插入新行。
+        f"DELETE FROM `coupon` WHERE `title` = '{SEED_COUPON_TITLE}'; "
+        "INSERT INTO `coupon` (`title`,`stock`,`begin_time`,`end_time`) "
+        f"VALUES ('{SEED_COUPON_TITLE}', {SEED_COUPON_STOCK}, "
+        f"'{SEED_COUPON_BEGIN_TIME}', '{SEED_COUPON_END_TIME}');"
     )
     proc = subprocess.run(
         base + ["--default-character-set=utf8mb4", "--database", DB_NAME,
@@ -151,7 +171,8 @@ def apply_baseline_seed(base: list[str]) -> tuple[bool, str]:
         f"SELECT `role` FROM `users` WHERE `id` = {SEED_ADMIN_ID}; "
         f"SELECT COUNT(*) FROM `comment` WHERE `content_id` IN "
         f"(SELECT `id` FROM `content` WHERE `title` LIKE '{_SEED_LIKE}'); "
-        f"SELECT `title` FROM `content` WHERE `title` LIKE '{_SEED_LIKE}' LIMIT 1;"
+        f"SELECT `title` FROM `content` WHERE `title` LIKE '{_SEED_LIKE}' LIMIT 1; "
+        f"SELECT `stock` FROM `coupon` WHERE `title` = '{SEED_COUPON_TITLE}';"
     )
     proc = subprocess.run(
         base + ["--batch", "--skip-column-names", "--database", DB_NAME,
@@ -166,9 +187,12 @@ def apply_baseline_seed(base: list[str]) -> tuple[bool, str]:
     admin_role = lines[0] if len(lines) > 0 else "?"
     comment_cnt = lines[1] if len(lines) > 1 else "?"
     seed_title = lines[2] if len(lines) > 2 else "?"
+    coupon_stock = lines[3] if len(lines) > 3 else "?"
     report = (f"管理员 id={SEED_ADMIN_ID} role={admin_role}；"
-              f"基线内容 '{seed_title}' 评论 {comment_cnt} 条")
-    if admin_role != "1" or comment_cnt != "3" or seed_title != SEED_CONTENT_TITLE:
+              f"基线内容 '{seed_title}' 评论 {comment_cnt} 条；"
+              f"固定券 '{SEED_COUPON_TITLE}' 库存 {coupon_stock}")
+    if (admin_role != "1" or comment_cnt != "3" or seed_title != SEED_CONTENT_TITLE
+            or coupon_stock != str(SEED_COUPON_STOCK)):
         return False, "校验不通过: " + report
     return True, report
 
