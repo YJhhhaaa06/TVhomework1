@@ -255,7 +255,10 @@ pytest 端到端用例运行在**独立测试库** `TVDatabase_test`（Docker My
 
 - 抢优惠券（消耗库存）
 
-**自动清理**：`run_tests.py test/all` 结束后自动清理**测试库**数据库数据（pytest\_/smoke\_ 前缀 content 及关联记录，等价 `DB_* 指向测试库 + cleanup_data.py --execute --no-backup`）。**生产库 TVDatabase 不再产生测试残留**。
+**自动清理**：`run_tests.py test/all` 结束后自动清理**测试库**数据库数据（等价 `DB_* 指向测试库 + cleanup_data.py --execute --no-backup`）：
+① pytest_/smoke_ 前缀 content 及关联记录；② **测试用户（T5，2026-09-08）**：username 命中 `cleanup_data.TEST_USERNAME_PREFIXES` 白名单（testA_/testB_/smoke_user_/admin_/hid_admin_/timing_）的 users 及关联（content/comment/comment_like/content_like/follow/coupon_order，关联表无 users 外键须显式级联；顺序子表在前）。
+
+seed 用户（一号员工/内部人员等中文名）不命中白名单，天然不受影响；删除测试用户后非测试行的冗余计数（like_count/follower_count/follow_count）可能漂移，用 `check_integrity.py --fix` 修复（既有职责边界）。**生产库 TVDatabase 不再产生测试残留**。
 
 **媒体文件**（T2 起）：pytest 上传的媒体文件落 `media-test`（`run_tests.py start` fresh-start 时把旧 media-test 整目录**移动式回收**至 `test_trash`——只移不删、由用户手动清理，再重建空目录；生命周期由 run_tests 管理，不产生孤儿残留）；生产 stone 不再接收测试文件。`cleanup_orphan_media.py` 为保护真实内容的回收工具，仍仅限 prod 语境执行（媒体根按库判定，见其 docstring）。
 
