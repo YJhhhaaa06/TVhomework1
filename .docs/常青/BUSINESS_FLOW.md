@@ -992,7 +992,7 @@ POST /follow/remove?followedUserId=456&token=xxx
 #### 4.3.3 查看关注列表
 
 ```
-GET /follow/following?userId=123&token=xxx（可选）
+GET /follow/following?userId=123&token=xxx（必填：/follow/* 前缀守卫需登录，2026-09-09 按代码修正"可选"标注）
 
 步骤：
 1. 查询用户的所有关注 ID
@@ -1017,7 +1017,7 @@ GET /follow/following?userId=123&token=xxx（可选）
 #### 4.3.4 查看粉丝列表
 
 ```
-GET /follow/followers?userId=123&token=xxx（可选）
+GET /follow/followers?userId=123&token=xxx（必填：/follow/* 前缀守卫需登录，2026-09-09 按代码修正"可选"标注）
 
 步骤：
 1. 查询用户的所有粉丝 ID
@@ -1205,8 +1205,6 @@ GET /feed?page=1&pageSize=10&token=xxx
 | `/comment/show` | GET | 查看评论 |
 | `/coupon/list` | GET | 优惠券列表 |
 | `/profile` | GET | 用户主页 |
-| `/follow/following` | GET | 关注列表 |
-| `/follow/followers` | GET | 粉丝列表 |
 
 ### 7.3 资源所有权校验（当前缺失）
 
@@ -1492,8 +1490,8 @@ return buildUserList(conn, ids, currentUserId);
 | GET | /comment/show | 查看评论 | ✗ |
 | POST | /follow/add | 关注 | ✓ |
 | POST | /follow/remove | 取关 | ✓ |
-| GET | /follow/following | 关注列表 | ✗ |
-| GET | /follow/followers | 粉丝列表 | ✗ |
+| GET | /follow/following | 关注列表 | ✓ |
+| GET | /follow/followers | 粉丝列表 | ✓ |
 
 ### 10.4 用户主页
 

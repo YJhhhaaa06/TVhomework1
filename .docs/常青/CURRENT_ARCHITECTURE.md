@@ -388,8 +388,8 @@ com.itheima/
 | POST | /content/commentEnabled | 作者开关自己作品的评论区（0=关/1=开） | ✓ |
 | POST | /follow/add | 关注 | ✓ |
 | POST | /follow/remove | 取关 | ✓ |
-| GET | /follow/following | 关注列表 | ✗ |
-| GET | /follow/followers | 粉丝列表 | ✗ |
+| GET | /follow/following | 关注列表 | ✓ |
+| GET | /follow/followers | 粉丝列表 | ✓ |
 | GET | /profile | 用户主页 | ✗ |
 
 ### 7.4 优惠券模块
