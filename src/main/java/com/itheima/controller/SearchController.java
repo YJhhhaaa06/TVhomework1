@@ -33,9 +33,6 @@ public class SearchController extends BaseServlet {
             case "/keywordSearch":
                 search(req, resp);
                 break;
-            case "/getDetailRecommended":
-                getDetail(req, resp);
-                break;
             default:
                 BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "未识别功能");
         }
@@ -91,30 +88,5 @@ public class SearchController extends BaseServlet {
         Long userId = (Long) req.getAttribute("userId");
         PageResult<ContentVO> result = contentService.search(dto.getKeyword().trim(), userId, page, pageSize);
         BaseServletUtil.writeSuccess(resp, result);
-    }
-
-    protected void getDetail(HttpServletRequest req, HttpServletResponse resp) throws IOException {
-        SearchDTO dto;
-        if (req.getContentLength() <= 0) {
-            dto = new SearchDTO();
-            String contentIdStr = req.getParameter("contentId");
-            if (contentIdStr != null && !contentIdStr.isEmpty()) {
-                dto.setContentId(Long.parseLong(contentIdStr));
-            }
-        } else {
-            dto = RequestParser.parse(req, SearchDTO.class);
-        }
-        Long userId = (Long) req.getAttribute("userId");
-
-        if(dto==null||(dto.getContentId()==null)){
-            BaseServletUtil.writeError(resp,ErrorCode.PARAM_ERROR,"contentId不能为空");
-            return;
-        }
-        ContentDetailVO cdVO = contentService.getContentDetailVO(dto.getContentId(), userId);
-        if (cdVO == null) {
-            BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "找不到对应内容");
-            return;
-        }
-        BaseServletUtil.writeSuccess(resp, cdVO);
     }
 }
