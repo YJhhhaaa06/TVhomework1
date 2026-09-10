@@ -33,6 +33,17 @@
     python tools/cleanup_orphan_media.py --quarantine --only <子串>  # 只回收相对URL含子串的孤儿
     python tools/cleanup_orphan_media.py --quarantine --yes-empty-db  # content_media 为空时显式确认
 
+连接参数（统一来源 tools/env/，T6）：
+    DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME
+    （默认当前激活环境 active.conf；环境变量优先级最高）
+
+安全提示（重要）：本脚本会【移动磁盘媒体文件】（移入回收站 <媒体根>/_trash/）。
+    测试/生产媒体目录已隔离（T2：测试实例落 media-test，生命周期由 run_tests 自动管理，
+    不产生孤儿）；媒体根按库判定（tools/media_paths.py）：连测试库 → media-test，
+    否则 app.properties upload.path 优先。本工具为保护真实内容的回收工具，
+    仍仅允许 prod 语境执行（tv.py 门禁）；即使绕过 tv.py 直连测试库裸跑，
+    也只会扫描 media-test，不会误扫/误清生产目录。
+
 退出码：
     0  成功 / dry-run 完成
     1  其它错误
@@ -53,17 +64,20 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import db_config
+from media_paths import resolve_upload_root
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-APP_PROPERTIES = PROJECT_ROOT / "src" / "main" / "resources" / "app.properties"
 REPORT_DIR = PROJECT_ROOT / ".docs" / "temp"
 
-DEFAULT_UPLOAD_ROOT = Path("D:/data/projects/VideoPlatform/stone")
-
-MYSQL_HOST = os.environ.get("DB_HOST", "127.0.0.1")
-MYSQL_PORT = os.environ.get("DB_PORT", "3306")
-MYSQL_USER = os.environ.get("DB_USER", "root")
-MYSQL_PASSWORD = os.environ.get("DB_PASSWORD", "MySQL")
-DB_NAME = "tvdatabase"
+# 连接参数统一来源 tools/env/（T6：默认 active.conf 当前环境，环境变量 DB_* 优先；
+# 本脚本会移动磁盘媒体文件，tv.py 已禁止在 test 环境执行）
+db_config.use()
+MYSQL_HOST = db_config.DB_HOST
+MYSQL_PORT = db_config.DB_PORT
+MYSQL_USER = db_config.DB_USER
+MYSQL_PASSWORD = db_config.DB_PASSWORD
+DB_NAME = db_config.DB_NAME
 
 COMMON_MYSQL_PATHS = [
     Path(r"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe"),
@@ -117,34 +131,6 @@ def run_sql(mysql: Path, sql: str) -> str:
     if proc.returncode != 0:
         raise RuntimeError("mysql 执行失败: " + (proc.stderr.strip() or proc.stdout.strip()))
     return proc.stdout
-
-
-def read_app_properties(path: Path) -> dict[str, str]:
-    """解析 app.properties（key=value，# 注释），文件缺失或解析失败返回空。"""
-    props: dict[str, str] = {}
-    if not path.is_file():
-        return props
-    try:
-        for raw in path.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            props[key.strip()] = value.strip()
-    except OSError:
-        return props
-    return props
-
-
-def resolve_upload_root() -> Path:
-    """上传根目录：app.properties 的 upload.path > 环境变量 TV_STONE_DIR > 默认值。"""
-    props = read_app_properties(APP_PROPERTIES)
-    if props.get("upload.path"):
-        return Path(props["upload.path"])
-    env = os.environ.get("TV_STONE_DIR")
-    if env:
-        return Path(env)
-    return DEFAULT_UPLOAD_ROOT
 
 
 def human_size(num: int) -> str:
@@ -246,7 +232,7 @@ def write_report(scan_time: datetime, candidates: list[dict], skipped: list[dict
         "# 孤儿媒体清理报告",
         "",
         f"> 时间：{scan_time.strftime('%Y-%m-%d %H:%M:%S')}",
-        f"> 上传根目录：{resolve_upload_root()}",
+        f"> 上传根目录：{resolve_upload_root(DB_NAME)}",
         f"> 模式：{'--quarantine（已移入回收站）' if execute else 'dry-run（未移动）'}",
         f"> 回收站：`{trash_root}`" if trash_root else "> 回收站：-",
         "",
@@ -303,7 +289,7 @@ def main() -> int:
         return 2
 
     # 1. 上传根目录
-    root = resolve_upload_root()
+    root = resolve_upload_root(DB_NAME)
     if not root.is_dir():
         print(f"错误: 上传根目录不存在或不是目录: {root}")
         return 1

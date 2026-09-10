@@ -31,7 +31,7 @@ class TestParameterValidation:
             f"Login with empty body should return 400, got code={body.get('code')}: {body}"
 
     def test_E02_register_duplicate_phone(self, base_url, user_a):
-        """E-02: Register with already-used phone -> code=401, message about phone used."""
+        """E-02: Register with already-used phone -> code=409."""
         resp = requests.post(
             f"{base_url}/user/register",
             json={
@@ -42,11 +42,8 @@ class TestParameterValidation:
             timeout=10,
         )
         body = resp.json()
-        assert body.get("code") == 401, \
-            f"Duplicate phone should return 401, got {body.get('code')}: {body}"
-        msg = body.get("msg", "")
-        assert "已" in msg or "存在" in msg or "使用" in msg, \
-            f"Error message should mention phone already used: {msg}"
+        assert body.get("code") == 409, \
+            f"Duplicate phone should return 409, got {body.get('code')}: {body}"
 
     def test_E03_comment_missing_message(self, base_url, token_a, sample_content_id):
         """E-03: POST /comment/add without message -> code=400."""
@@ -176,10 +173,12 @@ class TestIdempotency:
     def test_E09_duplicate_coupon_grab_returns_409(
         self, base_url, token_a, available_coupon_id
     ):
-        """E-09: Grab the same coupon twice -> second time returns 409."""
-        if available_coupon_id is None:
-            pytest.skip("No available coupons in the system")
+        """E-09: Grab the same coupon twice -> second time returns 409.
 
+        首抢（正常抢）必 200：available_coupon_id 命中 T1 固定券种子（高库存 999999、
+        end 2099、begin 过去），且 token_a 每次会话新建用户、从未领取过；再抢同券撞
+        coupon_order 唯一键 -> 409。缺失种子券由 fixture 直接 fail（不再静默 skip）。
+        """
         # First grab
         resp1 = requests.post(
             f"{base_url}/coupon/grab",
@@ -188,14 +187,6 @@ class TestIdempotency:
             timeout=10,
         )
         body1 = resp1.json()
-
-        if body1.get("code") == 409:
-            # Already grabbed in a previous test - that itself proves idempotency
-            msg = body1.get("msg", "")
-            assert "已" in msg or "重复" in msg, \
-                f"409 message should indicate already grabbed: {msg}"
-            return
-
         assert body1.get("code") == 200, f"First grab failed: {body1}"
 
         # Second grab (duplicate)
@@ -208,6 +199,25 @@ class TestIdempotency:
         body2 = resp2.json()
         assert body2.get("code") == 409, \
             f"Duplicate coupon grab should return 409, got {body2.get('code')}: {body2}"
+
+    def test_E09b_grab_expired_coupon_returns_409(
+        self, base_url, token_a, expired_coupon_id
+    ):
+        """E-09b: Grab an expired coupon -> code=409.
+
+        已过期券（conftest.EXPIRED_COUPON_ID=6，db.sql 历史行，end 早于当前时间）
+        必然不可抢：deductStock 的 end_time >= NOW() 不满足 -> 409；
+        不落 coupon_order、不耗库存。
+        """
+        resp = requests.post(
+            f"{base_url}/coupon/grab",
+            headers={"token": token_a, "Content-Type": "application/json"},
+            json={"couponId": expired_coupon_id},
+            timeout=10,
+        )
+        body = resp.json()
+        assert body.get("code") == 409, \
+            f"Grab expired coupon should return 409, got {body.get('code')}: {body}"
 
     def test_E10_follow_self_returns_409(self, base_url, token_a, user_a_id):
         """E-10: Follow yourself -> returns 409."""

@@ -17,14 +17,15 @@
     2  mysqldump 不可用
     3  备份文件缺失/为空/内容校验失败
 
-环境变量（可选）：
-    DB_HOST / DB_PORT / DB_USER / DB_PASSWORD
+连接参数（统一来源 tools/env/，T6）：
+    DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME
+    （默认当前激活环境 active.conf；环境变量优先级最高）
 """
 
 from __future__ import annotations
 
 import hashlib
-import os
+import db_config
 import shutil
 import subprocess
 import sys
@@ -33,11 +34,13 @@ from pathlib import Path
 
 AUTO_BACKUP_ROOT = Path(r"D:\dev\WorkSpace\VideoPlatform\auto_backup")
 
-DB_NAME = "tvdatabase"
-DB_HOST = os.environ.get("DB_HOST", "127.0.0.1")
-DB_PORT = os.environ.get("DB_PORT", "3306")
-DB_USER = os.environ.get("DB_USER", "root")
-DB_PASSWORD = os.environ.get("DB_PASSWORD", "MySQL")
+# 连接参数统一来源 tools/env/（T6：默认 active.conf 当前环境，环境变量 DB_* 优先）
+db_config.use()
+DB_NAME = db_config.DB_NAME
+DB_HOST = db_config.DB_HOST
+DB_PORT = db_config.DB_PORT
+DB_USER = db_config.DB_USER
+DB_PASSWORD = db_config.DB_PASSWORD
 
 COMMON_MYSQLDUMP_PATHS = [
     Path(r"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqldump.exe"),

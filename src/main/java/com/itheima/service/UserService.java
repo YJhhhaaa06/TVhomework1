@@ -5,7 +5,6 @@ import com.itheima.model.command.LoginCommand;
 import com.itheima.model.command.LoginType;
 import com.itheima.model.command.RegisterCommand;
 import com.itheima.dao.UserDao;
-import com.itheima.exception.AuthException;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.DatabaseException;
@@ -93,7 +92,7 @@ public class UserService {
         String hashedPassword=PasswordUtil.hashPassword(password);
         return transactionTemplate.execute(conn -> {
             if(userDao.isPhoneUsed(conn,phone)){
-                throw new AuthException("电话号码已被使用");
+                throw new DuplicatePhoneException();
             }
             if(userDao.isUsernameUsed(conn,username)) {
                 throw new ConflictException("用户名已被占用");

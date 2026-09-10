@@ -287,11 +287,10 @@ class TestCouponModule:
     def test_S16_grab_coupon(self, token_a, available_coupon_id, base_url):
         """S-16: POST /coupon/grab -> code=200, returns exchange code.
 
-        Skips if no coupons are available.
+        available_coupon_id 命中 T1 固定券种子（缺失由 fixture fail，不再静默 skip）。
+        同一会话内 E-09 已用 userA 抢过该券，故这里 200（首抢）或 409（同用户重复抢）
+        均为合法；200 时校验兑换码非空。
         """
-        if available_coupon_id is None:
-            pytest.skip("No available coupons in the system")
-
         resp = requests.post(
             f"{base_url}/coupon/grab",
             headers={"token": token_a, "Content-Type": "application/json"},

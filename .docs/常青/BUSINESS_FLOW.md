@@ -992,7 +992,7 @@ POST /follow/remove?followedUserId=456&token=xxx
 #### 4.3.3 查看关注列表
 
 ```
-GET /follow/following?userId=123&token=xxx（可选）
+GET /follow/following?userId=123&token=xxx（必填：/follow/* 前缀守卫需登录，2026-09-09 按代码修正"可选"标注）
 
 步骤：
 1. 查询用户的所有关注 ID
@@ -1017,7 +1017,7 @@ GET /follow/following?userId=123&token=xxx（可选）
 #### 4.3.4 查看粉丝列表
 
 ```
-GET /follow/followers?userId=123&token=xxx（可选）
+GET /follow/followers?userId=123&token=xxx（必填：/follow/* 前缀守卫需登录，2026-09-09 按代码修正"可选"标注）
 
 步骤：
 1. 查询用户的所有粉丝 ID
@@ -1205,8 +1205,6 @@ GET /feed?page=1&pageSize=10&token=xxx
 | `/comment/show` | GET | 查看评论 |
 | `/coupon/list` | GET | 优惠券列表 |
 | `/profile` | GET | 用户主页 |
-| `/follow/following` | GET | 关注列表 |
-| `/follow/followers` | GET | 粉丝列表 |
 
 ### 7.3 资源所有权校验（当前缺失）
 
@@ -1299,6 +1297,12 @@ ContentService.updateContentLikeCount(contentId, 1);
 **缓解**: 有定时刷新机制，最终会一致
 
 **建议**: 考虑使用消息队列保证最终一致性
+
+**状态（2026-09-02 T4）**: 计数漂移已提供统一校验与修复入口——`tools/check_integrity.py`
+默认 dry-run 校验 content.like_count / comment.like_count / content.comment_count /
+users.follow_count / users.follower_count，显式 `--fix` 单事务重算漂移行（改的只是冗余计数列，
+不触碰业务数据，逻辑与 CountRepairTool 一致）。应用层"事务内 ±1 + 事务外缓存 + 定时刷新兜底"
+的业务实现本次未改（P5 缓存一致性仍按既有定时刷新兜底，缓存改造属后续周期）。
 
 ---
 
@@ -1486,8 +1490,8 @@ return buildUserList(conn, ids, currentUserId);
 | GET | /comment/show | 查看评论 | ✗ |
 | POST | /follow/add | 关注 | ✓ |
 | POST | /follow/remove | 取关 | ✓ |
-| GET | /follow/following | 关注列表 | ✗ |
-| GET | /follow/followers | 粉丝列表 | ✗ |
+| GET | /follow/following | 关注列表 | ✓ |
+| GET | /follow/followers | 粉丝列表 | ✓ |
 
 ### 10.4 用户主页
 

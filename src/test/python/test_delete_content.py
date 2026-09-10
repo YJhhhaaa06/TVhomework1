@@ -23,9 +23,9 @@ import uuid
 import pytest
 import requests
 
-_unique = uuid.uuid4().hex[:8]
+from conftest import STONE_DIR  # 与 conftest 唯一持有默认值（N6/T2），严禁各自硬编码
 
-STONE_DIR = os.environ.get("TV_STONE_DIR", "D:/data/projects/VideoPlatform/stone")
+_unique = uuid.uuid4().hex[:8]
 
 
 # ---------------------------------------------------------------------------
