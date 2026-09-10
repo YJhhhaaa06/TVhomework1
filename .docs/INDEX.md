@@ -29,7 +29,9 @@
 
 | 文件 | 内容 |
 |------|------|
-| （暂无当前周期文档） | 上一周期 `260910-test-gap-fill`（补测试缺口 A 方向）已归档，见下 |
+| 目标与任务/NEXT_CYCLE_NEEDS.md | 本周期需求与痛点（Why）：方向 B=feature package 包结构改造定稿；目标=按 8 业务域重组 controller/service/dao/model、基建不动；含类归属清单、技术注意点、任务拆分骨架（已获用户逐项拍板） |
+| 目标与任务/NEXT_CYCLE_TASKS.md | 本周期任务（How）：**周期约定 G1-G10** + **任务模板四要素** + 任务详情（草稿：B 拆 9 任务 = 8 域迁移 + 1 收尾，待评审定稿） |
+| 目标与任务/UNPLANNED_ISSUES.md | 待决策池：登记"发现需要改、但暂未排进任务清单"的内容（文档滞后/代码债/观察），已预填 7 条候选（U-01~U-07），按登记规则新增 |
 
 > 历史周期：`260908-test-hardening`（测试体系改造 T1-T5）已归档 `archive/目标与任务/260908-test-hardening/`；`260910-test-gap-fill`（补测试缺口 A 方向 T1~T8，test(12)~test(19)）已归档 `archive/目标与任务/260910-test-gap-fill/`（勿读，追踪可追溯）。
 
