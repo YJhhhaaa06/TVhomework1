@@ -1,7 +1,7 @@
 package com.itheima.service;
 
 import com.itheima.dao.ContentDao;
-import com.itheima.dao.FollowDao;
+import com.itheima.follow.dao.FollowDao;
 import com.itheima.exception.ServerException;
 import com.itheima.model.cache.ContentCacheDTO;
 import com.itheima.model.dto.PageResult;

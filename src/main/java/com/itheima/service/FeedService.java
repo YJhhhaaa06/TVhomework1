@@ -2,7 +2,7 @@ package com.itheima.service;
 
 import com.itheima.model.dto.PageResult;
 import com.itheima.dao.ContentDao;
-import com.itheima.dao.FollowDao;
+import com.itheima.follow.dao.FollowDao;
 import com.itheima.exception.ServerException;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;

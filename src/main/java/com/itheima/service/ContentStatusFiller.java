@@ -1,6 +1,6 @@
 package com.itheima.service;
 
-import com.itheima.dao.FollowDao;
+import com.itheima.follow.dao.FollowDao;
 import com.itheima.exception.DatabaseException;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;

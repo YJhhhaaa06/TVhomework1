@@ -6,7 +6,7 @@ import com.itheima.model.vo.ProfileVO;
 
 import com.itheima.model.dto.PageResult;
 import com.itheima.dao.ContentDao;
-import com.itheima.dao.FollowDao;
+import com.itheima.follow.dao.FollowDao;
 import com.itheima.user.dao.UserDao;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;

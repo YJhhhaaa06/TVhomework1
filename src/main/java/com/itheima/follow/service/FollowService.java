@@ -1,6 +1,6 @@
-package com.itheima.service;
+package com.itheima.follow.service;
 
-import com.itheima.dao.FollowDao;
+import com.itheima.follow.dao.FollowDao;
 import com.itheima.user.dao.UserDao;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.ServerException;
