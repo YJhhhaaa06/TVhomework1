@@ -3,7 +3,7 @@ package com.itheima.controller;
 import com.itheima.exception.ErrorCode;
 import com.itheima.ioc.annotation.Inject;
 import com.itheima.service.ContentService;
-import com.itheima.service.FileUploadService;
+import com.itheima.upload.service.FileUploadService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServletRequest;

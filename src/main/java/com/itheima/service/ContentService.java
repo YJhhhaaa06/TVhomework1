@@ -1,6 +1,6 @@
 package com.itheima.service;
 
-import com.itheima.controller.UploadType;
+import com.itheima.upload.controller.UploadType;
 import com.itheima.dao.CommentDao;
 import com.itheima.dao.ContentDao;
 import com.itheima.dao.ContentLikeDao;
@@ -10,7 +10,7 @@ import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.model.cache.CommentCacheDTO;
 import com.itheima.model.cache.ContentCacheDTO;
-import com.itheima.model.command.UploadCommand;
+import com.itheima.upload.model.command.UploadCommand;
 import com.itheima.model.dto.PageResult;
 import com.itheima.model.entity.ContentMedia;
 import com.itheima.model.vo.AdminContentVO;

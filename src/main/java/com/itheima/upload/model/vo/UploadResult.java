@@ -1,4 +1,4 @@
-package com.itheima.model.vo;
+package com.itheima.upload.model.vo;
 
 public class UploadResult {
 

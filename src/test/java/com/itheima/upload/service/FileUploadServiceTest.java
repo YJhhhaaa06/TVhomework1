@@ -1,9 +1,9 @@
-package com.itheima.service;
+package com.itheima.upload.service;
 
 import com.itheima.config.AppConfig;
-import com.itheima.controller.UploadType;
+import com.itheima.upload.controller.UploadType;
 import com.itheima.exception.ParamException;
-import com.itheima.model.vo.UploadResult;
+import com.itheima.upload.model.vo.UploadResult;
 import jakarta.servlet.http.Part;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;

@@ -1,14 +1,17 @@
-package com.itheima.controller;
+package com.itheima.upload.controller;
 
+import com.itheima.controller.BaseServlet;
+import com.itheima.controller.BaseServletUtil;
+import com.itheima.controller.RequestParser;
 import com.itheima.model.command.CommandConverter;
-import com.itheima.model.command.UploadCommand;
+import com.itheima.upload.model.command.UploadCommand;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;
 import com.itheima.exception.ParamException;
 import com.itheima.ioc.annotation.Inject;
-import com.itheima.model.vo.UploadResult;
+import com.itheima.upload.model.vo.UploadResult;
 import com.itheima.service.ContentService;
-import com.itheima.service.FileUploadService;
+import com.itheima.upload.service.FileUploadService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.MultipartConfig;
 import jakarta.servlet.annotation.WebServlet;
