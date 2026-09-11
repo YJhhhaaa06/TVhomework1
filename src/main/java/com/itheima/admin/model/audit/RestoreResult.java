@@ -1,4 +1,4 @@
-package com.itheima.model.audit;
+package com.itheima.admin.model.audit;
 
 public class RestoreResult {
     private long mediaId;

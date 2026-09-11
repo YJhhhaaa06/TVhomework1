@@ -3,7 +3,7 @@ import com.itheima.content.model.cache.CommentCacheDTO;
 import com.itheima.content.model.cache.ContentCacheDTO;
 import com.itheima.content.model.entity.ContentMedia;
 import com.itheima.user.model.entity.User;
-import com.itheima.model.vo.AdminContentVO;
+import com.itheima.admin.model.vo.AdminContentVO;
 
 import java.time.LocalDateTime;
 

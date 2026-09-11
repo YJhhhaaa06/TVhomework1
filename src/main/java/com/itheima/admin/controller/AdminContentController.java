@@ -1,8 +1,11 @@
-package com.itheima.controller;
+package com.itheima.admin.controller;
 
+import com.itheima.controller.BaseServlet;
+import com.itheima.controller.BaseServletUtil;
+import com.itheima.controller.RequestParser;
 import com.itheima.exception.ErrorCode;
 import com.itheima.ioc.annotation.Inject;
-import com.itheima.model.vo.AdminContentVO;
+import com.itheima.admin.model.vo.AdminContentVO;
 import com.itheima.content.service.ContentService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;

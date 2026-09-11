@@ -1,4 +1,4 @@
-package com.itheima.model.vo;
+package com.itheima.admin.model.vo;
 
 /**
  * 管理端内容清单视图（A2 审核下架用）。

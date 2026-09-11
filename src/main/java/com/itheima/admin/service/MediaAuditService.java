@@ -1,4 +1,4 @@
-package com.itheima.service;
+package com.itheima.admin.service;
 
 import com.itheima.config.AppConfig;
 import com.itheima.content.dao.ContentDao;
@@ -10,9 +10,9 @@ import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.content.model.cache.ContentCacheDTO;
 import com.itheima.content.model.entity.ContentMedia;
-import com.itheima.model.audit.MediaAuditItem;
-import com.itheima.model.audit.MediaAuditResult;
-import com.itheima.model.audit.RestoreResult;
+import com.itheima.admin.model.audit.MediaAuditItem;
+import com.itheima.admin.model.audit.MediaAuditResult;
+import com.itheima.admin.model.audit.RestoreResult;
 import com.itheima.util.LogUtil;
 import com.itheima.util.TransactionTemplate;
 import jakarta.servlet.http.Part;

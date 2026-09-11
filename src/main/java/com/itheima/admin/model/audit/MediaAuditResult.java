@@ -1,4 +1,4 @@
-package com.itheima.model.audit;
+package com.itheima.admin.model.audit;
 
 import java.time.LocalDateTime;
 import java.util.List;

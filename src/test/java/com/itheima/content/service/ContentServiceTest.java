@@ -16,7 +16,7 @@ import com.itheima.content.model.cache.CommentCacheDTO;
 import com.itheima.upload.model.command.UploadCommand;
 import com.itheima.content.model.dto.PageResult;
 import com.itheima.content.model.entity.ContentMedia;
-import com.itheima.model.vo.AdminContentVO;
+import com.itheima.admin.model.vo.AdminContentVO;
 import com.itheima.content.model.vo.ContentDetailVO;
 import com.itheima.content.model.vo.ContentVO;
 import com.itheima.content.model.vo.CommentVO;

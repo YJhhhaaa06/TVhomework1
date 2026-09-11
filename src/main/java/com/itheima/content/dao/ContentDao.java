@@ -3,7 +3,7 @@ package com.itheima.content.dao;
 import com.itheima.dao.ResultMap;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.content.model.cache.ContentCacheDTO;
-import com.itheima.model.vo.AdminContentVO;
+import com.itheima.admin.model.vo.AdminContentVO;
 
 import java.sql.*;
 import java.util.ArrayList;

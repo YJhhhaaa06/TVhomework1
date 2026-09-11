@@ -1,11 +1,14 @@
-package com.itheima.controller;
+package com.itheima.admin.controller;
 
+import com.itheima.controller.BaseServlet;
+import com.itheima.controller.BaseServletUtil;
+import com.itheima.controller.RequestParser;
 import com.itheima.exception.ErrorCode;
 import com.itheima.exception.ParamException;
 import com.itheima.ioc.annotation.Inject;
-import com.itheima.model.audit.MediaAuditResult;
-import com.itheima.model.audit.RestoreResult;
-import com.itheima.service.MediaAuditService;
+import com.itheima.admin.model.audit.MediaAuditResult;
+import com.itheima.admin.model.audit.RestoreResult;
+import com.itheima.admin.service.MediaAuditService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.MultipartConfig;
 import jakarta.servlet.annotation.WebServlet;
