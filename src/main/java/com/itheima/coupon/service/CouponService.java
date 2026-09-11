@@ -1,6 +1,6 @@
-package com.itheima.service;
+package com.itheima.coupon.service;
 
-import com.itheima.dao.CouponDao;
+import com.itheima.coupon.dao.CouponDao;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.ServerException;
 import com.itheima.ioc.annotation.Component;

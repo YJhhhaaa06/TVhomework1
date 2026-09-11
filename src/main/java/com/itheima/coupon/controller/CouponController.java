@@ -1,9 +1,12 @@
-package com.itheima.controller;
+package com.itheima.coupon.controller;
 
-import com.itheima.model.dto.GrabCouponRequest;
+import com.itheima.coupon.model.dto.GrabCouponRequest;
+import com.itheima.coupon.service.CouponService;
+import com.itheima.controller.BaseServlet;
+import com.itheima.controller.BaseServletUtil;
+import com.itheima.controller.RequestParser;
 import com.itheima.exception.ErrorCode;
 import com.itheima.ioc.annotation.Inject;
-import com.itheima.service.CouponService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServletRequest;

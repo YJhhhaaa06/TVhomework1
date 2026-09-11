@@ -1,4 +1,4 @@
-package com.itheima.model.dto;
+package com.itheima.coupon.model.dto;
 
 public class GrabCouponRequest {
     private long couponId;

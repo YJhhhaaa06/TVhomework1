@@ -1,4 +1,4 @@
-package com.itheima.dao;
+package com.itheima.coupon.dao;
 
 import com.itheima.ioc.annotation.Component;
 
