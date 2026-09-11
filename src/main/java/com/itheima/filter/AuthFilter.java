@@ -3,7 +3,7 @@ package com.itheima.filter;
 import com.itheima.controller.BaseServletUtil;
 import com.itheima.exception.ErrorCode;
 import com.itheima.ioc.IocContainer;
-import com.itheima.service.UserService;
+import com.itheima.user.service.UserService;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;

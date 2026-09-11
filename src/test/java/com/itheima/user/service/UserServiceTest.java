@@ -1,6 +1,6 @@
-package com.itheima.service;
+package com.itheima.user.service;
 
-import com.itheima.dao.UserDao;
+import com.itheima.user.dao.UserDao;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.DatabaseException;
 import com.itheima.exception.DuplicatePhoneException;
@@ -8,11 +8,11 @@ import com.itheima.exception.InvalidPhoneException;
 import com.itheima.exception.ParamException;
 import com.itheima.exception.PasswordIncorrectException;
 import com.itheima.exception.UserNotFoundException;
-import com.itheima.model.command.ChangePasswordCommand;
-import com.itheima.model.command.LoginCommand;
-import com.itheima.model.command.RegisterCommand;
-import com.itheima.model.entity.User;
-import com.itheima.model.vo.LoginVO;
+import com.itheima.user.model.command.ChangePasswordCommand;
+import com.itheima.user.model.command.LoginCommand;
+import com.itheima.user.model.command.RegisterCommand;
+import com.itheima.user.model.entity.User;
+import com.itheima.user.model.vo.LoginVO;
 import com.itheima.util.JwtUtil;
 import com.itheima.util.PasswordUtil;
 import com.itheima.util.TransactionTemplate;

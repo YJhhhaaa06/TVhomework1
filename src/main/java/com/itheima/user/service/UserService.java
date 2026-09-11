@@ -1,10 +1,10 @@
-package com.itheima.service;
+package com.itheima.user.service;
 
-import com.itheima.model.command.ChangePasswordCommand;
-import com.itheima.model.command.LoginCommand;
-import com.itheima.model.command.LoginType;
-import com.itheima.model.command.RegisterCommand;
-import com.itheima.dao.UserDao;
+import com.itheima.user.model.command.ChangePasswordCommand;
+import com.itheima.user.model.command.LoginCommand;
+import com.itheima.user.model.command.LoginType;
+import com.itheima.user.model.command.RegisterCommand;
+import com.itheima.user.dao.UserDao;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.DatabaseException;
@@ -16,8 +16,8 @@ import com.itheima.exception.ServerException;
 import com.itheima.exception.UserNotFoundException;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;
-import com.itheima.model.vo.LoginVO;
-import com.itheima.model.entity.User;
+import com.itheima.user.model.vo.LoginVO;
+import com.itheima.user.model.entity.User;
 import com.itheima.util.TransactionTemplate;
 import com.itheima.util.*;
 

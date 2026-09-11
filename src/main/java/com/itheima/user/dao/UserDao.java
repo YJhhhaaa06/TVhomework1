@@ -1,7 +1,8 @@
-package com.itheima.dao;
+package com.itheima.user.dao;
 
+import com.itheima.dao.ResultMap;
 import com.itheima.ioc.annotation.Component;
-import com.itheima.model.entity.User;
+import com.itheima.user.model.entity.User;
 
 import java.sql.*;
 import java.util.List;

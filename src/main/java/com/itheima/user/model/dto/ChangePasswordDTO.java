@@ -1,19 +1,12 @@
-package com.itheima.model.command;
+package com.itheima.user.model.dto;
 
-public class ChangePasswordCommand {
-
+public class ChangePasswordDTO {
     String phone;
     String oldPassword;
     String newPassword;
 
-    public ChangePasswordCommand() {
-    }
 
-    public ChangePasswordCommand(String phone, String oldPassword, String newPassword) {
-        this.phone = phone;
-        this.oldPassword = oldPassword;
-        this.newPassword = newPassword;
-
+    public ChangePasswordDTO() {
     }
 
     public String getPhone() {
@@ -39,6 +32,4 @@ public class ChangePasswordCommand {
     public void setNewPassword(String newPassword) {
         this.newPassword = newPassword;
     }
-
-
 }

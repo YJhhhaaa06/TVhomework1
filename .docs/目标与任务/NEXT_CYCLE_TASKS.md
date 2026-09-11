@@ -51,7 +51,7 @@
 | -- | -- | -- | -- | -- | -- | --- |
 | T1 | 迁移 coupon 域（/coupon/\*） | coupon | — | 全套类落位 `com.itheima.coupon`，旧包无残留，`mvn compile` + JUnit 绿 | `refactor(pkg-01)` | 已完成 |
 | T2 | 迁移 upload 域（/api/upload/\*） | upload | — | 全套类落位 `com.itheima.upload`，`mvn compile` + JUnit 绿 | `refactor(pkg-02)` | 已完成 |
-| T3 | 迁移 user 域（/user/\*） | user | — | 全套类落位 `com.itheima.user`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-03)` | 待执行 |
+| T3 | 迁移 user 域（/user/\*） | user | — | 全套类落位 `com.itheima.user`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-03)` | 已完成 |
 | T4 | 迁移 comment 域（/comment/\*） | comment | — | 全套类落位 `com.itheima.comment`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-04)` | 待执行 |
 | T5 | 迁移 follow 域（/follow/\*） | follow | — | 全套类落位 `com.itheima.follow`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-05)` | 待执行 |
 | T6 | 迁移 like 域（/like/\*） | like | — | 全套类落位 `com.itheima.like`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-06)` | 待执行 |

@@ -1,4 +1,4 @@
-package com.itheima.model.command;
+package com.itheima.user.model.command;
 
 public class RegisterCommand {
     String phone;

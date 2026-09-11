@@ -1,10 +1,10 @@
 package com.itheima.service;
 
 import com.itheima.dao.FollowDao;
-import com.itheima.dao.UserDao;
+import com.itheima.user.dao.UserDao;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.ServerException;
-import com.itheima.model.entity.User;
+import com.itheima.user.model.entity.User;
 import com.itheima.util.TransactionTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

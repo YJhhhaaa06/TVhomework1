@@ -1,4 +1,4 @@
-package com.itheima.model.vo;
+package com.itheima.user.model.vo;
 
 public class LoginVO {
 

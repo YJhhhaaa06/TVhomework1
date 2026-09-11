@@ -1,4 +1,4 @@
-package com.itheima.model.entity;
+package com.itheima.user.model.entity;
 
 import com.itheima.util.PasswordUtil;
 import com.itheima.util.StringUtil;

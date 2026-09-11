@@ -1,6 +1,6 @@
-package com.itheima.model.dto;
+package com.itheima.user.model.dto;
 
-import com.itheima.model.command.LoginCommand;
+import com.itheima.user.model.command.LoginCommand;
 import com.itheima.exception.ParamException;
 import com.itheima.util.StringUtil;
 
