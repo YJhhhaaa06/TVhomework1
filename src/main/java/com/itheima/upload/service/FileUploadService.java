@@ -1,0 +1,103 @@
+package com.itheima.upload.service;
+
+import com.itheima.config.AppConfig;
+import com.itheima.exception.ParamException;
+import com.itheima.ioc.annotation.Component;
+import com.itheima.upload.controller.UploadType;
+import com.itheima.upload.model.vo.UploadResult;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.Part;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import com.itheima.util.LogUtil;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+@Component
+public class FileUploadService {
+
+    private static final Logger LOGGER =
+            LogUtil.getLogger(FileUploadService.class);
+
+    private static final Pattern UPLOAD_URL_PATTERN =
+            Pattern.compile("^/upload/(video|image|cover)/([A-Za-z0-9._-]+)$");
+
+    public UploadResult saveFile(Part part, UploadType type) throws IOException {
+        // 1. 校验
+        validate(part, type);
+
+        // 2. 生成文件名
+        String fileName = UUID.randomUUID() + getSuffix(part);
+        LOGGER.fine("文件保存, fileName=" + fileName);
+
+        // 3. 目录
+        String basePath = getBasePath();
+        LOGGER.fine("文件保存, path=" + basePath);
+        File dir = new File(basePath, type.getDir());
+        if (!dir.exists()) dir.mkdirs();
+
+        // 4. 写入
+        File file = new File(dir, fileName);
+        part.write(file.getAbsolutePath());//绝对路径，dir目录+fileName文件名，dir=basePath+type.getPath
+
+        UploadResult result=new UploadResult();
+        result.setUrl("/upload/" + type.getDir() + "/" + fileName);
+        result.setAbsolutePath(file.getAbsolutePath().replace('\\', '/'));
+        return result;
+    }
+
+    public void deleteFileQuietly(String absolutePath) {
+        if (absolutePath == null) return;
+
+        try {
+            File file = new File(absolutePath);
+            if (file.exists()) file.delete();
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "文件删除失败, path=" + absolutePath, e);
+        }
+    }
+
+    /**
+     * 按上传 URL（/upload/{video|image|cover}/{文件名}）删除物理文件，尽力而为。
+     * URL 非法或文件不存在时静默忽略（作者换源/删图清理旧文件用）。
+     */
+    public void deleteFileByUrl(String url) {
+        if (url == null) return;
+        String path = resolveAbsolutePath(url);
+        if (path == null) return;
+        deleteFileQuietly(path);
+    }
+
+    private String resolveAbsolutePath(String url) {
+        Matcher matcher = UPLOAD_URL_PATTERN.matcher(url);
+        if (!matcher.matches()) return null;
+        String dir = matcher.group(1);
+        String fileName = matcher.group(2);
+        if (fileName.contains("..")) return null;
+        return getBasePath() + File.separator + dir + File.separator + fileName;
+    }
+
+    private void validate(Part part, UploadType type) {//校验
+        String contentType = part.getContentType();
+        String fileName = part.getSubmittedFileName();
+
+        if (contentType == null || !type.isSuffixValid(fileName)) {
+            throw new ParamException("文件类型不支持");
+        }
+
+    }
+    private String getSuffix(Part part) {
+        String fileName = part.getSubmittedFileName();
+        int dotIndex = fileName.lastIndexOf('.');
+        return fileName.substring(dotIndex).toLowerCase();
+    }
+    private String getBasePath() {   // 需要把 req 传进来
+        return AppConfig.getUploadPath();
+    }
+}
+

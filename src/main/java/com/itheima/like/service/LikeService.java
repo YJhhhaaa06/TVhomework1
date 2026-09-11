@@ -1,0 +1,316 @@
+package com.itheima.like.service;
+
+import com.itheima.comment.dao.CommentDao;
+import com.itheima.like.dao.CommentLikeDao;
+import com.itheima.content.dao.ContentDao;
+import com.itheima.like.dao.ContentLikeDao;
+import com.itheima.content.service.ContentCacheManager;
+import com.itheima.exception.ConflictException;
+import com.itheima.exception.NotFoundException;
+import com.itheima.exception.ServerException;
+import com.itheima.ioc.annotation.Component;
+import com.itheima.ioc.annotation.InjectConstructor;
+import com.itheima.util.LogUtil;
+import com.itheima.util.TransactionTemplate;
+
+import java.sql.SQLException;
+import java.util.*;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+@Component
+public class LikeService {
+
+    private final ContentDao contentDao;
+    private final CommentDao commentDao;
+    private final ContentLikeDao contentLikeDao;
+    private final CommentLikeDao commentLikeDao;
+    private final LikeCacheService cache;
+    private final ContentCacheManager contentCacheManager;
+    private final TransactionTemplate transactionTemplate;
+    private static final Logger LOGGER =
+            LogUtil.getLogger(LikeService.class);
+
+    @InjectConstructor
+    public LikeService(ContentDao contentDao, CommentDao commentDao,
+                       ContentLikeDao contentLikeDao, CommentLikeDao commentLikeDao,
+                       LikeCacheService cache, ContentCacheManager contentCacheManager,
+                       TransactionTemplate transactionTemplate) {
+        this.contentDao = contentDao;
+        this.commentDao = commentDao;
+        this.contentLikeDao = contentLikeDao;
+        this.commentLikeDao = commentLikeDao;
+        this.cache = cache;
+        this.contentCacheManager = contentCacheManager;
+        this.transactionTemplate = transactionTemplate;
+    }
+
+    // ==================== 内容点赞 ====================
+
+    public void likeContent(long userId, long contentId) {
+        transactionTemplate.execute(conn -> {
+            if (!contentDao.isContentExist(conn, contentId)) {
+                throw new NotFoundException("内容不存在");
+            }
+            if (contentLikeDao.isLiked(conn, userId, contentId)) {
+                throw new ConflictException("不可重复点赞");
+            }
+            try {
+                contentLikeDao.addLike(conn, userId, contentId);
+                contentDao.updateLikeCount(conn, contentId, 1);
+                return null;
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "内容点赞失败, userId=" + userId + ", contentId=" + contentId, e);
+                throw new ServerException("服务器异常，点赞失败");
+            }
+        });
+
+        // 缓存更新放在事务提交后
+        cache.likeContent(userId, contentId);
+        contentCacheManager.updateContentLikeCount(contentId, 1);
+    }
+
+    public void removeLikeContent(long userId, long contentId) {
+        transactionTemplate.execute(conn -> {
+            if (!contentDao.isContentExist(conn, contentId)) {
+                throw new NotFoundException("内容不存在");
+            }
+            if (!contentLikeDao.isLiked(conn, userId, contentId)) {
+                throw new ConflictException("未点赞，无法取消");
+            }
+            try {
+                contentLikeDao.deleteLike(conn, userId, contentId);
+                contentDao.updateLikeCount(conn, contentId, -1);
+                return null;
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "取消内容点赞失败, userId=" + userId + ", contentId=" + contentId, e);
+                throw new ServerException("服务器异常，取消点赞失败");
+            }
+        });
+
+        cache.unlikeContent(userId, contentId);
+        contentCacheManager.updateContentLikeCount(contentId, -1);
+    }
+
+    // ==================== 评论点赞 ====================
+
+    public void likeComment(long userId, long commentId) {
+        transactionTemplate.execute(conn -> {
+            if (!commentDao.isCommentExist(conn, commentId)) {
+                throw new NotFoundException("评论不存在");
+            }
+            if (commentLikeDao.isLiked(conn, userId, commentId)) {
+                throw new ConflictException("不可重复点赞");
+            }
+            try {
+                commentLikeDao.addLike(conn, userId, commentId);
+                commentDao.updateLikeCount(conn, commentId, 1);
+                return null;
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "评论点赞失败, userId=" + userId + ", commentId=" + commentId, e);
+                throw new ServerException("服务器异常，点赞失败");
+            }
+        });
+
+        cache.likeComment(userId, commentId);
+        contentCacheManager.updateCommentLikeCount(commentId, 1);
+    }
+
+    public void removeLikeComment(long userId, long commentId) {
+        transactionTemplate.execute(conn -> {
+            if (!commentDao.isCommentExist(conn, commentId)) {
+                throw new NotFoundException("评论不存在");
+            }
+            if (!commentLikeDao.isLiked(conn, userId, commentId)) {
+                throw new ConflictException("未点赞，不可取消");
+            }
+            try {
+                commentLikeDao.removeLike(conn, userId, commentId);
+                commentDao.updateLikeCount(conn, commentId, -1);
+                return null;
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "取消评论点赞失败, userId=" + userId + ", commentId=" + commentId, e);
+                throw new ServerException("服务器异常，取消点赞失败");
+            }
+        });
+
+        cache.unlikeComment(userId, commentId);
+        contentCacheManager.updateCommentLikeCount(commentId, -1);
+    }
+
+    // ==================== 内容点赞查询（单条，缓存优先） ====================
+
+    /**
+     * 查询用户是否点赞了某个内容
+     * 缓存命中直接返回；缓存 miss 则从 DB 查该内容全部点赞者，回填 Redis 后返回
+     */
+    public boolean isContentLiked(long userId, long contentId) {
+        Boolean cached = cache.isContentLiked(userId, contentId);
+        if (cached != null) {
+            return cached;
+        }
+
+        return transactionTemplate.execute(conn -> {
+            try {
+                Set<Long> allLikers = contentLikeDao.findLikerIdsByContentId(conn, contentId);
+                cache.syncContentLikers(contentId, allLikers);
+                return allLikers.contains(userId);
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "查询内容点赞状态失败, userId=" + userId + ", contentId=" + contentId, e);
+                throw new ServerException("服务器异常，查询点赞状态失败");
+            }
+        });
+    }
+
+    /**
+     * 查询内容的点赞数
+     * 缓存命中直接返回 SCARD 结果；缓存 miss 则 DB 查全部点赞者，回填后返回集合大小
+     */
+    public int getContentLikeCount(long contentId) {
+        Integer cached = cache.getContentLikeCount(contentId);
+        if (cached != null) {
+            return cached;
+        }
+
+        return transactionTemplate.execute(conn -> {
+            try {
+                Set<Long> allLikers = contentLikeDao.findLikerIdsByContentId(conn, contentId);
+                cache.syncContentLikers(contentId, allLikers);
+                return allLikers.size();
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "查询内容点赞数失败, contentId=" + contentId, e);
+                throw new ServerException("服务器异常，查询点赞数失败");
+            }
+        });
+    }
+
+    // ==================== 评论点赞查询（单条，缓存优先） ====================
+
+    /**
+     * 查询用户是否点赞了某条评论
+     */
+    public boolean isCommentLiked(long userId, long commentId) {
+        Boolean cached = cache.isCommentLiked(userId, commentId);
+        if (cached != null) {
+            return cached;
+        }
+
+        return transactionTemplate.execute(conn -> {
+            try {
+                Set<Long> allLikers = commentLikeDao.findLikerIdsByCommentId(conn, commentId);
+                cache.syncCommentLikers(commentId, allLikers);
+                return allLikers.contains(userId);
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "查询评论点赞状态失败, userId=" + userId + ", commentId=" + commentId, e);
+                throw new ServerException("服务器异常，查询点赞状态失败");
+            }
+        });
+    }
+
+    /**
+     * 查询评论的点赞数
+     */
+    public int getCommentLikeCount(long commentId) {
+        Integer cached = cache.getCommentLikeCount(commentId);
+        if (cached != null) {
+            return cached;
+        }
+
+        return transactionTemplate.execute(conn -> {
+            try {
+                Set<Long> allLikers = commentLikeDao.findLikerIdsByCommentId(conn, commentId);
+                cache.syncCommentLikers(commentId, allLikers);
+                return allLikers.size();
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "查询评论点赞数失败, commentId=" + commentId, e);
+                throw new ServerException("服务器异常，查询点赞数失败");
+            }
+        });
+    }
+
+    // ==================== 批量查询点赞状态（Redis pipeline + DB 兜底） ====================
+
+    /**
+     * 批量查询用户对多个内容的点赞状态
+     * 1. Redis pipeline 批量 EXISTS + SISMEMBER
+     * 2. 缓存未命中的 ID → DB 批量查 → 回填缓存
+     * @return 完整的 contentId → isLiked 映射
+     */
+    public Map<Long, Boolean> batchIsContentLiked(long userId, List<Long> contentIds) {
+        if (contentIds == null || contentIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        // 1. Redis pipeline 批量查询
+        Map<Long, Boolean> result = new HashMap<>(cache.batchIsContentLiked(userId, contentIds));
+
+        // 2. 找出缓存未命中的 ID
+        List<Long> missed = new ArrayList<>();
+        for (Long cid : contentIds) {
+            if (!result.containsKey(cid)) {
+                missed.add(cid);
+            }
+        }
+        if (missed.isEmpty()) {
+            return result;
+        }
+
+        return transactionTemplate.execute(conn -> {
+            try {
+                // 先查用户对这批 content 的点赞情况
+                Set<Long> likedSet = contentLikeDao.findLikedContentIds(conn, userId, missed);
+                for (Long cid : missed) {
+                    result.put(cid, likedSet.contains(cid));
+                }
+                // 再逐个回填缓存（加载每个 content 的全部点赞者）
+                for (Long cid : missed) {
+                    Set<Long> allLikers = contentLikeDao.findLikerIdsByContentId(conn, cid);
+                    cache.syncContentLikers(cid, allLikers);
+                }
+                return result;
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "批量查询内容点赞状态失败, userId=" + userId, e);
+                throw new ServerException("服务器异常，批量查询点赞状态失败");
+            }
+        });
+    }
+
+    /**
+     * 批量查询用户对多个评论的点赞状态
+     * 逻辑同 batchIsContentLiked
+     */
+    public Map<Long, Boolean> batchIsCommentLiked(long userId, List<Long> commentIds) {
+        if (commentIds == null || commentIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Map<Long, Boolean> result = new HashMap<>(cache.batchIsCommentLiked(userId, commentIds));
+
+        List<Long> missed = new ArrayList<>();
+        for (Long cid : commentIds) {
+            if (!result.containsKey(cid)) {
+                missed.add(cid);
+            }
+        }
+        if (missed.isEmpty()) {
+            return result;
+        }
+
+        return transactionTemplate.execute(conn -> {
+            try {
+                Set<Long> likedSet = commentLikeDao.findLikedCommentIds(conn, userId, missed);
+                for (Long cid : missed) {
+                    result.put(cid, likedSet.contains(cid));
+                }
+                for (Long cid : missed) {
+                    Set<Long> allLikers = commentLikeDao.findLikerIdsByCommentId(conn, cid);
+                    cache.syncCommentLikers(cid, allLikers);
+                }
+                return result;
+            } catch (SQLException e) {
+                LOGGER.log(Level.SEVERE, "批量查询评论点赞状态失败, userId=" + userId, e);
+                throw new ServerException("服务器异常，批量查询点赞状态失败");
+            }
+        });
+    }
+}

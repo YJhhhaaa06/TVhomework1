@@ -1,7 +1,7 @@
 # 当前系统架构地图
 
-> 版本：2.4
-> 最后更新：2026-08-29
+> 版本：2.5
+> 最后更新：2026-09-11
 > 维护说明：每次架构改动后必须更新本文档
 
 ---
@@ -69,7 +69,7 @@ untitled/
 │   │       └── static/              # 前端资源（css/common.css + js/ 基础设施与视图模块）
 │   │
 │   └── test/
-│       ├── java/com/itheima/        # JUnit 单元测试（113 例）
+│       ├── java/com/itheima/        # JUnit 单元测试（按被测类同包随迁至各域 service 包，201 例）
 │       └── python/                  # pytest 端到端脚本（103 例）
 │
 ├── ssm_*/                           # 空壳子模块（待删除）
@@ -78,53 +78,56 @@ untitled/
 
 ---
 
-## 四、Java 包结构
+## 四、Java 包结构（B 改造后：8 业务域 + 基建不动）
 
 ### 4.1 包总览
 
 ```
 com.itheima/
-├── ioc/                    # 手写 IoC 容器（366行，构造器注入 + 生命周期接口）
-├── filter/                 # Servlet 过滤器（102行）
-├── controller/             # 控制器层（1205行）
-├── service/                # 业务逻辑层（2236行）
-├── dao/                    # 数据访问层（1160行）
-├── model/                  # 统一数据模型（28类，1147行）
-│   ├── entity/             # User、ContentMedia
-│   ├── dto/                # 请求/分页 DTO
-│   ├── vo/                 # 视图对象
-│   ├── cache/              # 缓存 DTO
-│   ├── audit/              # 媒体审计/恢复结果
-│   └── command/            # 命令对象与转换器
-├── exception/              # 异常体系（58行）
-├── util/                   # 工具类（370行）
+├── ioc/                    # 基建不动：手写 IoC 容器（366 行）
+├── filter/                 # 基建不动：4 个 Servlet Filter（197 行）
+├── util/                   # 基建不动：连接池/事务模板/JWT/密码/注入等（567 行）
+├── exception/              # 基建不动：异常体系（326 行）
+├── config/                 # 基建不动：AppConfig（146 行）
+├── controller/             # 仅保留跨域基建：BaseServlet/BaseServletUtil/RequestParser/AppShutDownListener（261 行）
+├── dao/                    # 仅保留跨域基建：ResultMap（88 行）
+│
+├── user/                   # 用户/认证域（937 行）
+├── content/                # 内容域：含首页/搜索/详情/关注流/主页读接口 + 共享缓存组件（3069 行）
+├── follow/                 # 关注域（321 行）
+├── like/                   # 点赞域（925 行）
+├── comment/                # 评论域（555 行）
+├── coupon/                 # 优惠券域（249 行）
+├── upload/                 # 上传/媒体域（471 行）
+└── admin/                  # 运维/审核域（737 行）
 ```
 
-### 4.2 各包详细清单
+> 每域内部保留 `controller / service / dao / model` 分层子包，与既有技术层级命名一致（B 改造后主代码 114 类 / 9215 行，行数统计 2026-09-11）。
+> 跨域依赖允许：feature 包间可互相 import（Java 无包环限制）；任何域不反向依赖基建包。
 
-> 行数统计更新至 2026-08-10；个别类行数以实际代码为准。
+### 4.2 基建包（保持原位不动）
 
 #### ioc 包 — 依赖注入容器
 
 | 类 | 行数 | 职责 |
 |----|------|------|
 | IocContainer | 258 | 单例容器：构造器注入优先、字段注入兼容，管理 Bean 生命周期（@PostConstruct → Initializable.init；关闭时 Disposable.destroy / 反射 shutdown） |
-| ClassScanner | 48 | 扫描 @Component 注解的类 |
-| @Component | - | 标记为受管 Bean |
-| @Inject | - | 字段依赖注入 |
-| @InjectConstructor | - | 构造器依赖注入（带注解的构造器优先） |
-| @PostConstruct | - | 初始化回调 |
-| Initializable | - | 生命周期接口：依赖注入完成后调用 init() |
-| Disposable | - | 生命周期接口：容器关闭时调用 destroy() |
+| ClassScanner | 48 | 扫描 @Component 注解的类（`scan("com.itheima")` 整根递归，子包增减不影响 Bean 发现） |
+| @Component | 11 | 标记为受管 Bean |
+| @Inject | 11 | 字段依赖注入 |
+| @InjectConstructor | 11 | 构造器依赖注入（带注解的构造器优先） |
+| @PostConstruct | 11 | 初始化回调 |
+| Initializable | 8 | 生命周期接口：依赖注入完成后调用 init() |
+| Disposable | 8 | 生命周期接口：容器关闭时调用 destroy() |
 
 #### filter 包 — 请求过滤器
 
 | 类 | 行数 | 职责 | URL 匹配 |
 |----|------|------|----------|
-| ExceptionFilter | 55 | 全局异常处理（业务异常按 code/msg 输出，未知异常 500） | /* |
-| EncodingFilter | 21 | UTF-8 编码 | /* |
+| ExceptionFilter | 53 | 全局异常处理（业务异常按 code/msg 输出，未知异常 500） | /* |
+| EncodingFilter | 27 | UTF-8 编码 | /* |
 | LoginFilter | 41 | 解析 JWT Token，设置 userId | /* |
-| AuthFilter | 71 | 权限校验（登录 + /api/admin 管理员角色） | /* |
+| AuthFilter | 76 | 权限校验（登录 + /api/admin 管理员角色） | /* |
 
 **执行顺序**：ExceptionFilter → EncodingFilter → LoginFilter → AuthFilter（web.xml 注册）
 
@@ -133,159 +136,135 @@ com.itheima/
 - 精确：`/comment/add`、`/comment/delete`、`/content/commentEnabled`、`/user/changePassword`、`/coupon/grab`、`/coupon/my`
 - `/api/admin/*` 额外校验 `role == 1`，非管理员返回 403（每次请求查库）
 
-#### controller 包 — 控制器
-
-| 类 | URL 映射 | 行数 | 职责 |
-|----|----------|------|------|
-| BaseServlet | - | 40 | 基类，IoC 注入 + JSON 响应 |
-| BaseServletUtil | - | 38 | 静态工具，writeSuccess/writeError |
-| RequestParser | - | 69 | JSON 请求体解析 |
-| AppShutDownListener | - | 102 | 容器生命周期管理（统一关闭 IoC 容器） |
-| LoginController | /user/* | 88 | 登录、注册、修改密码 |
-| StartController | /start | 43 | 首页推荐 |
-| SearchController | /search | 127 | 搜索 |
-| FeedController | /feed | 64 | 关注动态流 |
-| ProfileController | /profile | 76 | 用户主页 |
-| UploadController | /api/upload/* | 197 | 上传视频/动态 + 作者换源 |
-| MediaAdminController | /api/admin/media/* | 71 | 媒体运维：扫描/恢复（仅管理员） |
-| AdminCommentController | /api/admin/comment/* | 46 | 评论运维：管理员删评论（仅管理员） |
-| AdminContentController | /api/admin/content/* | 46 | 内容审核：下架/恢复内容（A2，仅管理员） |
-| FollowController | /follow/* | 103 | 关注/取关 |
-| LikeController | /like/* | 127 | 点赞 |
-| CommentController | /comment/* | 98 | 评论 |
-| ContentController | /content/* | 179 | 内容管理：作者开关评论区 + 编辑标题/简介 + 删除单条媒体 + 删除整个作品 |
-| CouponController | /coupon/* | 81 | 优惠券 |
-| UploadType | - | 84 | 上传类型枚举 |
-
-#### service 包 — 业务逻辑
-
-| 类 | 行数 | 职责 | 依赖 |
-|----|------|------|------|
-| ContentCacheManager | 653 | 内容缓存管理（内存索引/评论树/实时计数/编辑同步） | ContentDao, ContentMediaDao, CommentDao, LikeCacheService, TransactionTemplate |
-| ContentService | 292 | 内容管理（查询与发布 + 评论区开关 + 编辑作品：换源/删图/改文案 + 删除作品 + 管理员下架/恢复/审核清单） | ContentDao, ContentMediaDao, CommentService, LikeService, ContentCacheManager, ContentStatusFiller, TransactionTemplate |
-| ContentStatusFiller | 105 | 内容状态填充（点赞/关注） | LikeService, FollowDao, TransactionTemplate |
-| LikeService | 315 | 点赞业务 | ContentDao, CommentDao, ContentLikeDao, CommentLikeDao, LikeCacheService, ContentCacheManager, TransactionTemplate |
-| LikeCacheService | 264 | Redis 点赞缓存 | - |
-| CommentService | 200 | 评论业务（楼中楼：发表归一化主楼 + 软删除：用户自删/管理员删） | CommentDao, ContentDao, ContentCacheManager, TransactionTemplate |
-| UserService | 242 | 用户认证 + 管理员判定 | UserDao, TransactionTemplate |
-| FollowService | 123 | 关注业务 | FollowDao, UserDao |
-| ProfileService | 97 | 用户主页 | UserDao, ContentDao, FollowDao, ContentCacheManager, LikeService, TransactionTemplate |
-| FeedService | 86 | 关注动态流 | FollowDao, ContentDao, ContentCacheManager, LikeService, TransactionTemplate |
-| FileUploadService | 103 | 文件上传/按 URL 清理旧文件 | - |
-| MediaAuditService | 263 | 媒体完整性扫描与恢复 | ContentDao, ContentMediaDao |
-| CouponService | 74 | 优惠券抢购 | CouponDao |
-
-#### dao 包 — 数据访问
-
-| 类 | 行数 | 对应表 | 职责 |
-|----|------|--------|------|
-| UserDao | 224 | users | 用户 CRUD + 角色查询 |
-| ContentDao | 312 | content | 内容 CRUD + 全文搜索 + 媒体状态更新 + 编辑作品信息 + 内容状态读取/更新 + 管理端清单（A2） |
-| CommentDao | 145 | comment | 评论 CRUD + 软删除（整楼/单条）+ 楼内回复计数 |
-| CouponDao | 114 | coupon, coupon_order | 优惠券 CRUD |
-| ContentLikeDao | 124 | content_like | 内容点赞 |
-| CommentLikeDao | 132 | comment_like | 评论点赞 |
-| ContentMediaDao | 153 | content_media | 内容媒体 + 媒体状态更新 + 换源/删除/删除后 sort 重排 |
-| FollowDao | 107 | follow | 关注关系 |
-| ResultMap | 66 | - | ResultSet → 对象映射 |
-
-> 规范：所有 DAO 方法只接收 `Connection`，不自行获取/释放连接；连接与事务统一由 Service 通过 TransactionTemplate 管理。
-
-#### model 包 — 统一数据模型（原 pojo/DTO/command 合并）
-
-> entity/ 子包
-
-| 类 | 行数 | 类型 | 用途 |
-|----|------|------|------|
-| User | 89 | 实体 | 用户实体 |
-| ContentMedia | 63 | 实体 | 内容媒体实体 |
-
-> dto/ 子包
-
-| 类 | 行数 | 用途 |
-|----|------|------|
-| LoginDTO | - | 登录请求 |
-| RegisterDTO | - | 注册请求 |
-| ChangePasswordDTO | - | 修改密码请求 |
-| CommentDTO | - | 评论请求 |
-| SearchDTO | - | 搜索请求 |
-| PageResult | - | 分页结果 |
-| GrabCouponRequest | - | 抢券请求 |
-
-> vo/ 子包
-
-| 类 | 行数 | 类型 | 用途 |
-|----|------|------|------|
-| ProfileVO | 43 | VO | 个人主页视图 |
-| ContentVO | 41 | VO | 内容列表视图（继承 ContentCacheDTO） |
-| LoginVO | 40 | VO | 登录返回（原 LogInVO） |
-| UploadResult | 31 | VO | 上传结果 |
-| ContentDetailVO | 25 | VO | 内容详情视图（继承 ContentCacheDTO） |
-| CommentVO | 21 | VO | 评论视图 |
-| AdminContentVO | 29 | VO | 管理端内容清单（A2 审核下架） |
-
-> cache/ 子包
-
-| 类 | 行数 | 类型 | 用途 |
-|----|------|------|------|
-| ContentCacheDTO | 127 | 缓存DTO | 内容缓存对象（含 commentEnabled 评论区开关） |
-| CommentCacheDTO | 92 | 缓存DTO | 评论缓存对象（楼中楼两级：主楼 + 平铺 children；含 replyToUserId/replyToUsername @ 引用） |
-
-> audit/ 子包
-
-| 类 | 行数 | 类型 | 用途 |
-|----|------|------|------|
-| MediaAuditItem | 87 | 审计 | 媒体扫描结果项（灾后新增） |
-| MediaAuditResult | 88 | 审计 | 媒体扫描汇总结果（灾后新增） |
-| RestoreResult | 49 | 审计 | 媒体恢复结果（灾后新增） |
-
-> command/ 子包
-
-| 类 | 行数 | 用途 |
-|----|------|------|
-| CommandConverter | 134 | DTO → Command 转换器 |
-| LoginCommand | 63 | 登录命令 |
-| RegisterCommand | 44 | 注册命令 |
-| ChangePasswordCommand | 44 | 修改密码命令 |
-| UploadCommand | 46 | 上传命令 |
-| CommentCommand | 50 | 评论命令 |
-| ContentType | 16 | 内容类型枚举 |
-| LoginType | 7 | 登录类型枚举 |
-
 #### exception 包 — 异常体系
 
 | 类 | 行数 | 错误码 |
 |----|------|--------|
-| BusinessException | 35 | 基类（code + message，支持 ErrorCode 构造） |
-| ErrorCode | 55 | 错误码枚举（code + 中文默认消息） |
-| AuthException | 8 | 401 |
-| ForbiddenException | 9 | 403 |
-| NotFoundException | 7 | 404 |
-| ConflictException | 7 | 409 |
-| ParamException | 7 | 400 |
-| ServerException | 5 | 500 |
-| UserNotFoundException / PasswordIncorrectException / TokenExpiredException | - | 401 |
-| AccessDeniedException | - | 403 |
-| ContentNotFoundException / CommentNotFoundException | - | 404 |
-| DuplicateLikeException / DuplicatePhoneException | - | 409 |
-| InvalidPhoneException / InvalidPasswordException | - | 400 |
-| DatabaseException / CacheException | - | 500 |
+| BusinessException | 29 | 基类（code + message，支持 ErrorCode 构造） |
+| ErrorCode | 52 | 错误码枚举（code + 中文默认消息） |
+| AuthException | 12 | 401 |
+| ForbiddenException | 13 | 403 |
+| NotFoundException | 11 | 404 |
+| ConflictException | 11 | 409 |
+| ParamException | 11 | 400 |
+| ServerException | 7 | 500 |
+| UserNotFoundException / PasswordIncorrectException / TokenExpiredException | 15 | 401 |
+| AccessDeniedException | 15 | 403 |
+| ContentNotFoundException / CommentNotFoundException | 15 | 404 |
+| DuplicateLikeException / DuplicatePhoneException | 15 | 409 |
+| InvalidPhoneException / InvalidPasswordException | 15 | 400 |
+| DatabaseException / CacheException | 15 | 500 |
 
 #### util 包 — 工具类
 
 | 类 | 行数 | 职责 |
 |----|------|------|
 | MyConnectionPool | 138 | JDBC 连接池（上限 20、获取超时 5000ms、等待归还） |
-| TransactionTemplate | 50 | 统一事务模板（取连接/提交/回滚/归还，业务异常原样重抛） |
+| TransactionTemplate | 61 | 统一事务模板（取连接/提交/回滚/归还，业务异常原样重抛） |
 | PasswordUtil | 58 | BCrypt 密码哈希 |
-| JwtUtil | 39 | JWT 生成/校验 |
-| MyRedisPool | 37 | Redis 连接池 |
-| LogUtil | 33 | 日志工具 |
-| RequestContext | 24 | 请求上下文路径（动态拼接媒体 URL） |
-| StringUtil | 27 | 字符串校验 |
+| JwtUtil | 40 | JWT 生成/校验 |
+| MyRedisPool | 38 | Redis 连接池 |
+| LogUtil | 54 | 日志工具 |
+| RequestContext | 31 | 请求上下文路径（动态拼接媒体 URL） |
+| StringUtil | 37 | 字符串校验 |
 | ResultUtil | 26 | 响应格式构建 |
-| CountRepairTool | 59 | 数据修复工具 |
+| CountRepairTool | 69 | 数据修复工具 |
 | TimeUtil | 15 | 时间工具 |
+
+#### controller 包（跨域基建，业务 Controller 已全部搬出）
+
+| 类 | 行数 | 职责 |
+|----|------|------|
+| BaseServlet | 41 | 基类，IoC 注入 + JSON 响应 |
+| BaseServletUtil | 49 | 静态工具，writeSuccess/writeError |
+| RequestParser | 69 | JSON 请求体解析 |
+| AppShutDownListener | 102 | 容器生命周期管理（@WebListener，统一关闭 IoC 容器） |
+
+#### dao 包（跨域基建，业务 DAO 已全部搬出）
+
+| 类 | 行数 | 职责 |
+|----|------|------|
+| ResultMap | 88 | ResultSet → 对象映射 |
+
+> 规范：所有 DAO 方法只接收 `Connection`，不自行获取/释放连接；连接与事务统一由 Service 通过 TransactionTemplate 管理。
+
+### 4.3 业务域包（每域 controller/service/dao/model 分层）
+
+#### user 域 — `com.itheima.user`
+
+| 层 | 类（行数） | 职责 |
+|----|------|------|
+| controller | LoginController（80，/user/*） | 登录、注册、修改密码 |
+| service | UserService（241） | 用户认证 + 管理员判定 |
+| dao | UserDao（225） | users 用户 CRUD + 角色查询 |
+| model | entity/User（89）、dto/LoginDTO（28）/RegisterDTO（41）/ChangePasswordDTO（35）、command/LoginCommand（63）/RegisterCommand（44）/ChangePasswordCommand（44）/LoginType（7）、vo/LoginVO（40） | 用户实体与请求/命令/响应对象 |
+
+#### content 域 — `com.itheima.content`（含共享缓存组件）
+
+| 层 | 类（行数） | 职责 |
+|----|------|------|
+| controller | ContentController（182，/content/*）、StartController（49，/start）、SearchController（95，/search/*）、FeedController（57，/feed）、ProfileController（70，/profile） | 内容管理 + 首页推荐 + 搜索 + 关注流 + 用户主页 |
+| service | ContentService（420）、ContentCacheManager（666）、ContentStatusFiller（106）、FeedService（87）、ProfileService（98） | 内容业务 + 缓存管理 + 状态填充 + 关注流 + 主页 |
+| dao | ContentDao（366）、ContentMediaDao（163） | content/content_media 数据访问（ContentLikeDao 按 like 域归属） |
+| model | entity/ContentMedia（63）、cache/ContentCacheDTO（136）/CommentCacheDTO（110）、vo/ContentVO（42）/ContentDetailVO（26）/CommentVO（22）/ProfileVO（43）、dto/PageResult（62）/SearchDTO（51）、command/CommandConverter（139）/ContentType（16） | 内容模型 + 共享缓存 DTO + 共享 VO/DTO/转换器 |
+
+> **共享组件归属**：ContentCacheManager / ContentStatusFiller / ContentCacheDTO / CommentCacheDTO / PageResult / CommandConverter / ContentVO / ContentDetailVO / CommentVO 归本域，其它域 controller/service 跨域 import。
+
+#### follow 域 — `com.itheima.follow`
+
+| 层 | 类（行数） | 职责 |
+|----|------|------|
+| controller | FollowController（91，/follow/*） | 关注/取关/关注列表/粉丝列表 |
+| service | FollowService（123） | 关注业务 |
+| dao | FollowDao（107） | follow 关注关系（FeedService/ProfileService/ContentStatusFiller 跨域 import） |
+| model | — | 无专属 model |
+
+#### like 域 — `com.itheima.like`
+
+| 层 | 类（行数） | 职责 |
+|----|------|------|
+| controller | LikeController（113，/like/*） | 点赞/取消点赞 |
+| service | LikeService（316）、LikeCacheService（264） | 内容/评论点赞业务 + Redis 点赞缓存 |
+| dao | ContentLikeDao（120）、CommentLikeDao（112） | content_like / comment_like 数据访问 |
+| model | — | 无专属 model |
+
+> 注：ContentService 删除作品级联清点赞时 import `like.ContentLikeDao`（反向跨域）。
+
+#### comment 域 — `com.itheima.comment`
+
+| 层 | 类（行数） | 职责 |
+|----|------|------|
+| controller | CommentController（105，/comment/*） | 评论发表/查询/删除 |
+| service | CommentService（191） | 评论业务（楼中楼：发表归一化主楼 + 软删除：用户自删/管理员删） |
+| dao | CommentDao（165） | comment 评论 CRUD + 软删除（整楼/单条）+ 楼内回复计数 |
+| model | dto/CommentDTO（44）、command/CommentCommand（50） | 评论请求/命令（CommentVO 归 content 域） |
+
+#### coupon 域 — `com.itheima.coupon`
+
+| 层 | 类（行数） | 职责 |
+|----|------|------|
+| controller | CouponController（72，/coupon/*） | 优惠券抢购/列表/我的 |
+| service | CouponService（74） | 优惠券抢购 |
+| dao | CouponDao（95） | coupon, coupon_order 优惠券 CRUD |
+| model | dto/GrabCouponRequest（8） | 抢券请求 |
+
+#### upload 域 — `com.itheima.upload`
+
+| 层 | 类（行数） | 职责 |
+|----|------|------|
+| controller | UploadController（205，/api/upload/*）、UploadType（84） | 上传视频/动态 + 作者换源；上传类型枚举 |
+| service | FileUploadService（103） | 文件上传/按 URL 清理旧文件 |
+| dao | — | 无专属 DAO |
+| model | command/UploadCommand（48）、vo/UploadResult（31） | 上传命令/结果 |
+
+#### admin 域 — `com.itheima.admin`
+
+| 层 | 类（行数） | 职责 |
+|----|------|------|
+| controller | MediaAdminController（74，/api/admin/media/*）、AdminContentController（73，/api/admin/content/*）、AdminCommentController（47，/api/admin/comment/*） | 媒体运维 + 内容审核下架 + 评论运维（仅管理员） |
+| service | MediaAuditService（263） | 媒体完整性扫描与恢复 |
+| dao | —（复用 content.ContentDao / comment.CommentDao，跨域 import） | 数据访问 |
+| model | vo/AdminContentVO（56）、audit/MediaAuditItem（87）/MediaAuditResult（88）/RestoreResult（49） | 管理端清单 VO + 媒体审计/恢复结果 |
 
 ---
 
@@ -379,9 +358,9 @@ com.itheima/
 | POST | /like/comment/add | 点赞评论 | ✓ |
 | POST | /like/comment/remove | 取消点赞 | ✓ |
 | GET | /like/content/status | 点赞状态 | ✓ |
-| GET | /like/content/count | 点赞数 | ✗ |
+| GET | /like/content/count | 点赞数 | ✓ |
 | GET | /like/comment/status | 点赞状态 | ✓ |
-| GET | /like/comment/count | 点赞数 | ✗ |
+| GET | /like/comment/count | 点赞数 | ✓ |
 | POST | /comment/add | 发表评论 | ✓ |
 | GET | /comment/show | 查看评论 | ✗ |
 | POST | /comment/delete | 删除评论（软删除，仅自己） | ✓ |
@@ -485,36 +464,64 @@ src/main/webapp/
 
 > T2 媒体隔离（2026-09-06）：18080 测试实例媒体落盘（`UPLOAD_PATH` env 注入 `media-test`）与 `/upload` 挂载（run_tests 对部署的 ROOT.war 内 context.xml 做 zip 补丁改写 base）同指 `D:\data\projects\VideoPlatform\media-test`，`AppShutDownListener` 启动强校验保持两者一致；生产 8080 实例仍用 app.properties upload.path 不受影响。旧测试媒体在 fresh-start 时整目录**移动式回收**至 `test_trash`（只移不删，用户手动清理）后重建白名单目录 media-test（白名单硬编码于 run_tests.py，防误移动）。工具链媒体根按库判定（tools/media_paths.py）：测试库 → media-test，生产 → upload.path。
 
-### 9.2 JUnit 单元测试（阶段八新增，src/test/java）
+### 9.2 JUnit 单元测试（src/test/java，与被测类同包随迁）
 
-| 文件 | 用例数 | 覆盖模块 |
+| 文件（包） | 用例数 | 覆盖模块 |
 |------|--------|----------|
-| service/UserServiceTest | 23 | 登录/注册/改密/改资料/isAdmin |
-| service/ContentServiceTest | 42 | 搜索/详情/评论查询/发布/评论区开关/编辑作品（换源/删图/改文案）/删除作品（阶段四 +4 例）/内容审核下架恢复（阶段五 +12 例） |
-| service/LikeServiceTest | 14 | 点赞/取消/缓存优先/批量查询 |
-| service/CommentServiceTest | 13 | 评论归属/楼中楼归一化/软删除（自删+管理员删）/缓存更新 |
-| service/ContentCacheManagerLifecycleTest | 7 | 初始化/缓存命中/定时器关闭/刷新失败/评论缓存删除/两级归一化 |
+| user/service/UserServiceTest | 23 | 登录/注册/改密/改资料/isAdmin |
+| content/service/ContentServiceTest | 47 | 搜索/详情/评论查询/发布/评论区开关/编辑作品（换源/删图/改文案）/删除作品/内容审核下架恢复 |
+| content/service/ContentCacheManagerLifecycleTest | 9 | 初始化/缓存命中/定时器关闭/刷新失败/评论缓存删除/两级归一化 |
+| content/service/FeedServiceTest | 8 | 关注动态流 |
+| content/service/ProfileServiceTest | 13 | 用户主页 |
+| like/service/LikeServiceTest | 14 | 点赞/取消/缓存优先/批量查询 |
+| like/service/LikeCacheServiceTest | 18 | Redis 点赞缓存联动 |
+| comment/service/CommentServiceTest | 16 | 评论归属/楼中楼归一化/软删除（自删+管理员删）/缓存更新 |
+| follow/service/FollowServiceTest | 15 | 关注/取关/列表 |
+| coupon/service/CouponServiceTest | 11 | 抢券/幂等/库存 |
+| upload/service/FileUploadServiceTest | 9 | 上传校验/清理旧文件 |
+| admin/service/MediaAuditServiceTest | 14 | 媒体扫描/恢复 |
 | util/MyConnectionPoolTest | 4 | 满池超时/归还重取/失效移除/关闭后拒绝 |
-| **合计** | **92** | - |
+| **合计** | **201** | - |
+
+> 注：`com.itheima.tools.CouponAdmin` 属 tools 测试脚本目录（非测试类，package 保留 `com.itheima.tools`，仅 import java.*，无主代码引用）；`util/MyConnectionPoolTest` 被测类未动（基建），测试文件留在 util 包不迁。
+> 用例数取自 `target/surefire-reports`（2026-09-11 实测，与 latest.json 201 例一致）。
 
 > 构建输出：沙箱内 Maven 通过 `-Dstage8.buildDir` 指向 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（pom 默认 `./target`），原因是沙箱内 javac 无法把 worktree `target/classes` 作为 classpath（报"程序包不存在"）。
 > 离线仓库：新增测试依赖（junit/mockito/bytebuddy/surefire 等）的 `_remote.repositories` 已补 `>aliyun=` 来源行（只追加不删除），默认 aliyun 镜像下可离线解析。
 
 ---
 
-## 十、代码统计
+## 十、代码统计（B 改造后：按业务域 + 基建）
 
-| 层级 | 文件数 | 代码行数 | 占比 |
+### 10.1 业务域（8 域）
+
+| 域 | 文件数 | 代码行数 | 占比 |
 |------|--------|----------|------|
-| Service | 13 | 2,236 | 34.1% |
-| Controller | 18 | 1,205 | 18.4% |
-| DAO | 10 | 1,160 | 17.7% |
-| Model | 28 | 1,147 | 17.6% |
-| Util | 11 | 370 | 5.6% |
-| IoC | 5 | 226 | 3.4% |
-| Filter | 3 | 102 | 1.6% |
-| Exception | 8 | 58 | 0.9% |
-| **合计** | **96** | **6,504** | **100%** |
+| content | 23 | 3,069 | 33.3% |
+| user | 12 | 937 | 10.2% |
+| like | 5 | 925 | 10.0% |
+| admin | 8 | 737 | 8.0% |
+| comment | 5 | 555 | 6.0% |
+| upload | 5 | 471 | 5.1% |
+| follow | 3 | 321 | 3.5% |
+| coupon | 4 | 249 | 2.7% |
+| **业务域小计** | **65** | **7,264** | **78.8%** |
+
+### 10.2 基建（不动）
+
+| 包 | 文件数 | 代码行数 | 占比 |
+|------|--------|----------|------|
+| util | 11 | 567 | 6.2% |
+| ioc | 8 | 366 | 4.0% |
+| exception | 20 | 326 | 3.5% |
+| controller（基建 4 类） | 4 | 261 | 2.8% |
+| filter | 4 | 197 | 2.1% |
+| config | 1 | 146 | 1.6% |
+| dao（基建 ResultMap） | 1 | 88 | 1.0% |
+| **基建小计** | **49** | **1,951** | **21.2%** |
+| **合计** | **114** | **9,215** | **100%** |
+
+> 行数统计 2026-09-11（B 改造后实测，与第四章包清单一致）。
 
 ---
 
@@ -542,44 +549,15 @@ src/main/webapp/
 └─────────────────────────────────────────────────────────────────┘
 ```
 
----
 
-## 十二、待删除/重构清单
-
-### 12.1 待删除
-
-> 2026-08-10 阶段一完成，本清单已清空：Test3/MenuService/ImageService/UploadServlet/CommentMediaDao/CheckUtil 与 ssm_*/util 全部删除，`mvn compile` 通过。
-
-### 12.2 待重构
-
-| 项目 | 目标 |
-|------|------|
-| ContentService | ~~拆分为 3-4 个类~~（阶段五已完成：ContentCacheManager + ContentStatusFiller，2026-08-10） |
-| DAO 层 | TransactionTemplate + DAO 只接收 Connection（v2.0 修正，废弃 BaseDao 自取连接方案） |
-| 异常处理 | 统一使用 BusinessException |
-| 运维权限 | ~~/api/admin/* 增加管理员角色~~（阶段六已完成：role 列 + AuthFilter 校验，2026-08-10） |
 
 ---
 
-## 十三、安全审计记录
-
-### 13.1 SQL 注入复查（2026-08-10，TASK-036）
-
-- 范围：UserDao / ContentDao / CommentDao / ContentMediaDao / CommentLikeDao / ContentLikeDao / FollowDao / CouponDao 全部 DAO。
-- 结论：所有 SQL 均使用 `PreparedStatement` 参数化；动态 IN 查询先拼接 `?` 占位符再 `setXxx` 绑定；LIMIT/OFFSET 参数化；未发现字符串拼接用户输入，无注入风险点。
-
-### 13.2 资源所有权校验（2026-08-10，TASK-038）
-
-- 点赞/评论/关注/优惠券/修改密码等写操作均取 `req.getAttribute("userId")`（由 LoginFilter 从 JWT subject 设置），客户端无法伪造身份。
-- 媒体运维扫描/恢复经 AuthFilter 收口为仅管理员（role==1），普通用户返回 403。
-- 内容删除功能已取消，无删除接口需要校验。
-
----
-
-## 十四、更新日志
+## 十二、更新日志
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-09-11 | 2.5 | **B-feature package 改造完成（T1~T9，8 域迁移 + 收尾）**：业务 controller/service/dao/model 全部按 8 业务域重组（user/content/follow/like/comment/coupon/upload/admin），每域保留分层子包；共享组件（ContentCacheManager/ContentStatusFiller/ContentCacheDTO/CommentCacheDTO/PageResult/CommandConverter/Content相关VO）归 content 域；基建（ioc/filter/util/exception/config + controller 的 BaseServlet/BaseServletUtil/RequestParser/AppShutDownListener + dao 的 ResultMap）保持原位不动；web.xml / @WebServlet URL / IoC 扫描（`scan("com.itheima")`）/ 前端 / pytest 一行不改；JUnit 同包随迁（201 例全绿）；主代码 96 类 → 114 类（含 annotation 子包 4 注解类，行数 6,504 → 9,215 口径含基建）；本章第四章（包结构）、第九章（JUnit 表）、第十章（代码统计）同步重写 |
 | 2026-08-29 | 2.4 | 阶段五完成（A2 内容审核下架）：content.is_deleted 语义扩展为 0正常/1作者删除/2管理员下架（复用字段，无 DDL）；新增 AdminContentController（GET /api/admin/content/list、POST /api/admin/content/hide、POST /api/admin/content/unhide，AuthFilter /api/admin/* role==1 保护）；ContentDao 新增 getContentStatus/updateContentDeletedState/findContentForAdmin；ContentService 新增 listContentForAdmin/hideContent/unhideContent（下架剔除缓存、恢复回填缓存）；前端 admin.js 新增「内容下架管理（审核）」区块；BUSINESS_FLOW 新增 3.10。测试用例待后续补充 |
 | 2026-08-28 | 2.3 | 评论楼中楼回复增强：comment 表新增 reply_to_user_id（楼中楼 @ 引用）；CommentCacheDTO/ResultMap/CommentDao/CommentService 贯通该字段（回复楼内回复时上溯挂主楼并记录被回复作者）；详情页楼内回复增加回复按钮 + 「回复 @xxx」展示；commentTest/pytest/单测同步 |
 | 2026-08-28 | 2.2 | 阶段二完成（C2 作者开关评论区）：content 表新增 comment_enabled；ContentCacheDTO/CacheManager 贯通该字段；新增 ContentController（POST /content/commentEnabled，作者所有权校验）；AuthFilter 新增精确保护；评论发表/查询按开关门禁（add 409 / show 空）；创作中心卡片开关按钮 + 详情页评论区门禁展示 |

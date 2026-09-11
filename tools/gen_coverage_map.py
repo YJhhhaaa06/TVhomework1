@@ -17,7 +17,10 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 
 ROOT = r"d:\javaproject\VideoPlatform\TVhomework1"
-CTRL_DIR = os.path.join(ROOT, "src", "main", "java", "com", "itheima", "controller")
+# B 改造后（2026-09-11）业务 controller/service 按 8 域收拢到 com.itheima.<域>/controller、<域>/service，
+# 顶层 controller/ 仅剩基建、service/ 已不存在 → 递归扫各域子包
+CTRL_GLOB = os.path.join(ROOT, "src", "main", "java", "com", "itheima", "*", "controller", "*.java")
+SERVICE_GLOB = os.path.join(ROOT, "src", "main", "java", "com", "itheima", "*", "service", "*.java")
 FILTER_FILE = os.path.join(ROOT, "src", "main", "java", "com", "itheima", "filter", "AuthFilter.java")
 TEST_DIR = os.path.join(ROOT, "src", "test", "python")
 JACOCO_XML = os.path.join(ROOT, "target", "site", "jacoco", "jacoco.xml")
@@ -29,13 +32,15 @@ STAGE8_JACOCO_XML = os.path.join(
 )
 OUT_MD = os.path.join(ROOT, ".docs", "报告", "覆盖率地图.md")
 
-SKIP_CTRL = {"BaseServlet", "BaseServletUtil", "RequestParser", "UploadType", "AppShutDownListener"}
+# 基建类与不承载业务端点的类（controller 域内排除；业务域 controller 全部计入）
+SKIP_CTRL = {"BaseServlet", "BaseServletUtil", "RequestParser", "UploadType", "AppShutDownListener",
+             "ExceptionFilter", "EncodingFilter", "LoginFilter", "AuthFilter"}
 
 
 def scan_controllers():
-    """返回 [(ctrl, verb, full_path, raw_action)]"""
+    """返回 [(ctrl, verb, full_path, raw_action)]（B 后：扫描各业务域 controller 子包）"""
     endpoints = []
-    for f in glob.glob(os.path.join(CTRL_DIR, "*.java")):
+    for f in glob.glob(CTRL_GLOB):
         ctrl = os.path.basename(f)[:-5]
         if ctrl in SKIP_CTRL:
             continue
@@ -184,7 +189,7 @@ def jacoco_classes():
 
 
 def junit_test_map():
-    """service 类名 -> 引用了它的 JUnit 测试文件名列表"""
+    """service 类名 -> 引用了它的 JUnit 测试文件名列表（B 后：service 在各域 service 子包）"""
     inv = defaultdict(list)
     for f in glob.glob(os.path.join(ROOT, "src", "test", "java", "**", "*.java"), recursive=True):
         name = os.path.basename(f)
@@ -193,7 +198,7 @@ def junit_test_map():
         text = open(f, encoding="utf-8").read()
         # 去掉注释，避免 "提到但未测" 的误匹配
         text = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
-        for svc in glob.glob(os.path.join(ROOT, "src", "main", "java", "com", "itheima", "service", "*.java")):
+        for svc in glob.glob(SERVICE_GLOB):
             sname = os.path.basename(svc)[:-5]
             if re.search(r"\b" + re.escape(sname) + r"\b", text):
                 inv[sname].append(name[:-5])
@@ -201,9 +206,9 @@ def junit_test_map():
 
 
 def controller_service_map():
-    """service 类名 -> 引用它的 controller 名列表（按 @Inject Service 字段）"""
+    """service 类名 -> 引用它的 controller 名列表（按 @Inject Service 字段；B 后扫各域 controller）"""
     inv = defaultdict(set)
-    for f in glob.glob(os.path.join(CTRL_DIR, "*.java")):
+    for f in glob.glob(CTRL_GLOB):
         ctrl = os.path.basename(f)[:-5]
         if ctrl in SKIP_CTRL:
             continue
@@ -211,6 +216,23 @@ def controller_service_map():
                               open(f, encoding="utf-8").read()):
             inv[fm.group(1)].add(ctrl)
     return inv
+
+# B 后 jacoco 类名形如 com/itheima/<域>/service/XxxService、com/itheima/<域>/controller/XxxController
+# → 按路径段判断是否业务 service/controller（基建类仍计入 JUnit 覆盖表）
+JC_SERVICE_MARK = "/service/"
+JC_CTRL_MARK = "/controller/"
+
+
+def is_biz_service_or_ctrl(cls):
+    return JC_SERVICE_MARK in cls or JC_CTRL_MARK in cls
+
+
+def jacoco_service_key(short, jcov):
+    """按短类名（如 XxxService）从 jacoco 键集中反查实际域路径键；找不到返回短路名"""
+    for k in jcov:
+        if JC_SERVICE_MARK in k and k.endswith("/" + short):
+            return k
+    return short
 
 
 def main():
@@ -312,7 +334,7 @@ def main():
     A("| 类 | LINE% |")
     A("|---|---|")
     for cls in sorted(jcov, key=lambda c: (jcov[c] is None, jcov[c] if jcov[c] is not None else 0)):
-        if cls.startswith("com/itheima/service") or cls.startswith("com/itheima/controller"):
+        if is_biz_service_or_ctrl(cls):
             short = cls.replace("com/itheima/", "")
             A(f"| {short} | {jcov[cls] if jcov[cls] is not None else '-'} |")
     A("")
@@ -328,7 +350,8 @@ def main():
         ep_str = "; ".join(sorted({f"{r['verb']} {r['path']}" for r in endpoints_of})) or "-"
         missing = "; ".join(sorted({r["path"] for r in endpoints_of if not r["covered"]})) or "-"
         tstr = ", ".join(jt_map.get(svc, [])) or "-"
-        A(f"| {svc} | {jcov.get('com/itheima/service/' + svc, '-')} | {tstr} | {ep_str} | {missing} |")
+        svc_key = jacoco_service_key(svc, jcov)
+        A(f"| {svc} | {jcov.get(svc_key, '-')} | {tstr} | {ep_str} | {missing} |")
 
     os.makedirs(os.path.dirname(OUT_MD), exist_ok=True)
     open(OUT_MD, "w", encoding="utf-8").write("\n".join(lines))
