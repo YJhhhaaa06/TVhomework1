@@ -57,7 +57,7 @@
 | T6 | 迁移 like 域（/like/\*） | like | — | 全套类落位 `com.itheima.like`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-06)` | 已完成 |
 | T7 | 迁移 content 域（/content、/start、/search、/feed、/profile + 共享缓存组件） | content | T5/T6 | 全套类落位 `com.itheima.content`，**收口全部指向旧 model/service 的引用**，测试随迁，`mvn compile` + JUnit 绿；体量过大可拆 2 commit（见详情） | `refactor(pkg-07)` | 已完成 |
 | T8 | 迁移 admin 域（/api/admin/\*） | admin | T7 | 全套类落位 `com.itheima.admin`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-08)` | 已完成 |
-| T9 | 收尾：旧引用巡检 + pytest all + 常青文档 + 覆盖率地图 | — | T1~T8 | 全仓库无 `com.itheima.(service\|dao\|controller\|model)` 旧引用残留；pytest（`all`）全绿；常青文档已同步；覆盖率地图 rerun 无回归 | `refactor(pkg-09)` | 待执行 |
+| T9 | 收尾：旧引用巡检 + pytest all + 常青文档 + 覆盖率地图 | — | T1~T8 | 全仓库无 `com.itheima.(service\|dao\|controller\|model)` 旧引用残留；pytest（`all`）全绿；常青文档已同步；覆盖率地图 rerun 无回归 | `refactor(pkg-09)` | 已完成 |
 
 > 状态取值：草稿 / 待执行 / 执行中 / 已完成 / 搁置。
 >
@@ -139,6 +139,7 @@
 * **入口线索**：全仓库巡检 + 回归验证 + 文档同步。基于 T1~T8 完成态。
 * **红线边界**：不引入任何新代码改动；只做巡检、验证与文档。**若发现必须改动缺陷才能满足验收（如旧引用残留必须补代码才能清零）→ 不得硬扛、也不得擅自开禁：先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）**；发现"要改但未排期"的内容 → **登记入 `目标与任务/UNPLANNED_ISSUES.md`（G5 超范围暂停落点）**，不在本周期硬做。
 * **强制探索步骤**：(1) `rg -l 'com\.itheima\.(service|dao|controller|model)' src/` 确认无旧引用残留；(2) 校验 web.xml、IoC 扫描、`@WebServlet` 注解原样；(3) 确认 `src/test/java` 全部测试落位与 package 声明一致、`tools/CouponAdmin` import 已同步。
+* **执行记录（2026-09-11）**：① 巡检确认 src 无旧技术包引用残留（仅剩跨域基建 `controller.BaseServ*`/`dao.ResultMap` 等合法 import），旧 service/model 目录已空，@WebServlet 14 个 URL / web.xml / IoC `scan("com.itheima")` 原样，测试全部同包随迁（`com.itheima.tools.CouponAdmin` 仅 import java.* 无需同步）；② `git diff` 核对 T1~T8 为纯搬移（业务代码仅 1 处全限定类名 FQCN 同步，行为零变化）；③ 沙箱拦截 stage8 写操作 → 用户批准后沙箱外经 `tv.py` 跑 junit（201 例全绿）+ pytest all（124 passed 全绿，exit=0）；④ **发现 stage8 构建产物残留旧包 class（service/model/controller 旧类 + 累积 jacoco.exec）污染 war/jacoco 导致 Tomcat 双 servlet 同 URL 冲突** —— 获用户批准后同步适配 `tools/gen_coverage_map.py`（CTRL_DIR 改递归扫 8 域 controller/service 子包、类名过滤与反查改新包路径），清理 stage8 残留并全量重建后 pytest 恢复 124 全绿，覆盖率地图 rerun：41 端点全 pytest 覆盖（无用例 0、守卫死规则无、公开写缺口无）、JUnit 覆盖表无旧类残留；⑤ CURRENT_ARCHITECTURE.md 升级 2.5（第四.包结构 8 域+基建、第九.JUnit 表 201 例按域、第十.代码统计按域、更新日志）；BUSINESS_FLOW.md 确认无需改动（纯搬移不改业务流）。
 * **验收**：不再有旧技术包引用；pytest（`all`）全绿（收尾阶段统一回归一次）；更新 `CURRENT_ARCHITECTURE.md`（四.包结构、十.代码统计、更新日志）+ 重建覆盖率地图确认无回归；`BUSINESS_FLOW.md` 确认无需改动（纯搬移不改业务流）。
 
 ***
