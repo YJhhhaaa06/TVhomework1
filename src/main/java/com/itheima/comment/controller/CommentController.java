@@ -1,10 +1,13 @@
-package com.itheima.controller;
+package com.itheima.comment.controller;
 
+import com.itheima.controller.BaseServlet;
+import com.itheima.controller.BaseServletUtil;
+import com.itheima.controller.RequestParser;
 import com.itheima.model.command.CommandConverter;
-import com.itheima.model.command.CommentCommand;
+import com.itheima.comment.model.command.CommentCommand;
 import com.itheima.exception.ErrorCode;
 import com.itheima.ioc.annotation.Inject;
-import com.itheima.service.CommentService;
+import com.itheima.comment.service.CommentService;
 import com.itheima.service.ContentService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
@@ -60,7 +63,7 @@ public class CommentController extends BaseServlet {
 
     protected void addComment(HttpServletRequest req, HttpServletResponse resp) throws IOException {
 
-        com.itheima.model.dto.CommentDTO dto=RequestParser.parse(req, com.itheima.model.dto.CommentDTO.class);
+        com.itheima.comment.model.dto.CommentDTO dto=RequestParser.parse(req, com.itheima.comment.model.dto.CommentDTO.class);
         Long userId = (Long) req.getAttribute("userId");
         dto.setUserId(userId);
         CommentCommand commentCommand= CommandConverter.commentToCommand(dto);

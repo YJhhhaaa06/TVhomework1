@@ -1,7 +1,8 @@
 package com.itheima.service;
 
 import com.itheima.upload.controller.UploadType;
-import com.itheima.dao.CommentDao;
+import com.itheima.comment.dao.CommentDao;
+import com.itheima.comment.service.CommentService;
 import com.itheima.dao.ContentDao;
 import com.itheima.dao.ContentLikeDao;
 import com.itheima.dao.ContentMediaDao;

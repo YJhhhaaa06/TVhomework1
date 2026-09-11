@@ -1,4 +1,4 @@
-package com.itheima.model.command;
+package com.itheima.comment.model.command;
 
 public class CommentCommand {
 

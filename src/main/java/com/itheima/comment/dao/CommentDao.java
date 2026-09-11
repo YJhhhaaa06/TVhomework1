@@ -1,5 +1,6 @@
-package com.itheima.dao;
+package com.itheima.comment.dao;
 
+import com.itheima.dao.ResultMap;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.model.cache.CommentCacheDTO;
 

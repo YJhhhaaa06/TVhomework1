@@ -2,13 +2,14 @@
 package com.itheima.model.command;
 
 import com.itheima.user.model.dto.ChangePasswordDTO;
-import com.itheima.model.dto.CommentDTO;
+import com.itheima.comment.model.dto.CommentDTO;
 import com.itheima.user.model.dto.LoginDTO;
 import com.itheima.user.model.dto.RegisterDTO;
 import com.itheima.exception.ParamException;
 import com.itheima.util.PasswordUtil;
 import com.itheima.util.StringUtil;
 import com.itheima.upload.model.command.UploadCommand;
+import com.itheima.comment.model.command.CommentCommand;
 import com.itheima.user.model.command.LoginCommand;
 import com.itheima.user.model.command.RegisterCommand;
 import com.itheima.user.model.command.ChangePasswordCommand;

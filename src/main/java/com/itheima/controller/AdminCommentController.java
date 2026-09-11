@@ -2,7 +2,7 @@ package com.itheima.controller;
 
 import com.itheima.exception.ErrorCode;
 import com.itheima.ioc.annotation.Inject;
-import com.itheima.service.CommentService;
+import com.itheima.comment.service.CommentService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServletRequest;

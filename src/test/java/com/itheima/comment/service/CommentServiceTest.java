@@ -1,6 +1,7 @@
-package com.itheima.service;
+package com.itheima.comment.service;
 
-import com.itheima.dao.CommentDao;
+import com.itheima.comment.dao.CommentDao;
+import com.itheima.service.ContentCacheManager;
 import com.itheima.dao.ContentDao;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.ForbiddenException;
@@ -8,7 +9,7 @@ import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
 import com.itheima.model.cache.CommentCacheDTO;
 import com.itheima.model.cache.ContentCacheDTO;
-import com.itheima.model.command.CommentCommand;
+import com.itheima.comment.model.command.CommentCommand;
 import com.itheima.model.vo.CommentVO;
 import com.itheima.util.TransactionTemplate;
 import org.junit.jupiter.api.BeforeEach;

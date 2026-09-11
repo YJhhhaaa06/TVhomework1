@@ -1,6 +1,6 @@
 package com.itheima.service;
 
-import com.itheima.dao.CommentDao;
+import com.itheima.comment.dao.CommentDao;
 import com.itheima.dao.ContentDao;
 import com.itheima.dao.ContentMediaDao;
 import com.itheima.exception.CacheException;

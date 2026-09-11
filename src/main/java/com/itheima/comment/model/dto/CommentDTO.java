@@ -1,4 +1,4 @@
-package com.itheima.model.dto;
+package com.itheima.comment.model.dto;
 
 public class CommentDTO {
     private long contentId;
