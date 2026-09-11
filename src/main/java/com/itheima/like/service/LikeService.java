@@ -1,9 +1,10 @@
-package com.itheima.service;
+package com.itheima.like.service;
 
 import com.itheima.comment.dao.CommentDao;
-import com.itheima.dao.CommentLikeDao;
+import com.itheima.like.dao.CommentLikeDao;
 import com.itheima.dao.ContentDao;
-import com.itheima.dao.ContentLikeDao;
+import com.itheima.like.dao.ContentLikeDao;
+import com.itheima.service.ContentCacheManager;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;

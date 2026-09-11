@@ -1,4 +1,4 @@
-package com.itheima.service;
+package com.itheima.like.service;
 
 import com.itheima.util.MyRedisPool;
 import org.junit.jupiter.api.Test;

@@ -1,4 +1,4 @@
-package com.itheima.service;
+package com.itheima.like.service;
 
 import com.itheima.ioc.annotation.Component;
 import com.itheima.util.MyRedisPool;

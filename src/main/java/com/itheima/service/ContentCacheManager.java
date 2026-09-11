@@ -2,6 +2,7 @@ package com.itheima.service;
 
 import com.itheima.config.AppConfig;
 import com.itheima.comment.dao.CommentDao;
+import com.itheima.like.service.LikeCacheService;
 import com.itheima.dao.ContentDao;
 import com.itheima.dao.ContentMediaDao;
 import com.itheima.exception.CacheException;

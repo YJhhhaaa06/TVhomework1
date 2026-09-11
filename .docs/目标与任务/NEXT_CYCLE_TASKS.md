@@ -54,7 +54,7 @@
 | T3 | 迁移 user 域（/user/\*） | user | — | 全套类落位 `com.itheima.user`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-03)` | 已完成 |
 | T4 | 迁移 comment 域（/comment/\*） | comment | — | 全套类落位 `com.itheima.comment`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-04)` | 已完成 |
 | T5 | 迁移 follow 域（/follow/\*） | follow | — | 全套类落位 `com.itheima.follow`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-05)` | 已完成 |
-| T6 | 迁移 like 域（/like/\*） | like | — | 全套类落位 `com.itheima.like`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-06)` | 待执行 |
+| T6 | 迁移 like 域（/like/\*） | like | — | 全套类落位 `com.itheima.like`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-06)` | 已完成 |
 | T7 | 迁移 content 域（/content、/start、/search、/feed、/profile + 共享缓存组件） | content | T5/T6 | 全套类落位 `com.itheima.content`，**收口全部指向旧 model/service 的引用**，测试随迁，`mvn compile` + JUnit 绿；体量过大可拆 2 commit（见详情） | `refactor(pkg-07)` | 待执行 |
 | T8 | 迁移 admin 域（/api/admin/\*） | admin | T7 | 全套类落位 `com.itheima.admin`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-08)` | 待执行 |
 | T9 | 收尾：旧引用巡检 + pytest all + 常青文档 + 覆盖率地图 | — | T1~T8 | 全仓库无 `com.itheima.(service\|dao\|controller\|model)` 旧引用残留；pytest（`all`）全绿；常青文档已同步；覆盖率地图 rerun 无回归 | `refactor(pkg-09)` | 待执行 |

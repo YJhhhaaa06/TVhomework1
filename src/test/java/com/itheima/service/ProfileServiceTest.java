@@ -2,6 +2,7 @@ package com.itheima.service;
 
 import com.itheima.dao.ContentDao;
 import com.itheima.follow.dao.FollowDao;
+import com.itheima.like.service.LikeService;
 import com.itheima.user.dao.UserDao;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
