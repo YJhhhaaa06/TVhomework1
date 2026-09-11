@@ -254,9 +254,8 @@ class LikeCacheServiceTest {
             service.deleteContentLike(5L);
             verify(jedis).del("content:like:5");
 
-            // 现状行为：deleteCommentLike 用的是 contentLikeKey（技术债，只测现状不改）
             service.deleteCommentLike(9L);
-            verify(jedis).del("content:like:9");
+            verify(jedis).del("comment:like:9");
         }
     }
 }

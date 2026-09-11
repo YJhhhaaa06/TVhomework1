@@ -257,7 +257,7 @@ public class LikeCacheService {
     }
     public void deleteCommentLike(long commentId){
         try (Jedis jedis = MyRedisPool.getJedis()) {
-            String key = contentLikeKey(commentId);
+            String key = commentLikeKey(commentId);
             jedis.del(key);
         }
     }

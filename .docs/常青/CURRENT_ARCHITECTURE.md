@@ -358,9 +358,9 @@ com.itheima/
 | POST | /like/comment/add | 点赞评论 | ✓ |
 | POST | /like/comment/remove | 取消点赞 | ✓ |
 | GET | /like/content/status | 点赞状态 | ✓ |
-| GET | /like/content/count | 点赞数 | ✗ |
+| GET | /like/content/count | 点赞数 | ✓ |
 | GET | /like/comment/status | 点赞状态 | ✓ |
-| GET | /like/comment/count | 点赞数 | ✗ |
+| GET | /like/comment/count | 点赞数 | ✓ |
 | POST | /comment/add | 发表评论 | ✓ |
 | GET | /comment/show | 查看评论 | ✗ |
 | POST | /comment/delete | 删除评论（软删除，仅自己） | ✓ |
@@ -549,41 +549,11 @@ src/main/webapp/
 └─────────────────────────────────────────────────────────────────┘
 ```
 
----
 
-## 十二、待删除/重构清单
-
-### 12.1 待删除
-
-> 2026-08-10 阶段一完成，本清单已清空：Test3/MenuService/ImageService/UploadServlet/CommentMediaDao/CheckUtil 与 ssm_*/util 全部删除，`mvn compile` 通过。
-
-### 12.2 待重构
-
-| 项目 | 目标 |
-|------|------|
-| ContentService | ~~拆分为 3-4 个类~~（阶段五已完成：ContentCacheManager + ContentStatusFiller，2026-08-10） |
-| DAO 层 | TransactionTemplate + DAO 只接收 Connection（v2.0 修正，废弃 BaseDao 自取连接方案） |
-| 异常处理 | 统一使用 BusinessException |
-| 运维权限 | ~~/api/admin/* 增加管理员角色~~（阶段六已完成：role 列 + AuthFilter 校验，2026-08-10） |
 
 ---
 
-## 十三、安全审计记录
-
-### 13.1 SQL 注入复查（2026-08-10，TASK-036）
-
-- 范围：UserDao / ContentDao / CommentDao / ContentMediaDao / CommentLikeDao / ContentLikeDao / FollowDao / CouponDao 全部 DAO。
-- 结论：所有 SQL 均使用 `PreparedStatement` 参数化；动态 IN 查询先拼接 `?` 占位符再 `setXxx` 绑定；LIMIT/OFFSET 参数化；未发现字符串拼接用户输入，无注入风险点。
-
-### 13.2 资源所有权校验（2026-08-10，TASK-038）
-
-- 点赞/评论/关注/优惠券/修改密码等写操作均取 `req.getAttribute("userId")`（由 LoginFilter 从 JWT subject 设置），客户端无法伪造身份。
-- 媒体运维扫描/恢复经 AuthFilter 收口为仅管理员（role==1），普通用户返回 403。
-- 内容删除功能已取消，无删除接口需要校验。
-
----
-
-## 十四、更新日志
+## 十二、更新日志
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|

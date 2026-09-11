@@ -22,12 +22,7 @@
 
 | 编号 | 类别 | 问题 | 位置/证据 | 来源 | 状态 |
 |----|------|------|-----------|------|------|
-| U-01 | 文档滞后 | CURRENT_ARCHITECTURE 7.4/7.5 将 `/like/content/count`、`/like/comment/count` 标为**无需登录**，与 AuthFilter `/like` 前缀**实际要求登录**不符 | [CURRENT_ARCHITECTURE.md](file:///d:/javaproject/VideoPlatform/TVhomework1/.docs/常青/CURRENT_ARCHITECTURE.md) 七.4/七.5（7.4/7.5 表） | 上周期 T2 探索记录（明确"不在本期处理"） | 待定 |
-| U-02 | 文档滞后 | BUSINESS_FLOW 2.3 步骤表"用户不存在抛 RuntimeException"表述过时，现状为 `UserNotFoundException → 401` | .docs/常青/BUSINESS_FLOW.md 二.2.3 | 上周期 T3 探索记录（纯文档滞后未改） | 待定 |
-| U-03 | 文案与实现不一致 | 密码格式：正则实测 `^[a-zA-Z0-9]{1,16}$`，与界面/文档文案"6~16 位"不符（5 位纯字母数字实际可过） | 代码 PasswordUtil + 需求文案 | 上周期 T3 探索记录 | 待定 |
-| U-04 | 代码债 | `LikeCacheService.deleteCommentLike` 用 `contentLikeKey(commentId)` 删除 `content:like:{id}` 而非 `comment:like:{id}`，疑似复制粘贴 bug（上周期只测现状未修） | LikeCacheService.java:258-263 | 上周期 T8 探索记录 | 待定 |
 | U-05 | 代码债 | `LikeService.likeContent` 缓存更新在事务外，靠定时刷新兜底（计数暂可能不准）——已结转至后续方向 C，此处留痕 | LikeService.java（缓存写入点） | 结转向 P5（需求文档二） | 已结转方向 C |
-| U-06 | 观察 | 业务异常不统一（UserService 等既有历史表述）——BUSINESS_FLOW 八.问题1 提及 | BUSINESS_FLOW.md 问题1 | 上周期 T3 红线记录（"既有技术债，本任务只测现状"） | 待定 |
 | U-07 | 观察（包架构） | content ↔ comment 包层循环依赖：content 域共享组件（ContentCacheDTO 等）被 comment 域引用，而 content 域又引用 comment 域的 CommentService。**非 IoC/Bean 环**（依赖链 ContentService→CommentService→ContentCacheManager 有向无环，容器可正常构建、测试全绿），仅包架构不纯净，Java 允许 | ContentService 注入 CommentService；CommentService 注入 ContentCacheManager | 本期（B）探索记录（2026-09-10） | 待定（消化点：后续 C 缓存改造） |
 
 > 注：U-05 与需求文档"二、结转遗留未决项 P5"重复，但按"颗粒度"归本档留痕，方向归属仍以需求文档为准（C 缓存改造时消化）。

@@ -242,11 +242,11 @@ Content-Type: application/json
 | 1 | 从 request attribute 获取 userId | 未登录返回 401 |
 | 2 | 解析 JSON 为 ChangePasswordDTO | 返回 400 参数错误 |
 | 3 | 开启事务 | - |
-| 4 | 查询用户信息 | 用户不存在返回 RuntimeException("USER_NOT_FOUND") |
-| 5 | 验证手机号匹配 | 不匹配返回 RuntimeException("PHONE_INCORRECT") |
-| 6 | 验证旧密码正确 | 不正确返回 RuntimeException("OLD_PASSWORD_ERROR") |
+| 4 | 查询用户信息 | 用户不存在抛 UserNotFoundException（401） |
+| 5 | 验证手机号匹配 | 不匹配抛 ParamException（400） |
+| 6 | 验证旧密码正确 | 不正确抛 PasswordIncorrectException（401） |
 | 7 | 新密码 BCrypt 哈希 | - |
-| 8 | 更新数据库密码 | 更新失败返回 RuntimeException("UPDATE_FAILED") |
+| 8 | 更新数据库密码 | 更新失败抛 DatabaseException（500） |
 | 9 | 提交事务 | - |
 
 #### 接口定义
@@ -1223,23 +1223,7 @@ GET /feed?page=1&pageSize=10&token=xxx
 
 ### 8.1 业务逻辑问题
 
-#### 问题1：异常类型不统一
-
-**位置**: `UserService.changePassword()`
-
-```java
-// 当前代码 - 混用 RuntimeException 和 BusinessException
-if (dbUser == null) {
-    throw new RuntimeException("USER_NOT_FOUND");  // ✗ 应该用 NotFoundException
-}
-if (!phone.equals(dbUser.getPhone())) {
-    throw new RuntimeException("PHONE_INCORRECT");  // ✗ 应该用 ParamException
-}
-```
-
-**影响**: Controller 层无法统一捕获 BusinessException
-
-**建议**: 统一使用具体业务异常类
+#### 问题1：异常类型不统一 ✅ 已解决
 
 ---
 
@@ -1344,26 +1328,7 @@ userDao.updateFollowerCount(conn, followedUserId, 1);
 
 #### 问题7：内容删除未清理关联数据
 
-> ✅ **2026-08-29 已关闭**：阶段四 A1 已实现作者删除作品（`POST /content/delete`），软删内容并级联清理评论（软删）、点赞（物理删）、媒体记录（物理删）+ 物理文件删除 + 缓存剔除（见 3.9）。
-
-**位置**: `ContentService.deleteContent()`
-
-```java
-public void deleteContent(long contentId, long userId) {
-    ContentCacheDTO dto = contentCache.get(contentId);
-    if (dto != null) {
-        removeFromIndex(contentId, dto.getType(), dto.getCategoryId());
-    }
-    evictContent(contentId);
-    synchronized (recommendList) {
-        recommendList.removeIf(cvo -> cvo.getId() == contentId);
-    }
-}
-```
-
-**风险**: 只清理了缓存，未删除数据库记录（评论、点赞等）
-
-**建议**: 应该是软删除（is_deleted = 1），或者级联删除关联数据
+> ✅ **2026-08-29 已关闭**
 
 ---
 

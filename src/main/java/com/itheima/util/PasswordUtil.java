@@ -26,7 +26,7 @@ import java.util.regex.Pattern;
 
 public class PasswordUtil {
     // 1. 抽离正则，提高复用性能
-    private static final Pattern PWD_PATTERN = Pattern.compile("^[a-zA-Z0-9]{1,16}$");
+    private static final Pattern PWD_PATTERN = Pattern.compile("^[a-zA-Z0-9]{6,16}$");
 
     // 2. 统一使用 Spring 的编码器，设为静态常量
     private static final BCryptPasswordEncoder ENCODER = new BCryptPasswordEncoder();
