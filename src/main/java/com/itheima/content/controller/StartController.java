@@ -1,9 +1,12 @@
-package com.itheima.controller;
+package com.itheima.content.controller;
 
+import com.itheima.controller.BaseServlet;
+import com.itheima.controller.BaseServletUtil;
+import com.itheima.controller.RequestParser;
 import com.itheima.ioc.annotation.Inject;
 import com.itheima.content.model.vo.ContentVO;
-import com.itheima.service.ContentCacheManager;
-import com.itheima.service.ContentStatusFiller;
+import com.itheima.content.service.ContentCacheManager;
+import com.itheima.content.service.ContentStatusFiller;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServletRequest;

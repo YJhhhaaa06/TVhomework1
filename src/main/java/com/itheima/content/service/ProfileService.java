@@ -1,11 +1,11 @@
-package com.itheima.service;
+package com.itheima.content.service;
 import com.itheima.content.model.cache.ContentCacheDTO;
 import com.itheima.user.model.entity.User;
 import com.itheima.content.model.vo.ContentVO;
 import com.itheima.content.model.vo.ProfileVO;
 
 import com.itheima.content.model.dto.PageResult;
-import com.itheima.dao.ContentDao;
+import com.itheima.content.dao.ContentDao;
 import com.itheima.follow.dao.FollowDao;
 import com.itheima.like.service.LikeService;
 import com.itheima.user.dao.UserDao;

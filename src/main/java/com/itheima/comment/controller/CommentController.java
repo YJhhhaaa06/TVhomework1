@@ -8,7 +8,7 @@ import com.itheima.comment.model.command.CommentCommand;
 import com.itheima.exception.ErrorCode;
 import com.itheima.ioc.annotation.Inject;
 import com.itheima.comment.service.CommentService;
-import com.itheima.service.ContentService;
+import com.itheima.content.service.ContentService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServletRequest;

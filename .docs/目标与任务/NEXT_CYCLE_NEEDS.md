@@ -102,7 +102,9 @@ com.itheima/
 | controller | ContentController（/content/*）、StartController（/start）、SearchController（/search）、FeedController（/feed）、ProfileController（/profile）——**读接口并入 content（用户拍板，因共享缓存组件同域、内聚高）** |
 | service | ContentService、ContentCacheManager、ContentStatusFiller、FeedService、ProfileService |
 | dao | ContentDao、ContentMediaDao、ContentLikeDao |
-| model | entity/ContentMedia；cache/ContentCacheDTO、CommentCacheDTO；vo/ContentVO、ContentDetailVO、CommentVO；dto/PageResult、SearchDTO；command/CommandConverter、ContentType |
+| model | entity/ContentMedia；cache/ContentCacheDTO、CommentCacheDTO；vo/ContentVO、ContentDetailVO、CommentVO、**ProfileVO**；dto/PageResult、SearchDTO；command/CommandConverter、ContentType |
+
+> **执行补充（2026-09-11）**：`ProfileVO`（主页响应 VO，依赖 PageResult/ContentVO、被 ProfileService/ProfileController 使用）原归属表未列举，探索发现后按内聚原则补入 content 域随迁；`ContentLikeDao` 归属以 like 域表为准（ContentService 级联清赞反向 import like）。
 
 > **共享组件归属（用户拍板）**：ContentCacheManager（7 处引用）、ContentStatusFiller、ContentCacheDTO/CommentCacheDTO、PageResult、CommandConverter、ContentVO/ContentDetailVO/CommentVO **全部归本域**，其它域 import 引用（如 follow 域 FollowDao、admin 域 AdminContentVO 在各自域，content 需要时跨域 import 即可）。
 > 取舍记录：CommandConverter 同时服务于 user/upload/comment 的请求转换，随共享组件归 content，形成 content→user/upload/comment 的单向跨域引用（由各 controller import content.CommandConverter），**可接受，Java 编译无环限制**。

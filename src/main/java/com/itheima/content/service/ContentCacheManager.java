@@ -1,10 +1,10 @@
-package com.itheima.service;
+package com.itheima.content.service;
 
 import com.itheima.config.AppConfig;
 import com.itheima.comment.dao.CommentDao;
 import com.itheima.like.service.LikeCacheService;
-import com.itheima.dao.ContentDao;
-import com.itheima.dao.ContentMediaDao;
+import com.itheima.content.dao.ContentDao;
+import com.itheima.content.dao.ContentMediaDao;
 import com.itheima.exception.CacheException;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ParamException;

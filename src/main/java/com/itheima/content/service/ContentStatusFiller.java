@@ -1,4 +1,4 @@
-package com.itheima.service;
+package com.itheima.content.service;
 
 import com.itheima.follow.dao.FollowDao;
 import com.itheima.like.service.LikeService;

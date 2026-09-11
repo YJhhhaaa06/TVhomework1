@@ -1,8 +1,8 @@
 package com.itheima.comment.service;
 
 import com.itheima.comment.dao.CommentDao;
-import com.itheima.service.ContentCacheManager;
-import com.itheima.dao.ContentDao;
+import com.itheima.content.service.ContentCacheManager;
+import com.itheima.content.dao.ContentDao;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.ForbiddenException;
 import com.itheima.exception.NotFoundException;

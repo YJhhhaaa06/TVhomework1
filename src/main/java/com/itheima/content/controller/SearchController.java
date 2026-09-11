@@ -1,12 +1,15 @@
-package com.itheima.controller;
+package com.itheima.content.controller;
 
+import com.itheima.controller.BaseServlet;
+import com.itheima.controller.BaseServletUtil;
+import com.itheima.controller.RequestParser;
 import com.itheima.content.model.dto.PageResult;
 import com.itheima.content.model.dto.SearchDTO;
 import com.itheima.exception.ErrorCode;
 import com.itheima.ioc.annotation.Inject;
 import com.itheima.content.model.vo.ContentDetailVO;
 import com.itheima.content.model.vo.ContentVO;
-import com.itheima.service.ContentService;
+import com.itheima.content.service.ContentService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServletRequest;

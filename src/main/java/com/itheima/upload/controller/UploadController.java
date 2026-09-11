@@ -10,7 +10,7 @@ import com.itheima.exception.ErrorCode;
 import com.itheima.exception.ParamException;
 import com.itheima.ioc.annotation.Inject;
 import com.itheima.upload.model.vo.UploadResult;
-import com.itheima.service.ContentService;
+import com.itheima.content.service.ContentService;
 import com.itheima.upload.service.FileUploadService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.MultipartConfig;

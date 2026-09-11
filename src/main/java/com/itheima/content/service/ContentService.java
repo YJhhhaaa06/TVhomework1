@@ -1,12 +1,12 @@
-package com.itheima.service;
+package com.itheima.content.service;
 
 import com.itheima.upload.controller.UploadType;
 import com.itheima.comment.dao.CommentDao;
 import com.itheima.comment.service.CommentService;
-import com.itheima.dao.ContentDao;
+import com.itheima.content.dao.ContentDao;
 import com.itheima.like.dao.ContentLikeDao;
 import com.itheima.like.service.LikeService;
-import com.itheima.dao.ContentMediaDao;
+import com.itheima.content.dao.ContentMediaDao;
 import com.itheima.exception.*;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;

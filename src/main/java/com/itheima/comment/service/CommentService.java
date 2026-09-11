@@ -2,8 +2,8 @@ package com.itheima.comment.service;
 
 import com.itheima.comment.model.command.CommentCommand;
 import com.itheima.comment.dao.CommentDao;
-import com.itheima.service.ContentCacheManager;
-import com.itheima.dao.ContentDao;
+import com.itheima.content.service.ContentCacheManager;
+import com.itheima.content.dao.ContentDao;
 import com.itheima.exception.*;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;

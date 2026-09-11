@@ -55,7 +55,7 @@
 | T4 | 迁移 comment 域（/comment/\*） | comment | — | 全套类落位 `com.itheima.comment`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-04)` | 已完成 |
 | T5 | 迁移 follow 域（/follow/\*） | follow | — | 全套类落位 `com.itheima.follow`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-05)` | 已完成 |
 | T6 | 迁移 like 域（/like/\*） | like | — | 全套类落位 `com.itheima.like`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-06)` | 已完成 |
-| T7 | 迁移 content 域（/content、/start、/search、/feed、/profile + 共享缓存组件） | content | T5/T6 | 全套类落位 `com.itheima.content`，**收口全部指向旧 model/service 的引用**，测试随迁，`mvn compile` + JUnit 绿；体量过大可拆 2 commit（见详情） | `refactor(pkg-07)` | 待执行 |
+| T7 | 迁移 content 域（/content、/start、/search、/feed、/profile + 共享缓存组件） | content | T5/T6 | 全套类落位 `com.itheima.content`，**收口全部指向旧 model/service 的引用**，测试随迁，`mvn compile` + JUnit 绿；体量过大可拆 2 commit（见详情） | `refactor(pkg-07)` | 已完成 |
 | T8 | 迁移 admin 域（/api/admin/\*） | admin | T7 | 全套类落位 `com.itheima.admin`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-08)` | 待执行 |
 | T9 | 收尾：旧引用巡检 + pytest all + 常青文档 + 覆盖率地图 | — | T1~T8 | 全仓库无 `com.itheima.(service\|dao\|controller\|model)` 旧引用残留；pytest（`all`）全绿；常青文档已同步；覆盖率地图 rerun 无回归 | `refactor(pkg-09)` | 待执行 |
 
@@ -123,6 +123,7 @@
 
 * **入口线索**：[ContentController.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/controller/ContentController.java)（/content/\*）、StartController（/start）、SearchController（/search）、FeedController（/feed）、ProfileController（/profile）；ContentService、ContentCacheManager、ContentStatusFiller、FeedService、ProfileService；ContentDao、ContentMediaDao、ContentLikeDao；entity/ContentMedia、cache/ContentCacheDTO、CommentCacheDTO、vo/ContentVO、ContentDetailVO、CommentVO、dto/PageResult、SearchDTO、command/CommandConverter、ContentType → 目标 `com.itheima.content`。
 * **红线边界**：不改内容/搜索/feed/主页逻辑与 URL；本域**收口所有指向旧 `com.itheima.model.*`（归属本域的类）与旧 service 路径的引用**——搬移 ContentCacheDTO/CommentCacheDTO/PageResult/CommandConverter 等共享类时，全部引用方（含已搬走的 user/comment/like/upload/admin 域）import 一并改为 `com.itheima.content.*`；ContentServiceTest/CommentService 相关测试与 ContentCacheManagerLifecycleTest/FeedServiceTest/ProfileServiceTest 同包随迁。**若发现不动上述红线项就会阻碍迁移（如不改内容逻辑无法让编译/测试通过）→ 不得硬扛、也不得擅自开禁：先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
+* **执行记录（2026-09-11）**：按 T7 允许的 G1 例外拆 **2 个 commit（用户批准）**：`refactor(pkg-07a)` 模型与共享组件收口（11 model 类 + 全仓库旧 model import 改向）、`refactor(pkg-07b)` 结构搬移（5 controller + 5 service + 2 dao + 4 测试 + 外部 service/dao import 收口）；两个 commit 各自 `mvn clean test` 全绿。ContentLikeDao 按 like 域归属（T6 已搬）**未随本域再搬**；ProfileVO 探索发现归 content（已同步回写需求文档 §4.2）。
 * **强制探索步骤**：(1) 用 `rg 'com\.itheima\.model\.(cache|vo|dto|command|entity)'` 全量列出待收口引用；(2) 逐类核对"归属 content"的模型类（需求文档 §4.2 归属表）与"归属其它域"的（如 LoginVO→user、GrabCouponRequest→coupon）无错放；(3) 若单任务体量过大（预计改动文件最多）→ **停决策点，向用户申请拆 2 个 commit**（如 a. 模型与共享组件收口 b. controller/service/dao 搬移），获准后在详情标注（G1 例外）。
 * **验收**：content 域全部类落位；全仓库 `com.itheima.model.*` 中归属本域的引用清零、归属其它域的未错搬；`mvn compile` 通过与 JUnit 绿。
 

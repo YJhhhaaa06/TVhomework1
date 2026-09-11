@@ -1,8 +1,8 @@
 package com.itheima.service;
 
 import com.itheima.config.AppConfig;
-import com.itheima.dao.ContentDao;
-import com.itheima.dao.ContentMediaDao;
+import com.itheima.content.dao.ContentDao;
+import com.itheima.content.dao.ContentMediaDao;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ParamException;
 import com.itheima.exception.ServerException;
