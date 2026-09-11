@@ -1,9 +1,9 @@
 # 下一周期任务清单
 
 > 关联文档：目标与任务/NEXT_CYCLE_NEEDS.md（决策唯一源；此文件为执行细节）
-> 状态：**任务拆分已定稿** —— 本周期仅做 B（feature package），拆 9 任务（8 域迁移 + 1 收尾，默认期望 9 commit）；每任务四要素详情已填写，执行前仍可微调（G5）。
+> 状态：**任务拆分骨架（草稿）** —— 本周期做 C（缓存改造），一版拆 6 任务（T1 基建 + T2~T5 四域重制 + T6 收尾，默认期望 6 commit）；四要素详情**待细化**（执行方案后续逐任务填写，执行前仍可微调 G5）。
 > 工作流：每个任务开独立窗口执行；"任务清单 + 需求与痛点"为窗口间唯一交接载体。
-> 来源：260910-test-gap-fill 周期（A 方向 T1~T8 全部完成）归档后的新一轮规划，见 archive/目标与任务/260910-test-gap-fill/（勿读）。B/C/D 顺序已定：B 先于 C/D（缓存拆类避免二次搬家），本周期仅做 B。
+> 来源：260912-package-refactor 周期（B 方向 T1~T9 全部完成）归档后的新一轮规划。本周期=NEEDS 中 C 方向缓存改造，决策见 NEXT_CYCLE_NEEDS.md（4.1~4.12 已拍板，O-5~O-9 二期）。
 
 ***
 
@@ -11,28 +11,28 @@
 
 | 编号  | 约定                   | 内容                                                                                                                                                                                                                                                                                 |
 | --- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| G1  | 一任务一窗口一 commit（默认期望） | 每个任务开独立窗口，默认期望 1 个 commit；因任务内部依赖需拆多 commit 或小任务合并时，在该任务详情标注；commit message 强制带任务编号                                                                                                                                                                                |
-| G2  | 开窗协议（输入）             | 新窗口顺序读取：① .docs/INDEX.md → ② 需求与痛点.md 相关章节（决策节必读，含结转 C-1\~C-4）→ ③ 任务清单.md 当前任务 → ④ 常青文档（涉及架构/业务时）→ ⑤ 上一个任务 commit                                                                                                                              |
-| G3  | 收窗协议（输出）             | ① **跑测试与反馈**：本周期为纯机械搬移，以 `mvn compile` + JUnit 为每任务验收（测试执行与回传依实际窗口环境安排，不指定角色）；pytest（`all`）只在收尾任务统一跑一次。② 勾选任务清单状态 → ③ 涉及架构/业务改动时同步常青文档 → ④ 提交 |
+| G1  | 一任务一窗口一 commit（默认期望） | 每个任务开独立窗口，默认期望 1 个 commit；因任务内部依赖需拆多 commit 或小任务合并时，在该任务详情标注；commit message 强制带任务编号（本周期 `refactor(cache-0N)`）                                                                                                                                                                                |
+| G2  | 开窗协议（输入）             | 新窗口顺序读取：① .docs/INDEX.md → ② NEXT_CYCLE_NEEDS.md（决策节必读，含 4.1~4.12、H1~H11、O-5~O-9）→ ③ 本任务清单当前任务 → ④ 常青文档（CURRENT_ARCHITECTURE.md 六.Redis 设计 / BUSINESS_FLOW.md 3.1 缓存机制等）→ ⑤ 上一个任务 commit                                                                                                                              |
+| G3  | 收窗协议（输出）             | ① **跑测试与反馈**：本周期为缓存层重制（对外行为零变化、内部实现全改），以 `mvn compile` + JUnit 为每任务验收，**相关端点 pytest 回归**（测试执行与回传依实际窗口环境安排，不指定角色）；`pytest all` 全量在收尾任务统一跑一次。② 勾选任务清单状态 → ③ 涉及架构/业务改动时同步常青文档 → ④ 提交 |
 | G4  | commit 语义闭环          | 代码改动 + 其对应常青文档更新 + 任务清单勾选进同一 commit；message 强制带任务编号                                                                                                                                                                                                                                 |
 | G5  | 超范围暂停规则              | 执行中发现需求歧义、或任务实际远超预期 → 停在第一个决策点，回写任务清单（拆/改），不得硬扛、不得擅自扩大范围                                                                                                                                                                                                           |
 | G6  | 评审与返工                | 评审以"任务验收标准 + 测试结果"为准；返工记录在任务清单；连续返工 ≥2 次 → 返回周期设计重新评估                                                                                                                                                                                             |
-| G7  | 决策唯一源                | 需求与痛点.md 决策节为唯一决策源；窗口内发现新决策 → 回写该节并标记"已定/待定"，不许自行拍板                                                                                                                                                                                            |
+| G7  | 决策唯一源                | NEXT_CYCLE_NEEDS.md 决策节为唯一决策源；窗口内发现新决策 → 回写该节并标记"已定/待定"，不许自行拍板                                                                                                                                                                                            |
 | G8  | 分支与合并                | **开分支 / 合并回 integration / 合入 master 均由用户手动执行**；任务窗口只负责本任务的代码、测试与 commit（G1），不自行创建/切换分支、不合并 |
-| G9  | DDL 备份               | 任何任务出现表结构改动，执行前必须先备份库结构与建表语句到 .docs/DBbackups/（本周期纯搬移，预计无 DDL；若有例外先申请）                                                                                                                                                          |
+| G9  | DDL 备份               | 任何任务出现表结构改动，执行前必须先备份库结构与建表语句到 .docs/DBbackups/（本周期为缓存层重制，预计无 DDL；若有例外先申请）                                                                                                                                                          |
 | G10 | 脚本规范                 | 临时一次性脚本放 temp_script/，长期复用/自动化脚本放 tools/                                                                                                                                                                                                                                          |
 
-> 本周期为**纯代码搬移、行为零变化**（用户拍板），周期约定在既往周期基础上延续，删去了原 G3 中"指定某外部角色执行测试"的表述（该角色本周期不参与）。
+> 本周期为**缓存层重制、对外行为零变化**（用户拍板），周期约定在既往周期基础上延续；G3 相比 B 周期补充"相关端点 pytest 回归"（重制风险高于纯搬移）。
 
 ***
 
 ## 二、任务模板（每任务必含四要素）
 
-> 背景：任务详情采用"入口线索 + 红线边界 + 强制探索 + 验收"四要素结构（沿用上周期）；执行 Agent 允许动态调整，但**调整前先回写任务清单/需求文档（G5/G7），再动手**。
+> 背景：任务详情采用"入口线索 + 红线边界 + 强制探索 + 验收"四要素结构（沿用既往周期）；执行 Agent 允许动态调整，但**调整前先回写任务清单/需求文档（G5/G7），再动手**。
 >
 > **红线措辞约定（延续 2026-09-06 用户修订）**：红线不做"一刀切禁止"。若执行中**发现不改本来要守的"红线"就会阻碍后续工作**，不允许硬扛、也不允许擅自开禁——**必须先向用户申请并说明理由，获得批准后才能动手**；未获批准则维持红线。
 >
-> **编号引用约定（延续 2026-09-06）**：禁裸编号引用已归档周期元素（旧 T1-T8/N1-N6 等）；裸编号仅指本文档内部定义的元素（本表 T1-T9 与需求文档的 A~D/C-1~C-4/P5/P6/B/C/D）。执行中发现引用歧义 → 回写清单用文字澄清，不得自行猜义。
+> **编号引用约定（延续 2026-09-06）**：禁裸编号引用已归档周期元素（旧 T1-T9 等）；裸编号仅指本文档内部定义的元素（本表 T1-T6 与 NEEDS 的 H1~H11 / O-5~O-9 / 4.1~4.12）。执行中发现引用歧义 → 回写清单用文字澄清，不得自行猜义。
 
 ```markdown
 ### T1-N 任务标题
@@ -45,102 +45,76 @@
 
 ***
 
-## 三、任务总览（B=feature package，8 域迁移 + 1 收尾 = 9 commit）
+## 三、任务总览（C=缓存改造一版，T1 基建 + T2~T5 四域重制 + T6 收尾 = 6 commit）
 
-| 编号 | 标题 | 对应域 | 依赖 | 验收关键（动态） | 期望 commit 主题 | 状态 |
+| 编号 | 标题 | 对应域/模块 | 依赖 | 验收关键（动态） | 期望 commit 主题 | 状态 |
 | -- | -- | -- | -- | -- | -- | --- |
-| T1 | 迁移 coupon 域（/coupon/\*） | coupon | — | 全套类落位 `com.itheima.coupon`，旧包无残留，`mvn compile` + JUnit 绿 | `refactor(pkg-01)` | 已完成 |
-| T2 | 迁移 upload 域（/api/upload/\*） | upload | — | 全套类落位 `com.itheima.upload`，`mvn compile` + JUnit 绿 | `refactor(pkg-02)` | 已完成 |
-| T3 | 迁移 user 域（/user/\*） | user | — | 全套类落位 `com.itheima.user`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-03)` | 已完成 |
-| T4 | 迁移 comment 域（/comment/\*） | comment | — | 全套类落位 `com.itheima.comment`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-04)` | 已完成 |
-| T5 | 迁移 follow 域（/follow/\*） | follow | — | 全套类落位 `com.itheima.follow`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-05)` | 已完成 |
-| T6 | 迁移 like 域（/like/\*） | like | — | 全套类落位 `com.itheima.like`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-06)` | 已完成 |
-| T7 | 迁移 content 域（/content、/start、/search、/feed、/profile + 共享缓存组件） | content | T5/T6 | 全套类落位 `com.itheima.content`，**收口全部指向旧 model/service 的引用**，测试随迁，`mvn compile` + JUnit 绿；体量过大可拆 2 commit（见详情） | `refactor(pkg-07)` | 已完成 |
-| T8 | 迁移 admin 域（/api/admin/\*） | admin | T7 | 全套类落位 `com.itheima.admin`，测试随迁，`mvn compile` + JUnit 绿 | `refactor(pkg-08)` | 已完成 |
-| T9 | 收尾：旧引用巡检 + pytest all + 常青文档 + 覆盖率地图 | — | T1~T8 | 全仓库无 `com.itheima.(service\|dao\|controller\|model)` 旧引用残留；pytest（`all`）全绿；常青文档已同步；覆盖率地图 rerun 无回归 | `refactor(pkg-09)` | 已完成 |
+| T1 | 缓存基建骨架：`com.itheima.cache` 基建包（统一 Redis 访问 + 序列化 + key 规范 + 单飞组件 + 三态/空标记/写失败 DEL 封装） | content/基建（新包） | — | 基建类落位 `com.itheima.cache`，`mvn compile` + 新增组件单测绿；业务读路径尚未切换（只增不改） | `refactor(cache-01)` | 待执行 |
+| T2 | 内容缓存重制：ContentCacheManager 内容部分拆分为内容缓存类，三态 Cache-Aside + 空标记 + 写失败 DEL | content | T1 | 内容读路径（Start/Search/Detail/Feed/Profile）全部走新缓存；H2 相关 TTL 策略按 4.12 一版（固定 TTL+简单抖动）；`mvn compile` + JUnit + 相关 pytest 绿 | `refactor(cache-02)` | 待执行 |
+| T3 | 评论缓存重制：评论树独立 TTL + 空标记 + 业务显式失效（内容删除级联删评论 key） | content/comment | T1/T2 | 评论读/写路径走新缓存；评论 miss ≠ 没有评论（三态）；`mvn compile` + JUnit + 相关 pytest 绿 | `refactor(cache-03)` | 待执行 |
+| T4 | 点赞缓存重制：LikeCacheService 重写为计数/成员分离 + 单飞 + 写失败 DEL | like | T1 | 点赞读/写路径走新缓存；清除 `__placeholder__` 占位符（H11）；`mvn compile` + JUnit + 相关 pytest 绿 | `refactor(cache-04)` | 待执行 |
+| T5 | 关注关系入缓存：user:following / user:follower 双 Set + MULTI 双写 + 失败双 DEL | follow | T1 | 关注读（isFollowing/列表）与写（关注/取关）路径走新缓存；`mvn compile` + JUnit + 相关 pytest 绿 | `refactor(cache-05)` | 待执行 |
+| T6 | 收尾：旧缓存代码残留清理 + pytest all 全量回归 + 常青文档同步 + 覆盖率地图 | — | T1~T5 | 无旧缓存实现残留（ContentCacheManager/LikeCacheService 旧实现移除）；`pytest all` 全绿；CURRENT_ARCHITECTURE.md（六.Redis 设计）/ BUSINESS_FLOW.md（3.1 缓存机制）同步；覆盖率地图 rerun 无回归 | `refactor(cache-06)` | 待执行 |
 
 > 状态取值：草稿 / 待执行 / 执行中 / 已完成 / 搁置。
 >
-> **迁移顺序理由（依赖方向）**：coupon/upload 自包含零反向依赖，先动最安全；comment 的 CommentCacheDTO 依赖仍指向旧 model 路径（content 未搬前有效）；follow/like 的 DAO 被 content 域服务依赖 → 先于 content；content 最大且承载读接口与共享组件、并收口所有旧 `com.itheima.model.*` 归属它的类 → 倒数第二；admin 依赖 content/comment 的 DAO → 最后。inter（content）为最大单域，允许拆 2 个 commit（G1 例外，须在详情标注）。
+> **重制顺序理由（依赖方向）**：T1 基建先行（统一 Redis 访问/序列化/单飞/三态/降级是全部重制的地基，纯新增零业务改动最安全）；T2 内容 → T3 评论 → T4 点赞 → T5 关注按"读路径切换"递进（评论树构建原在 ContentCacheManager，随 T3 迁出；点赞/关注相互独立可并行窗口）；T6 收尾清残留 + 全量回归。
 >
-> **C/D 已延期**：本周期仅做 B（2026-09-10 用户评审决定）；C 缓存改造 / D feed 流为后续周期方向，本清单暂不拆任务。
+> **二期已延期**：O-5~O-9（初始化选择性加载 / 定时刷新去留 / 搜索入缓存 / TTL 滑动续期 / 关注粉丝计数）均为二期迭代，本清单不拆任务。
 
 ***
 
 ## 四、任务详情
 
-> **共通注（所有迁移任务通用）**：
-> - 每个搬移类：改 `package` 声明 + 同步更新**所有引用该类的文件**（主代码 + `src/test/java` + `tools/`）的 import；
-> - **不改**类名、`@WebServlet` URL、方法签名与行为、任何业务逻辑；基建包（ioc/filter/util/exception/config）零改动；
-> - `src/main/webapp/WEB-INF/web.xml` 零改动（只注册 filter，无 Servlet 类名引用）；
-> - JUnit 与被测类**同包跟随**：对应 `src/test/java/com/itheima/service/XxxTest.java` 同步迁移 package 声明；
-> - 不共用代码 → 直接改文件，不做新增 shim/兼容类；
-> - 完成标识 = 该域类全部落位新包 + 旧包不留该域类 + `mvn compile` 通过。
+> **共通注（所有重制任务通用）**：
+> - 遵循 NEEDS 4.1~4.13：统一 Redis；三态 Cache-Aside（miss/hit-empty/hit-data）；空标记独立 key + 短 TTL；**写失败=失效（DEL）+ 读自愈**；统一单飞组件（ConcurrentHashMap+FutureTask，失败必须 remove）；**基建归属 4.13**——技术无关组件（统一 Redis 访问/序列化/key 规范/单飞/三态/空标记/写失败 DEL 封装）新建于 `com.itheima.cache` 基建包，业务缓存类放各自业务域（内容/评论→content、点赞→like、关注→follow）；
+> - **不引入 MQ**；Redis 写失败不阻塞主流程（4.2/4.7）；
+> - key 命名遵循统一规范（`content:{id}`、`content:comments:{id}`、`empty:...`、`user:following:{id}`、`content:likeCount:{id}` 等，T1 在 `com.itheima.cache` 定稿）；
+> - 序列化统一（JSON 字符串存 value，T1 定稿）；
+> - 单飞只对单实例有效（当前单 Tomcat 够用，不过度设计，4.9）；
+> - **本清单四要素为骨架，执行方案由执行 Agent 探索细化**（G5 允许回写）。
 
-### T1 迁移 coupon 域（方向 B）
+### T1 缓存基建骨架（方向 C）
 
-* **入口线索**：[CouponController.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/controller/CouponController.java)（/coupon/\*）、[CouponService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/service/CouponService.java)、[CouponDao.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/dao/CouponDao.java)、[GrabCouponRequest.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/model/dto/GrabCouponRequest.java) → 目标 `com.itheima.coupon`（controller/service/dao/model/dto）。
-* **红线边界**：不改抢券/列表业务逻辑与 URL；不引入对基建包的反向依赖；CouponServiceTest 同包随迁。**若发现不动上述红线项就会阻碍迁移（如不动业务逻辑无法让编译/测试通过）→ 不得硬扛、也不得擅自开禁：先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
-* **强制探索步骤**：(1) `rg 'CouponController|CouponService|CouponDao|GrabCouponRequest' src/` 全量找出引用方；(2) 确认 test/CouponServiceTest 与 tools/CouponAdmin 的 import 同步；(3) 若无其它域引用（本域自包含）→ 直接搬。
-* **验收**：4 类全部落位 `com.itheima.coupon`；旧包无残留；全仓库 import 指向新包；`mvn compile` 通过与 JUnit 绿。
+* **入口线索**：新建 `com.itheima.cache` 基建包（4.13 已拍板，不再"执行时定"）：① 统一 Redis 访问封装（基于 [MyRedisPool.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/util/MyRedisPool.java)）；② JSON 序列化工具；③ 统一 key 命名/生成规范；④ 单飞组件（4.9 ConcurrentHashMap+FutureTask，失败 remove）；⑤ 三态读取 + 空标记写入封装（4.3/4.4，空标记独立 key + 短 TTL）；⑥ 写失败=DEL 降级封装（4.2）。
+* **红线边界**：不改任何业务读路径（本任务**只增不改**）；不改 MyRedisPool 现有对外方法签名（他处仍在用）；不引入 Spring/MyBatis。**若发现不动红线就阻碍基建（如需要改 MyRedisPool 才能封装）→ 先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
+* **强制探索步骤**：(1) 读 [ContentCacheManager.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ContentCacheManager.java) 与 [LikeCacheService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/like/service/LikeCacheService.java) 摸清现有 Redis/序列化用法；(2) 确认 MyRedisPool 线程安全用法（getJedis try-with-resources）；(3) 若 key/TTL 规范需新增决策 → 回写 NEEDS 再动手。
+* **验收**：基建类全部落位；`mvn compile` 通过；新增基建组件有 JUnit 单测覆盖（单飞成功/失败 remove、三态读、空标记 TTL、DEL 降级）；现有测试全绿（本任务无业务切换）。
 
-### T2 迁移 upload 域（方向 B）
+### T2 内容缓存重制（方向 C）
 
-* **入口线索**：[UploadController.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/controller/UploadController.java)（/api/upload/\*）、[UploadType.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/controller/UploadType.java)、[FileUploadService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/service/FileUploadService.java)、[UploadCommand.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/model/command/UploadCommand.java)、[UploadResult.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/model/vo/UploadResult.java) → 目标 `com.itheima.upload`。
-* **红线边界**：不改上传校验/落盘/换源逻辑与 URL；ContentService import UploadCommand 需同步改（content 域未搬前 import 指向新 upload 包即可）；FileUploadServiceTest 同包随迁。**若发现不动上述红线项就会阻碍迁移（如不动上传逻辑无法让编译/测试通过）→ 不得硬扛、也不得擅自开禁：先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
-* **强制探索步骤**：(1) `rg 'UploadController|UploadType|FileUploadService|UploadCommand|UploadResult' src/` 列出引用方（重点 ContentService）；(2) 确认 test/FileUploadServiceTest 随迁；(3) 确认无隐藏硬编码类路径字符串（`Class.forName` 等）。
-* **验收**：5 类落位 `com.itheima.upload`；ContentService 等跨域 import 同步；`mvn compile` 通过与 JUnit 绿。
+* **入口线索**：[ContentCacheManager.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ContentCacheManager.java)（666 行 god class，本任务拆出**内容缓存**职责：contentCache/contentTimestamps/类型分区索引/recommendList → 迁入新内容缓存类，用 T1 基建实现三态 + 空标记 + 写失败 DEL）；切换内容读路径：[StartController.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/controller/StartController.java)、[ContentService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ContentService.java)（search/getContentDetailVO）、[FeedService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/FeedService.java)、[ProfileService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ProfileService.java)。
+* **红线边界**：不改内容业务逻辑与 `@WebServlet` URL；评论缓存（commentCache/评论树）本任务**不动**（T3 处理）；不定时刷新（O-6 二期）；不引入滑动续期（O-8 二期，一版固定 TTL+简单抖动）。**若发现不动上述红线就阻碍重制 → 先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
+* **强制探索步骤**：(1) `rg 'getContentFromCache|backfillContent|evictContent|getRecommendByFilter|updateCacheAfterAdd|refreshContent|removeContent' src/` 全量列出调用方；(2) 确认定时刷新 `startScheduler` 的去留对一版的影响（先保留 or 先停，执行时评估，倾向保留至 T6 决定）；(3) 若 T2 范围需碰评论 → 停决策点回写。
+* **验收**：内容读路径全部走新缓存实现；旧 ContentCacheManager 中内容相关方法调用清零（评论部分残留可暂留）；`mvn compile` + JUnit 全绿 + 内容相关 pytest（/start /search /content/detail /feed /profile）回归通过。
 
-### T3 迁移 user 域（方向 B）
+### T3 评论缓存重制（方向 C）
 
-* **入口线索**：[LoginController.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/controller/LoginController.java)（/user/\*）、[UserService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/service/UserService.java)、[UserDao.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/dao/UserDao.java)、model/entity/User、model/dto/LoginDTO、RegisterDTO、ChangePasswordDTO、model/command/LoginCommand、RegisterCommand、ChangePasswordCommand、LoginType、model/vo/LoginVO → 目标 `com.itheima.user`。
-* **红线边界**：不改认证/改密逻辑与 URL；**User 实体被多模块 import（FollowDao/ProfileService 等）→ 全量同步**；UserServiceTest 同包随迁；UserService 的 `import com.itheima.util.*;` 通配 import 不动（util 基建未动）。**若发现不动上述红线项就会阻碍迁移（如不动认证流程无法让编译/测试通过）→ 不得硬扛、也不得擅自开禁：先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
-* **强制探索步骤**：(1) `rg 'com\.itheima\.model\.entity\.User|LoginController|UserService|UserDao|LoginDTO|LoginVO|LoginCommand|LoginType' src/` 列出全部引用方（预计 userId 上下文贯穿多域）；(2) 确认 tools/CouponAdmin 若引用 User 则同步。
-* **验收**：9 类落位 `com.itheima.user`；全仓库 import 同步；`mvn compile` 通过与 JUnit 绿。
+* **入口线索**：将 [ContentCacheManager.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ContentCacheManager.java) 评论部分（commentCache/评论树构建/collectCommentIds/addCommentToCache/removeCommentFromCache/updateCommentLikeCount 等）迁入评论缓存类；用 T1 基建实现**独立 TTL + 空标记 + 业务显式失效**（4.5：内容删除级联删评论 key）；切换评论读/写路径：[CommentService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/comment/service/CommentService.java)（addComment/删除）、[ContentService.getCommentsForContent](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ContentService.java#L111-L130)。
+* **红线边界**：不改评论业务逻辑（楼中楼归一化/软删规则/开关门禁）；评论 miss 语义按三态实现（hit-empty 返回空，miss 查 DB 回填，**不得把 miss 当"没有评论"**）；不碰点赞缓存（T4）。**若发现不动上述红线就阻碍重制 → 先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
+* **强制探索步骤**：(1) `rg 'getCommentTree|addCommentToCache|removeCommentFromCache|updateCommentLikeCount|loadCommentTree|buildCommentTree' src/` 列出全部调用方；(2) 确认"读评论前先验证 content 存在"的落点（4.5）；(3) 确认删除内容时评论 key 级联失效的调用点（ContentService.deleteContent / removeContent）。
+* **验收**：评论读/写路径走新缓存；三态正确（无评论=hit-empty 空标记，有评论=hit-data，未加载=miss 回填）；删除内容级联失效验证；`mvn compile` + JUnit 全绿 + 评论相关 pytest（/comment/show /content/detail 评论区）回归通过。
 
-### T4 迁移 comment 域（方向 B）
+### T4 点赞缓存重制（方向 C）
 
-* **入口线索**：[CommentController.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/controller/CommentController.java)（/comment/\*）、[CommentService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/service/CommentService.java)、[CommentDao.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/dao/CommentDao.java)、model/dto/CommentDTO、model/command/CommentCommand → 目标 `com.itheima.comment`。
-* **红线边界**：不改楼中楼/软删逻辑与 URL；CommentService 依赖 content 的 CommentCacheDTO/ContentCacheDTO → **content 域未搬，暂走旧 `com.itheima.model.cache` 路径，T7 再收口**；CommentVO 归 content 域（共享组件）→ 不随本域搬；CommentServiceTest 同包随迁。**若发现不动上述红线项就会阻碍迁移（如不改评论逻辑无法让编译/测试通过）→ 不得硬扛、也不得擅自开禁：先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
-* **强制探索步骤**：(1) `rg 'CommentController|CommentService|CommentDao|CommentDTO|CommentCommand' src/` 列出引用方（ContentService/AdminCommentController 等）；(2) 确认 CommentVO 保持不动只会影响 import 方向，无遗漏。
-* **验收**：5 类落位 `com.itheima.comment`；跨域 import 同步；`mvn compile` 通过与 JUnit 绿。
+* **入口线索**：重写 [LikeCacheService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/like/service/LikeCacheService.java) 为**计数/成员分离**（4.6：`content:likeCount:{id}` int 高频读 + `content:likeSet:{id}` set 低频成员查询）+ 单飞（4.9）+ 写失败 DEL（4.2）；**清除 `__placeholder__` hack（H11）**；切换读写路径：[LikeService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/like/service/LikeService.java)、[ContentStatusFiller.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ContentStatusFiller.java)（批量 isLiked）、ContentCacheManager.updateContentLikeCount（若 T2 已迁，改指向新点赞缓存）。
+* **红线边界**：不改点赞/取消/重复校验业务逻辑；Redis 写失败不得让点赞接口 500（4.2，H5 修复）；不改评论点赞的计数归属（评论点赞计数与内容计数分开）。**若发现不动上述红线就阻碍重制 → 先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
+* **强制探索步骤**：(1) `rg 'LikeCacheService|likeContent|isContentLiked|getContentLikeCount|batchIsContentLiked|syncContentLikers|updateContentLikeCount' src/` 列出全部调用方；(2) 确认点赞数在 ContentCacheDTO/ContentVO 中的读取点（缓存里存的是计数还是集合）；(3) 确认 deleteContentLike 的级联删除调用点（内容删除时清点赞 key）。
+* **验收**：点赞读/写路径走新缓存（计数/成员分离）；`__placeholder__` 清除且无残留；Redis 挂时点赞接口不 500（降级验证）；`mvn compile` + JUnit 全绿 + 点赞相关 pytest（/like/* 内容/评论点赞、内容详情 isLiked）回归通过。
 
-### T5 迁移 follow 域（方向 B）
+### T5 关注关系入缓存（方向 C）
 
-* **入口线索**：[FollowController.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/controller/FollowController.java)（/follow/\*）、[FollowService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/service/FollowService.java)、[FollowDao.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/dao/FollowDao.java)、model/entity/User（关注列表条目含用户名）→ 目标 `com.itheima.follow`。
-* **红线边界**：不改关注/取关/列表逻辑与 URL；FollowServiceTest 同包随迁；FeedService/ProfileService/ContentStatusFiller 依赖 FollowDao → 跨域 import 指向新包（它们自身未搬时照常 import）。**若发现不动上述红线项就会阻碍迁移（如不改关注逻辑无法让编译/测试通过）→ 不得硬扛、也不得擅自开禁：先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
-* **强制探索步骤**：(1) `rg 'FollowController|FollowService|FollowDao' src/` 列出引用方（content 域服务居多）；(2) 确认 FollowDao 移入 follow 域后，content 域服务 import 同步为 `com.itheima.follow.FollowDao`。
-* **验收**：3 类落位 `com.itheima.follow`；依赖方 import 同步；`mvn compile` 通过与 JUnit 绿。
+* **入口线索**：新增关注缓存类（NEEDS 4.10：`user:following:{userId}` / `user:follower:{userId}` 双 Set，MULTI 双写，失败双 DEL）；切换读写路径：[FollowDao.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/follow/dao/FollowDao.java) 的读取方（[FollowService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/follow/service/FollowService.java) 关注/取关、[ContentStatusFiller.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ContentStatusFiller.java) isFollowing 批量、[FeedService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/FeedService.java) 关注列表、[ProfileService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ProfileService.java) 粉丝/关注数暂不动 O-9）。
+* **红线边界**：不改关注/取关业务逻辑；只缓存"关系"本身，**不做 feed 聚合缓存**（D 方向边界）；关注数/粉丝数计数暂不入缓存（O-9 二期）；失败降级按"写失败双 DEL"（4.10）。**若发现不动上述红线就阻碍重制 → 先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
+* **强制探索步骤**：(1) `rg 'FollowDao|getFollowedIds|getAllFollowedUserIds|isFollowing|addFollow|deleteFollow|getFollowerUserIds' src/` 列出全部调用方；(2) 确认关注/取关的事务边界（缓存双写放在 DB 提交后）；(3) 确认 MULTI 事务在单连接上如何与现有事务模板配合（不跨连接）。
+* **验收**：关注关系读/写路径走新缓存（双 Set + MULTI + 失败双 DEL）；关注/取关后关系即时生效；`mvn compile` + JUnit 全绿 + 关注相关 pytest（/follow/*、内容卡片 isFollowed）回归通过。
 
-### T6 迁移 like 域（方向 B）
+### T6 收尾（方向 C）
 
-* **入口线索**：[LikeController.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/controller/LikeController.java)（/like/\*）、[LikeService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/service/LikeService.java)、[LikeCacheService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/service/LikeCacheService.java)、[ContentLikeDao.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/dao/ContentLikeDao.java)、[CommentLikeDao.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/dao/CommentLikeDao.java) → 目标 `com.itheima.like`。
-* **红线边界**：不改点赞/缓存逻辑与 URL；ContentService 删除作品级联清赞 import ContentLikeDao → 跨域同步；LikeServiceTest/LikeCacheServiceTest 同包随迁。**若发现不动上述红线项就会阻碍迁移（如不改点赞/缓存逻辑无法让编译/测试通过）→ 不得硬扛、也不得擅自开禁：先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
-* **强制探索步骤**：(1) `rg 'LikeController|LikeService|LikeCacheService|ContentLikeDao|CommentLikeDao' src/` 列出引用方；(2) 确认 LikeCacheService 无注入构造、被 ContentCacheManager 依赖 → import 同步。
-* **验收**：5 类落位 `com.itheima.like`；`mvn compile` 通过与 JUnit 绿。
-
-### T7 迁移 content 域（方向 B，最大域）
-
-* **入口线索**：[ContentController.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/controller/ContentController.java)（/content/\*）、StartController（/start）、SearchController（/search）、FeedController（/feed）、ProfileController（/profile）；ContentService、ContentCacheManager、ContentStatusFiller、FeedService、ProfileService；ContentDao、ContentMediaDao、ContentLikeDao；entity/ContentMedia、cache/ContentCacheDTO、CommentCacheDTO、vo/ContentVO、ContentDetailVO、CommentVO、dto/PageResult、SearchDTO、command/CommandConverter、ContentType → 目标 `com.itheima.content`。
-* **红线边界**：不改内容/搜索/feed/主页逻辑与 URL；本域**收口所有指向旧 `com.itheima.model.*`（归属本域的类）与旧 service 路径的引用**——搬移 ContentCacheDTO/CommentCacheDTO/PageResult/CommandConverter 等共享类时，全部引用方（含已搬走的 user/comment/like/upload/admin 域）import 一并改为 `com.itheima.content.*`；ContentServiceTest/CommentService 相关测试与 ContentCacheManagerLifecycleTest/FeedServiceTest/ProfileServiceTest 同包随迁。**若发现不动上述红线项就会阻碍迁移（如不改内容逻辑无法让编译/测试通过）→ 不得硬扛、也不得擅自开禁：先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
-* **执行记录（2026-09-11）**：按 T7 允许的 G1 例外拆 **2 个 commit（用户批准）**：`refactor(pkg-07a)` 模型与共享组件收口（11 model 类 + 全仓库旧 model import 改向）、`refactor(pkg-07b)` 结构搬移（5 controller + 5 service + 2 dao + 4 测试 + 外部 service/dao import 收口）；两个 commit 各自 `mvn clean test` 全绿。ContentLikeDao 按 like 域归属（T6 已搬）**未随本域再搬**；ProfileVO 探索发现归 content（已同步回写需求文档 §4.2）。
-* **强制探索步骤**：(1) 用 `rg 'com\.itheima\.model\.(cache|vo|dto|command|entity)'` 全量列出待收口引用；(2) 逐类核对"归属 content"的模型类（需求文档 §4.2 归属表）与"归属其它域"的（如 LoginVO→user、GrabCouponRequest→coupon）无错放；(3) 若单任务体量过大（预计改动文件最多）→ **停决策点，向用户申请拆 2 个 commit**（如 a. 模型与共享组件收口 b. controller/service/dao 搬移），获准后在详情标注（G1 例外）。
-* **验收**：content 域全部类落位；全仓库 `com.itheima.model.*` 中归属本域的引用清零、归属其它域的未错搬；`mvn compile` 通过与 JUnit 绿。
-
-### T8 迁移 admin 域（方向 B）
-
-* **入口线索**：[MediaAdminController.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/controller/MediaAdminController.java)（/api/admin/media/\*）、[AdminContentController.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/controller/AdminContentController.java)（/api/admin/content/\*）、[AdminCommentController.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/controller/AdminCommentController.java)（/api/admin/comment/\*）、[MediaAuditService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/service/MediaAuditService.java)、model/vo/AdminContentVO、model/audit/MediaAuditItem、MediaAuditResult、RestoreResult → 目标 `com.itheima.admin`。
-* **红线边界**：不改媒体扫描/恢复/审核逻辑与 URL；依赖 content.ContentDao / comment.CommentDao → 跨域 import（content/comment 已搬，import 直接指向新包）；MediaAuditServiceTest 同包随迁。**若发现不动上述红线项就会阻碍迁移（如不改审核/恢复逻辑无法让编译/测试通过）→ 不得硬扛、也不得擅自开禁：先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
-* **强制探索步骤**：(1) `rg 'MediaAdminController|AdminContentController|AdminCommentController|MediaAuditService|AdminContentVO|MediaAuditItem|MediaAuditResult|RestoreResult' src/` 列出引用方；(2) 确认 auth/filter 角色校验不涉及包路径。
-* **验收**：8 类落位 `com.itheima.admin`；`mvn compile` 通过与 JUnit 绿。
-
-### T9 收尾（方向 B）
-
-* **入口线索**：全仓库巡检 + 回归验证 + 文档同步。基于 T1~T8 完成态。
-* **红线边界**：不引入任何新代码改动；只做巡检、验证与文档。**若发现必须改动缺陷才能满足验收（如旧引用残留必须补代码才能清零）→ 不得硬扛、也不得擅自开禁：先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）**；发现"要改但未排期"的内容 → **登记入 `目标与任务/UNPLANNED_ISSUES.md`（G5 超范围暂停落点）**，不在本周期硬做。
-* **强制探索步骤**：(1) `rg -l 'com\.itheima\.(service|dao|controller|model)' src/` 确认无旧引用残留；(2) 校验 web.xml、IoC 扫描、`@WebServlet` 注解原样；(3) 确认 `src/test/java` 全部测试落位与 package 声明一致、`tools/CouponAdmin` import 已同步。
-* **执行记录（2026-09-11）**：① 巡检确认 src 无旧技术包引用残留（仅剩跨域基建 `controller.BaseServ*`/`dao.ResultMap` 等合法 import），旧 service/model 目录已空，@WebServlet 14 个 URL / web.xml / IoC `scan("com.itheima")` 原样，测试全部同包随迁（`com.itheima.tools.CouponAdmin` 仅 import java.* 无需同步）；② `git diff` 核对 T1~T8 为纯搬移（业务代码仅 1 处全限定类名 FQCN 同步，行为零变化）；③ 沙箱拦截 stage8 写操作 → 用户批准后沙箱外经 `tv.py` 跑 junit（201 例全绿）+ pytest all（124 passed 全绿，exit=0）；④ **发现 stage8 构建产物残留旧包 class（service/model/controller 旧类 + 累积 jacoco.exec）污染 war/jacoco 导致 Tomcat 双 servlet 同 URL 冲突** —— 获用户批准后同步适配 `tools/gen_coverage_map.py`（CTRL_DIR 改递归扫 8 域 controller/service 子包、类名过滤与反查改新包路径），清理 stage8 残留并全量重建后 pytest 恢复 124 全绿，覆盖率地图 rerun：41 端点全 pytest 覆盖（无用例 0、守卫死规则无、公开写缺口无）、JUnit 覆盖表无旧类残留；⑤ CURRENT_ARCHITECTURE.md 升级 2.5（第四.包结构 8 域+基建、第九.JUnit 表 201 例按域、第十.代码统计按域、更新日志）；BUSINESS_FLOW.md 确认无需改动（纯搬移不改业务流）。
-* **验收**：不再有旧技术包引用；pytest（`all`）全绿（收尾阶段统一回归一次）；更新 `CURRENT_ARCHITECTURE.md`（四.包结构、十.代码统计、更新日志）+ 重建覆盖率地图确认无回归；`BUSINESS_FLOW.md` 确认无需改动（纯搬移不改业务流）。
+* **入口线索**：全仓库巡检 + 回归验证 + 文档同步。基于 T1~T5 完成态。
+* **红线边界**：不引入任何新功能改动；只做残留清理、验证与文档。**若发现必须改缺陷才能满足验收（如旧缓存实现残留必须补代码才能清零）→ 先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）**；发现"要改但未排期"的内容 → **登记入 `目标与任务/UNPLANNED_ISSUES.md`**，不在本周期硬做。
+* **强制探索步骤**：(1) `rg 'ContentCacheManager|LikeCacheService|contentCache|commentCache|recommendList|typeCategoryIndex|__placeholder__' src/` 确认无旧缓存实现残留；(2) 校验 @WebServlet URL / web.xml / IoC 扫描原样；(3) 确认 `startScheduler` 定时刷新去留最终决定（O-6 二期 or 一版保留，记录到 NEEDS）。
+* **验收**：无旧缓存实现残留；`pytest all` 全量回归全绿；CURRENT_ARCHITECTURE.md（六.Redis 设计）与 BUSINESS_FLOW.md（3.1 缓存机制）同步；覆盖率地图 rerun 无回归；NEEDS 中已拍板决策与实现一致。
 
 ***
 
@@ -148,7 +122,5 @@
 
 | 日期         | 版本  | 内容                                                                                                   |
 | ---------- | --- | ---------------------------------------------------------------------------------------------------- |
-| 2026-09-10 | 0.1 | 新建本文档（草稿）：结转周期约定 G1-G10 与任务模板四要素/红线措辞/编号引用约定（删去原周期约定中指定特定外部角色执行测试的表述）；任务总览按需求文档 §6 拆分 **9 任务 = 8 域迁移 + 1 收尾**（coupon→upload→user→comment→follow→like→content→admin→收尾，T7 允许拆 2 commit 例外）；四要素详情按需求文档 §4.2 类归属表填写，待评审定稿 |
-| 2026-09-10 | 0.2 | 配合需求文档精简：G8 改为"开分支/合并回 integration/合入 master 均由用户手动执行，任务窗口只负责代码/测试/commit"（删除 agent 操作的 integration 工作树流程描述） |
-| 2026-09-10 | 0.3 | 落实红线措辞约定到全部 9 任务：每个任务"红线边界"不再只列"不改什么"，改为"列明不改项 + **若发现不动红线即阻碍迁移 → 先向用户申请并说明理由、获准后才动手**"的完整句式；顺带清除 T9 遗留的特定外部角色表述 |
-| 2026-09-10 | 0.4 | 定稿：状态由"草稿待评审"改"任务拆分已定稿"；任务总览 9 任务状态由"草稿"改"待执行"；文档改英文名 NEXT_CYCLE_TASKS.md（关联文档指向 NEXT_CYCLE_NEEDS.md、未排期指向 UNPLANNED_ISSUES.md） |
+| 2026-09-12 | 0.1 | 新建本文档（骨架草稿）：结转周期约定 G1-G10 与任务模板四要素/红线措辞/编号引用约定（G3 补充"相关端点 pytest 回归"）；按 NEEDS 4.12 一版方案拆 **6 任务 = T1 基建 + T2 内容 + T3 评论 + T4 点赞 + T5 关注 + T6 收尾**；总览表含依赖与验收关键；任务详情为**四要素骨架**，执行方案由执行 Agent 探索细化；O-5~O-9 明确归二期不拆任务 |
+| 2026-09-12 | 0.2 | 落实 NEEDS 4.13 基建归属：T1 落点明确为新建 `com.itheima.cache` 基建包（原"归属执行时定"改为已拍板）；共通注补充 4.13 分工边界（基建=cache 包、业务缓存类=各自业务域） |

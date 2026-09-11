@@ -29,11 +29,11 @@
 
 | 文件 | 内容 |
 |------|------|
-| 目标与任务/NEXT_CYCLE_NEEDS.md | 本周期需求与痛点（Why）：方向 B=feature package 包结构改造定稿；目标=按 8 业务域重组 controller/service/dao/model、基建不动；含类归属清单、技术注意点、任务拆分骨架（已获用户逐项拍板） |
-| 目标与任务/NEXT_CYCLE_TASKS.md | 本周期任务（How）：**周期约定 G1-G10** + **任务模板四要素** + 任务详情（草稿：B 拆 9 任务 = 8 域迁移 + 1 收尾，待评审定稿） |
+| 目标与任务/NEXT_CYCLE_NEEDS.md | 本周期需求与痛点（Why）：C 方向缓存改造——统一 Redis + Cache-Aside 三态（miss/hit-empty/hit-data）+ 空标记独立 key + 短 TTL + 缓存可降级 + 点赞计数/成员分离；核心决策已拍板，未定项 O-5~O-9 待续聊 |
+| 目标与任务/NEXT_CYCLE_TASKS.md | 本周期任务（How）：**周期约定 G1-G10** + **任务模板四要素** + 任务总览（草稿：C 缓存改造一版拆 6 任务 = T1 基建 + T2~T5 四域重制 + T6 收尾，四要素待细化） |
 | 目标与任务/UNPLANNED_ISSUES.md | 待决策池：登记"发现需要改、但暂未排进任务清单"的内容（文档滞后/代码债/观察），已预填 7 条候选（U-01~U-07），按登记规则新增 |
 
-> 历史周期：`260908-test-hardening`（测试体系改造 T1-T5）已归档 `archive/目标与任务/260908-test-hardening/`；`260910-test-gap-fill`（补测试缺口 A 方向 T1~T8，test(12)~test(19)）已归档 `archive/目标与任务/260910-test-gap-fill/`（勿读，追踪可追溯）。
+> 历史周期：`260908-test-hardening`（测试体系改造 T1-T5）已归档 `archive/目标与任务/260908-test-hardening/`；`260910-test-gap-fill`（补测试缺口 A 方向 T1~T8，test(12)~test(19)）已归档 `archive/目标与任务/260910-test-gap-fill/`；`260912-package-refactor`（B 方向 feature package 改造：8 域迁移 + 1 收尾 T1~T9，pkg-01~pkg-09，仅搬移不改名、行为零变化）已归档 `archive/目标与任务/260912-package-refactor/`（勿读，追踪可追溯）。
 
 > 术语：周期 > 任务。（历史文档中的"阶段"仅指 260830 周期内部顺序，已归档。）
 
