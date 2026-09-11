@@ -3,7 +3,7 @@ package com.itheima.comment.controller;
 import com.itheima.controller.BaseServlet;
 import com.itheima.controller.BaseServletUtil;
 import com.itheima.controller.RequestParser;
-import com.itheima.model.command.CommandConverter;
+import com.itheima.content.model.command.CommandConverter;
 import com.itheima.comment.model.command.CommentCommand;
 import com.itheima.exception.ErrorCode;
 import com.itheima.ioc.annotation.Inject;

@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.itheima.controller.BaseServlet;
 import com.itheima.controller.BaseServletUtil;
 import com.itheima.controller.RequestParser;
-import com.itheima.model.command.CommandConverter;
+import com.itheima.content.model.command.CommandConverter;
 import com.itheima.user.model.command.ChangePasswordCommand;
 import com.itheima.user.model.command.LoginCommand;
 import com.itheima.user.model.command.RegisterCommand;

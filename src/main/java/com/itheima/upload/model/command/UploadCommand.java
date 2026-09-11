@@ -1,6 +1,6 @@
 package com.itheima.upload.model.command;
 
-import com.itheima.model.command.ContentType;
+import com.itheima.content.model.command.ContentType;
 
 public class UploadCommand {
     String title;

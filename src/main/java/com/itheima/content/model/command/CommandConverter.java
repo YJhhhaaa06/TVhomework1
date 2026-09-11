@@ -1,5 +1,5 @@
 
-package com.itheima.model.command;
+package com.itheima.content.model.command;
 
 import com.itheima.user.model.dto.ChangePasswordDTO;
 import com.itheima.comment.model.dto.CommentDTO;

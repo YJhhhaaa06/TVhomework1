@@ -2,7 +2,7 @@ package com.itheima.comment.dao;
 
 import com.itheima.dao.ResultMap;
 import com.itheima.ioc.annotation.Component;
-import com.itheima.model.cache.CommentCacheDTO;
+import com.itheima.content.model.cache.CommentCacheDTO;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;

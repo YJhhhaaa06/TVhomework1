@@ -2,7 +2,7 @@ package com.itheima.controller;
 
 import com.itheima.exception.ParamException;
 import com.itheima.ioc.annotation.Inject;
-import com.itheima.model.vo.ProfileVO;
+import com.itheima.content.model.vo.ProfileVO;
 import com.itheima.service.ProfileService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;

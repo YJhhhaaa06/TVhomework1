@@ -1,4 +1,4 @@
-package com.itheima.model.cache;
+package com.itheima.content.model.cache;
 
 import java.time.LocalDateTime;
 import java.util.List;

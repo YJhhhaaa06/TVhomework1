@@ -1,4 +1,4 @@
-package com.itheima.model.entity;
+package com.itheima.content.model.entity;
 
 import java.util.List;
 import java.util.Map;

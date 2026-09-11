@@ -1,5 +1,5 @@
-package com.itheima.model.vo;
-import com.itheima.model.cache.CommentCacheDTO;
+package com.itheima.content.model.vo;
+import com.itheima.content.model.cache.CommentCacheDTO;
 
 public class CommentVO extends CommentCacheDTO {
     private boolean isLiked;

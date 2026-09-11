@@ -3,7 +3,7 @@ package com.itheima.upload.controller;
 import com.itheima.controller.BaseServlet;
 import com.itheima.controller.BaseServletUtil;
 import com.itheima.controller.RequestParser;
-import com.itheima.model.command.CommandConverter;
+import com.itheima.content.model.command.CommandConverter;
 import com.itheima.upload.model.command.UploadCommand;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ErrorCode;

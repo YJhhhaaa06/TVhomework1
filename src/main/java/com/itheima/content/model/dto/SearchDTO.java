@@ -1,4 +1,4 @@
-package com.itheima.model.dto;
+package com.itheima.content.model.dto;
 
 public class SearchDTO {
     private String keyword;

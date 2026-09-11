@@ -5,8 +5,8 @@ import com.itheima.like.service.LikeService;
 import com.itheima.exception.DatabaseException;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;
-import com.itheima.model.vo.ContentDetailVO;
-import com.itheima.model.vo.ContentVO;
+import com.itheima.content.model.vo.ContentDetailVO;
+import com.itheima.content.model.vo.ContentVO;
 import com.itheima.util.LogUtil;
 import com.itheima.util.TransactionTemplate;
 

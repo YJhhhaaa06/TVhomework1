@@ -1,7 +1,7 @@
 package com.itheima.controller;
 
 import com.itheima.ioc.annotation.Inject;
-import com.itheima.model.vo.ContentVO;
+import com.itheima.content.model.vo.ContentVO;
 import com.itheima.service.ContentCacheManager;
 import com.itheima.service.ContentStatusFiller;
 import jakarta.servlet.ServletException;

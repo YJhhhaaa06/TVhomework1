@@ -1,4 +1,4 @@
-package com.itheima.model.command;
+package com.itheima.content.model.command;
 
 public enum ContentType {
     VIDEO(1),

@@ -1,5 +1,5 @@
-package com.itheima.model.vo;
-import com.itheima.model.cache.ContentCacheDTO;
+package com.itheima.content.model.vo;
+import com.itheima.content.model.cache.ContentCacheDTO;
 
 public class ContentDetailVO extends ContentCacheDTO {
     private boolean isLiked;

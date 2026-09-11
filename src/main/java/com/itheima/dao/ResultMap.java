@@ -1,7 +1,7 @@
 package com.itheima.dao;
-import com.itheima.model.cache.CommentCacheDTO;
-import com.itheima.model.cache.ContentCacheDTO;
-import com.itheima.model.entity.ContentMedia;
+import com.itheima.content.model.cache.CommentCacheDTO;
+import com.itheima.content.model.cache.ContentCacheDTO;
+import com.itheima.content.model.entity.ContentMedia;
 import com.itheima.user.model.entity.User;
 import com.itheima.model.vo.AdminContentVO;
 
