@@ -39,8 +39,8 @@ import java.util.logging.Logger;
  * 类型分区索引迁为 Redis LIST {@code content:index:{type}:{category}}（4 key/内容，新前序），
  * 点赞/评论数/评论区开关变更 = 失效内容 key 让读自愈（DB 列为源真理，见 NEEDS 4.5）。
  *
- * <p>本类只负责内容；评论缓存仍在 ContentCacheManager（T3 迁出）。任何缓存失败一律降级（4.2），
- * init 不 crash 应用（旧 ContentCacheManager.init 会因 Redis/DB 异常抛 CacheException 导致启动失败）。
+ * <p>本类只负责内容；评论缓存见 {@link CommentCache}（T3 迁出）。任何缓存失败一律降级（4.2），
+ * init 不 crash 应用（旧 ContentCacheManager 的 HashMap 实现已随 T6 移除）。
  * 索引懒重建：索引 key 缺失（Redis 重启/被清）时按需从 DB 重建，防 /start 空推荐。
  */
 @Component
@@ -167,7 +167,7 @@ public class ContentCache implements Initializable {
         cacheAside.invalidate(CacheKeys.content(contentId));
     }
 
-    // ==================== VO 复制（自 ContentCacheManager 迁入，T6 清理旧类对应方法） ====================
+    // ==================== VO 复制（自旧 ContentCacheManager 迁入，旧类已随 T6 移除） ====================
 
     public ContentVO toContentVO(ContentCacheDTO dto) {
         ContentVO cVO = new ContentVO();

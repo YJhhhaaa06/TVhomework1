@@ -54,7 +54,7 @@
 | T3 | 评论缓存重制：评论树独立 TTL + 空标记 + 业务显式失效（内容删除级联删评论 key） | content/comment | T1/T2 | 评论读/写路径走新缓存；评论 miss ≠ 没有评论（三态）；`mvn compile` + JUnit + 相关 pytest 绿 | `refactor(cache-03)` | 已完成（2026-09-12：CommentCache 9 方法新增管理 + 读写路径全切 + 失效式 + 删除/下架级联失效 + H1 评论竞态消除 + H7 启动少一轮 N+1；tv.py test junit 261 例全绿 + pytest all 124 passed） |
 | T4 | 点赞缓存重制：LikeCacheService 重写为计数/成员分离 + 单飞 + 写失败 DEL | like | T1 | 点赞读/写路径走新缓存；清除 `__placeholder__` 占位符（H11）；`mvn compile` + JUnit + 相关 pytest 绿 | `refactor(cache-04)` | 已完成（2026-09-12：LikeCacheService 重写为计数/成员分离+三态读+统一单飞+降级，占位符清零，LikeService 读路径委托；tv.py test junit 264 例全绿 + pytest all 124 passed） |
 | T5 | 关注关系入缓存：user:following / user:follower 双 Set + MULTI 双写 + 失败双 DEL | follow | T1 | 关注读（isFollowing/列表）与写（关注/取关）路径走新缓存；`mvn compile` + JUnit + 相关 pytest 绿 | `refactor(cache-05)` | 已完成（2026-09-12：FollowCache 双 Set 三态读+条件 MULTI 双写+失败双 DEL+降级新增，读写路径全切，配置 cache.follow.ttlMinutes；tv.py test junit 293 例全绿 + pytest all 124 passed） |
-| T6 | 收尾：旧缓存代码残留清理 + pytest all 全量回归 + 常青文档同步 + 覆盖率地图 | — | T1~T5 | 无旧缓存实现残留（ContentCacheManager/LikeCacheService 旧实现移除）；`pytest all` 全绿；CURRENT_ARCHITECTURE.md（六.Redis 设计）/ BUSINESS_FLOW.md（3.1 缓存机制）同步；覆盖率地图 rerun 无回归 | `refactor(cache-06)` | 待执行 |
+| T6 | 收尾：旧缓存代码残留清理 + pytest all 全量回归 + 常青文档同步 + 覆盖率地图 | — | T1~T5 | 无旧缓存实现残留（ContentCacheManager/LikeCacheService 旧实现移除）；`pytest all` 全绿；CURRENT_ARCHITECTURE.md（六.Redis 设计）/ BUSINESS_FLOW.md（3.1 缓存机制）同步；覆盖率地图 rerun 无回归 | `refactor(cache-06)` | 已完成（2026-09-12：旧 ContentCacheManager 整体移除 + 点赞失效迁入 LikeService.deleteContentLike + 死配置删除 + 定时刷新去留拍板；mvn clean test 288 例全绿无残留 + pytest all 124 passed） |
 
 > 状态取值：草稿 / 待执行 / 执行中 / 已完成 / 搁置。
 >
@@ -124,6 +124,8 @@
 * **强制探索步骤**：(1) `rg 'ContentCacheManager|LikeCacheService|contentCache|commentCache|recommendList|typeCategoryIndex|__placeholder__' src/` 确认无旧缓存实现残留；(2) 校验 @WebServlet URL / web.xml / IoC 扫描原样；(3) 确认 `startScheduler` 定时刷新去留最终决定（O-6 二期 or 一版保留，记录到 NEEDS）。
 * **验收**：无旧缓存实现残留；`pytest all` 全量回归全绿；CURRENT_ARCHITECTURE.md（六.Redis 设计）与 BUSINESS_FLOW.md（3.1 缓存机制）同步；覆盖率地图 rerun 无回归；NEEDS 中已拍板决策与实现一致。
 
+> **T6 执行回写（2026-09-12，G5/G7）**：① **残留确认**：旧残留=ContentCacheManager.java（内存 HashMap/索引/推荐列表/定时刷新，T2/T3 迁出后仍被 ContentService 以"遗产副作用"调用 removeContent/refreshContent）+ ContentCacheManagerLifecycleTest（5 例）+ 死配置 `AppConfig.getContentRefreshMinutes`/`cache.content.refreshMinutes`；ContentCache/CommentCache/重写后 LikeCacheService/FollowCache 均为新实现，`__placeholder__` 清零无残留；@WebServlet 14 URL / web.xml（4 filter）/ IoC 扫描（`ClassScanner.scan("com.itheima")` 自动）原样；② **改造**：删除 ContentCacheManager 类；ContentService 删除 3 处旧调用（deleteContent/hideContent 的 removeContent、unhideContent 的 refreshContent），其"旧格式点赞 key 清理"副作用迁入 `LikeService.deleteContentLike`（新增委托，DELETE/hide 后显式失效 count+set+empty 三 key，T4 设计保留、对外行为零变化）；删除 LifecycleTest；ContentServiceTest 断言随新路径（likeService.deleteContentLike 等）；删除死配置；③ **O-6 拍板=一版移除定时全量刷新**（随旧类删除），一致性由启动全量重建+索引懒重建+业务显式失效+Cache-Aside 读自愈承担，记录到 NEEDS；④ **验证**：`mvn clean test` 干净重建无残留字节码（默认 surefire 284 + pool-test 4 = 288 例全绿）+ `pytest all` 124 passed；⑤ **文档同步**：CURRENT_ARCHITECTURE（4.3 content 域去残留/6.2 定时刷新移除说明/9.2 删 LifecycleTest 行 合计 288/12 更新日志 2.9）+ BUSINESS_FLOW（3.1 关键语义/3.8/3.9/3.10 缓存同步点 + 问题4 P5 已消化注）+ NEEDS（O-6 已拍板、P5 已消化、U-07 观察结论、七决策记录、变更记录 0.5）+ 本清单 T6 勾选 0.6；⑥ 覆盖率地图 rerun 无回归。
+
 ***
 
 ## 五、变更记录
@@ -135,3 +137,4 @@
 | 2026-09-12 | 0.3 | **T3 评论缓存重制完成**：T3 状态置"已完成"，详情追加 T3 执行回写（失效式代替原地增删、独立 TTL 配置、dto==null 短路、级联失效、ContentCacheManager 清理口径） |
 | 2026-09-12 | 0.4 | **T4 点赞缓存重制完成**：T4 状态置"已完成"，详情追加 T4 执行回写（计数/成员分离、统一单飞拉满 H6、条件写+失败失效 H5、占位符清零 H11、LikeService 读路径委托、删 updateContentLikeCount 死代码、like TTL 配置） |
 | 2026-09-12 | 0.5 | **T5 关注关系入缓存完成**：T5 状态置"已完成"，详情追加 T5 执行回写（FollowCache 双 Set 三态读+条件 MULTI 双写+失败双 DEL、空标记 set 存在守卫、follow TTL 配置、读写路径全切、FollowDao 仅剩业务校验与 loader、JUnit 293 + pytest 124、常青同步、subagent review 必修已修） |
+| 2026-09-12 | 0.6 | **T6 收尾完成**：T6 状态置"已完成"，详情追加 T6 执行回写（旧 ContentCacheManager 整体移除、点赞失效副作用迁入 LikeService.deleteContentLike、死配置删除、ContentCacheManagerLifecycleTest 删除、O-6 定时刷新去留=一版移除、mvn clean test 288 例无残留 + pytest all 124、常青/NEEDS/覆盖率地图同步） |

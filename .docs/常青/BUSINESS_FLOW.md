@@ -358,8 +358,8 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-> 关键语义（NEEDS 4.2~4.5/4.12）：内容与评论读/写**全部收敛 Redis**（废弃旧内存 HashMap 版
-> ContentCacheManager：T2 迁出内容部分、T3 迁出评论部分，仅剩内存残留 T6 清理）；
+> 关键语义（NEEDS 4.2~4.5/4.12）：内容与评论读/写**全部收敛 Redis**（旧内存 HashMap 版
+> ContentCacheManager 已随 T6 整体移除，职责由 ContentCache/CommentCache 承接）；
 > **任何缓存失败降级走 DB、不导致业务失败**；
 > 计数（like_count/comment_count/comment_enabled）与评论树内容以 DB 为源真理，变更即失效让读自愈；
 > 类型分区索引启动 init 全量重建 + 索引 key 缺失时单飞懒重建（防 Redis 重启后 /start 空推荐）。
@@ -639,7 +639,7 @@ ContentDetailVO 包含：
 
 1. 弹层修改标题/简介 → `POST /content/update?contentId=&title=&description=`。
 2. `ContentService.updateContentInfo`：校验内容存在（404）→ 作者本人（403）→ title 非空且 ≤50、简介 ≤5000 → `ContentDao.updateContentInfo`。
-3. 全文索引由 MySQL 自动维护（DML 即时生效）；事务后 `ContentCacheManager.refreshContent` 同步缓存（详情/搜索用新值）。
+3. 全文索引由 MySQL 自动维护（DML 即时生效）；事务后 `ContentCache.refreshContent` 回填内容缓存与索引（详情/搜索用新值）。
 
 #### 换源 / 替换媒体
 
@@ -673,9 +673,9 @@ ContentDetailVO 包含：
         5. contentLikeDao.deleteByContentId：点赞记录物理删除
         6. contentMediaDao.deleteByContentId：媒体记录物理删除
     → 事务提交后缓存同步（4.5 显式失效）:
-      ContentCacheManager.removeContent（旧：清内存残留 + 旧格式 Redis 点赞 key，T4/T6 清）
-      + ContentCache.removeContent（失效 content:{id} + 索引剔除，读自愈 404）
+      ContentCache.removeContent（失效 content:{id} + 索引剔除，读自愈 404）
       + CommentCache.invalidateComments（级联失效 content:comments:{id} + 空标记）
+      + LikeService.deleteContentLike（失效 content:likeCount/Set + 空标记，T6 迁入）
     → Controller 逐个 FileUploadService.deleteFileByUrl 删物理文件（尽力而为）
 ```
 
@@ -695,12 +695,12 @@ ContentDetailVO 包含：
 
 1. `ContentService.hideContent`：`getContentStatus` 校验内容存在（404）→ 未被作者删除（409「内容已删除，无法下架」）→ 未处于下架态（409「内容已下架」）→ `updateContentDeletedState(conn, id, 2)`。
 2. 仅改 `content.is_deleted=2` 一个字段；**不动**评论/点赞/媒体记录/物理文件（隐藏≠删除）。
-3. 事务提交后缓存同步：ContentCacheManager.removeContent（旧残留，T4/T6 清）+ ContentCache.removeContent（失效 content:{id} + 索引剔除）+ CommentCache.invalidateComments（级联失效评论树），前台即时不可见。
+3. 事务提交后缓存同步：ContentCache.removeContent（失效 content:{id} + 索引剔除）+ CommentCache.invalidateComments（级联失效评论树）+ LikeService.deleteContentLike（失效点赞缓存），前台即时不可见。
 
 **恢复**：`POST /api/admin/content/unhide?contentId=X`
 
 1. `ContentService.unhideContent`：校验存在（404）→ 未被删除（409）→ 当前处于下架态（409「内容未下架」）→ `updateContentDeletedState(conn, id, 0)`。
-2. 事务提交后 `ContentCacheManager.refreshContent`（旧内存残留，T6 清）+ `ContentCache.refreshContent` 回填内容缓存与索引，前台立即重新可见；评论树无需额外动作（hide 已失效评论 key，读时 miss 回填 DB 现存评论）。
+2. 事务提交后 `ContentCache.refreshContent` 回填内容缓存与索引，前台立即重新可见；评论树无需额外动作（hide 已失效评论 key，读时 miss 回填 DB 现存评论）；点赞 key 无需处理（hide 已失效，读时 miss 回填 DB 现存点赞）。
 
 **效果**：下架后内容在首页 `/start`（索引剔除）、搜索（`is_deleted=0` 过滤）、关注流 `/feed`、用户主页 `/profile`、作者本人「我的投稿」均不可见；详情 `/search/IdSearch` 返回 404。恢复后重新可见，且评论/点赞数/媒体数据完好。
 
@@ -1327,6 +1327,11 @@ ContentService.updateContentLikeCount(contentId, 1);
 users.follow_count / users.follower_count，显式 `--fix` 单事务重算漂移行（改的只是冗余计数列，
 不触碰业务数据，逻辑与 CountRepairTool 一致）。应用层"事务内 ±1 + 事务外缓存 + 定时刷新兜底"
 的业务实现本次未改（P5 缓存一致性仍按既有定时刷新兜底，缓存改造属后续周期）。
+
+**状态（2026-09-12 P5 已消化）**: 本周期 C 缓存改造消化 P5——点赞/评论计数写路径改为"DB 提交后
+有条件写 + 写失败=DEL 失效"（NEEDS 4.2/4.6），读走三态 Cache-Aside 自愈（miss 单飞回填 DB 源真理）；
+时间戳侧"定时刷新兜底"已失效且随旧 ContentCacheManager 整体移除（O-6，T6）。计数仍以 DB 列为源
+真理，check_integrity --fix 作为最终兜底保留。
 
 ---
 

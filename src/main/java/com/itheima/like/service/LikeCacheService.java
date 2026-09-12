@@ -342,7 +342,7 @@ public class LikeCacheService {
 
     /**
      * 删除内容后失效其点赞缓存（计数 + 成员 + 空标记）。
-     * 调用方：ContentCacheManager.evictContent（内容删除/下架级联）。
+     * 调用方：LikeService.deleteContentLike（ContentService 内容删除/下架级联，T6 自 ContentCacheManager 迁入）。
      */
     public void deleteContentLike(long contentId) {
         cacheAside.invalidate(CacheKeys.contentLikeCount(contentId), CacheKeys.contentLikeSet(contentId));

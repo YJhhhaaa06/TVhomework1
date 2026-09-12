@@ -44,7 +44,6 @@ class ContentServiceTest {
     private ContentLikeDao contentLikeDao;
     private CommentService commentService;
     private LikeService likeService;
-    private ContentCacheManager cache;
     private ContentCache contentCache;
     private CommentCache commentCache;
     private ContentStatusFiller filler;
@@ -60,14 +59,13 @@ class ContentServiceTest {
         contentLikeDao = mock(ContentLikeDao.class);
         commentService = mock(CommentService.class);
         likeService = mock(LikeService.class);
-        cache = mock(ContentCacheManager.class);
         contentCache = mock(ContentCache.class);
         commentCache = mock(CommentCache.class);
         filler = mock(ContentStatusFiller.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
         service = new ContentService(contentDao, contentMediaDao, commentDao,
-                contentLikeDao, commentService, likeService, cache, contentCache, commentCache, filler, tt);
+                contentLikeDao, commentService, likeService, contentCache, commentCache, filler, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);
@@ -320,7 +318,7 @@ class ContentServiceTest {
 
         assertThrows(ForbiddenException.class, () -> service.replaceMedia(1L, 8L, 3, 1, "/upload/cover/new.png"));
         verify(contentMediaDao, never()).updateMediaUrl(any(), anyLong(), anyString(), anyBoolean(), any());
-        verify(cache, never()).refreshContent(anyLong());
+        verify(contentCache, never()).refreshContent(anyLong());
     }
 
     @Test
@@ -345,7 +343,7 @@ class ContentServiceTest {
                 .thenThrow(new SQLException("db down"));
 
         assertThrows(ServerException.class, () -> service.replaceMedia(1L, 7L, 3, 1, "/upload/cover/new.png"));
-        verify(cache, never()).refreshContent(anyLong());
+        verify(contentCache, never()).refreshContent(anyLong());
     }
 
     // ----- deleteMedia -----
@@ -354,7 +352,7 @@ class ContentServiceTest {
     void deleteMediaNonImageThrowsParamException() throws SQLException {
         assertThrows(ParamException.class, () -> service.deleteMedia(1L, 7L, 1, 1));
         verify(contentMediaDao, never()).deleteMediaByContentIdAndTypeSort(any(), anyLong(), anyInt(), anyInt());
-        verify(cache, never()).refreshContent(anyLong());
+        verify(contentCache, never()).refreshContent(anyLong());
     }
 
     @Test
@@ -448,8 +446,9 @@ class ContentServiceTest {
         verify(commentDao).softDeleteByContentId(conn, 1L);
         verify(contentLikeDao).deleteByContentId(conn, 1L);
         verify(contentMediaDao).deleteByContentId(conn, 1L);
-        verify(cache).removeContent(1L);
+        verify(contentCache).removeContent(1L);
         verify(commentCache).invalidateComments(1L);
+        verify(likeService).deleteContentLike(1L);
     }
 
     @Test
@@ -461,7 +460,7 @@ class ContentServiceTest {
         verify(commentDao, never()).softDeleteByContentId(any(), anyLong());
         verify(contentLikeDao, never()).deleteByContentId(any(), anyLong());
         verify(contentMediaDao, never()).deleteByContentId(any(), anyLong());
-        verify(cache, never()).removeContent(anyLong());
+        verify(contentCache, never()).removeContent(anyLong());
     }
 
     @Test
@@ -470,7 +469,7 @@ class ContentServiceTest {
 
         assertThrows(NotFoundException.class, () -> service.deleteContent(1L, 7L));
         verify(contentDao, never()).softDeleteContent(any(), anyLong());
-        verify(cache, never()).removeContent(anyLong());
+        verify(contentCache, never()).removeContent(anyLong());
     }
 
     @Test
@@ -480,7 +479,7 @@ class ContentServiceTest {
 
         assertThrows(ServerException.class, () -> service.deleteContent(1L, 7L));
         verify(contentDao, never()).softDeleteContent(any(), anyLong());
-        verify(cache, never()).removeContent(anyLong());
+        verify(contentCache, never()).removeContent(anyLong());
     }
 
     // ===== 管理员下架/恢复内容（阶段五 A2）=====
@@ -513,8 +512,9 @@ class ContentServiceTest {
         service.hideContent(1L);
 
         verify(contentDao).updateContentDeletedState(conn, 1L, 2);
-        verify(cache).removeContent(1L);
+        verify(contentCache).removeContent(1L);
         verify(commentCache).invalidateComments(1L);
+        verify(likeService).deleteContentLike(1L);
     }
 
     @Test
@@ -523,7 +523,7 @@ class ContentServiceTest {
 
         assertThrows(NotFoundException.class, () -> service.hideContent(1L));
         verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
-        verify(cache, never()).removeContent(anyLong());
+        verify(contentCache, never()).removeContent(anyLong());
     }
 
     @Test
@@ -532,7 +532,7 @@ class ContentServiceTest {
 
         assertThrows(ConflictException.class, () -> service.hideContent(1L));
         verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
-        verify(cache, never()).removeContent(anyLong());
+        verify(contentCache, never()).removeContent(anyLong());
     }
 
     @Test
@@ -541,7 +541,7 @@ class ContentServiceTest {
 
         assertThrows(ConflictException.class, () -> service.hideContent(1L));
         verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
-        verify(cache, never()).removeContent(anyLong());
+        verify(contentCache, never()).removeContent(anyLong());
     }
 
     @Test
@@ -550,7 +550,7 @@ class ContentServiceTest {
 
         assertThrows(ServerException.class, () -> service.hideContent(1L));
         verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
-        verify(cache, never()).removeContent(anyLong());
+        verify(contentCache, never()).removeContent(anyLong());
     }
 
     @Test
@@ -569,7 +569,7 @@ class ContentServiceTest {
 
         assertThrows(NotFoundException.class, () -> service.unhideContent(1L));
         verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
-        verify(cache, never()).refreshContent(anyLong());
+        verify(contentCache, never()).refreshContent(anyLong());
     }
 
     @Test
@@ -578,7 +578,7 @@ class ContentServiceTest {
 
         assertThrows(ConflictException.class, () -> service.unhideContent(1L));
         verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
-        verify(cache, never()).refreshContent(anyLong());
+        verify(contentCache, never()).refreshContent(anyLong());
     }
 
     @Test
@@ -587,7 +587,7 @@ class ContentServiceTest {
 
         assertThrows(ConflictException.class, () -> service.unhideContent(1L));
         verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
-        verify(cache, never()).refreshContent(anyLong());
+        verify(contentCache, never()).refreshContent(anyLong());
     }
 
     @Test
@@ -596,6 +596,6 @@ class ContentServiceTest {
 
         assertThrows(ServerException.class, () -> service.unhideContent(1L));
         verify(contentDao, never()).updateContentDeletedState(any(), anyLong(), anyInt());
-        verify(cache, never()).refreshContent(anyLong());
+        verify(contentCache, never()).refreshContent(anyLong());
     }
 }

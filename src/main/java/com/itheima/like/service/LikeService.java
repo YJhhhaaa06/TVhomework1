@@ -98,6 +98,16 @@ public class LikeService {
         contentCache.notifyLikeCountChanged(contentId);
     }
 
+    // ==================== 删除/下架级联失效 ====================
+
+    /**
+     * 删除/下架内容后失效其点赞缓存（计数 + 成员 + 空标记），由 ContentService 在 DB 提交后调用。
+     * 原副作用在旧 ContentCacheManager.evictContent 内（T4 设计保留），T6 移除旧类时迁入本委托。
+     */
+    public void deleteContentLike(long contentId) {
+        cache.deleteContentLike(contentId);
+    }
+
     // ==================== 评论点赞 ====================
 
     public void likeComment(long userId, long commentId) {

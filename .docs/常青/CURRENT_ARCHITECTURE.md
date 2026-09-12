@@ -222,11 +222,11 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | ContentController（182，/content/*）、StartController（49，/start）、SearchController（95，/search/*）、FeedController（57，/feed）、ProfileController（70，/profile） | 内容管理 + 首页推荐 + 搜索 + 关注流 + 用户主页 |
-| service | ContentService（445）、ContentCache（400，T2 新增：Redis 内容缓存=三态 Cache-Aside+索引）、CommentCache（173，T3 新增：Redis 评论缓存=三态 Cache-Aside+独立 TTL+空标记+显式失效）、ContentCacheManager（465，评论职责已迁出，内存残留 T6 清理）、ContentStatusFiller（90）、FeedService（74）、ProfileService（86） | 内容业务 + Redis 内容缓存 + Redis 评论树缓存 + ContentCacheManager 内存残留（过渡） + 状态填充 + 关注流 + 主页 |
+| service | ContentService（445）、ContentCache（400，T2 新增：Redis 内容缓存=三态 Cache-Aside+索引）、CommentCache（173，T3 新增：Redis 评论缓存=三态 Cache-Aside+独立 TTL+空标记+显式失效）、ContentStatusFiller（90）、FeedService（74）、ProfileService（86） | 内容业务 + Redis 内容缓存 + Redis 评论树缓存 + 状态填充 + 关注流 + 主页 |
 | dao | ContentDao（366）、ContentMediaDao（163） | content/content_media 数据访问（ContentLikeDao 按 like 域归属） |
 | model | entity/ContentMedia（63）、cache/ContentCacheDTO（136）/CommentCacheDTO（110）、vo/ContentVO（42）/ContentDetailVO（26）/CommentVO（22）/ProfileVO（43）、dto/PageResult（62）/SearchDTO（51）、command/CommandConverter（139）/ContentType（16） | 内容模型 + 共享缓存 DTO + 共享 VO/DTO/转换器 |
 
-> **共享组件归属**：ContentCacheManager / ContentCache / CommentCache / ContentStatusFiller / ContentCacheDTO / CommentCacheDTO / PageResult / CommandConverter / ContentVO / ContentDetailVO / CommentVO 归本域，其它域 controller/service 跨域 import。
+> **共享组件归属**：ContentCache / CommentCache / ContentStatusFiller / ContentCacheDTO / CommentCacheDTO / PageResult / CommandConverter / ContentVO / ContentDetailVO / CommentVO 归本域，其它域 controller/service 跨域 import。
 
 #### follow 域 — `com.itheima.follow`
 
@@ -354,6 +354,8 @@ com.itheima/
 | user:follower:{userId} | Set\<userId\> | 谁关注了我（4.10，MULTI 双写，失败双 DEL；T5 启用） |
 
 > 旧 key 演进：原 `content:like:{id}` / `comment:like:{id}`（单 Set 兼容 SCARD 计数）已随 T4 停用，由本表计数/成员分离 key 取代（旧 key 仅退款前历史遗留在 Redis，TTL 过期自然回收）；本表为新缓存层规范，按任务逐行启用（当前已启用：content / content:index / content:comments / content:likeCount / content:likeSet / comment:likeCount / comment:likeSet / user:following / user:follower；空标记随行）。
+>
+> 定时全量刷新（旧 `ContentCacheManager.startScheduler` 10min `scheduleAtFixedRate`）已随旧类移除（O-6 拍板，T6）：内容/索引一致性由**启动全量重建 + 索引懒重建 + 业务显式失效（增删改/计数/门禁/隐藏恢复）+ Cache-Aside 读自愈（按 key TTL 过期回填）** 承担，不再有周期性全库重载（原 H2/H7 雪崩与 N+1 痛点）。
 
 ---
 
@@ -503,7 +505,6 @@ src/main/webapp/
 |------|--------|----------|
 | user/service/UserServiceTest | 23 | 登录/注册/改密/改资料/isAdmin |
 | content/service/ContentServiceTest | 48 | 搜索/详情/评论查询/发布/评论区开关/编辑作品（换源/删图/改文案）/删除作品/内容审核下架恢复 |
-| content/service/ContentCacheManagerLifecycleTest | 5 | 初始化/缓存命中/定时器关闭/刷新失败/评论区开关同步（updateContentLikeCount 死代码已随 T4 删除） |
 | content/service/ContentCacheTest | 12 | Redis 内容缓存：三态 loader 构建（含媒体 URL）/DB 无媒体损坏降级/索引读取与懒重建/写路径失效契约/init 重建不 crash/失效方法/VO 复制 |
 | content/service/CommentCacheTest | 11 | Redis 评论缓存：三态 loader（树构建/deep-chain 归一化/无评论 null/DB 降级）/invalidateComments 显式失效/评论点赞定位失效/collectCommentIds 展平 |
 | content/service/FeedServiceTest | 8 | 关注动态流 |
@@ -522,10 +523,10 @@ src/main/webapp/
 | cache/RedisAccessTest | 4 | execute/executeVoid 取还连接、异常包装 CacheException（含连接获取失败） |
 | cache/SingleFlightTest | 4 | 并发同 key 只 load 一次、失败/成功 remove、不同 key 独立 |
 | cache/CacheAsideTest | 16 | 三态 read、Cache-Aside get 命中/回填/空标记、降级不写回、写失败 DEL、清空标记防假空、markEmpty/invalidate best-effort |
-| **合计** | **293** | - |
+| **合计** | **288** | - |
 
 > 注：`com.itheima.tools.CouponAdmin` 属 tools 测试脚本目录（非测试类，package 保留 `com.itheima.tools`，仅 import java.*，无主代码引用）；`util/MyConnectionPoolTest` 被测类未动（基建），测试文件留在 util 包不迁。
-> 用例数取自 `stage8-target/surefire-reports`（2026-09-12 实测，`tv.py test junit` 全绿 293 例 = T4 末尾 264 + FollowCacheTest 新增 26 + FollowServiceTest 读路径委托/缓存联动断言调整 +2 − ProfileServiceTest 删关注 SQL 残留 1 例）。
+> 用例数取自 `stage8-target/surefire-reports`（2026-09-12 实测，`mvn clean test` 全绿 288 例 = T5 末尾 293 − 删除旧 ContentCacheManagerLifecycleTest 5 例（旧类已随 T6 移除）；ContentServiceTest 断言随新删除/下架路径（likeService.deleteContentLike）调整）。
 
 > 构建输出：沙箱内 Maven 通过 `-Dstage8.buildDir` 指向 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（pom 默认 `./target`），原因是沙箱内 javac 无法把 worktree `target/classes` 作为 classpath（报"程序包不存在"）。
 > 离线仓库：新增测试依赖（junit/mockito/bytebuddy/surefire 等）的 `_remote.repositories` 已补 `>aliyun=` 来源行（只追加不删除），默认 aliyun 镜像下可离线解析。
@@ -599,6 +600,7 @@ src/main/webapp/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-09-12 | 2.9 | **C 缓存改造 T6 收尾（refactor(cache-06)）**：旧 `ContentCacheManager`（内存 HashMap 缓存/索引/推荐列表/定时刷新）整体移除，删除 ContentService 三处旧调用（deleteContent/hideContent 的 removeContent、unhideContent 的 refreshContent），其"旧格式点赞 key 清理"副作用迁入 `LikeService.deleteContentLike`（新委托，ContentService 在 DB 提交后显式调用，失效 count+set+empty 三 key）；死配置 `AppConfig.getContentRefreshMinutes` + app.properties `cache.content.refreshMinutes` 删除；**定时全量刷新去留（O-6）拍板=移除**，一致性由启动全量重建 + 索引懒重建 + 业务显式失效 + Cache-Aside 读自愈承担；ContentCacheManagerLifecycleTest 删除（旧类已无）、ContentServiceTest 断言随新路径调整；`mvn clean test` 干净构建无残留（默认 surefire 284 + pool 4 = 288 例全绿，stage8-target 已无 ContentCacheManager 字节码）+ pytest all 124 passed；本文件 4.3（content 域）/6.2（Redis 设计）/9.2（JUnit 表）/12 同步；BUSINESS_FLOW 3.1/4.x 缓存失效流程同步 |
 | 2026-09-12 | 2.8 | **C 缓存改造 T3 评论缓存重制（refactor(cache-03)）**：新建 `com.itheima.content.service.CommentCache`（拆 ContentCacheManager 评论职责）：评论树走 T1 CacheAside 三态/空标记 60s/独立 TTL（新增 cache.comment.ttlMinutes=10+抖动）/写失败 DEL；评论增/删/点赞 = 失效 `content:comments:{id}` 读自愈（4.5 业务显式失效，替代旧内存树原地增删，消除 H1），评论点赞经 CommentDao 新增轻查询 getContentIdByCommentId 定位所属内容后失效；getCommentsForContent 增加 dto==null 短路（读评论前先确认 content 存在，防隐藏内容评论泄漏）；删除/下架内容级联失效评论 key（deleteContent/hideContent）；ContentCacheManager 删除评论字段/方法（init 不再全量加载评论，缓解 H7），内存残留 T6 清理；业务逻辑（楼中楼/软删/开关门禁）/@WebServlet 零改动；JUnit 新增 CommentCacheTest 11 例 + 评论短路用例 1 例（tv.py test junit 261 例全绿）+ pytest all 124 passed；本文件 4.3/6.2/9.2/10.1/10.2 同步；BUSINESS_FLOW 3.1/4.1.2/4.2.x 评论缓存失效流程同步 |
 | 2026-09-12 | 2.7 | **C 缓存改造 T2 内容缓存重制（refactor(cache-02)）**：新建 `com.itheima.content.service.ContentCache`（Redis 内容缓存，拆 ContentCacheManager 内容职责）：内容详情走 T1 CacheAside 三态/空标记 60s/单飞/写失败 DEL，类型分区索引迁为 Redis LIST `content:index:{t}:{c}`（4 key/内容，启动 init 全量重建 + 索引缺失单飞懒重建），点赞/评论数/评论区开关变更 = 失效内容 key 读自愈（DB 列为源真理）；业务读路径（/start /search /detail /feed /profile）全切新缓存，业务逻辑/@WebServlet 零改动；H3 修复：addVideo/addPost 的 Redis 缓存写入移出 DB 事务；评论树内存缓存暂留 ContentCacheManager（T3 迁出），旧 updateCacheAfterAdd/removeContent/refreshContent 仅保留评论树/旧点赞 key 遗产副作用（代码注释标注 T3/T4 清理）；JUnit 新增 ContentCacheTest 12 例（tv.py test junit 252 例全绿）+ pytest all 124 passed；本文件 4.3/6.2/9.2/10.1/10.2 同步；BUSINESS_FLOW 3.1 缓存机制重写 |
 | 2026-09-12 | 2.6 | **C 缓存改造 T1 基建完成（refactor(cache-01)）**：新建 `com.itheima.cache` 基建包（7 类，纯新增零改动）：CacheKeys（统一 key 规范定稿 + 空标记 60s 常量）/ JacksonCodec（JSON 序列化）/ RedisAccess（回调式取还连接，支持同连接 pipeline/MULTI，异常包 CacheException）/ SingleFlight（单飞，失败/成功均 remove）/ CacheStatus+CacheResult（三态）/ CacheAside（三态 Cache-Aside 读 + 空标记独立 key + 写失败=DEL 自愈降级 + TTL ±10% 抖动）；KEY 规范：内容/评论/点赞计数与成员分离/关注双 Set/`empty:` 空标记；本任务不改任何业务读路径、不改 MyRedisPool、不引入 Spring/MyBatis/MQ；JUnit 新增 5 类 36 例（tv.py test junit 240 例全绿）；本文件 4.1/4.2/6.2/9.2/10.1/10.2 同步 |

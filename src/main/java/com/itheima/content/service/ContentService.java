@@ -38,7 +38,6 @@ public class ContentService {
     private final ContentLikeDao contentLikeDao;
     private final CommentService commentService;
     private final LikeService likeService;
-    private final ContentCacheManager contentCacheManager;
     private final ContentCache contentCache;
     private final CommentCache commentCache;
     private final ContentStatusFiller contentStatusFiller;
@@ -50,7 +49,6 @@ public class ContentService {
     public ContentService(ContentDao contentDao, ContentMediaDao contentMediaDao,
                           CommentDao commentDao, ContentLikeDao contentLikeDao,
                           CommentService commentService, LikeService likeService,
-                          ContentCacheManager contentCacheManager,
                           ContentCache contentCache,
                           CommentCache commentCache,
                           ContentStatusFiller contentStatusFiller,
@@ -61,7 +59,6 @@ public class ContentService {
         this.contentLikeDao = contentLikeDao;
         this.commentService = commentService;
         this.likeService = likeService;
-        this.contentCacheManager = contentCacheManager;
         this.contentCache = contentCache;
         this.commentCache = commentCache;
         this.contentStatusFiller = contentStatusFiller;
@@ -323,12 +320,12 @@ public class ContentService {
             }
         });
         // 缓存同步放事务提交后：
-        // 旧内容管理器：清内存评论树 + 旧格式点赞 key（T4/T6 迁出时随旧调用一并删除）
-        contentCacheManager.removeContent(contentId);
         // 新内容缓存：失效内容 key + 索引剔除（读自愈 404）
         contentCache.removeContent(contentId);
         // 新评论缓存：级联失效评论树 key（4.5 内容删除 → 显式删 content:comments:{id} + 空标记）
         commentCache.invalidateComments(contentId);
+        // 点赞缓存：失效计数/成员/空标记（T4 旧 ContentCacheManager.evictContent 副作用，T6 迁入）
+        likeService.deleteContentLike(contentId);
         return mediaUrls;
     }
 
@@ -376,12 +373,12 @@ public class ContentService {
             }
             return null;
         });
-        // 旧内容管理器：清内存评论树 + 旧格式点赞 key（T4/T6 迁出时随旧调用一并删除）
-        contentCacheManager.removeContent(contentId);
         // 新内容缓存：失效内容 key + 索引剔除
         contentCache.removeContent(contentId);
         // 新评论缓存：下架时失效内容评论树 key（读自愈；4.5 业务显式失效）
         commentCache.invalidateComments(contentId);
+        // 点赞缓存：失效计数/成员/空标记（T6 迁入，同删除路径）
+        likeService.deleteContentLike(contentId);
     }
 
     /**
@@ -399,9 +396,7 @@ public class ContentService {
             }
             return null;
         });
-        // 旧内容管理器：重建内存评论树（恢复评论可见；T3 迁出时随旧调用一并删除）
-        contentCacheManager.refreshContent(contentId);
-        // 新内容缓存：重载内容 + 索引
+        // 新内容缓存：重载内容 + 索引（旧内存评论树重建副作用已随旧管理器 T6 移除）
         contentCache.refreshContent(contentId);
     }
 

@@ -130,10 +130,6 @@ public final class AppConfig {
         return getLong("cache.content.ttlMinutes") * 60 * 1000;
     }
 
-    public static long getContentRefreshMinutes() {
-        return getLong("cache.content.refreshMinutes");
-    }
-
     public static long getCommentTtlSeconds() {
         return getLong("cache.comment.ttlMinutes") * 60;
     }

@@ -23,9 +23,9 @@
 
 | 编号 | 事项 | 状态 | 说明 |
 | ---- | ---- | ---- | ---- |
-| P5 | 缓存一致性弱点 | **本周期消化** | `LikeService.likeContent` 缓存更新在事务外，靠定时刷新兜底（计数暂可能不准）；与 ContentCacheManager 拆分改造同源 → 即本周期（C 缓存改造）主战场 |
+| P5 | 缓存一致性弱点 | **本周期已消化（T6）** | `LikeService.likeContent` 缓存更新在事务外，靠定时刷新兜底（计数暂可能不准）→ 由本周期 C 缓存改造消化：写路径条件写+失败失效、读三态自愈、定时刷新移除（详见 4.2/4.6 与 T6 回写） |
 | P6 | 优惠券抢购限流 | 默认不做 | 需用户确认纳入才拆任务；改动面 `CouponService`/`CouponController` |
-| U-07 | content ↔ comment 包层循环依赖（非 Bean 环） | 待定 | content 域共享组件被 comment 域引用，content 又引用 comment 的 CommentService；仅包架构不纯净，Java 允许；本周期 C 是消化点（随缓存重制观察是否自然解除） |
+| U-07 | content ↔ comment 包层循环依赖（非 Bean 环） | 待定（C 周期后观察：仍在） | content 域共享组件被 comment 域引用（CommentService 注入 ContentCache/CommentCache），content 又引用 comment 的 CommentService；仅包架构不纯净，Java 允许；T3 已移除 CommentService→ContentCacheManager 依赖，但包层环未自然解除，不随缓存重制消除 |
 
 ***
 
@@ -212,7 +212,7 @@ user:follower:{userId}   → Set<userId>           （谁关注了我）
 | # | 未定项 | 归期 | 说明 |
 | ---- | ---- | ---- | ---- |
 | O-5 | 初始化选择性加载 | 二期 | 启动全量加载（现状）改为按需回填 or 分级加载？评论是否仍全量 |
-| O-6 | 定时全量刷新去留 | 二期 | `scheduleAtFixedRate` 10 分钟全量刷新是否保留/改造（与 TTL 自愈的关系） |
+| O-6 | 定时全量刷新去留 | **已拍板（T6，一版移除）** | 旧 `ContentCacheManager.startScheduler` 10min 全量刷新已随旧类整体移除：内容/索引一致性由启动全量重建 + 索引 key 缺失单飞懒重建 + 业务显式失效（增删改/计数/门禁/隐藏恢复）+ Cache-Aside 按 key TTL 读自愈承担，不再需要周期性全库重载（原 H2/H7）。二期不再评估"保留/改造"；如需定期重建索引防长尾漂移，另行登记评估 |
 | O-7 | 搜索是否入缓存 | 二期 | 现走 MySQL FULLTEXT（合理），是否维持现状只缓存详情 |
 | O-8 | TTL 取值与滑动续期 | 二期 | 一版固定 TTL + 简单抖动；滑动续期（治 H2"热点固定过期反复回填"）是否做、各 key TTL 数值 |
 | O-9 | followerCount/followCount 计数 | 二期 | 关注关系入缓存后，Profile 展示的关注/粉丝计数是否一并入缓存（关系 Set 是成员，计数是独立 key） |
@@ -243,6 +243,8 @@ user:follower:{userId}   → Set<userId>           （谁关注了我）
 - **MVP 切分（已拍板）**：一版基础方案（统一 Redis + 三态空标记 + 写失败失效 + 单飞 + 点赞/关注）→ 二期迭代（TTL 精调/加载策略/搜索/计数）。
 - **红线措辞约定延续**：发现不改"红线"就阻碍后续工作 → 先向用户申请并说明理由，批准后才能动手。
 - **编号引用约定延续**：禁裸编号引用已归档周期元素；裸编号仅指本文档内部定义元素（H1~H11、O-5~O-9；O-1~O-4 已关闭）。
+- **定时刷新去留（O-6，T6 拍板）**：一版**移除**定时全量刷新；一致性由启动全量重建 + 索引懒重建 + 业务显式失效 + Cache-Aside 按 key TTL 读自愈承担（不再周期性全库重载）。
+- **删除/下架内容的点赞缓存清理（T6 落地）**：旧 ContentCacheManager.evictContent 的"失效点赞缓存"副作用迁入 `LikeService.deleteContentLike`（ContentService 删除/下架内容 DB 提交后显式调用，失效 count+set+empty 三 key），保持删除链路对外行为零变化。
 
 ***
 
@@ -254,3 +256,4 @@ user:follower:{userId}   → Set<userId>           （谁关注了我）
 | 2026-09-12 | 0.2 | 拍板 O-1~O-4 并回写：新增 4.9 统一单飞组件（ConcurrentHashMap+FutureTask，四处复用，失败必须 remove）、4.10 关注关系入缓存（user:following/follower 双 Set + MULTI 双写 + 失败双 DEL，边界=只做关系不做 feed 聚合）、4.11 全部重写（拆 god class + 业务零变化 + 分阶段切换）、4.12 一版/二期切分；**修正 4.2 写失败语义**：写失败=失效（DEL）让读自愈，而非忽略留旧缓存（用户质疑"热门内容新评论长期不可见"后修正）；未定项重编号 O-5~O-9（TTL 滑动续期 O-8、关注/粉丝计数 O-9） |
 | 2026-09-12 | 0.3 | 新增 4.13 基建归属：新建 `com.itheima.cache` 基建包装技术无关组件（统一 Redis 访问/序列化/key 规范/单飞/三态/空标记/写失败 DEL 封装）；业务缓存类放各自业务域（内容/评论→content、点赞→like、关注→follow），避免其它域反向依赖业务域破坏域边界 |
 | 2026-09-12 | 0.4 | T2 内容缓存重制拍板回写（G7）：① 4.1 索引"方案待定"→已定：类型分区索引 = Redis LIST `content:index:{t}:{c}`（4 key/内容，LREM+LPUSH 新前序，启动全量重建+懒重建），`recommendList` 死代码废弃；② 4.1 新增计数/门禁变更策略：点赞/评论数/评论区开关变更 = 失效 content key 读自愈（DB 列为源真理，不读改写）；③ H3 修复落地：addVideo/addPost 的 Redis 缓存写入（`contentCache.addContent`）移出 DB 事务；④ 说明：旧 `updateCacheAfterAdd`（评论树空列表种子）因签名需 Connection 仍在事务内调用，仅作用于旧内存/评论树且对读路径无影响（H3 修复点=新 Redis 写入已移出），T3 迁出评论时删除；旧 `removeContent`/`refreshContent`（清内存评论树/旧点赞 key、恢复评论树）保留至 T3/T4 |
+| 2026-09-12 | 0.5 | **T6 收尾拍板回写**：① O-6 定时刷新去留=**一版移除**（随旧 ContentCacheManager 整体删除，理由见 O-6 行）；② 删除路径点赞缓存清理迁入 `LikeService.deleteContentLike`（七决策记录）；③ P5 标记已消化；④ U-07 观察结论=C 周期后包层环仍在（未自然解除）；⑤ 0.4 遗留的 `removeContent`/`refreshContent` 遗产副作用已随旧类删除 |
