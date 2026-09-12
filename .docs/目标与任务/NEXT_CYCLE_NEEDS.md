@@ -1,7 +1,7 @@
 # 下一周期需求与痛点
 
 > 用途：回答"下一周期为什么做这些"——本周期要解决的痛点、候选任务的优先级映射、以及开工前必须拍板的技术决策。
-> 状态：**核心决策已拍板（2026-09-12）** —— 统一 Redis 缓存 + Cache-Aside 三态（miss/hit-empty/hit-data）+ 空标记独立 key + 短 TTL + 缓存必须可降级 + 写失败=失效（DEL）+ 统一单飞组件 + 关注关系入缓存（双 Set + MULTI）+ 全部重制（拆 god class、行为零变化、分阶段切换）。一版基础方案与二期迭代已切分；O-5~O-9 待续聊后再进任务清单。
+> 状态：**一版已完成（T1~T6，2026-09-12）；二期范围已拍板（2026-09-12）** —— 一版核心决策（统一 Redis + Cache-Aside 三态 + 空标记独立 key + 短 TTL + 可降级 + 写失败=失效（DEL）+ 统一单飞 + 关注双 Set + MULTI + 全部重制）已全部落地（T1 基建 + T2~T5 四域 + T6 收尾）。二期 = 观测埋点（惰性日志）+ 读路径加固（H12/H13）+ O-8 TTL 精调，详见 4.14；O-7 拍板维持 FULLTEXT 直查；O-5/O-9 留池未排期；分布式继续延后。本文档不归档（二期需求已排、O-5/O-9 未消化）。
 > 来源：260912-package-refactor 周期（B 方向 feature package 改造，T1~T9 全部完成，pkg-01~pkg-09 已合并）归档后的新一轮规划。方向：用户提出缓存改造（此前预告的 C 方向），当前分支 `refactor/cache-architecture`。
 > 术语约定：**周期 > 任务**。本文档只回答 Why（需求与决策），How（拆任务）在任务清单文档。
 
@@ -62,6 +62,14 @@
 | H10 | 低 | `getRecommendByFilter` 每次拷贝并 shuffle 全量索引，只取 12 条，数据量大时 O(n) |
 
 > 另有**实锤 bug**（H11，独立登记）：[LikeCacheService.syncContentLikers](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/like/service/LikeCacheService.java#L222-L234) 的 `__placeholder__` 占位写法已失效——`sadd` 后立即 `srem` 移掉最后成员，Redis 自动回收空集合 key，等于没标记，`EXISTS` 仍 false，继续穿透。
+
+> **二期探索补充（2026-09-12，一版落地后复查发现）**：
+
+| 编号 | 严重度 | 问题 |
+| ---- | ---- | ---- |
+| H12 | 中 | 读路径 RTT 放大：[CacheAside.getInternal](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/cache/CacheAside.java#L94-L118) 每次读 = EXISTS 空标记 + GET 两趟往返；/start 推荐 12 条内容逐条 `getContent` ≈ 24+ 趟往返（[ContentCache.getRecommendByFilter](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ContentCache.java#L90-L113)）；索引 `LRANGE 0 -1` 每请求拉全量 id |
+| H13 | 低 | KEYS 命令阻塞：[removeContent](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ContentCache.java#L139-L153) 与 rebuildIndexes 用 `KEYS "content:index:*"`，Redis 主线程 O(N)，数据量大后隐患（应换 SCAN） |
+| H14 | 低 | 无观测能力：全链路只有 WARNING 日志，无命中率/穿透/降级/写失败计数——O-8 TTL 精调与后续调优没有数据依据 |
 
 ### 3.3 目标形态（Why 的答案）
 
@@ -194,6 +202,7 @@ user:follower:{userId}   → Set<userId>           （谁关注了我）
   6. 初始化选择性加载、定时刷新去留
   7. 性能调优、分布式
 - 迭代前提：一版结构不堵死二期（4.1~4.11 一次做对，5~7 留口子）。
+- **二期范围已拍板（2026-09-12，见 4.14）**：观测埋点（治 H14）+ 读路径加固（治 H12/H13）+ O-8 TTL 精调；O-7 维持 FULLTEXT 直查；O-5/O-9 留池；分布式延后。
 
 ### 4.13 基建归属（已拍板：cache 单独成包）
 
@@ -203,26 +212,38 @@ user:follower:{userId}   → Set<userId>           （谁关注了我）
 - 理由：① 基建会被 content/comment/like/follow/admin 全域引用，放业务域会造成其它域反向依赖业务域，破坏 B 周期域边界（硬伤）；② util 是"通用小工具"（连接池/JWT/密码/日志），缓存抽象是本次核心地基，塞 util 会变杂货铺。
 - 分工边界：`com.itheima.cache` = 技术无关；业务域 = 技术 + 业务（key/TTL/失效策略）。
 
+### 4.14 二期范围与设计要点（已拍板，2026-09-12）
+
+- **二期主线 = "测量 → 优化 → 再测量"闭环**，拆 3 任务（T7→T8→T9，见任务清单）：
+  1. **T7 观测埋点（治 H14）**：新增 `CacheStats` 统计组件——六类事件计数（hitData / hitEmpty / miss / loadCount / degradeCount / writeFailCount），AtomicLong 无锁；**按 key 前缀分域分桶**（域解析收敛到 `CacheKeys.domainOf` 单一源，key 生成与解析同源不漂移；分域是刻意设计：将来 O-8 分域调 TTL 需要各域自己的命中率曲线）；埋点位置 = CacheAside 自动挂（JSON 路径全覆盖）+ LikeCacheService/FollowCache 原生 Set 三态路径手动打点（不埋则点赞成员/关注关系穿透率是盲区）。
+  2. **T8 读路径加固（治 H12/H13）**：CacheAside 单 key 读 pipeline 化（EXISTS 空标记 + GET 合一趟往返）+ 批量读接口（pipeline/MGET，批量三态判断须与单 key 语义一致）；`getRecommendByFilter` 逐条 getContent 改批量；`KEYS "content:index:*"` → SCAN。**LRANGE 全量读保留**（推荐 shuffle 对外语义不变）。
+  3. **T9 O-8 TTL 精调**：读命中顺带续期（挂 T8 pipeline 读路径）+ 分域 TTL 取值（只动既有 `cache.*.ttlMinutes` 配置）；**调参依据 = T7 观测数据**（本地流量不足时用测试/压测流量造数，执行时评估）。
+- **统计输出方式（用户拍板）：惰性日志**——每 N 次缓存访问顺带输出一次各域摘要；**不引入定时器**（与 O-6 移除定时刷新的决策不冲突：统计只读不重建）、**不新增 admin 端点**。
+- **O-7 搜索（用户拍板）：维持 FULLTEXT 直查，不做缓存**——关键词基数大命中率低、结果新鲜度敏感，缓存性价比差。
+- **待 T9 执行时拍板**：空标记 60s 是否参与续期（倾向**不续期**，防"假空"窗口延长，执行时定）。
+- **O-5 / O-9 继续留池未排期**；分布式（单飞进程内锁的多实例化）继续延后，不破一版留的口子。
+
 ***
 
 ## 五、未定项（待续聊，进任务清单前须拍板）
 
-> O-1~O-4 已拍板（见 4.9~4.12），下表仅剩未定项，按"一版/二期"归类。
+> O-1~O-4 已拍板（见 4.9~4.12），O-7/O-8 已拍板或排期（见 4.14），下表仅剩留池未定项。
 
 | # | 未定项 | 归期 | 说明 |
 | ---- | ---- | ---- | ---- |
-| O-5 | 初始化选择性加载 | 二期 | 启动全量加载（现状）改为按需回填 or 分级加载？评论是否仍全量 |
+| O-5 | 初始化选择性加载 | 留池（二期未排） | 启动全量加载（现状）改为按需回填 or 分级加载？评论是否仍全量 |
 | O-6 | 定时全量刷新去留 | **已拍板（T6，一版移除）** | 旧 `ContentCacheManager.startScheduler` 10min 全量刷新已随旧类整体移除：内容/索引一致性由启动全量重建 + 索引 key 缺失单飞懒重建 + 业务显式失效（增删改/计数/门禁/隐藏恢复）+ Cache-Aside 按 key TTL 读自愈承担，不再需要周期性全库重载（原 H2/H7）。二期不再评估"保留/改造"；如需定期重建索引防长尾漂移，另行登记评估 |
-| O-7 | 搜索是否入缓存 | 二期 | 现走 MySQL FULLTEXT（合理），是否维持现状只缓存详情 |
-| O-8 | TTL 取值与滑动续期 | 二期 | 一版固定 TTL + 简单抖动；滑动续期（治 H2"热点固定过期反复回填"）是否做、各 key TTL 数值 |
-| O-9 | followerCount/followCount 计数 | 二期 | 关注关系入缓存后，Profile 展示的关注/粉丝计数是否一并入缓存（关系 Set 是成员，计数是独立 key） |
+| O-7 | 搜索是否入缓存 | **已拍板（2026-09-12，维持直查）** | 维持 MySQL FULLTEXT 直查、不做缓存（关键词基数大命中率低、新鲜度敏感；详见 4.14）。若未来要动，另行登记评估 |
+| O-8 | TTL 取值与滑动续期 | **已排期二期（T9）** | 读命中顺带续期 + 分域取值，调参依据=T7 观测数据；空标记续期与否待 T9 执行时拍板（见 4.14） |
+| O-9 | followerCount/followCount 计数 | 留池（二期未排） | 关注关系入缓存后，Profile 展示的关注/粉丝计数是否一并入缓存（关系 Set 是成员，计数是独立 key；注意 SCARD 冷 set 返 0 的坑） |
 
 ***
 
 ## 六、本周期范围与边界（初步，待任务清单定稿后细化）
 
-- **一版范围内**：缓存层统一 Redis（重写 ContentCacheManager/LikeCacheService + 新增关注缓存，拆 god class）；三态 Cache-Aside + 空标记独立 key + 短 TTL + 简单抖动；写失败=失效（DEL）+ 读自愈；统一单飞组件；点赞计数/成员分离；关注关系双 Set + MULTI；占位符清除（H11）；H1~H6 修复；常青文档同步（CURRENT_ARCHITECTURE.md 六.Redis 设计、BUSINESS_FLOW.md 3.1 缓存机制等）；测试维护。
-- **二期（本周期不做，跑通后再排）**：O-5 初始化选择性加载；O-6 定时刷新去留；O-7 搜索入缓存；O-8 TTL 滑动续期与取值；O-9 关注/粉丝计数入缓存。
+- **一版范围内（已完成，T1~T6）**：缓存层统一 Redis（重写 ContentCacheManager/LikeCacheService + 新增关注缓存，拆 god class）；三态 Cache-Aside + 空标记独立 key + 短 TTL + 简单抖动；写失败=失效（DEL）+ 读自愈；统一单飞组件；点赞计数/成员分离；关注关系双 Set + MULTI；占位符清除（H11）；H1~H6 修复；常青文档同步（CURRENT_ARCHITECTURE.md 六.Redis 设计、BUSINESS_FLOW.md 3.1 缓存机制等）；测试维护。
+- **二期范围内（已排期，T7~T9）**：观测埋点 CacheStats（六类事件/分域/惰性日志，治 H14）；读路径加固（单 key pipeline 化/批量读/getRecommendByFilter 批量化/KEYS→SCAN，治 H12/H13）；O-8 TTL 精调（滑动续期+分域取值，依据 T7 数据）。
+- **留池未排（O-5/O-9）**：初始化选择性加载；关注/粉丝计数入缓存——是否纳入后续迭代，跑完二期再评估。
 - **范围外（默认不做）**：P6 优惠券限流；D feed 流改造（含 feed 聚合缓存）；前端；新增缓存之外的业务功能。
 - **禁止**：Spring/SpringBoot/MyBatis（沿用）；擅自改动 `@WebServlet` URL、web.xml、IoC 扫描；业务逻辑改动（点赞去重/楼中楼/搜索，纯缓存层重制）。
 
@@ -257,3 +278,4 @@ user:follower:{userId}   → Set<userId>           （谁关注了我）
 | 2026-09-12 | 0.3 | 新增 4.13 基建归属：新建 `com.itheima.cache` 基建包装技术无关组件（统一 Redis 访问/序列化/key 规范/单飞/三态/空标记/写失败 DEL 封装）；业务缓存类放各自业务域（内容/评论→content、点赞→like、关注→follow），避免其它域反向依赖业务域破坏域边界 |
 | 2026-09-12 | 0.4 | T2 内容缓存重制拍板回写（G7）：① 4.1 索引"方案待定"→已定：类型分区索引 = Redis LIST `content:index:{t}:{c}`（4 key/内容，LREM+LPUSH 新前序，启动全量重建+懒重建），`recommendList` 死代码废弃；② 4.1 新增计数/门禁变更策略：点赞/评论数/评论区开关变更 = 失效 content key 读自愈（DB 列为源真理，不读改写）；③ H3 修复落地：addVideo/addPost 的 Redis 缓存写入（`contentCache.addContent`）移出 DB 事务；④ 说明：旧 `updateCacheAfterAdd`（评论树空列表种子）因签名需 Connection 仍在事务内调用，仅作用于旧内存/评论树且对读路径无影响（H3 修复点=新 Redis 写入已移出），T3 迁出评论时删除；旧 `removeContent`/`refreshContent`（清内存评论树/旧点赞 key、恢复评论树）保留至 T3/T4 |
 | 2026-09-12 | 0.5 | **T6 收尾拍板回写**：① O-6 定时刷新去留=**一版移除**（随旧 ContentCacheManager 整体删除，理由见 O-6 行）；② 删除路径点赞缓存清理迁入 `LikeService.deleteContentLike`（七决策记录）；③ P5 标记已消化；④ U-07 观察结论=C 周期后包层环仍在（未自然解除）；⑤ 0.4 遗留的 `removeContent`/`refreshContent` 遗产副作用已随旧类删除 |
+| 2026-09-12 | 0.6 | **二期规划拍板回写**（一版 T1~T6 完成后的续期讨论）：① 状态行更新为一版已完成+二期范围已拍板，本文档不归档；② 新增二期探索补充问题 H12（读路径 RTT 放大）/H13（KEYS 命令阻塞）/H14（无观测能力）；③ 新增 4.14 二期范围与设计要点：主线=观测埋点（CacheStats 六类事件/分域/惰性日志输出）→ 读路径加固（pipeline 化/批量读/SCAN）→ O-8 TTL 精调（滑动续期+分域取值，依据 T7 数据），拆 3 任务 T7~T9；④ O-7 拍板维持 FULLTEXT 直查；⑤ O-5/O-9 留池未排期、分布式继续延后；⑥ 更新六.范围与边界 |
