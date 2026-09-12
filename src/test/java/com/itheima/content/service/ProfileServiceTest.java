@@ -18,6 +18,8 @@ import org.junit.jupiter.api.Test;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -48,6 +50,13 @@ class ProfileServiceTest {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);
         });
+        // T8：profile 页内改批量读；默认空映射，用例内自行覆盖
+        when(contentCache.getContentsBatch(anyList())).thenReturn(Collections.emptyMap());
+    }
+
+    /** getContentsBatch 桩（id → DTO，null 值=缓存 miss 跳过）。 */
+    private void stubGetBatch(Map<Long, ContentCacheDTO> values) {
+        when(contentCache.getContentsBatch(anyList())).thenReturn(values);
     }
 
     private User user() {
@@ -103,8 +112,7 @@ class ProfileServiceTest {
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L, 2L));
         ContentCacheDTO dto1 = dto(1L);
         ContentCacheDTO dto2 = dto(2L);
-        when(contentCache.getContent(1L)).thenReturn(dto1);
-        when(contentCache.getContent(2L)).thenReturn(dto2);
+        stubGetBatch(Map.of(1L, dto1, 2L, dto2));
         when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
         when(contentCache.toContentVO(dto2)).thenReturn(vo(2L));
         when(followCache.isFollowing(8L, 7L)).thenReturn(true);
@@ -127,9 +135,12 @@ class ProfileServiceTest {
     void getProfileSkipsCacheMissAndQueriesLikedForSurvivors() throws SQLException {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L, 2L));
-        when(contentCache.getContent(1L)).thenReturn(null);
         ContentCacheDTO dto2 = dto(2L);
-        when(contentCache.getContent(2L)).thenReturn(dto2);
+        // 1 为缓存 miss（null）；Map.of 不允许 null，用 HashMap
+        Map<Long, ContentCacheDTO> values = new HashMap<>();
+        values.put(1L, null);
+        values.put(2L, dto2);
+        stubGetBatch(values);
         when(contentCache.toContentVO(dto2)).thenReturn(vo(2L));
         when(likeService.batchIsContentLiked(8L, java.util.List.of(2L)))
                 .thenReturn(java.util.Map.of(2L, true));
@@ -146,7 +157,7 @@ class ProfileServiceTest {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L));
         ContentCacheDTO dto1 = dto(1L);
-        when(contentCache.getContent(1L)).thenReturn(dto1);
+        stubGetBatch(Map.of(1L, dto1));
         when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
         when(likeService.batchIsContentLiked(7L, java.util.List.of(1L)))
                 .thenReturn(java.util.Map.of(1L, true));
@@ -163,7 +174,7 @@ class ProfileServiceTest {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L));
         ContentCacheDTO dto1 = dto(1L);
-        when(contentCache.getContent(1L)).thenReturn(dto1);
+        stubGetBatch(Map.of(1L, dto1));
         when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
 
         ProfileVO profile = service.getProfile(7L, null, 1, 10);
@@ -179,7 +190,7 @@ class ProfileServiceTest {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L));
         ContentCacheDTO dto1 = dto(1L);
-        when(contentCache.getContent(1L)).thenReturn(dto1);
+        stubGetBatch(Map.of(1L, dto1));
         when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
         when(likeService.batchIsContentLiked(8L, java.util.List.of(1L))).thenReturn(null);
 
@@ -205,7 +216,7 @@ class ProfileServiceTest {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L, 2L, 3L));
         ContentCacheDTO dto3 = dto(3L);
-        when(contentCache.getContent(3L)).thenReturn(dto3);
+        stubGetBatch(Map.of(3L, dto3));
         when(contentCache.toContentVO(dto3)).thenReturn(vo(3L));
 
         ProfileVO profile = service.getProfile(7L, 8L, 2, 2);

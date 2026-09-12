@@ -63,8 +63,10 @@ public class ProfileService {
                 List<Long> pageIds = offset < total ? allIds.subList(offset, end) : Collections.emptyList();
 
                 List<ContentVO> contentVOList = new ArrayList<>();
+                // T8：页内批量读（一趟 pipeline，语义与逐条 getContent 一致），按原序跳过 null
+                Map<Long, ContentCacheDTO> byId = contentCache.getContentsBatch(pageIds);
                 for (Long contentId : pageIds) {
-                    ContentCacheDTO cached = contentCache.getContent(contentId);
+                    ContentCacheDTO cached = byId.get(contentId);
                     if (cached == null) continue;
                     contentVOList.add(contentCache.toContentVO(cached));
                 }

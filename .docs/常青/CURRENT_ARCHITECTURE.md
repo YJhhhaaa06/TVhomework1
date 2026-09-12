@@ -204,9 +204,9 @@ com.itheima/
 | SingleFlight | 65 | 统一单飞组件（4.9）：ConcurrentHashMap+FutureTask，失败/成功均 remove（防缓存失败结果 + 防泄漏） |
 | CacheStatus | 15 | 三态枚举：MISS / HIT_EMPTY / HIT_DATA |
 | CacheResult | 39 | 三态读取结果载体（status + value，HIT_EMPTY 时 value=null） |
-| CacheAside | 230 | 统一 Cache-Aside 封装：`read` 三态读 / `get` 带单飞回填 / `writeOrInvalidate`（写失败=DEL 自愈，写数据同时清空标记）/ `markEmpty` / `invalidate`，TTL ±10% 简单抖动，缓存失败一律降级不抛业务异常；T7 起三态读/降级/LOAD/写失败处自动打点 CacheStats |
+| CacheAside | 230 | 统一 Cache-Aside 封装：`read` 三态读 / `get` 带单飞回填 / `writeOrInvalidate`（写失败=DEL 自愈，写数据同时清空标记）/ `markEmpty` / `invalidate`，TTL ±10% 简单抖动，缓存失败一律降级不抛业务异常；T7 起三态读/降级/LOAD/写失败处自动打点 CacheStats；**T8 起读路径 pipeline 化**（单 key 与批量均 EXISTS 空标记+GET 一趟往返）并新增 **`getBatch` 批量读接口**（三态语义与单 key 一致、miss 逐个单飞回填、解析失败/整批降级逐 key 直接 loader 不写回） |
 
-> 测试：`src/test/java/com/itheima/cache/` 6 类 47 例（mockStatic MyRedisPool + mock Jedis，不碰真实 Redis，含 CacheStatsTest 域解析/计数/惰性输出 8 例），见九.9.2。
+> 测试：`src/test/java/com/itheima/cache/` 6 类 54 例（mockStatic MyRedisPool + mock Jedis，不碰真实 Redis，含 CacheStatsTest 域解析/计数/惰性输出 8 例；CacheAsideTest 26 例含单 key pipeline 往返断言与批量三态/降级/脏 JSON 用例），见九.9.2。
 
 ### 4.3 业务域包（每域 controller/service/dao/model 分层）
 
@@ -371,6 +371,16 @@ com.itheima/
 - **红线段**：`record()` 自身异常吞掉记 WARNING，不影响主链路；统计不引入 MQ。
 - **用途**：分域命中率/穿透曲线为 O-8（T9）分域 TTL 调参与 T8 读路径加固前后对比提供数据依据。
 
+### 6.4 读路径加固（T8 新增，治 H12/H13）
+
+> 二期读路径加速（NEEDS 4.14 T8），**对外行为零变化**（推荐 shuffle 语义与结果分布、`LRANGE 0 -1` 全量读、索引 LREM+LPUSH 语义、三态判断顺序一概不变；仅合并往返/换非阻塞命令）。
+
+- **单 key 读 pipeline 化**：`CacheAside.read` / `getInternal` 由"EXISTS 空标记 + GET 数据 key 两趟往返"合并为**一趟 pipeline**（内部 `probe(dataKey)` 复用，三态/空标记/单飞/降级语义与统计逐条不变）。
+- **批量读接口**：`CacheAside.getBatch(List<String> dataKeys, Class<T>, Function<String,T>, long)` → `Map<String,T>`——一趟 pipeline 批量 EXISTS+GET，三态判断与单 key 完全一致（先空标记后数据 key），miss 项逐个单飞回填；**批量记录粒度=每 (数据 key, 决策) 记一次**（T7 口径延续）；单个 key 脏 JSON 或整批 Redis 异常 → 该 key/全部 key `DEGRADE` + 直接 loader 不写回（对齐单 key 降级语义）。调用方保证 key 无重复。
+- **内容批量接入**：`ContentCache.getContentsBatch(List<Long>)`（id → DTO 映射，null 值=hit-empty/DB 无数据透传）；`getRecommendByFilter`（/start 推荐 12 条 ≈ 24+ 往返 → 一趟 pipeline + 少量 miss 回填）、`FeedService.getFeed`、`ProfileService.getProfile` 页循环均改批量读。
+- **索引 KEYS→SCAN**：`ContentCache.forEachIndexKey`（`scan(cursor, ScanParams.match("content:index:*").count(100))` 游标收敛于 "0"）替换 `KEYS "content:index:*"`（removeContent 的 LREM、rebuildIndexes 的 DEL 两处，治 H13 Redis 主线程 O(N) 阻塞；LREM/DEL 幂等，SCAN 重复 key 无害）。
+- **统计口径**：批量读打点与单 key 一致（T9 分域取参数据连续）；单 key 与批量均为 1 趟往返（CacheAsideTest 有 `pipelined()` 次数断言）。
+
 ---
 
 ## 七、API 接口清单
@@ -519,7 +529,7 @@ src/main/webapp/
 |------|--------|----------|
 | user/service/UserServiceTest | 23 | 登录/注册/改密/改资料/isAdmin |
 | content/service/ContentServiceTest | 48 | 搜索/详情/评论查询/发布/评论区开关/编辑作品（换源/删图/改文案）/删除作品/内容审核下架恢复 |
-| content/service/ContentCacheTest | 12 | Redis 内容缓存：三态 loader 构建（含媒体 URL）/DB 无媒体损坏降级/索引读取与懒重建/写路径失效契约/init 重建不 crash/失效方法/VO 复制 |
+| content/service/ContentCacheTest | 16 | Redis 内容缓存：三态 loader 构建（含媒体 URL）/DB 无媒体损坏降级/索引读取与懒重建/**getContentsBatch 批量读映射与空值透传/推荐批量跳过 null 截断 limit/SCAN 遍历索引**/写路径失效契约/init 重建不 crash/失效方法/VO 复制 |
 | content/service/CommentCacheTest | 11 | Redis 评论缓存：三态 loader（树构建/deep-chain 归一化/无评论 null/DB 降级）/invalidateComments 显式失效/评论点赞定位失效/collectCommentIds 展平 |
 | content/service/FeedServiceTest | 8 | 关注动态流 |
 | content/service/ProfileServiceTest | 12 | 用户主页 |
@@ -536,12 +546,12 @@ src/main/webapp/
 | cache/JacksonCodecTest | 4 | DTO 往返、null 处理、TypeReference 泛型、非法 JSON 抛 CacheException |
 | cache/RedisAccessTest | 4 | execute/executeVoid 取还连接、异常包装 CacheException（含连接获取失败） |
 | cache/SingleFlightTest | 4 | 并发同 key 只 load 一次、失败/成功 remove、不同 key 独立 |
-| cache/CacheAsideTest | 19 | 三态 read、Cache-Aside get 命中/回填/空标记、降级不写回、写失败 DEL、清空标记防假空、markEmpty/invalidate best-effort +T7 统计接线（hitData/MISS+LOAD/降级计数） |
+| cache/CacheAsideTest | 26 | 三态 read、Cache-Aside get 命中/回填/空标记、降级不写回、写失败 DEL、清空标记防假空、markEmpty/invalidate best-effort +T7 统计接线（hitData/MISS+LOAD/降级计数）+**T8 批量读（混合三态/全空标记跳过 loader/miss 空标记回填/整批降级/脏 JSON 单 key 降级/空入参/批量统计打点 + 单 key 一趟 pipeline 往返断言）** |
 | cache/CacheStatsTest | 8 |（T7 新增）观测统计组件：domainOf 域解析全形态/前缀重叠优先级、六类计数分桶、惰性日志触发与摘要、打点异常吞掉 |
-| **合计** | **301** | - |
+| **合计** | **312** | - |
 
 > 注：`com.itheima.tools.CouponAdmin` 属 tools 测试脚本目录（非测试类，package 保留 `com.itheima.tools`，仅 import java.*，无主代码引用）；`util/MyConnectionPoolTest` 被测类未动（基建），测试文件留在 util 包不迁。
-> 用例数取自 `stage8-target/surefire-reports`（2026-09-12 实测，`mvn test` 全绿 301 例 = T6 末尾 288 + T7 新增 13（CacheStatsTest 8 + CacheAsideTest +3 + LikeCacheServiceTest +1 + FollowCacheTest +1）；surefire 297 + 独立 fork pool-test 4）。
+> 用例数取自 `stage8-target/surefire-reports`（2026-09-12 实测，`mvn test` 全绿 312 例 = T7 末尾 301 + T8 新增 11（CacheAsideTest +7 批量读/往返断言、ContentCacheTest +4 批量与 SCAN）；surefire 308 + 独立 fork pool-test 4）。
 
 > 构建输出：沙箱内 Maven 通过 `-Dstage8.buildDir` 指向 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（pom 默认 `./target`），原因是沙箱内 javac 无法把 worktree `target/classes` 作为 classpath（报"程序包不存在"）。
 > 离线仓库：新增测试依赖（junit/mockito/bytebuddy/surefire 等）的 `_remote.repositories` 已补 `>aliyun=` 来源行（只追加不删除），默认 aliyun 镜像下可离线解析。
@@ -615,6 +625,7 @@ src/main/webapp/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-09-12 | 2.10 | **C 缓存改造 T8 二期读路径加固（refactor(cache-08)，治 H12/H13）**：`CacheAside` 读路径 pipeline 化——`read`/`getInternal`（EXISTS 空标记+GET 一趟往返，内部 `probe` 复用）+ 新增 `getBatch` 批量读接口（一趟 pipeline 批量 EXISTS+GET，三态语义与单 key 完全一致、miss 逐个单飞回填、脏 JSON 单 key/整批降级直接 loader 不写回，统计按 (key, 决策) 打点）；`ContentCache` 新增 `getContentsBatch`，`getRecommendByFilter`（/start 12 条 ≈24+ 往返 → 一趟 pipeline+少量回填）、`FeedService.getFeed`、`ProfileService.getProfile` 页循环改批量读；索引 `KEYS "content:index:*"` → **SCAN**（`forEachIndexKey`，removeContent LREM 与 rebuildIndexes DEL 两处，治 H13）；对外行为零变化（推荐 shuffle/`LRANGE 0 -1`/LREM+LPUSH/三态顺序一概不变）；JUnit 新增 11 例（surefire 308 + pool 4 = 312 例全绿，CacheAsideTest 26 例含批量三态/降级与单 key 一趟往返断言、ContentCacheTest 16 例含批量与 SCAN 多游标）+ pytest all 124 passed；本文件 4.2/4.3/6.4/9.2/12 同步；BUSINESS_FLOW 3.1 读路径往返/KEYS 表述同步 |
 | 2026-09-12 | 2.9 | **C 缓存改造 T6 收尾（refactor(cache-06)）**：旧 `ContentCacheManager`（内存 HashMap 缓存/索引/推荐列表/定时刷新）整体移除，删除 ContentService 三处旧调用（deleteContent/hideContent 的 removeContent、unhideContent 的 refreshContent），其"旧格式点赞 key 清理"副作用迁入 `LikeService.deleteContentLike`（新委托，ContentService 在 DB 提交后显式调用，失效 count+set+empty 三 key）；死配置 `AppConfig.getContentRefreshMinutes` + app.properties `cache.content.refreshMinutes` 删除；**定时全量刷新去留（O-6）拍板=移除**，一致性由启动全量重建 + 索引懒重建 + 业务显式失效 + Cache-Aside 读自愈承担；ContentCacheManagerLifecycleTest 删除（旧类已无）、ContentServiceTest 断言随新路径调整；`mvn clean test` 干净构建无残留（默认 surefire 284 + pool 4 = 288 例全绿，stage8-target 已无 ContentCacheManager 字节码）+ pytest all 124 passed；本文件 4.3（content 域）/6.2（Redis 设计）/9.2（JUnit 表）/12 同步；BUSINESS_FLOW 3.1/4.x 缓存失效流程同步 |
 | 2026-09-12 | 2.8 | **C 缓存改造 T3 评论缓存重制（refactor(cache-03)）**：新建 `com.itheima.content.service.CommentCache`（拆 ContentCacheManager 评论职责）：评论树走 T1 CacheAside 三态/空标记 60s/独立 TTL（新增 cache.comment.ttlMinutes=10+抖动）/写失败 DEL；评论增/删/点赞 = 失效 `content:comments:{id}` 读自愈（4.5 业务显式失效，替代旧内存树原地增删，消除 H1），评论点赞经 CommentDao 新增轻查询 getContentIdByCommentId 定位所属内容后失效；getCommentsForContent 增加 dto==null 短路（读评论前先确认 content 存在，防隐藏内容评论泄漏）；删除/下架内容级联失效评论 key（deleteContent/hideContent）；ContentCacheManager 删除评论字段/方法（init 不再全量加载评论，缓解 H7），内存残留 T6 清理；业务逻辑（楼中楼/软删/开关门禁）/@WebServlet 零改动；JUnit 新增 CommentCacheTest 11 例 + 评论短路用例 1 例（tv.py test junit 261 例全绿）+ pytest all 124 passed；本文件 4.3/6.2/9.2/10.1/10.2 同步；BUSINESS_FLOW 3.1/4.1.2/4.2.x 评论缓存失效流程同步 |
 | 2026-09-12 | 2.7 | **C 缓存改造 T2 内容缓存重制（refactor(cache-02)）**：新建 `com.itheima.content.service.ContentCache`（Redis 内容缓存，拆 ContentCacheManager 内容职责）：内容详情走 T1 CacheAside 三态/空标记 60s/单飞/写失败 DEL，类型分区索引迁为 Redis LIST `content:index:{t}:{c}`（4 key/内容，启动 init 全量重建 + 索引缺失单飞懒重建），点赞/评论数/评论区开关变更 = 失效内容 key 读自愈（DB 列为源真理）；业务读路径（/start /search /detail /feed /profile）全切新缓存，业务逻辑/@WebServlet 零改动；H3 修复：addVideo/addPost 的 Redis 缓存写入移出 DB 事务；评论树内存缓存暂留 ContentCacheManager（T3 迁出），旧 updateCacheAfterAdd/removeContent/refreshContent 仅保留评论树/旧点赞 key 遗产副作用（代码注释标注 T3/T4 清理）；JUnit 新增 ContentCacheTest 12 例（tv.py test junit 252 例全绿）+ pytest all 124 passed；本文件 4.3/6.2/9.2/10.1/10.2 同步；BUSINESS_FLOW 3.1 缓存机制重写 |

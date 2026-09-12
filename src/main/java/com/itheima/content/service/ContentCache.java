@@ -25,12 +25,16 @@ import com.itheima.util.TransactionTemplate;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import redis.clients.jedis.Jedis;
+import redis.clients.jedis.params.ScanParams;
+import redis.clients.jedis.resps.ScanResult;
 
 /**
  * 内容缓存（C 周期 T2，拆 ContentCacheManager 的内容职责）：统一 Redis 缓存层。
@@ -84,6 +88,34 @@ public class ContentCache implements Initializable {
     }
 
     /**
+     * 批量读内容（T8 读路径加固）：一趟 pipeline 拉多条三态（语义与单 key 完全一致，
+     * miss 逐个单飞回填），供推荐/Feed/Profile 页循环复用，替代逐条 {@link #getContent} 的 2*N 往返。
+     *
+     * <p>返回 {@code contentId → DTO} 全量 Map（null 值合法 = hit-empty / DB 无数据），
+     * 调用方按键按原序收集并跳过 null。
+     */
+    public Map<Long, ContentCacheDTO> getContentsBatch(List<Long> contentIds) {
+        if (contentIds == null || contentIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        List<String> keys = new ArrayList<>(contentIds.size());
+        for (Long id : contentIds) {
+            keys.add(CacheKeys.content(id));
+        }
+        Map<String, ContentCacheDTO> byKey = cacheAside.getBatch(keys, ContentCacheDTO.class,
+                k -> loadContentFromDb(parseContentId(k)), ttlSeconds());
+        Map<Long, ContentCacheDTO> byId = new HashMap<>(byKey.size());
+        for (Map.Entry<String, ContentCacheDTO> entry : byKey.entrySet()) {
+            byId.put(parseContentId(entry.getKey()), entry.getValue());
+        }
+        return byId;
+    }
+
+    private static long parseContentId(String dataKey) {
+        return Long.parseLong(dataKey.substring("content:".length()));
+    }
+
+    /**
      * 首页推荐（类型/分区过滤）。索引为 Redis LIST，读取去重 + shuffle + limit（沿用旧 getRecommendByFilter 语义）。
      * type/category 参数校验与旧 buildQueryKey 一致（ParamException 同文案）。
      */
@@ -98,9 +130,11 @@ public class ContentCache implements Initializable {
 
         List<Long> distinctIds = new ArrayList<>(new LinkedHashSet<>(idList));
         Collections.shuffle(distinctIds);
+        // T8：批量一趟 pipeline 读全部候选（语义与逐条 getContent 一致），再按 shuffle 原序跳过 null 收到 limit
+        Map<Long, ContentCacheDTO> byId = getContentsBatch(distinctIds);
         List<ContentVO> result = new ArrayList<>();
         for (Long contentId : distinctIds) {
-            ContentCacheDTO dto = getContent(contentId);
+            ContentCacheDTO dto = byId.get(contentId);
             if (dto == null) {
                 continue;
             }
@@ -139,14 +173,9 @@ public class ContentCache implements Initializable {
     public void removeContent(long contentId) {
         cacheAside.invalidate(CacheKeys.content(contentId));
         try {
-            redisAccess.executeVoid(j -> {
-                Set<String> keys = j.keys("content:index:*");
-                if (keys != null) {
-                    for (String k : keys) {
-                        j.lrem(k, 0, String.valueOf(contentId));
-                    }
-                }
-            });
+            // T8：KEYS→SCAN（治 H13 阻塞），LREM 幂等，重复 key 无害
+            redisAccess.executeVoid(j ->
+                    forEachIndexKey(j, k -> j.lrem(k, 0, String.valueOf(contentId))));
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "内容索引移除失败, contentId=" + contentId, e);
         }
@@ -391,17 +420,10 @@ public class ContentCache implements Initializable {
         }
     }
 
-    /** 索引全量重建：先清掉历史 content:index:*，再按 findAllContent 顺序（新前序）重建。 */
+    /** 索引全量重建：先清掉历史 content:index:*（SCAN 遍历，T8 替代 KEYS），再按 findAllContent 顺序（新前序）重建。 */
     private void rebuildIndexes(List<ContentCacheDTO> all) {
         try {
-            redisAccess.executeVoid(j -> {
-                Set<String> keys = j.keys("content:index:*");
-                if (keys != null) {
-                    for (String k : keys) {
-                        j.del(k);
-                    }
-                }
-            });
+            redisAccess.executeVoid(j -> forEachIndexKey(j, k -> j.del(k)));
             redisAccess.executeVoid(j -> {
                 for (ContentCacheDTO dto : all) {
                     lremAndLpush(j, dto.getType(), dto.getCategoryId(), dto.getId());
@@ -410,6 +432,19 @@ public class ContentCache implements Initializable {
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "索引重建失败（降级为空推荐）", e);
         }
+    }
+
+    /** content:index:* 索引 key 的 SCAN 遍历助手（T8：KEYS→SCAN，治 H13 REDIS 主线程 O(N) 阻塞）。 */
+    private static void forEachIndexKey(Jedis j, Consumer<String> action) {
+        ScanParams params = new ScanParams().match("content:index:*").count(100);
+        String cursor = ScanParams.SCAN_POINTER_START;
+        do {
+            ScanResult<String> r = j.scan(cursor, params);
+            cursor = r.getCursor();
+            for (String k : r.getResult()) {
+                action.accept(k);
+            }
+        } while (!cursor.equals(ScanParams.SCAN_POINTER_START));
     }
 
     /** init 全量重建：内容 key + 索引一起写（分批落库后单事务读已由调用方保证）。 */

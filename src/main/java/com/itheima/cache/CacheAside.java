@@ -5,7 +5,14 @@ import com.itheima.exception.CacheException;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.util.LogUtil;
+import redis.clients.jedis.Pipeline;
+import redis.clients.jedis.Response;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.function.Function;
 import java.util.logging.Level;
@@ -24,6 +31,10 @@ import java.util.Random;
  *
  * <p>三态（4.3）：miss=key 不存在→查 DB 回填；hit-empty=空标记命中→返回空不查 DB；
  * hit-data=数据命中→直接返回。空标记为独立 {@code empty:{dataKey}} key + 短 TTL（4.4）。
+ *
+ * <p>读路径加固（T8）：单 key 读（{@link #read} / {@link #get}）与批量读
+ * （{@link #getBatch}）均 pipeline 化，EXISTS 空标记 + GET 数据 key 一趟往返（治 H12）；
+ * 批量三态语义与单 key 完全一致。
  */
 @Component
 public class CacheAside {
@@ -59,12 +70,12 @@ public class CacheAside {
      */
     public <T> CacheResult<T> read(String dataKey, Class<T> type) {
         try {
-            boolean empty = redis.execute(j -> j.exists(CacheKeys.empty(dataKey)));
-            if (empty) {
+            List<Object> probe = probe(dataKey);
+            if (Boolean.TRUE.equals(probe.get(0))) {
                 stats.record(CacheStats.Event.HIT_EMPTY, dataKey);
                 return CacheResult.hitEmpty();
             }
-            String json = redis.execute(j -> j.get(dataKey));
+            String json = (String) probe.get(1);
             if (json != null) {
                 T value = codec.fromJson(json, type);
                 stats.record(CacheStats.Event.HIT_DATA, dataKey); // 反序列化成功后才算命中（脏 JSON 归降级）
@@ -102,12 +113,12 @@ public class CacheAside {
     private <T> T getInternal(String dataKey, Function<String, T> parse,
                               Callable<T> loader, long ttlSeconds) {
         try {
-            boolean empty = redis.execute(j -> j.exists(CacheKeys.empty(dataKey)));
-            if (empty) {
+            List<Object> probe = probe(dataKey);
+            if (Boolean.TRUE.equals(probe.get(0))) {
                 stats.record(CacheStats.Event.HIT_EMPTY, dataKey);
                 return null;
             }
-            String json = redis.execute(j -> j.get(dataKey));
+            String json = (String) probe.get(1);
             if (json != null) {
                 T value = parse.apply(json);
                 stats.record(CacheStats.Event.HIT_DATA, dataKey); // 反序列化成功后才算命中（脏 JSON 归降级）
@@ -128,6 +139,85 @@ public class CacheAside {
             stats.record(CacheStats.Event.DEGRADE, dataKey);
             return invokeLoader(dataKey, loader);
         }
+    }
+
+    // ==================== 批量读（T8 二期读路径加固） ====================
+
+    /**
+     * 批量 Cache-Aside 读：一趟 pipeline 拉全部数据 key（EXISTS 空标记 + GET），
+     * 三态语义与单 key {@link #get(String, Class, Callable, long)} 完全一致
+     * （NEEDS 4.3 顺序：先空标记后数据 key），miss 项逐个单飞回填。
+     *
+     * <p>返回 {@code dataKey → value} 全量 Map（null 值合法 = hit-empty / 加载为空），
+     * 调用方按键取值；调用方保证 dataKeys 无重复。
+     *
+     * <p>降级语义与单 key 一致：整批 Redis 异常或单个 key JSON 解析失败 → 该 key
+     * DEGRADE + 直接 loader（不写回、不单飞）；miss → 单飞回填（LOAD + 写回/空标记）。
+     *
+     * @param loader key → 数据加载器（查 DB）
+     */
+    public <T> Map<String, T> getBatch(List<String> dataKeys, Class<T> type,
+                                       Function<String, T> loader, long ttlSeconds) {
+        if (dataKeys == null || dataKeys.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, T> result = new HashMap<>();
+        List<String> missed = new ArrayList<>();
+        try {
+            redis.executeVoid(j -> {
+                Pipeline p = j.pipelined();
+                Map<String, Response<Boolean>> empties = new HashMap<>();
+                Map<String, Response<String>> jsons = new HashMap<>();
+                for (String key : dataKeys) {
+                    empties.put(key, p.exists(CacheKeys.empty(key)));
+                    jsons.put(key, p.get(key));
+                }
+                p.sync();
+                for (String key : dataKeys) {
+                    if (Boolean.TRUE.equals(empties.get(key).get())) {
+                        stats.record(CacheStats.Event.HIT_EMPTY, key);
+                        result.put(key, null);
+                    } else {
+                        String json = jsons.get(key).get();
+                        if (json != null) {
+                            try {
+                                T value = codec.fromJson(json, type);
+                                stats.record(CacheStats.Event.HIT_DATA, key); // 反序列化成功后才算命中
+                                result.put(key, value);
+                            } catch (CacheException e) {
+                                // 单 key 解析失败语义（对齐 getInternal catch 分支）：该 key 降级直接 loader，不拖垮整批
+                                LOGGER.log(Level.WARNING, "批量缓存反序列化失败，该 key 降级, key=" + key, e);
+                                stats.record(CacheStats.Event.DEGRADE, key);
+                                result.put(key, loadBatch(key, loader));
+                            }
+                        } else {
+                            stats.record(CacheStats.Event.MISS, key);
+                            missed.add(key);
+                        }
+                    }
+                }
+            });
+        } catch (CacheException e) {
+            LOGGER.log(Level.WARNING, "批量缓存读降级走 DB, keys=" + dataKeys.size(), e);
+            for (String key : dataKeys) {
+                stats.record(CacheStats.Event.DEGRADE, key);
+                result.put(key, loadBatch(key, loader));
+            }
+        }
+        if (!missed.isEmpty()) {
+            for (String key : missed) {
+                result.put(key, singleFlight.get(key, () -> {
+                    T value = invokeLoader(key, () -> loader.apply(key));
+                    if (value != null) {
+                        writeOrInvalidate(key, value, ttlSeconds);
+                    } else {
+                        markEmpty(key);
+                    }
+                    return value;
+                }));
+            }
+        }
+        return result;
     }
 
     // ==================== 写路径（写失败=DEL 降级，4.2） ====================
@@ -183,6 +273,25 @@ public class CacheAside {
     }
 
     // ==================== 内部工具 ====================
+
+    /**
+     * 一趟 pipeline 探测单 key 的 [空标记, 数据 JSON]（T8：读路径 EXISTS + GET 合一趟往返，治 H12）。
+     * 供 {@link #read(String, Class)} 与 {@link #getInternal} 复用。
+     */
+    private List<Object> probe(String dataKey) {
+        return redis.execute(j -> {
+            Pipeline p = j.pipelined();
+            Response<Boolean> empty = p.exists(CacheKeys.empty(dataKey));
+            Response<String> json = p.get(dataKey);
+            p.sync();
+            return java.util.Arrays.asList(empty.get(), json.get());
+        });
+    }
+
+    /** 批量 loader 包装：记 LOAD（对齐单 key 口径）并执行。 */
+    private <T> T loadBatch(String dataKey, Function<String, T> loader) {
+        return invokeLoader(dataKey, () -> loader.apply(dataKey));
+    }
 
     private void deleteQuietly(String dataKey) {
         try {

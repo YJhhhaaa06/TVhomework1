@@ -15,6 +15,7 @@ import org.mockito.ArgumentCaptor;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -45,6 +46,13 @@ class FeedServiceTest {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);
         });
+        // T8：feed 页内改批量读；默认空映射，用例内自行覆盖
+        when(contentCache.getContentsBatch(anyList())).thenReturn(Collections.emptyMap());
+    }
+
+    /** getContentsBatch 桩（id → DTO，null 值=缓存 miss 跳过）。 */
+    private void stubGetBatch(Map<Long, ContentCacheDTO> values) {
+        when(contentCache.getContentsBatch(anyList())).thenReturn(values);
     }
 
     private ContentCacheDTO dto(long id) {
@@ -95,8 +103,7 @@ class FeedServiceTest {
         when(contentDao.findContentIdsByUsers(conn, List.of(7L), 0, 10)).thenReturn(List.of(1L, 2L));
         ContentCacheDTO dto1 = dto(1L);
         ContentCacheDTO dto2 = dto(2L);
-        when(contentCache.getContent(1L)).thenReturn(dto1);
-        when(contentCache.getContent(2L)).thenReturn(dto2);
+        stubGetBatch(Map.of(1L, dto1, 2L, dto2));
         when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
         when(contentCache.toContentVO(dto2)).thenReturn(vo(2L));
         when(likeService.batchIsContentLiked(7L, List.of(1L, 2L)))
@@ -117,9 +124,12 @@ class FeedServiceTest {
         when(followCache.getFollowingIds(7L)).thenReturn(List.of(7L));
         when(contentDao.countContentByUsers(conn, List.of(7L))).thenReturn(2);
         when(contentDao.findContentIdsByUsers(conn, List.of(7L), 0, 10)).thenReturn(List.of(1L, 2L));
-        when(contentCache.getContent(1L)).thenReturn(null);
         ContentCacheDTO dto2 = dto(2L);
-        when(contentCache.getContent(2L)).thenReturn(dto2);
+        // 1 为缓存 miss（null）；Map.of 不允许 null，用 HashMap
+        Map<Long, ContentCacheDTO> values = new HashMap<>();
+        values.put(1L, null);
+        values.put(2L, dto2);
+        stubGetBatch(values);
         when(contentCache.toContentVO(dto2)).thenReturn(vo(2L));
         when(likeService.batchIsContentLiked(7L, List.of(2L))).thenReturn(Map.of(2L, true));
 
@@ -136,7 +146,7 @@ class FeedServiceTest {
         when(contentDao.countContentByUsers(conn, List.of(7L))).thenReturn(1);
         when(contentDao.findContentIdsByUsers(conn, List.of(7L), 0, 10)).thenReturn(List.of(1L));
         ContentCacheDTO dto1 = dto(1L);
-        when(contentCache.getContent(1L)).thenReturn(dto1);
+        stubGetBatch(Map.of(1L, dto1));
         when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
         when(likeService.batchIsContentLiked(7L, List.of(1L))).thenReturn(null);
 
@@ -153,7 +163,7 @@ class FeedServiceTest {
         when(contentDao.findContentIdsByUsers(eq(conn), eq(List.of(7L)), eq(40), eq(20)))
                 .thenReturn(List.of(1L));
         ContentCacheDTO dto1 = dto(1L);
-        when(contentCache.getContent(1L)).thenReturn(dto1);
+        stubGetBatch(Map.of(1L, dto1));
         when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
 
         PageResult<ContentVO> result = service.getFeed(7L, 3, 20);

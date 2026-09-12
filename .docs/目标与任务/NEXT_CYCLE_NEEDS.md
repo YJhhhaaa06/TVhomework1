@@ -1,7 +1,7 @@
 # 下一周期需求与痛点
 
 > 用途：回答"下一周期为什么做这些"——本周期要解决的痛点、候选任务的优先级映射、以及开工前必须拍板的技术决策。
-> 状态：**一版已完成（T1~T6，2026-09-12）；二期 T7 观测埋点已完成（2026-09-12），T8/T9 待执行；二期范围已拍板（2026-09-12）** —— 一版核心决策（统一 Redis + Cache-Aside 三态 + 空标记独立 key + 短 TTL + 可降级 + 写失败=失效（DEL）+ 统一单飞 + 关注双 Set + MULTI + 全部重制）已全部落地（T1 基建 + T2~T5 四域 + T6 收尾）。二期 = 观测埋点（惰性日志，T7 已完成）+ 读路径加固（H12/H13，T8）+ O-8 TTL 精调（T9），详见 4.14；O-7 拍板维持 FULLTEXT 直查；O-5/O-9 留池未排期；分布式继续延后。本文档不归档（二期需求已排、O-5/O-9 未消化）。
+> 状态：**一版已完成（T1~T6，2026-09-12）；二期 T7 观测埋点已完成（2026-09-12）T8 读路径加固已完成（2026-09-12），T9 待执行**——一版核心决策（统一 Redis + Cache-Aside 三态 + 空标记独立 key + 短 TTL + 可降级 + 写失败=失效（DEL）+ 统一单飞 + 关注双 Set + MULTI + 全部重制）已全部落地（T1 基建 + T2~T5 四域 + T6 收尾）。二期 = 观测埋点（惰性日志，T7 已完成）+ 读路径加固（H12/H13，T8 已完成）+ O-8 TTL 精调（T9），详见 4.14；O-7 拍板维持 FULLTEXT 直查；O-5/O-9 留池未排期；分布式继续延后。本文档不归档（二期需求已排、O-5/O-9 未消化）。
 > 来源：260912-package-refactor 周期（B 方向 feature package 改造，T1~T9 全部完成，pkg-01~pkg-09 已合并）归档后的新一轮规划。方向：用户提出缓存改造（此前预告的 C 方向），当前分支 `refactor/cache-architecture`。
 > 术语约定：**周期 > 任务**。本文档只回答 Why（需求与决策），How（拆任务）在任务清单文档。
 
@@ -222,6 +222,7 @@ user:follower:{userId}   → Set<userId>           （谁关注了我）
 - **O-7 搜索（用户拍板）：维持 FULLTEXT 直查，不做缓存**——关键词基数大命中率低、结果新鲜度敏感，缓存性价比差。
 - **待 T9 执行时拍板**：空标记 60s 是否参与续期（倾向**不续期**，防"假空"窗口延长，执行时定）。
 - **T7 执行定稿（2026-09-12，G7 回写）**：① 惰性日志阈值 **N=1000**（`DEFAULT_LOG_INTERVAL`，类内常量；不引入定时器/端点），摘要 INFO 单行格式 `CacheStats 摘要: total=.. content{hitData=.. …}`；② 域解析 `CacheKeys.domainOf` 长前缀优先（content:index/content:like/content:comments 先于通用 content:），`empty:` 解包到底层数据 key 再归域，**content:index 归 CONTENT 域**；③ 批量记录粒度=**每 (数据 key, 决策) 记一次**（like 批量 key 各异按 id、follow 批量单 key 按一趟）；④ **Like/Follow 原生 Set 写方法 catch 也计 WRITE_FAIL**（补全各域写失败口径，仅记数不改语义）；⑤ 挂点清单：CacheAside 自动打点（read/getInternal 三态 + 降级 + invokeLoader 入口 LOAD + writeOrInvalidate/markEmpty/deleteQuietly 写失败）+ LikeCacheService/FollowCache 三态读分支与批量 pipeline 手动打点。
+- **T8 执行定稿（2026-09-12，G7 回写）**：① 单 key 读（`read`/`getInternal`）pipeline 化——EXISTS 空标记 + GET 数据 key **一趟往返**（内部 `probe(dataKey)` 复用，三态/空标记/单飞/降级/统计逐条不变）；② 批量读接口 **`CacheAside.getBatch(List<String>, Class<T>, Function<String,T>, long)` → `Map<String,T>`**：一趟 pipeline 批量 EXISTS+GET，三态判断与单 key 完全一致（先空标记后数据 key），miss 项逐个单飞回填，统计按 (key, 决策) 打点（T7 口径延续）；**单个 key 脏 JSON 或整批 Redis 异常 → 该 key/全部 key DEGRADE + 直接 loader 不写回**（对齐单 key 降级语义，防拖垮整批）；调用方保证 key 无重复；③ 内容批量接入：`ContentCache.getContentsBatch(List<Long>)`（id→DTO，null 值=hit-empty/DB 无数据透传），**推荐（/start）、Feed 页、Profile 分页三处高频多 key 循环全部切批量读**（任务强制探索 ① 评估结论；结果集/顺序/空跳语义不变）；④ 索引 `KEYS "content:index:*"` → **SCAN**（`ContentCache.forEachIndexKey`，`scan(cursor, ScanParams.match("content:index:*").count(100))` 游标收敛于 "0"；removeContent LREM 与 rebuildIndexes DEL 两处；LREM/DEL 幂等、SCAN 重复 key 无害）；⑤ 批次策略=**整批一趟 pipeline**（不 chunk；LRANGE 已全量拉回 id、内存基准一致）——为 T9 续期挂点保留同一 pipeline 读路径结构；⑥ 测试：JUnit surefire 308 + pool 4 = 312 例全绿（CacheAsideTest +7 批量读/往返断言、ContentCacheTest +4 批量与 SCAN 多游标），pytest all 124 passed。
 - **O-5 / O-9 继续留池未排期**；分布式（单飞进程内锁的多实例化）继续延后，不破一版留的口子。
 
 ***
@@ -281,3 +282,4 @@ user:follower:{userId}   → Set<userId>           （谁关注了我）
 | 2026-09-12 | 0.5 | **T6 收尾拍板回写**：① O-6 定时刷新去留=**一版移除**（随旧 ContentCacheManager 整体删除，理由见 O-6 行）；② 删除路径点赞缓存清理迁入 `LikeService.deleteContentLike`（七决策记录）；③ P5 标记已消化；④ U-07 观察结论=C 周期后包层环仍在（未自然解除）；⑤ 0.4 遗留的 `removeContent`/`refreshContent` 遗产副作用已随旧类删除 |
 | 2026-09-12 | 0.6 | **二期规划拍板回写**（一版 T1~T6 完成后的续期讨论）：① 状态行更新为一版已完成+二期范围已拍板，本文档不归档；② 新增二期探索补充问题 H12（读路径 RTT 放大）/H13（KEYS 命令阻塞）/H14（无观测能力）；③ 新增 4.14 二期范围与设计要点：主线=观测埋点（CacheStats 六类事件/分域/惰性日志输出）→ 读路径加固（pipeline 化/批量读/SCAN）→ O-8 TTL 精调（滑动续期+分域取值，依据 T7 数据），拆 3 任务 T7~T9；④ O-7 拍板维持 FULLTEXT 直查；⑤ O-5/O-9 留池未排期、分布式继续延后；⑥ 更新六.范围与边界 |
 | 2026-09-12 | 0.7 | **T7 观测埋点完成回写**：① 4.14 补"T7 执行定稿"注记（N=1000、CacheDomain 5 域/domainOf 长前缀优先/content:index 归 CONTENT、批量记录粒度规则、Like/Follow 写失败也计 WRITE_FAIL、挂点清单）；② 状态行更新（T7 已完成、T8/T9 待执行）；③ 治 H14 落地，为 T8 前后对比与 T9 分域 TTL 调参提供观测数据依据 |
+| 2026-09-12 | 0.8 | **T8 读路径加固完成回写**：① 4.14 补"T8 执行定稿"注记（单 key 读 pipeline 化一趟往返 probe、getBatch 批量读接口语义与 DEGRADE 口径、/start+Feed+Profile 三处批量接入、索引 KEYS→SCAN、整批不 chunk 策略与 T9 续期挂点结构保留）；② 状态行更新（T8 已完成、T9 待执行）；③ 治 H12（read 路径往返合并：单 key 2→1 趟、推荐 12 条 24+→1 趟 + 少量 miss 回填）与 H13（KEYS→SCAN）落地 |

@@ -365,6 +365,8 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 > 类型分区索引启动 init 全量重建 + 索引 key 缺失时单飞懒重建（防 Redis 重启后 /start 空推荐）。
 > 评论树不再原地增删（消除 H1 并发竞态）：评论增/删/点赞 = 失效 `content:comments:{id}` + 空标记，
 > 下次读 miss 单飞回填 DB 最新整树。
+>
+> **T8 读路径加固（2026-09-12，治 H12/H13）**：内容读路径（单 key 与批量）均 pipeline 化——EXISTS 空标记 + GET 数据 key 一趟往返（`CacheAside.read`/`getInternal`/`getBatch`）；推荐（/start）、Feed、Profile 页内改 `ContentCache.getContentsBatch` 批量读（结果集/顺序/空跳语义不变）；索引遍历由 `KEYS "content:index:*"` 改为 **SCAN**（`forEachIndexKey`，removeContent LREM 与重建 DEL 两处，LREM/DEL 幂等、SCAN 重复 key 无害）。
 
 ### 3.2 发布视频流程
 
