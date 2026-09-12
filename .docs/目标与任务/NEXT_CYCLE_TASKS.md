@@ -1,7 +1,7 @@
 # 下一周期任务清单
 
 > 关联文档：目标与任务/NEXT_CYCLE_NEEDS.md（决策唯一源；此文件为执行细节）
-> 状态：**一版 6 任务（T1~T6）全部完成（2026-09-12）；二期 T7 观测埋点已完成、T8 读路径加固已完成（2026-09-12），T9 TTL 精调待执行（决策见 NEEDS 4.14）**，四要素为骨架、执行方案由执行 Agent 探索细化（G5 允许回写）。
+> 状态：**一版 6 任务（T1~T6）全部完成（2026-09-12）；二期 T7 观测埋点、T8 读路径加固、T9 TTL 精调全部完成（2026-09-13）**，四要素为骨架、执行方案由执行 Agent 探索细化（G5 允许回写）。
 > 工作流：每个任务开独立窗口执行；"任务清单 + 需求与痛点"为窗口间唯一交接载体。
 > 来源：260912-package-refactor 周期（B 方向 T1~T9 全部完成）归档后的新一轮规划。本周期=NEEDS 中 C 方向缓存改造，一版决策见 NEEDS 4.1~4.13（已落地），二期决策见 NEEDS 4.14（T7~T9）。
 
@@ -57,7 +57,7 @@
 | T6 | 收尾：旧缓存代码残留清理 + pytest all 全量回归 + 常青文档同步 + 覆盖率地图 | — | T1~T5 | 无旧缓存实现残留（ContentCacheManager/LikeCacheService 旧实现移除）；`pytest all` 全绿；CURRENT_ARCHITECTURE.md（六.Redis 设计）/ BUSINESS_FLOW.md（3.1 缓存机制）同步；覆盖率地图 rerun 无回归 | `refactor(cache-06)` | 已完成（2026-09-12：旧 ContentCacheManager 整体移除 + 点赞失效迁入 LikeService.deleteContentLike + 死配置删除 + 定时刷新去留拍板；mvn clean test 288 例全绿无残留 + pytest all 124 passed） |
 | T7 | 二期·观测埋点：`CacheStats` 统计组件（六类事件计数 + key 前缀分域 + 惰性日志输出）+ CacheAside 自动挂点 + like/follow 原生 Set 路径手动打点 | 基建/like/follow | T1~T6（一版完成态） | 各域命中率/穿透/降级/写失败计数正确（JUnit）；惰性日志按阈值输出摘要；缓存读写行为零变化（既有 JUnit + pytest all 全绿） | `refactor(cache-07)` | 已完成（2026-09-12：CacheStats 六类事件 AtomicLong 计数/5 域分桶（CacheKeys.domainOf 长前缀优先）/惰性日志 N=1000；CacheAside 自动挂点（三态/降级/LOAD/写失败）+ like/follow Set 路径手动打点；JUnit 301 例全绿（surefire 297 + pool-test 4）+ pytest all 124 passed） |
 | T8 | 二期·读路径加固：CacheAside 单 key 读 pipeline 化（EXISTS+GET 一趟）+ 批量读接口 + getRecommendByFilter 批量化 + KEYS→SCAN | 基建/content | T7（软依赖：用观测对比前后效果） | /start 推荐路径 Redis 往返次数显著下降；SCAN 替换后索引操作行为不变；批量三态语义与单 key 一致；JUnit + pytest all 全绿 | `refactor(cache-08)` | 已完成（2026-09-12：CacheAside read/getInternal pipeline 化（probe 一趟往返）+ getBatch 批量接口（三态与单 key 一致、miss 逐个单飞回填、脏 JSON/整批降级逐 key 直接 loader）；ContentCache.getContentsBatch + 推荐/Feed/Profile 批量接入 + 索引 forEachIndexKey SCAN（removeContent/rebuildIndexes 两处）；tv.py test junit 312 例全绿（surefire 308 + pool 4）+ pytest all 124 passed） |
-| T9 | 二期·O-8 TTL 精调：读命中顺带续期（挂 T8 pipeline 读路径）+ 分域 TTL 取值（依据 T7 观测数据） | 基建/各域配置 | T7/T8 | 热点 key 命中率提升（T7 数据前后对比）；分域 TTL 配置生效；空标记续期与否执行时拍板（倾向不续期）；JUnit + pytest all 全绿 | `refactor(cache-09)` | 待执行 |
+| T9 | 二期·O-8 TTL 精调：读命中顺带续期（挂 T8 pipeline 读路径）+ 分域 TTL 取值（依据 T7 观测数据） | 基建/各域配置 | T7/T8 | 热点 key 命中率提升（T7 数据前后对比）；分域 TTL 配置生效；空标记续期与否执行时拍板（倾向不续期）；JUnit + pytest all 全绿 | `refactor(cache-09)` | 已完成（2026-09-13：CacheAside get/getBatch 读命中续期（同一 pipeline 追加 EXPIRE，原 TTL 抖动，空标记不续）+ Like/Follow 原生 Set 读路径续期；分域 TTL 取值 content 30/comment 10/like 15/follow 30（双轮轻量压测 CacheStats 摘要依据）；tv.py test junit 323 例全绿 + pytest all 124 passed） |
 
 > 状态取值：草稿 / 待执行 / 执行中 / 已完成 / 搁置。
 >
@@ -165,6 +165,8 @@
 * **强制探索步骤**：(1) 拉取 T7 落地后累计的各域观测数据（或造数），形成调参依据记录；(2) 确认续期触发粒度（每次命中都续 vs 剩余 TTL 低于阈值才续——后者需 TTL 查询往返，权衡后拍板并回写）；(3) 空标记续期与否拍板（NEEDS 4.14 倾向不续期）；(4) 若观测数据不足以支撑取值 → 停决策点回写，不得拍脑袋定参。
 * **验收**：热点 key 命中率提升（T7 数据前后对比）；分域 TTL 配置生效（配置读取单测）；续期失败降级不影响读（单测）；tv.py test junit 全绿 + pytest all 全绿；常青文档同步（CURRENT_ARCHITECTURE 六 + 调参数据依据记录）。
 
+> **T9 执行回写（2026-09-13，G5/G7）**：① **滑动续期**：`CacheAside.getInternal` 走新增私有 `probeRenew(dataKey, ttl)`（exists(empty)+get+expire 一趟 pipeline，续期值=原 TTL ±10% 抖动），`getBatch` 命令收集循环逐 key 追加 expire；`LikeCacheService.scanLikeSet`/两个批量、`FollowCache.scanSet`/`getSetMembers`/`batchIsFollowing` 原生 Set 三态读命中同样续期（值=域 TTL 精确值）；**空标记（`empty:`）从不续期**（执行定稿，防"假空"窗口延长）；数据 key **无条件入列 EXPIRE**（hit-data 生效、hit-empty/miss 时 data key 不存在返回 0 无效果，EXPIRE 失败走既有降级，读不受影响）；`read()`（纯三态读、无生产调用方）与 `probePair`（写路径探测）不续期；② **续期粒度拍板=每次命中都续**（零额外往返，弃"TTL 阈值续期"——需多一趟查询违背 T8 一趟结构），NEEDS 4.14 已回写；③ **分域 TTL 取值**（用户拍板=轻量造数+不足保守回退）：新增 `temp_script/pressure_cache.py`（Python 压测脚本，注册临时用户+八类域读端点，预热+测量段 ≥3000 记录触发 CacheStats 摘要），改动前基线 vs 续期后双轮（total=21000）：comment 命中占比 38.4%→42.5%、like 59.0%→64.8%、content 恒 100% hitData、follow 以空关系为主（hitEmpty≈100%）；取值 content 10→**30min**、comment 保持 **10min**、like 10→**15min**、follow 10→**30min**（app.properties，只动配置；依据与"待真流量复调"注记已写入常青 6.5 与 NEEDS）；④ **测试**：CacheAsideTest 26→30（+4 续期：命中续期抖动/空标记不续/批量续期/续期失败降级不影响读）、LikeCacheServiceTest/FollowCacheTest 各 +1（hit-data 续期 set key、empty 不续，断言读 AppConfig getter 防调参断挂）、新增 config/AppConfigCacheTtlTest 5 例（四 getter 与 app.properties 绑定生效）；`tv.py test junit` 323 例全绿（surefire 319 + pool 4）+ pytest all 124 passed；⑤ **文档同步**：CURRENT_ARCHITECTURE（版本 2.11：新增 6.5 TTL 精调小节+6.2 key 表 TTL 值+4.2 CacheAside/测试行+9.2 JUnit 表合计 323+12 更新日志 2.11）+ BUSINESS_FLOW（3.1 T9 滑动续期注记）+ NEEDS（状态行/4.14 T9 执行定稿/O-8 置已完成/变更记录 0.10）+ 本清单 T9 勾选/执行回写/变更记录 0.10；⑥ **subagent review 结论（2026-09-13）**：**通过，无必修项**；建议项 3 条——① getBatch 续期用例未覆盖 miss key 场景（逻辑与 hit-empty 同保证，记录不修）、② Like/Follow 批量 pipeline 续期未直接断言（单 key hit-data 已覆盖，记录不修）、③ like 命中占比算术 931/1436≈64.8% 非 66%，**已修正**（app.properties/常青 6.5 与 12/NEEDS 4.14 与 0.10 同步为 59.0%→64.8%）。
+
 ***
 
 ## 五、变更记录
@@ -180,3 +182,4 @@
 | 2026-09-12 | 0.7 | **二期规划立题**（一版 T1~T6 完成后续期讨论，决策源 NEEDS 4.14）：任务总览追加 T7 观测埋点 / T8 读路径加固 / T9 O-8 TTL 精调（骨架，草稿态）；新增"四·二、二期任务详情"（四要素 + 二期共通注：对外行为零变化、不改缓存语义）；顺序理由=测量→优化→再测量闭环；O-5/O-9 留池、O-7 已拍板维持直查 |
 | 2026-09-12 | 0.8 | **T7 观测埋点完成**：T7 状态置"已完成"，详情追加 T7 执行回写（CacheStats 六类事件/5 域分桶/惰性日志 N=1000、CacheKeys.domainOf 长前缀优先、CacheAside 自动挂点 + like/follow 手动打点、批量记录粒度规则、Like/Follow 写失败也计、JUnit 301 全绿 + pytest all 124、CURRENT_ARCHITECTURE 6.3 观测小节与 NEEDS 4.14 注释同步） |
 | 2026-09-12 | 0.9 | **T8 读路径加固完成**：T8 状态置"已完成"，详情追加 T8 执行回写（单 key 读 pipeline 化一趟往返、getBatch 批量读接口与 DEGRADE 口径、/start+Feed+Profile 批量接入、KEYS→SCAN forEachIndexKey、整批不 chunk 保障 shuffle 语义、CacheAsideTest 26/ContentCacheTest 16、JUnit surefire 308 + pool 4 = 312 全绿 + pytest all 124、CURRENT_ARCHITECTURE 6.4 小节、BUSINESS_FLOW 3.1 注记与 NEEDS 4.14 T8 执行定稿同步） |
+| 2026-09-13 | 0.10 | **T9 二期·O-8 TTL 精调完成**：T9 状态置"已完成"，详情追加 T9 执行回写（滑动续期=每次命中都续/空标记不续/续期值原 TTL 抖动、CacheAside probeRenew+getBatch 与 Like/Follow 原生 Set 挂点、分域取值=轻量造数+不足保守回退（temp_script/pressure_cache.py 双轮压测：content 恒 100%、comment 38.4%→42.5%、like 59.0%→64.8%）、四域 TTL content 30/comment 10/like 15/follow 30、CacheAsideTest 30/Like 22/Follow 28/AppConfigCacheTtlTest 5、JUnit surefire 319 + pool 4 = 323 全绿 + pytest all 124、CURRENT_ARCHITECTURE 6.5 小节与 NEEDS 4.14 T9 执行定稿同步；subagent review 通过无必修，建议项 ③ like 占比算术已修正、① ② 记录不修） |

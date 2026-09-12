@@ -300,6 +300,8 @@ public class LikeCacheService {
                     empties.add(p.exists(CacheKeys.empty(setKey)));
                     existsList.add(p.exists(setKey));
                     members.add(p.sismember(setKey, String.valueOf(userId)));
+                    // T9 滑动续期：命中 set 顺带续期（无条件入列，set 不存在返回 0 无效果；空标记不续）
+                    p.expire(setKey, ttlSeconds());
                 }
                 p.sync();
                 for (int i = 0; i < ids.size(); i++) {
@@ -350,6 +352,8 @@ public class LikeCacheService {
                     empties.add(p.exists(CacheKeys.empty(setKey)));
                     existsList.add(p.exists(setKey));
                     members.add(p.sismember(setKey, String.valueOf(userId)));
+                    // T9 滑动续期：命中 set 顺带续期（无条件入列，set 不存在返回 0 无效果；空标记不续）
+                    p.expire(setKey, ttlSeconds());
                 }
                 p.sync();
                 for (int i = 0; i < ids.size(); i++) {
@@ -585,13 +589,15 @@ public class LikeCacheService {
         }
     }
 
-    /** 单条成员三态扫描：一趟 pipeline 返回 [空标记, set 存在, 是否成员]（元素可能为 null，用 asList）。 */
+    /** 单条成员三态扫描：一趟 pipeline 返回 [空标记, set 存在, 是否成员]（元素可能为 null，用 asList）。
+     *  T9 滑动续期：命中 set 顺带续期（无条件入列，set 不存在返回 0 无效果；空标记不续）。 */
     private List<Boolean> scanLikeSet(String setKey, String userIdStr) {
         return redis.execute(j -> {
             Pipeline p = j.pipelined();
             Response<Boolean> empty = p.exists(CacheKeys.empty(setKey));
             Response<Boolean> exists = p.exists(setKey);
             Response<Boolean> member = p.sismember(setKey, userIdStr);
+            p.expire(setKey, ttlSeconds());
             p.sync();
             return java.util.Arrays.asList(empty.get(), exists.get(), member.get());
         });

@@ -6,6 +6,7 @@ import com.itheima.cache.CacheKeys;
 import com.itheima.cache.CacheStats;
 import com.itheima.cache.RedisAccess;
 import com.itheima.cache.SingleFlight;
+import com.itheima.config.AppConfig;
 import com.itheima.exception.CacheException;
 import com.itheima.exception.ServerException;
 import com.itheima.follow.dao.FollowDao;
@@ -140,6 +141,28 @@ class FollowCacheTest {
 
         assertFalse(cache.isFollowing(USER, FOLLOWED));
         verify(tt, never()).execute(any());
+    }
+
+    // ==================== T9 滑动续期：命中 set 顺带续期、空标记不续 ====================
+
+    @Test
+    void isFollowingHitDataRenewsSetTtlButNotEmptyMarker() {
+        Response<Boolean> emptyResp = booleanResponse(false);
+        Response<Boolean> existsResp = booleanResponse(true);
+        Response<Boolean> memberResp = booleanResponse(true);
+        Pipeline p = mock(Pipeline.class);
+        when(jedis.pipelined()).thenReturn(p);
+        String setKey = followingKey(USER);
+        when(p.exists(CacheKeys.empty(setKey))).thenReturn(emptyResp);
+        when(p.exists(setKey)).thenReturn(existsResp);
+        when(p.sismember(setKey, String.valueOf(FOLLOWED))).thenReturn(memberResp);
+
+        assertTrue(cache.isFollowing(USER, FOLLOWED));
+
+        // hit-data：set key 续期（值=域 TTL，与写路径 expire 口径一致；读配置 getter 防分域调参断挂）
+        verify(p).expire(setKey, AppConfig.getFollowTtlSeconds());
+        // 空标记 key 从不被续期
+        verify(p, never()).expire(startsWith("empty:"), anyLong());
     }
 
     @Test

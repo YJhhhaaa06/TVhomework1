@@ -366,6 +366,8 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 > 评论树不再原地增删（消除 H1 并发竞态）：评论增/删/点赞 = 失效 `content:comments:{id}` + 空标记，
 > 下次读 miss 单飞回填 DB 最新整树。
 >
+> **T9 滑动续期注记（2026-09-13，NEEDS 4.14）**：所有缓存读路径**命中数据 key 顺带续期**——内容/评论/点赞计数（CacheAside get/getBatch，续期值=原 TTL ±10% 抖动，同 pipeline 追加 EXPIRE）与点赞成员/关注关系 Set（scanLikeSet/scanSet/getSetMembers/batchIsFollowing/batchIsContentLiked/batchIsCommentLiked，续期值=域 TTL 精确值）在命中时延长生命周期，热点常驻由续期自然达成、不设永不过期 key；**空标记（`empty:`）一律不续期**（防"假空"窗口延长，执行定稿）；续期失败（Redis 异常）走既有降级读，不影响业务。分域 TTL 已按双轮压测观测取值：content 30min / comment 10min / like 15min / follow 30min（详见 CURRENT_ARCHITECTURE 6.5 与 NEEDS 4.14 T9 执行定稿）。
+>
 > **T8 读路径加固（2026-09-12，治 H12/H13）**：内容读路径（单 key 与批量）均 pipeline 化——EXISTS 空标记 + GET 数据 key 一趟往返（`CacheAside.read`/`getInternal`/`getBatch`）；推荐（/start）、Feed、Profile 页内改 `ContentCache.getContentsBatch` 批量读（结果集/顺序/空跳语义不变）；索引遍历由 `KEYS "content:index:*"` 改为 **SCAN**（`forEachIndexKey`，removeContent LREM 与重建 DEL 两处，LREM/DEL 幂等、SCAN 重复 key 无害）。
 
 ### 3.2 发布视频流程

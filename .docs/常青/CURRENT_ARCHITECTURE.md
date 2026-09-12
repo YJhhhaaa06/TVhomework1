@@ -1,7 +1,7 @@
 # 当前系统架构地图
 
-> 版本：2.8
-> 最后更新：2026-09-12
+> 版本：2.11
+> 最后更新：2026-09-13
 > 维护说明：每次架构改动后必须更新本文档
 
 ---
@@ -204,9 +204,9 @@ com.itheima/
 | SingleFlight | 65 | 统一单飞组件（4.9）：ConcurrentHashMap+FutureTask，失败/成功均 remove（防缓存失败结果 + 防泄漏） |
 | CacheStatus | 15 | 三态枚举：MISS / HIT_EMPTY / HIT_DATA |
 | CacheResult | 39 | 三态读取结果载体（status + value，HIT_EMPTY 时 value=null） |
-| CacheAside | 230 | 统一 Cache-Aside 封装：`read` 三态读 / `get` 带单飞回填 / `writeOrInvalidate`（写失败=DEL 自愈，写数据同时清空标记）/ `markEmpty` / `invalidate`，TTL ±10% 简单抖动，缓存失败一律降级不抛业务异常；T7 起三态读/降级/LOAD/写失败处自动打点 CacheStats；**T8 起读路径 pipeline 化**（单 key 与批量均 EXISTS 空标记+GET 一趟往返）并新增 **`getBatch` 批量读接口**（三态语义与单 key 一致、miss 逐个单飞回填、解析失败/整批降级逐 key 直接 loader 不写回） |
+| CacheAside | 360 | 统一 Cache-Aside 封装：`read` 三态读 / `get` 带单飞回填 / `writeOrInvalidate`（写失败=DEL 自愈，写数据同时清空标记）/ `markEmpty` / `invalidate`，TTL ±10% 简单抖动，缓存失败一律降级不抛业务异常；T7 起三态读/降级/LOAD/写失败处自动打点 CacheStats；**T8 起读路径 pipeline 化**（单 key 与批量均 EXISTS 空标记+GET 一趟往返）并新增 **`getBatch` 批量读接口**（三态语义与单 key 一致、miss 逐个单飞回填、解析失败/整批降级逐 key 直接 loader 不写回）；**T9 起读命中滑动续期**（`get`/`getInternal` 与 `getBatch` 命中数据 key 时同 pipeline 追加 EXPIRE，续期值=原 TTL ±10% 抖动，空标记从不续期；`read` 纯三态读不续期） |
 
-> 测试：`src/test/java/com/itheima/cache/` 6 类 54 例（mockStatic MyRedisPool + mock Jedis，不碰真实 Redis，含 CacheStatsTest 域解析/计数/惰性输出 8 例；CacheAsideTest 26 例含单 key pipeline 往返断言与批量三态/降级/脏 JSON 用例），见九.9.2。
+> 测试：`src/test/java/com/itheima/cache/` 6 类 58 例（mockStatic MyRedisPool + mock Jedis，不碰真实 Redis，含 CacheStatsTest 域解析/计数/惰性输出 8 例；CacheAsideTest 30 例含单 key pipeline 往返断言与批量三态/降级/脏 JSON 用例 + **T9 滑动续期 4 例**：命中续期抖动/空标记不续/批量续期/续期失败降级），见九.9.2。
 
 ### 4.3 业务域包（每域 controller/service/dao/model 分层）
 
@@ -344,10 +344,10 @@ com.itheima/
 
 | Key 模式 | 类型 | 用途 |
 |----------|------|------|
-| content:{contentId} | String(JSON) | 内容详情缓存（Cache-Aside 数据 key，TTL 10min+抖动） |
+| content:{contentId} | String(JSON) | 内容详情缓存（Cache-Aside 数据 key，TTL 30min+抖动，T9 分域取值） |
 | content:index:{type}:{category} | LIST\<contentId\> | 类型分区索引（4 key/内容：t,c / t,-1 / -1,c / -1,-1；新前序；T2 启用，启动全量重建+懒重建） |
 | content:comments:{contentId} | String(JSON) | 内容评论树缓存（独立 TTL cache.comment.ttlMinutes=10min+抖动，与内容解耦；T3 启用） |
-| empty:{dataKey} | String "1" | 空标记：已加载确认无数据（短 TTL 60s） |
+| empty:{dataKey} | String "1" | 空标记：已加载确认无数据（短 TTL 60s，**T9 起确认为不参与滑动续期**） |
 | content:likeCount:{contentId} | String(int) | 内容点赞计数（高频读，计数/成员分离 4.6；T4 启用） |
 | content:likeSet:{contentId} | Set\<userId\> | 内容点赞成员（低频"谁点过"查询，miss 允许穿透；T4 启用） |
 | comment:likeCount:{commentId} | String(int) | 评论点赞计数（T4 启用） |
@@ -380,6 +380,24 @@ com.itheima/
 - **内容批量接入**：`ContentCache.getContentsBatch(List<Long>)`（id → DTO 映射，null 值=hit-empty/DB 无数据透传）；`getRecommendByFilter`（/start 推荐 12 条 ≈ 24+ 往返 → 一趟 pipeline + 少量 miss 回填）、`FeedService.getFeed`、`ProfileService.getProfile` 页循环均改批量读。
 - **索引 KEYS→SCAN**：`ContentCache.forEachIndexKey`（`scan(cursor, ScanParams.match("content:index:*").count(100))` 游标收敛于 "0"）替换 `KEYS "content:index:*"`（removeContent 的 LREM、rebuildIndexes 的 DEL 两处，治 H13 Redis 主线程 O(N) 阻塞；LREM/DEL 幂等，SCAN 重复 key 无害）。
 - **统计口径**：批量读打点与单 key 一致（T9 分域取参数据连续）；单 key 与批量均为 1 趟往返（CacheAsideTest 有 `pipelined()` 次数断言）。
+
+### 6.5 TTL 精调（T9 新增，O-8 滑动续期 + 分域取值）
+
+> 二期"测量→优化→再测量"闭环收口（NEEDS 4.14 T9），**对外行为零变化**：三态判断顺序/空标记/DEL 降级路径一概不动，仅命中热 key 时延长生命周期（热点常驻由续期自然达成，不设永不过期 key）。
+
+- **滑动续期（读命中顺带续期）**：`CacheAside.get`/`getInternal`（单 key，内部 `probeRenew`）与 `getBatch`（批量）在**同 pipeline** 内对数据 key 追加 `EXPIRE`，续期值=原 TTL ±10% 抖动（复用 `applyJitter`，保底 1s），**零额外往返**；LikeCacheService（`scanLikeSet`/两个批量）与 FollowCache（`scanSet`/`getSetMembers`/`batchIsFollowing`）原生 Set 三态读命中同样续期（值=域 TTL 精确值，与写路径 expire 口径一致）。
+- **空标记不续期（执行定稿）**：`empty:` key 从不被 EXPIRE，防"假空"窗口延长；实现上对数据 key 无条件入列 EXPIRE——hit-data 生效、hit-empty/miss 时数据 key 不存在 EXPIRE 返回 0 无效果，不影响读返回（EXPIRE 失败即 pipeline Redis 异常，走既有降级 loader）。
+- **`read()` 不续期**：纯三态读、无 TTL 上下文、无生产调用方，保持原语义。
+- **分域 TTL 取值（执行定稿）**：双轮轻量压测（temp_script/pressure_cache.py 造缓存流量触发 CacheStats 惰性日志，改动前基线 vs 续期后对比）+ 各域读写特性，见下表（数据依据记录于 NEEDS 4.14 T9 执行定稿）：
+
+| 域 | 配置键 | 取值 | 依据（基线 → 续期后，total=21000 摘要） |
+|----|--------|------|------|
+| content | cache.content.ttlMinutes | 30min | 基线/续期后均恒 100% hitData（启动全量重建 + 热读），miss≈0 无穿透风险 |
+| comment | cache.comment.ttlMinutes | 10min | 命中占比 38.4%→42.5%（134/349 → 148/348），新鲜度敏感（增删/点赞失效），保持短 TTL |
+| like | cache.like.ttlMinutes | 15min | 命中占比 59.0%→64.8%（847/1436 → 931/1436），显式失效清晰（点赞/取消失效 count+set） |
+| follow | cache.follow.ttlMinutes | 30min | 关系低频变 + MULTI 双写失效清晰；压测以空关系为主（hitEmpty 近 100%），依据写路径特性保守延长 |
+
+- **红线核验**：不改 key 命名、不改三态顺序、不改空标记 TTL（60s）、不设 TTL 永生；续期失败不影响读返回（单测覆盖 `getRenewalFailureDegradesToLoaderWithoutThrowing`）。
 
 ---
 
@@ -534,10 +552,10 @@ src/main/webapp/
 | content/service/FeedServiceTest | 8 | 关注动态流 |
 | content/service/ProfileServiceTest | 12 | 用户主页 |
 | like/service/LikeServiceTest | 16 | 点赞/取消/读路径委托缓存类/空输入空 map |
-| like/service/LikeCacheServiceTest | 21 | Redis 点赞缓存：计数/成员分离三态+单飞回填+空标记+写失败失效+降级 +批量 pipeline+DB 兜底 +delete 失效 +T7 统计接线（LIKE 域 HIT_EMPTY 计数） |
+| like/service/LikeCacheServiceTest | 22 | Redis 点赞缓存：计数/成员分离三态+单飞回填+空标记+写失败失效+降级 +批量 pipeline+DB 兜底 +delete 失效 +T7 统计接线（LIKE 域 HIT_EMPTY 计数）+**T9 续期接线（hit-data 续期 set key、空标记不续）** |
 | comment/service/CommentServiceTest | 16 | 评论归属/楼中楼归一化/软删除（自删+管理员删）/缓存更新 |
 | follow/service/FollowServiceTest | 15 | 关注/取关/列表（读路径委托 FollowCache；写路径 DB 提交后缓存双写） |
-| follow/service/FollowCacheTest | 27 | Redis 关注缓存：双 Set 三态+单飞回填+空标记（set 存在守卫防并发覆盖）/批量 pipeline+DB 兜底+best-effort 回填/列表 smembers 排序/条件 MULTI 双写+失败双 DEL+降级 +T7 统计接线（FOLLOW 域 MISS/LOAD 计数） |
+| follow/service/FollowCacheTest | 28 | Redis 关注缓存：双 Set 三态+单飞回填+空标记（set 存在守卫防并发覆盖）/批量 pipeline+DB 兜底+best-effort 回填/列表 smembers 排序/条件 MULTI 双写+失败双 DEL+降级 +T7 统计接线（FOLLOW 域 MISS/LOAD 计数）+**T9 续期接线（hit-data 续期 set key、空标记不续）** |
 | coupon/service/CouponServiceTest | 11 | 抢券/幂等/库存 |
 | upload/service/FileUploadServiceTest | 9 | 上传校验/清理旧文件 |
 | admin/service/MediaAuditServiceTest | 14 | 媒体扫描/恢复 |
@@ -546,12 +564,13 @@ src/main/webapp/
 | cache/JacksonCodecTest | 4 | DTO 往返、null 处理、TypeReference 泛型、非法 JSON 抛 CacheException |
 | cache/RedisAccessTest | 4 | execute/executeVoid 取还连接、异常包装 CacheException（含连接获取失败） |
 | cache/SingleFlightTest | 4 | 并发同 key 只 load 一次、失败/成功 remove、不同 key 独立 |
-| cache/CacheAsideTest | 26 | 三态 read、Cache-Aside get 命中/回填/空标记、降级不写回、写失败 DEL、清空标记防假空、markEmpty/invalidate best-effort +T7 统计接线（hitData/MISS+LOAD/降级计数）+**T8 批量读（混合三态/全空标记跳过 loader/miss 空标记回填/整批降级/脏 JSON 单 key 降级/空入参/批量统计打点 + 单 key 一趟 pipeline 往返断言）** |
+| cache/CacheAsideTest | 30 | 三态 read、Cache-Aside get 命中/回填/空标记、降级不写回、写失败 DEL、清空标记防假空、markEmpty/invalidate best-effort +T7 统计接线（hitData/MISS+LOAD/降级计数）+**T8 批量读（混合三态/全空标记跳过 loader/miss 空标记回填/整批降级/脏 JSON 单 key 降级/空入参/批量统计打点 + 单 key 一趟 pipeline 往返断言）** +**T9 滑动续期（命中续期抖动/空标记不续/批量续期/续期失败降级不影响读）** |
 | cache/CacheStatsTest | 8 |（T7 新增）观测统计组件：domainOf 域解析全形态/前缀重叠优先级、六类计数分桶、惰性日志触发与摘要、打点异常吞掉 |
-| **合计** | **312** | - |
+| config/AppConfigCacheTtlTest | 5 |（T9 新增）分域 TTL 配置读取：content/comment/like/follow 四 getter 与 app.properties 绑定生效、非 0 互不串读 |
+| **合计** | **323** | - |
 
 > 注：`com.itheima.tools.CouponAdmin` 属 tools 测试脚本目录（非测试类，package 保留 `com.itheima.tools`，仅 import java.*，无主代码引用）；`util/MyConnectionPoolTest` 被测类未动（基建），测试文件留在 util 包不迁。
-> 用例数取自 `stage8-target/surefire-reports`（2026-09-12 实测，`mvn test` 全绿 312 例 = T7 末尾 301 + T8 新增 11（CacheAsideTest +7 批量读/往返断言、ContentCacheTest +4 批量与 SCAN）；surefire 308 + 独立 fork pool-test 4）。
+> 用例数取自 `stage8-target/surefire-reports`（2026-09-13 实测，`mvn test` 全绿 323 例 = T8 末尾 312 + T9 新增 11（CacheAsideTest +4 续期、LikeCacheServiceTest +1、FollowCacheTest +1、AppConfigCacheTtlTest +5）；surefire 319 + 独立 fork pool-test 4）。
 
 > 构建输出：沙箱内 Maven 通过 `-Dstage8.buildDir` 指向 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（pom 默认 `./target`），原因是沙箱内 javac 无法把 worktree `target/classes` 作为 classpath（报"程序包不存在"）。
 > 离线仓库：新增测试依赖（junit/mockito/bytebuddy/surefire 等）的 `_remote.repositories` 已补 `>aliyun=` 来源行（只追加不删除），默认 aliyun 镜像下可离线解析。
@@ -625,6 +644,7 @@ src/main/webapp/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-09-13 | 2.11 | **C 缓存改造 T9 二期 O-8 TTL 精调（refactor(cache-09)，滑动续期 + 分域取值）**：`CacheAside` 读命中滑动续期——`get`/`getInternal`（新增 `probeRenew`）与 `getBatch` 命中数据 key 时同 pipeline 追加 `EXPIRE`（续期值=原 TTL ±10% 抖动、零额外往返），**空标记（`empty:`）从不续期**（防"假空"窗口延长，执行定稿），`read` 纯三态读不续期；`LikeCacheService`（scanLikeSet/两个批量）与 `FollowCache`（scanSet/getSetMembers/batchIsFollowing）原生 Set 三态读命中同样续期（值=域 TTL）；分域 TTL 取值（app.properties：content 10→30min、comment 保持 10min、like 10→15min、follow 10→30min），依据=双轮轻量压测 CacheStats 摘要（temp_script/pressure_cache.py，基线 vs 续期后：content 恒 100% hitData、comment 38.4%→42.5%、like 59.0%→64.8%）+ 各域读写特性；对外行为零变化（三态/空标记/DEL 降级/key 命名/TTL 永生一律不碰）；JUnit 323 例全绿（surefire 319 + pool 4 = T8 末尾 312 + 新增 11：CacheAsideTest +4 续期、LikeCacheServiceTest/FollowCacheTest 各 +1、AppConfigCacheTtlTest +5）+ pytest all 124 passed；本文件 4.2/6.2/6.5/9.2/12 同步；BUSINESS_FLOW 3.1 注记；NEEDS 4.14 T9 执行定稿 |
 | 2026-09-12 | 2.10 | **C 缓存改造 T8 二期读路径加固（refactor(cache-08)，治 H12/H13）**：`CacheAside` 读路径 pipeline 化——`read`/`getInternal`（EXISTS 空标记+GET 一趟往返，内部 `probe` 复用）+ 新增 `getBatch` 批量读接口（一趟 pipeline 批量 EXISTS+GET，三态语义与单 key 完全一致、miss 逐个单飞回填、脏 JSON 单 key/整批降级直接 loader 不写回，统计按 (key, 决策) 打点）；`ContentCache` 新增 `getContentsBatch`，`getRecommendByFilter`（/start 12 条 ≈24+ 往返 → 一趟 pipeline+少量回填）、`FeedService.getFeed`、`ProfileService.getProfile` 页循环改批量读；索引 `KEYS "content:index:*"` → **SCAN**（`forEachIndexKey`，removeContent LREM 与 rebuildIndexes DEL 两处，治 H13）；对外行为零变化（推荐 shuffle/`LRANGE 0 -1`/LREM+LPUSH/三态顺序一概不变）；JUnit 新增 11 例（surefire 308 + pool 4 = 312 例全绿，CacheAsideTest 26 例含批量三态/降级与单 key 一趟往返断言、ContentCacheTest 16 例含批量与 SCAN 多游标）+ pytest all 124 passed；本文件 4.2/4.3/6.4/9.2/12 同步；BUSINESS_FLOW 3.1 读路径往返/KEYS 表述同步 |
 | 2026-09-12 | 2.9 | **C 缓存改造 T6 收尾（refactor(cache-06)）**：旧 `ContentCacheManager`（内存 HashMap 缓存/索引/推荐列表/定时刷新）整体移除，删除 ContentService 三处旧调用（deleteContent/hideContent 的 removeContent、unhideContent 的 refreshContent），其"旧格式点赞 key 清理"副作用迁入 `LikeService.deleteContentLike`（新委托，ContentService 在 DB 提交后显式调用，失效 count+set+empty 三 key）；死配置 `AppConfig.getContentRefreshMinutes` + app.properties `cache.content.refreshMinutes` 删除；**定时全量刷新去留（O-6）拍板=移除**，一致性由启动全量重建 + 索引懒重建 + 业务显式失效 + Cache-Aside 读自愈承担；ContentCacheManagerLifecycleTest 删除（旧类已无）、ContentServiceTest 断言随新路径调整；`mvn clean test` 干净构建无残留（默认 surefire 284 + pool 4 = 288 例全绿，stage8-target 已无 ContentCacheManager 字节码）+ pytest all 124 passed；本文件 4.3（content 域）/6.2（Redis 设计）/9.2（JUnit 表）/12 同步；BUSINESS_FLOW 3.1/4.x 缓存失效流程同步 |
 | 2026-09-12 | 2.8 | **C 缓存改造 T3 评论缓存重制（refactor(cache-03)）**：新建 `com.itheima.content.service.CommentCache`（拆 ContentCacheManager 评论职责）：评论树走 T1 CacheAside 三态/空标记 60s/独立 TTL（新增 cache.comment.ttlMinutes=10+抖动）/写失败 DEL；评论增/删/点赞 = 失效 `content:comments:{id}` 读自愈（4.5 业务显式失效，替代旧内存树原地增删，消除 H1），评论点赞经 CommentDao 新增轻查询 getContentIdByCommentId 定位所属内容后失效；getCommentsForContent 增加 dto==null 短路（读评论前先确认 content 存在，防隐藏内容评论泄漏）；删除/下架内容级联失效评论 key（deleteContent/hideContent）；ContentCacheManager 删除评论字段/方法（init 不再全量加载评论，缓解 H7），内存残留 T6 清理；业务逻辑（楼中楼/软删/开关门禁）/@WebServlet 零改动；JUnit 新增 CommentCacheTest 11 例 + 评论短路用例 1 例（tv.py test junit 261 例全绿）+ pytest all 124 passed；本文件 4.3/6.2/9.2/10.1/10.2 同步；BUSINESS_FLOW 3.1/4.1.2/4.2.x 评论缓存失效流程同步 |

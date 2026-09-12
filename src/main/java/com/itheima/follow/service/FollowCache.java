@@ -141,6 +141,8 @@ public class FollowCache {
                 for (Long id : followedUserIds) {
                     members.add(p.sismember(setKey, String.valueOf(id)));
                 }
+                // T9 滑动续期：命中 set 顺带续期（此地已探 empty+exists，set 不存在时 expire 返回 0 无效果；空标记不续）
+                p.expire(setKey, ttlSeconds());
                 p.sync();
                 if (Boolean.TRUE.equals(empty.get())) {
                     stats.record(CacheStats.Event.HIT_EMPTY, setKey);
@@ -211,6 +213,8 @@ public class FollowCache {
                 Pipeline p = j.pipelined();
                 Response<Boolean> empty = p.exists(CacheKeys.empty(setKey));
                 Response<Boolean> exists = p.exists(setKey);
+                // T9 滑动续期：命中 set 顺带续期（无条件入列，set 不存在返回 0 无效果；空标记不续）
+                p.expire(setKey, ttlSeconds());
                 p.sync();
                 List<Boolean> r = new ArrayList<>(2);
                 r.add(empty.get());
@@ -474,13 +478,15 @@ public class FollowCache {
         }
     }
 
-    /** 单条成员三态扫描：一趟 pipeline 返回 [空标记, set 存在, 是否成员]（元素可能为 null，用 asList）。 */
+    /** 单条成员三态扫描：一趟 pipeline 返回 [空标记, set 存在, 是否成员]（元素可能为 null，用 asList）。
+     *  T9 滑动续期：命中 set 顺带续期（无条件入列，set 不存在返回 0 无效果；空标记不续）。 */
     private List<Boolean> scanSet(String setKey, String member) {
         return redis.execute(j -> {
             Pipeline p = j.pipelined();
             Response<Boolean> empty = p.exists(CacheKeys.empty(setKey));
             Response<Boolean> exists = p.exists(setKey);
             Response<Boolean> memberResp = p.sismember(setKey, member);
+            p.expire(setKey, ttlSeconds());
             p.sync();
             return java.util.Arrays.asList(empty.get(), exists.get(), memberResp.get());
         });

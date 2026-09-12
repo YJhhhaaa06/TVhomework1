@@ -400,6 +400,90 @@ class CacheAsideTest {
         }
     }
 
+    // ==================== T9 滑动续期：命中续期（原 TTL 抖动）、空标记不续、失败降级 ====================
+
+    @Test
+    void getHitDataRenewsTtlInSingleRoundTripWithoutRenewingEmptyMarker() {
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            Pipeline p = stubProbe(jedis, false, new JacksonCodec().toJson(new SampleDto(1L, "alice")));
+
+            SampleDto value = cache.get("content:1", SampleDto.class, () -> new SampleDto(2L, "loader"), 100);
+
+            assertEquals(1L, value.getId());
+            // 命中数据 key 顺带续期：续期值=原 TTL ±10% 抖动（100s -> [90,110]），仍一趟往返
+            verify(p).expire(eq("content:1"), longThat(t -> t >= 90 && t <= 110));
+            verify(jedis, times(1)).pipelined();
+            // 空标记 key 从不被续期
+            verify(p, never()).expire(startsWith("empty:"), anyLong());
+        }
+    }
+
+    @Test
+    void getHitEmptyNeverRenewsEmptyMarkerAndSkipsLoader() {
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            Pipeline p = stubProbe(jedis, true, null);
+            AtomicInteger loads = new AtomicInteger();
+
+            assertNull(cache.get("content:1", SampleDto.class, () -> {
+                loads.incrementAndGet();
+                return new SampleDto(1L, "x");
+            }, 100));
+
+            assertEquals(0, loads.get());
+            // hit-empty：data key 不存在，EXPIRE 返回 0 无效果（语义无害）；empty: key 从未被续期
+            verify(p).expire(eq("content:1"), longThat(t -> t >= 90 && t <= 110));
+            verify(p, never()).expire(startsWith("empty:"), anyLong());
+            verify(jedis, never()).setex(anyString(), anyLong(), anyString());
+        }
+    }
+
+    @Test
+    void getBatchRenewsEachDataKeyWithoutRenewingEmptyMarker() {
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            Pipeline p = mock(Pipeline.class);
+            when(jedis.pipelined()).thenReturn(p);
+            Response<Boolean> e1 = boolResponse(false);
+            Response<Boolean> e2 = boolResponse(true);
+            Response<String> j1 = strResponse(new JacksonCodec().toJson(new SampleDto(1L, "one")));
+            Response<String> j2 = strResponse(null);
+            when(p.exists("empty:k1")).thenReturn(e1);
+            when(p.exists("empty:k2")).thenReturn(e2);
+            when(p.get("k1")).thenReturn(j1);
+            when(p.get("k2")).thenReturn(j2);
+
+            cache.getBatch(List.of("k1", "k2"), SampleDto.class, k -> null, 100);
+
+            // 每个 data key 命中（hit-data / hit-empty）均入列续期；empty: key 从不续期
+            verify(p).expire(eq("k1"), longThat(t -> t >= 90 && t <= 110));
+            verify(p).expire(eq("k2"), longThat(t -> t >= 90 && t <= 110));
+            verify(p, never()).expire(startsWith("empty:"), anyLong());
+            verify(jedis, times(1)).pipelined();
+        }
+    }
+
+    @Test
+    void getRenewalFailureDegradesToLoaderWithoutThrowing() {
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            Pipeline p = mock(Pipeline.class);
+            when(jedis.pipelined()).thenReturn(p);
+            Response<Boolean> notEmpty = boolResponse(false);
+            Response<String> json = strResponse(new JacksonCodec().toJson(new SampleDto(1L, "alice")));
+            when(p.exists(anyString())).thenReturn(notEmpty);
+            when(p.get(anyString())).thenReturn(json);
+            doThrow(new RuntimeException("redis expire down")).when(p).sync();
+
+            SampleDto value = cache.get("content:1", SampleDto.class, () -> new SampleDto(2L, "db"), 100);
+
+            // EXPIRE 引发的 pipeline 失败（Redis 异常）不影响读返回：降级走 loader、不写回
+            assertEquals(2L, value.getId());
+            verify(jedis, never()).setex(anyString(), anyLong(), anyString());
+        }
+    }
+
     // ==================== 写路径：写失败=DEL 降级 ====================
 
     @Test

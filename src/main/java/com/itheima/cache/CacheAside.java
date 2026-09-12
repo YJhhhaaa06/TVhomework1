@@ -35,6 +35,11 @@ import java.util.Random;
  * <p>读路径加固（T8）：单 key 读（{@link #read} / {@link #get}）与批量读
  * （{@link #getBatch}）均 pipeline 化，EXISTS 空标记 + GET 数据 key 一趟往返（治 H12）；
  * 批量三态语义与单 key 完全一致。
+ *
+ * <p>滑动续期（T9 O-8）：**读命中顺带续期**——{@link #get}（{@link #getInternal}）与
+ * {@link #getBatch} 在命中数据 key 时同 pipeline 追加 {@code EXPIRE}（续期值=原 TTL ±10% 抖动），
+ * 热点 key 常驻由续期自然达成、不设永不过期 key；**空标记（{@code empty:}）一律不续期**
+ * （防"假空"窗口延长，NEEDS 4.14）；{@link #read} 为纯三态读不续期。
  */
 @Component
 public class CacheAside {
@@ -113,7 +118,7 @@ public class CacheAside {
     private <T> T getInternal(String dataKey, Function<String, T> parse,
                               Callable<T> loader, long ttlSeconds) {
         try {
-            List<Object> probe = probe(dataKey);
+            List<Object> probe = probeRenew(dataKey, ttlSeconds);
             if (Boolean.TRUE.equals(probe.get(0))) {
                 stats.record(CacheStats.Event.HIT_EMPTY, dataKey);
                 return null;
@@ -171,6 +176,9 @@ public class CacheAside {
                 for (String key : dataKeys) {
                     empties.put(key, p.exists(CacheKeys.empty(key)));
                     jsons.put(key, p.get(key));
+                    // T9 滑动续期：命中数据 key 顺带续期（值=原 TTL 抖动）。无条件入列——
+                    // hit-empty/miss 时 data key 不存在，EXPIRE 返回 0 无效果；空标记 key 从不续期
+                    p.expire(key, applyJitter(ttlSeconds));
                 }
                 p.sync();
                 for (String key : dataKeys) {
@@ -276,13 +284,34 @@ public class CacheAside {
 
     /**
      * 一趟 pipeline 探测单 key 的 [空标记, 数据 JSON]（T8：读路径 EXISTS + GET 合一趟往返，治 H12）。
-     * 供 {@link #read(String, Class)} 与 {@link #getInternal} 复用。
+     * 供 {@link #read(String, Class)} 复用（纯三态读，不续期）。
      */
     private List<Object> probe(String dataKey) {
         return redis.execute(j -> {
             Pipeline p = j.pipelined();
             Response<Boolean> empty = p.exists(CacheKeys.empty(dataKey));
             Response<String> json = p.get(dataKey);
+            p.sync();
+            return java.util.Arrays.asList(empty.get(), json.get());
+        });
+    }
+
+    /**
+     * T9 滑动续期版探测：与 {@link #probe(String)} 同构，命中数据 key 时顺带续期
+     * （值=原 TTL ±10% 抖动），供 {@link #getInternal} 使用。
+     *
+     * <p>EXPIRE 对 data key **无条件入列**：hit-data 时数据 key 存在 → 续期生效；
+     * hit-empty / miss 时数据 key 不存在 → EXPIRE 返回 0 无效果，且**空标记 key
+     * （{@code empty:}）从不被续期**（NEEDS 4.14：防"假空"窗口延长）。
+     * EXPIRE 的 Response 无需读取；Redis 异常由调用方既有 catch 降级兜底，
+     * EXPIRE 失败不影响读返回。空标记的短 TTL 由 markEmpty/writeOrInvalidate 维护，与续期无关。
+     */
+    private List<Object> probeRenew(String dataKey, long ttlSeconds) {
+        return redis.execute(j -> {
+            Pipeline p = j.pipelined();
+            Response<Boolean> empty = p.exists(CacheKeys.empty(dataKey));
+            Response<String> json = p.get(dataKey);
+            p.expire(dataKey, applyJitter(ttlSeconds));
             p.sync();
             return java.util.Arrays.asList(empty.get(), json.get());
         });
