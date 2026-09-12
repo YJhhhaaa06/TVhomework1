@@ -4,6 +4,7 @@ import com.itheima.comment.dao.CommentDao;
 import com.itheima.like.dao.CommentLikeDao;
 import com.itheima.content.dao.ContentDao;
 import com.itheima.like.dao.ContentLikeDao;
+import com.itheima.content.service.ContentCache;
 import com.itheima.content.service.ContentCacheManager;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.NotFoundException;
@@ -27,6 +28,7 @@ public class LikeService {
     private final CommentLikeDao commentLikeDao;
     private final LikeCacheService cache;
     private final ContentCacheManager contentCacheManager;
+    private final ContentCache contentCache;
     private final TransactionTemplate transactionTemplate;
     private static final Logger LOGGER =
             LogUtil.getLogger(LikeService.class);
@@ -35,6 +37,7 @@ public class LikeService {
     public LikeService(ContentDao contentDao, CommentDao commentDao,
                        ContentLikeDao contentLikeDao, CommentLikeDao commentLikeDao,
                        LikeCacheService cache, ContentCacheManager contentCacheManager,
+                       ContentCache contentCache,
                        TransactionTemplate transactionTemplate) {
         this.contentDao = contentDao;
         this.commentDao = commentDao;
@@ -42,6 +45,7 @@ public class LikeService {
         this.commentLikeDao = commentLikeDao;
         this.cache = cache;
         this.contentCacheManager = contentCacheManager;
+        this.contentCache = contentCache;
         this.transactionTemplate = transactionTemplate;
     }
 
@@ -67,7 +71,8 @@ public class LikeService {
 
         // 缓存更新放在事务提交后
         cache.likeContent(userId, contentId);
-        contentCacheManager.updateContentLikeCount(contentId, 1);
+        // 失效内容 key，读自愈回填 DB 最新 like_count（T2 4.5 显式失效）
+        contentCache.notifyLikeCountChanged(contentId);
     }
 
     public void removeLikeContent(long userId, long contentId) {
@@ -89,7 +94,8 @@ public class LikeService {
         });
 
         cache.unlikeContent(userId, contentId);
-        contentCacheManager.updateContentLikeCount(contentId, -1);
+        // 失效内容 key，读自愈回填 DB 最新 like_count（T2 4.5 显式失效）
+        contentCache.notifyLikeCountChanged(contentId);
     }
 
     // ==================== 评论点赞 ====================

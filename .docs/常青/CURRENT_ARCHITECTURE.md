@@ -222,7 +222,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | ContentController（182，/content/*）、StartController（49，/start）、SearchController（95，/search/*）、FeedController（57，/feed）、ProfileController（70，/profile） | 内容管理 + 首页推荐 + 搜索 + 关注流 + 用户主页 |
-| service | ContentService（420）、ContentCacheManager（666）、ContentStatusFiller（106）、FeedService（87）、ProfileService（98） | 内容业务 + 缓存管理 + 状态填充 + 关注流 + 主页 |
+| service | ContentService（405）、ContentCache（400，T2 新增：Redis 内容缓存=三态 Cache-Aside+索引）、ContentCacheManager（597，评论树内存缓存暂留，T3 迁出）、ContentStatusFiller（90）、FeedService（74）、ProfileService（86） | 内容业务 + Redis 内容缓存 + 评论树内存缓存（过渡） + 状态填充 + 关注流 + 主页 |
 | dao | ContentDao（366）、ContentMediaDao（163） | content/content_media 数据访问（ContentLikeDao 按 like 域归属） |
 | model | entity/ContentMedia（63）、cache/ContentCacheDTO（136）/CommentCacheDTO（110）、vo/ContentVO（42）/ContentDetailVO（26）/CommentVO（22）/ProfileVO（43）、dto/PageResult（62）/SearchDTO（51）、command/CommandConverter（139）/ContentType（16） | 内容模型 + 共享缓存 DTO + 共享 VO/DTO/转换器 |
 
@@ -339,17 +339,18 @@ com.itheima/
 
 | Key 模式 | 类型 | 用途 |
 |----------|------|------|
-| content:{contentId} | String(JSON) | 内容详情缓存（Cache-Aside 数据 key） |
-| content:comments:{contentId} | String(JSON) | 内容评论树缓存（独立 TTL，与内容解耦） |
+| content:{contentId} | String(JSON) | 内容详情缓存（Cache-Aside 数据 key，TTL 10min+抖动） |
+| content:index:{type}:{category} | LIST\<contentId\> | 类型分区索引（4 key/内容：t,c / t,-1 / -1,c / -1,-1；新前序；T2 启用，启动全量重建+懒重建） |
+| content:comments:{contentId} | String(JSON) | 内容评论树缓存（独立 TTL，与内容解耦；T3 启用） |
 | empty:{dataKey} | String "1" | 空标记：已加载确认无数据（短 TTL 60s） |
-| content:likeCount:{contentId} | String(int) | 内容点赞计数（高频读，计数/成员分离 4.6） |
-| content:likeSet:{contentId} | Set\<userId\> | 内容点赞成员（低频"谁点过"查询，miss 允许穿透） |
-| comment:likeCount:{commentId} | String(int) | 评论点赞计数 |
-| comment:likeSet:{commentId} | Set\<userId\> | 评论点赞成员 |
-| user:following:{userId} | Set\<followedUserId\> | 我关注了谁（4.10，MULTI 双写，失败双 DEL） |
-| user:follower:{userId} | Set\<userId\> | 谁关注了我（4.10，MULTI 双写，失败双 DEL） |
+| content:likeCount:{contentId} | String(int) | 内容点赞计数（高频读，计数/成员分离 4.6；T4 启用） |
+| content:likeSet:{contentId} | Set\<userId\> | 内容点赞成员（低频"谁点过"查询，miss 允许穿透；T4 启用） |
+| comment:likeCount:{commentId} | String(int) | 评论点赞计数（T4 启用） |
+| comment:likeSet:{commentId} | Set\<userId\> | 评论点赞成员（T4 启用） |
+| user:following:{userId} | Set\<followedUserId\> | 我关注了谁（4.10，MULTI 双写，失败双 DEL；T5 启用） |
+| user:follower:{userId} | Set\<userId\> | 谁关注了我（4.10，MULTI 双写，失败双 DEL；T5 启用） |
 
-> 旧 key 演进：原 `content:like:{id}` / `comment:like:{id}`（单 Set 兼容 SCARD 计数）将在 T4 点赞缓存重制后随旧实现移除；本表为新缓存层目标规范。
+> 旧 key 演进：原 `content:like:{id}` / `comment:like:{id}`（单 Set 兼容 SCARD 计数）在 T4 前仍生效（LikeCacheService 现行）；本表为新缓存层目标规范，按任务逐行启用（当前已启用：content / content:index；空标记随行）。
 
 ---
 
@@ -500,6 +501,7 @@ src/main/webapp/
 | user/service/UserServiceTest | 23 | 登录/注册/改密/改资料/isAdmin |
 | content/service/ContentServiceTest | 47 | 搜索/详情/评论查询/发布/评论区开关/编辑作品（换源/删图/改文案）/删除作品/内容审核下架恢复 |
 | content/service/ContentCacheManagerLifecycleTest | 9 | 初始化/缓存命中/定时器关闭/刷新失败/评论缓存删除/两级归一化 |
+| content/service/ContentCacheTest | 12 | Redis 内容缓存：三态 loader 构建（含媒体 URL）/DB 无媒体损坏降级/索引读取与懒重建/写路径失效契约/init 重建不 crash/失效方法/VO 复制 |
 | content/service/FeedServiceTest | 8 | 关注动态流 |
 | content/service/ProfileServiceTest | 13 | 用户主页 |
 | like/service/LikeServiceTest | 14 | 点赞/取消/缓存优先/批量查询 |
@@ -515,10 +517,10 @@ src/main/webapp/
 | cache/RedisAccessTest | 4 | execute/executeVoid 取还连接、异常包装 CacheException（含连接获取失败） |
 | cache/SingleFlightTest | 4 | 并发同 key 只 load 一次、失败/成功 remove、不同 key 独立 |
 | cache/CacheAsideTest | 16 | 三态 read、Cache-Aside get 命中/回填/空标记、降级不写回、写失败 DEL、清空标记防假空、markEmpty/invalidate best-effort |
-| **合计** | **240** | - |
+| **合计** | **252** | - |
 
 > 注：`com.itheima.tools.CouponAdmin` 属 tools 测试脚本目录（非测试类，package 保留 `com.itheima.tools`，仅 import java.*，无主代码引用）；`util/MyConnectionPoolTest` 被测类未动（基建），测试文件留在 util 包不迁。
-> 用例数取自 `stage8-target/surefire-reports`（2026-09-12 实测，`tv.py test junit` 全绿 240 例 = 既有 204 + cache 基建 36）。
+> 用例数取自 `stage8-target/surefire-reports`（2026-09-12 实测，`tv.py test junit` 全绿 252 例 = 既有 240 + ContentCacheTest 12）。
 
 > 构建输出：沙箱内 Maven 通过 `-Dstage8.buildDir` 指向 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（pom 默认 `./target`），原因是沙箱内 javac 无法把 worktree `target/classes` 作为 classpath（报"程序包不存在"）。
 > 离线仓库：新增测试依赖（junit/mockito/bytebuddy/surefire 等）的 `_remote.repositories` 已补 `>aliyun=` 来源行（只追加不删除），默认 aliyun 镜像下可离线解析。
@@ -531,21 +533,21 @@ src/main/webapp/
 
 | 域 | 文件数 | 代码行数 | 占比 |
 |------|--------|----------|------|
-| content | 23 | 3,069 | 31.7% |
-| user | 12 | 937 | 9.7% |
-| like | 5 | 925 | 9.6% |
+| content | 24 | 3,103 | 31.9% |
+| user | 12 | 937 | 9.6% |
+| like | 5 | 925 | 9.5% |
 | admin | 8 | 737 | 7.6% |
 | comment | 5 | 555 | 5.7% |
-| upload | 5 | 471 | 4.9% |
+| upload | 5 | 471 | 4.8% |
 | follow | 3 | 321 | 3.3% |
 | coupon | 4 | 249 | 2.6% |
-| **业务域小计** | **65** | **7,264** | **75.0%** |
+| **业务域小计** | **66** | **7,298** | **75.1%** |
 
 ### 10.2 基建（不动 + cache 新增）
 
 | 包 | 文件数 | 代码行数 | 占比 |
 |------|--------|----------|------|
-| util | 11 | 567 | 5.9% |
+| util | 11 | 567 | 5.8% |
 | ioc | 8 | 366 | 3.8% |
 | exception | 20 | 326 | 3.4% |
 | controller（基建 4 类） | 4 | 261 | 2.7% |
@@ -553,11 +555,10 @@ src/main/webapp/
 | config | 1 | 146 | 1.5% |
 | dao（基建 ResultMap） | 1 | 88 | 0.9% |
 | cache（C 周期 T1 新增） | 7 | 465 | 4.8% |
-| **基建小计** | **56** | **2,416** | **25.0%** |
-| **合计** | **121** | **9,680** | **100%** |
+| **基建小计** | **56** | **2,416** | **24.9%** |
+| **合计** | **122** | **9,714** | **100%** |
 
-> 行数统计 2026-09-12（B 改造后 + C 周期 T1 cache 基建实测，与第四章包清单一致）。
-> 占比分母以基建+业务域合计为 100%（原 21.2% 基建口径含 cache 上行后为 25.0%）。
+> 行数统计 2026-09-12（B 改造后 + C 周期 T1 cache 基建 + T2 ContentCache 内容域增量，与第四章包清单一致；行数为快照，以实际代码为准）。
 
 ---
 
@@ -593,6 +594,7 @@ src/main/webapp/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-09-12 | 2.7 | **C 缓存改造 T2 内容缓存重制（refactor(cache-02)）**：新建 `com.itheima.content.service.ContentCache`（Redis 内容缓存，拆 ContentCacheManager 内容职责）：内容详情走 T1 CacheAside 三态/空标记 60s/单飞/写失败 DEL，类型分区索引迁为 Redis LIST `content:index:{t}:{c}`（4 key/内容，启动 init 全量重建 + 索引缺失单飞懒重建），点赞/评论数/评论区开关变更 = 失效内容 key 读自愈（DB 列为源真理）；业务读路径（/start /search /detail /feed /profile）全切新缓存，业务逻辑/@WebServlet 零改动；H3 修复：addVideo/addPost 的 Redis 缓存写入移出 DB 事务；评论树内存缓存暂留 ContentCacheManager（T3 迁出），旧 updateCacheAfterAdd/removeContent/refreshContent 仅保留评论树/旧点赞 key 遗产副作用（代码注释标注 T3/T4 清理）；JUnit 新增 ContentCacheTest 12 例（tv.py test junit 252 例全绿）+ pytest all 124 passed；本文件 4.3/6.2/9.2/10.1/10.2 同步；BUSINESS_FLOW 3.1 缓存机制重写 |
 | 2026-09-12 | 2.6 | **C 缓存改造 T1 基建完成（refactor(cache-01)）**：新建 `com.itheima.cache` 基建包（7 类，纯新增零改动）：CacheKeys（统一 key 规范定稿 + 空标记 60s 常量）/ JacksonCodec（JSON 序列化）/ RedisAccess（回调式取还连接，支持同连接 pipeline/MULTI，异常包 CacheException）/ SingleFlight（单飞，失败/成功均 remove）/ CacheStatus+CacheResult（三态）/ CacheAside（三态 Cache-Aside 读 + 空标记独立 key + 写失败=DEL 自愈降级 + TTL ±10% 抖动）；KEY 规范：内容/评论/点赞计数与成员分离/关注双 Set/`empty:` 空标记；本任务不改任何业务读路径、不改 MyRedisPool、不引入 Spring/MyBatis/MQ；JUnit 新增 5 类 36 例（tv.py test junit 240 例全绿）；本文件 4.1/4.2/6.2/9.2/10.1/10.2 同步 |
 | 2026-09-11 | 2.5 | **B-feature package 改造完成（T1~T9，8 域迁移 + 收尾）**：业务 controller/service/dao/model 全部按 8 业务域重组（user/content/follow/like/comment/coupon/upload/admin），每域保留分层子包；共享组件（ContentCacheManager/ContentStatusFiller/ContentCacheDTO/CommentCacheDTO/PageResult/CommandConverter/Content相关VO）归 content 域；基建（ioc/filter/util/exception/config + controller 的 BaseServlet/BaseServletUtil/RequestParser/AppShutDownListener + dao 的 ResultMap）保持原位不动；web.xml / @WebServlet URL / IoC 扫描（`scan("com.itheima")`）/ 前端 / pytest 一行不改；JUnit 同包随迁（201 例全绿）；主代码 96 类 → 114 类（含 annotation 子包 4 注解类，行数 6,504 → 9,215 口径含基建）；本章第四章（包结构）、第九章（JUnit 表）、第十章（代码统计）同步重写 |
 | 2026-08-29 | 2.4 | 阶段五完成（A2 内容审核下架）：content.is_deleted 语义扩展为 0正常/1作者删除/2管理员下架（复用字段，无 DDL）；新增 AdminContentController（GET /api/admin/content/list、POST /api/admin/content/hide、POST /api/admin/content/unhide，AuthFilter /api/admin/* role==1 保护）；ContentDao 新增 getContentStatus/updateContentDeletedState/findContentForAdmin；ContentService 新增 listContentForAdmin/hideContent/unhideContent（下架剔除缓存、恢复回填缓存）；前端 admin.js 新增「内容下架管理（审核）」区块；BUSINESS_FLOW 新增 3.10。测试用例待后续补充 |

@@ -307,30 +307,36 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 
 ## 三、内容管理模块
 
-### 3.1 内容缓存机制
+### 3.1 内容缓存机制（C 周期 T2 重制为统一 Redis，2026-09-12）
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    ContentService 缓存结构                       │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌─────────────────┐    ┌─────────────────┐                    │
-│  │  recommendList   │    │  contentCache   │                    │
-│  │  (推荐列表)      │    │  (内容详情)     │                    │
-│  │  List<ContentVO> │    │  Map<id, DTO>   │                    │
-│  └─────────────────┘    └─────────────────┘                    │
-│                                                                 │
-│  ┌─────────────────┐    ┌─────────────────┐                    │
-│  │  commentCache    │    │ typeCategoryIndex│                   │
-│  │  (评论缓存)      │    │  (类型分区索引)  │                    │
-│  │  Map<id, List>   │    │  Map<key, List>  │                    │
-│  └─────────────────┘    └─────────────────┘                    │
-│                                                                 │
-│  定时刷新：每 10 分钟全量刷新                                    │
-│  TTL：单条内容 10 分钟过期                                       │
-│                                                                 │
+│  前台读路径（Start/Search/Detail/Feed/Profile）                  │
+│    ↓  ContentCache（com.itheima.content.service）               │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │ 内容详情：content:{id} → JSON（T1 CacheAside 三态）        │   │
+│  │   miss=查 DB 回填（单飞）；hit-empty=空标记 60s 防穿透；    │   │
+│  │   hit-data=直接返回；Redis 挂=降级走 DB                    │   │
+│  │ 类型分区索引：content:index:{type}:{category}（Redis LIST）│   │
+│  │   4 key/内容（含 type=-1 / category=-1 通配），新前序      │   │
+│  │ TTL：内容 10min（+±10% 抖动，4.12 一版）                  │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│  写路径（DB 事务提交后）：                                      │
+│    addVideo/addPost    → contentCache.addContent(id) 入缓存      │
+│    编辑媒体/文案、恢复   → contentCache.refreshContent(id)       │
+│    删除/下架            → contentCache.removeContent(id)（失效+索引剔除）│
+│    点赞/取消            → 失效 content:{id}（读自愈回填 DB 计数）  │
+│    评论增删             → 失效 content:{id}（读自愈回填 comment_count）│
+│    评论区开关           → 失效 content:{id}（读自愈回填 comment_enabled）│
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+> 关键语义（NEEDS 4.2~4.5/4.12）：内容读/写**全部收敛 Redis**（废弃旧内存 HashMap 版
+> ContentCacheManager 的内容部分，评论树内存缓存 T3 迁出）；**任何缓存失败降级走 DB、不导致业务失败**；
+> 计数（like_count/comment_count/comment_enabled）以 DB 列为源真理，变更即失效让读自愈；
+> 类型分区索引启动 init 全量重建 + 索引 key 缺失时单飞懒重建（防 Redis 重启后 /start 空推荐）。
+> 旧 ContentCacheManager 仅保留评论树内存缓存与"评论树空列表种子"副作用（T3 移除），
+> ContentService 内标注 T3/T4 迁出时清理。
 
 ### 3.2 发布视频流程
 

@@ -45,6 +45,7 @@ class ContentServiceTest {
     private CommentService commentService;
     private LikeService likeService;
     private ContentCacheManager cache;
+    private ContentCache contentCache;
     private ContentStatusFiller filler;
     private TransactionTemplate tt;
     private Connection conn;
@@ -59,11 +60,12 @@ class ContentServiceTest {
         commentService = mock(CommentService.class);
         likeService = mock(LikeService.class);
         cache = mock(ContentCacheManager.class);
+        contentCache = mock(ContentCache.class);
         filler = mock(ContentStatusFiller.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
         service = new ContentService(contentDao, contentMediaDao, commentDao,
-                contentLikeDao, commentService, likeService, cache, filler, tt);
+                contentLikeDao, commentService, likeService, cache, contentCache, filler, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);
@@ -86,14 +88,14 @@ class ContentServiceTest {
         ContentCacheDTO dto2 = dto(2L);
         when(contentDao.countKeywordSearch(conn, "java")).thenReturn(2);
         when(contentDao.keywordSearchInBrief(conn, "java", 1, 10)).thenReturn(List.of(1L, 2L));
-        when(cache.getContentFromCache(1L)).thenReturn(dto1);
-        when(cache.getContentFromCache(2L)).thenReturn(dto2);
+        when(contentCache.getContent(1L)).thenReturn(dto1);
+        when(contentCache.getContent(2L)).thenReturn(dto2);
         ContentVO vo1 = new ContentVO();
         vo1.setId(1L);
         ContentVO vo2 = new ContentVO();
         vo2.setId(2L);
-        when(cache.toContentVO(dto1)).thenReturn(vo1);
-        when(cache.toContentVO(dto2)).thenReturn(vo2);
+        when(contentCache.toContentVO(dto1)).thenReturn(vo1);
+        when(contentCache.toContentVO(dto2)).thenReturn(vo2);
 
         PageResult<ContentVO> result = service.search("java", 7L, 1, 10);
 
@@ -113,7 +115,7 @@ class ContentServiceTest {
 
     @Test
     void getContentDetailVOReturnsNullWhenCacheMiss() {
-        when(cache.getContentFromCache(5L)).thenReturn(null);
+        when(contentCache.getContent(5L)).thenReturn(null);
 
         assertNull(service.getContentDetailVO(5L, 7L));
         verifyNoInteractions(filler);
@@ -124,8 +126,8 @@ class ContentServiceTest {
         ContentCacheDTO dto = dto(5L);
         ContentDetailVO detail = new ContentDetailVO();
         detail.setId(5L);
-        when(cache.getContentFromCache(5L)).thenReturn(dto);
-        when(cache.toDetailVO(dto)).thenReturn(detail);
+        when(contentCache.getContent(5L)).thenReturn(dto);
+        when(contentCache.toDetailVO(dto)).thenReturn(detail);
 
         ContentDetailVO result = service.getContentDetailVO(5L, 7L);
 
@@ -137,7 +139,7 @@ class ContentServiceTest {
     @Test
     void getCommentsForContentWithoutUserSkipsLikeQuery() {
         CommentCacheDTO root = new CommentCacheDTO("alice", 1L, 3L, 7L, "hi", null, 0);
-        when(cache.getContentFromCache(3L)).thenReturn(dto(3L));
+        when(contentCache.getContent(3L)).thenReturn(dto(3L));
         when(cache.getCommentTree(3L)).thenReturn(List.of(root));
         when(commentService.convertToCommentVOList(anyList(), anyMap()))
                 .thenReturn(List.of(new CommentVO()));
@@ -151,7 +153,7 @@ class ContentServiceTest {
     @Test
     void getCommentsForContentWithUserQueriesLikedMap() {
         CommentCacheDTO root = new CommentCacheDTO("alice", 1L, 3L, 7L, "hi", null, 0);
-        when(cache.getContentFromCache(3L)).thenReturn(dto(3L));
+        when(contentCache.getContent(3L)).thenReturn(dto(3L));
         when(cache.getCommentTree(3L)).thenReturn(List.of(root));
         when(cache.collectCommentIds(List.of(root))).thenReturn(List.of(1L));
         when(likeService.batchIsCommentLiked(7L, List.of(1L))).thenReturn(Map.of(1L, true));
@@ -166,7 +168,7 @@ class ContentServiceTest {
 
     @Test
     void getCommentsForContentEmptyTreeReturnsEmpty() {
-        when(cache.getContentFromCache(4L)).thenReturn(dto(4L));
+        when(contentCache.getContent(4L)).thenReturn(dto(4L));
         when(cache.getCommentTree(4L)).thenReturn(Collections.emptyList());
 
         List<CommentVO> result = service.getCommentsForContent(4L, null);
@@ -185,6 +187,7 @@ class ContentServiceTest {
         verify(contentMediaDao).addMedia(conn, 100L, "v.mp4", 1, 1);
         verify(contentMediaDao).addMedia(conn, 100L, "c.png", 3, 1);
         verify(cache).updateCacheAfterAdd(conn, 100L);
+        verify(contentCache).addContent(100L);
     }
 
     @Test
@@ -208,6 +211,7 @@ class ContentServiceTest {
         verify(contentMediaDao).addMedia(conn, 200L, "i1.jpg", 2, 1);
         verify(contentMediaDao).addMedia(conn, 200L, "i2.jpg", 2, 2);
         verify(cache).updateCacheAfterAdd(conn, 200L);
+        verify(contentCache).addContent(200L);
     }
 
     @Test
@@ -220,6 +224,7 @@ class ContentServiceTest {
         assertEquals(200L, id);
         verify(contentMediaDao, never()).addMedia(eq(conn), eq(200L), eq(null), anyInt(), anyInt());
         verify(contentMediaDao).addMedia(conn, 200L, "i1.jpg", 2, 1);
+        verify(contentCache).addContent(200L);
     }
 
     // ===== 评论区开关（C2）=====
@@ -231,7 +236,7 @@ class ContentServiceTest {
         service.setCommentEnabled(1L, 7L, false);
 
         verify(contentDao).updateCommentEnabled(conn, 1L, false);
-        verify(cache).updateContentCommentEnabled(1L, false);
+        verify(contentCache).updateCommentEnabled(1L);
     }
 
     @Test
@@ -240,7 +245,7 @@ class ContentServiceTest {
 
         assertThrows(ForbiddenException.class, () -> service.setCommentEnabled(1L, 8L, false));
         verify(contentDao, never()).updateCommentEnabled(any(), anyLong(), anyBoolean());
-        verify(cache, never()).updateContentCommentEnabled(anyLong(), anyBoolean());
+        verify(contentCache, never()).updateCommentEnabled(anyLong());
     }
 
     @Test
@@ -258,14 +263,14 @@ class ContentServiceTest {
                 .thenThrow(new SQLException("db down"));
 
         assertThrows(ServerException.class, () -> service.setCommentEnabled(1L, 7L, false));
-        verify(cache, never()).updateContentCommentEnabled(anyLong(), anyBoolean());
+        verify(contentCache, never()).updateCommentEnabled(anyLong());
     }
 
     @Test
     void getCommentsForContentReturnsEmptyWhenCommentsDisabled() {
         ContentCacheDTO dto = dto(3L);
         dto.setCommentEnabled(false);
-        when(cache.getContentFromCache(3L)).thenReturn(dto);
+        when(contentCache.getContent(3L)).thenReturn(dto);
 
         List<CommentVO> result = service.getCommentsForContent(3L, null);
 
@@ -293,7 +298,7 @@ class ContentServiceTest {
         assertEquals("/upload/cover/old.png", oldUrl);
         verify(contentMediaDao).updateMediaUrl(eq(conn), eq(10L), eq("/upload/cover/new.png"), eq(true), any(Timestamp.class));
         verify(contentDao).updateFileExists(eq(conn), eq(1L), eq(true), any(Timestamp.class));
-        verify(cache).refreshContent(1L);
+        verify(contentCache).refreshContent(1L);
     }
 
     @Test
@@ -350,7 +355,7 @@ class ContentServiceTest {
         assertEquals("/upload/image/old.jpg", oldUrl);
         verify(contentMediaDao).deleteMediaByContentIdAndTypeSort(conn, 1L, 2, 1);
         verify(contentMediaDao).compactImageSort(conn, 1L, 1);
-        verify(cache).refreshContent(1L);
+        verify(contentCache).refreshContent(1L);
     }
 
     @Test
@@ -378,7 +383,7 @@ class ContentServiceTest {
         service.updateContentInfo(1L, 7L, "新标题", "新简介");
 
         verify(contentDao).updateContentInfo(conn, 1L, "新标题", "新简介");
-        verify(cache).refreshContent(1L);
+        verify(contentCache).refreshContent(1L);
     }
 
     @Test
@@ -540,7 +545,7 @@ class ContentServiceTest {
         service.unhideContent(1L);
 
         verify(contentDao).updateContentDeletedState(conn, 1L, 0);
-        verify(cache).refreshContent(1L);
+        verify(contentCache).refreshContent(1L);
     }
 
     @Test

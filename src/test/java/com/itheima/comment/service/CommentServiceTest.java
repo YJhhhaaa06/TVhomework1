@@ -1,6 +1,7 @@
 package com.itheima.comment.service;
 
 import com.itheima.comment.dao.CommentDao;
+import com.itheima.content.service.ContentCache;
 import com.itheima.content.service.ContentCacheManager;
 import com.itheima.content.dao.ContentDao;
 import com.itheima.exception.ConflictException;
@@ -32,6 +33,7 @@ class CommentServiceTest {
     private CommentDao commentDao;
     private ContentDao contentDao;
     private ContentCacheManager contentCacheManager;
+    private ContentCache contentCache;
     private TransactionTemplate tt;
     private Connection conn;
     private CommentService service;
@@ -43,9 +45,10 @@ class CommentServiceTest {
         commentDao = mock(CommentDao.class);
         contentDao = mock(ContentDao.class);
         contentCacheManager = mock(ContentCacheManager.class);
+        contentCache = mock(ContentCache.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
-        service = new CommentService(commentDao, contentDao, contentCacheManager, tt);
+        service = new CommentService(commentDao, contentDao, contentCacheManager, contentCache, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);
@@ -67,7 +70,7 @@ class CommentServiceTest {
         service.addComment(command);
 
         verify(contentDao).updateCommentCount(conn, 3L, 1);
-        verify(contentCacheManager).updateContentCommentCount(3L, 1);
+        verify(contentCache).notifyCommentCountChanged(3L);
         verify(contentCacheManager).addCommentToCache(3L, saved, null);
     }
 
@@ -76,7 +79,7 @@ class CommentServiceTest {
         CommentCommand command = rootCommand();
         ContentCacheDTO dto = new ContentCacheDTO();
         dto.setCommentEnabled(false);
-        when(contentCacheManager.getContentFromCache(3L)).thenReturn(dto);
+        when(contentCache.getContent(3L)).thenReturn(dto);
 
         assertThrows(ConflictException.class, () -> service.addComment(command));
         verify(commentDao, never()).addComment(any(), anyLong(), anyLong(), anyString(), any(), any());
@@ -166,7 +169,7 @@ class CommentServiceTest {
 
         verify(commentDao).softDeleteFloor(conn, 9L);
         verify(contentDao).updateCommentCount(conn, 3L, -4);
-        verify(contentCacheManager).updateContentCommentCount(3L, -4);
+        verify(contentCache).notifyCommentCountChanged(3L);
         verify(contentCacheManager).removeCommentFromCache(3L, 9L, true);
     }
 

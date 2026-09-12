@@ -26,7 +26,7 @@ class FeedServiceTest {
 
     private FollowDao followDao;
     private ContentDao contentDao;
-    private ContentCacheManager cache;
+    private ContentCache contentCache;
     private LikeService likeService;
     private TransactionTemplate tt;
     private Connection conn;
@@ -36,11 +36,11 @@ class FeedServiceTest {
     void setUp() throws Exception {
         followDao = mock(FollowDao.class);
         contentDao = mock(ContentDao.class);
-        cache = mock(ContentCacheManager.class);
+        contentCache = mock(ContentCache.class);
         likeService = mock(LikeService.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
-        service = new FeedService(followDao, contentDao, cache, likeService, tt);
+        service = new FeedService(followDao, contentDao, contentCache, likeService, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);
@@ -95,10 +95,10 @@ class FeedServiceTest {
         when(contentDao.findContentIdsByUsers(conn, List.of(7L), 0, 10)).thenReturn(List.of(1L, 2L));
         ContentCacheDTO dto1 = dto(1L);
         ContentCacheDTO dto2 = dto(2L);
-        when(cache.getContentFromCache(1L)).thenReturn(dto1);
-        when(cache.getContentFromCache(2L)).thenReturn(dto2);
-        when(cache.toContentVO(dto1)).thenReturn(vo(1L));
-        when(cache.toContentVO(dto2)).thenReturn(vo(2L));
+        when(contentCache.getContent(1L)).thenReturn(dto1);
+        when(contentCache.getContent(2L)).thenReturn(dto2);
+        when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
+        when(contentCache.toContentVO(dto2)).thenReturn(vo(2L));
         when(likeService.batchIsContentLiked(7L, List.of(1L, 2L)))
                 .thenReturn(Map.of(1L, true, 2L, false));
 
@@ -117,10 +117,10 @@ class FeedServiceTest {
         when(followDao.getAllFollowedUserIds(conn, 7L)).thenReturn(List.of(7L));
         when(contentDao.countContentByUsers(conn, List.of(7L))).thenReturn(2);
         when(contentDao.findContentIdsByUsers(conn, List.of(7L), 0, 10)).thenReturn(List.of(1L, 2L));
-        when(cache.getContentFromCache(1L)).thenReturn(null);
+        when(contentCache.getContent(1L)).thenReturn(null);
         ContentCacheDTO dto2 = dto(2L);
-        when(cache.getContentFromCache(2L)).thenReturn(dto2);
-        when(cache.toContentVO(dto2)).thenReturn(vo(2L));
+        when(contentCache.getContent(2L)).thenReturn(dto2);
+        when(contentCache.toContentVO(dto2)).thenReturn(vo(2L));
         when(likeService.batchIsContentLiked(7L, List.of(2L))).thenReturn(Map.of(2L, true));
 
         PageResult<ContentVO> result = service.getFeed(7L, 1, 10);
@@ -136,8 +136,8 @@ class FeedServiceTest {
         when(contentDao.countContentByUsers(conn, List.of(7L))).thenReturn(1);
         when(contentDao.findContentIdsByUsers(conn, List.of(7L), 0, 10)).thenReturn(List.of(1L));
         ContentCacheDTO dto1 = dto(1L);
-        when(cache.getContentFromCache(1L)).thenReturn(dto1);
-        when(cache.toContentVO(dto1)).thenReturn(vo(1L));
+        when(contentCache.getContent(1L)).thenReturn(dto1);
+        when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
         when(likeService.batchIsContentLiked(7L, List.of(1L))).thenReturn(null);
 
         PageResult<ContentVO> result = service.getFeed(7L, 1, 10);
@@ -153,8 +153,8 @@ class FeedServiceTest {
         when(contentDao.findContentIdsByUsers(eq(conn), eq(List.of(7L)), eq(40), eq(20)))
                 .thenReturn(List.of(1L));
         ContentCacheDTO dto1 = dto(1L);
-        when(cache.getContentFromCache(1L)).thenReturn(dto1);
-        when(cache.toContentVO(dto1)).thenReturn(vo(1L));
+        when(contentCache.getContent(1L)).thenReturn(dto1);
+        when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
 
         PageResult<ContentVO> result = service.getFeed(7L, 3, 20);
 

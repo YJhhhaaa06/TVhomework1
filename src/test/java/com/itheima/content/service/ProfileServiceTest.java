@@ -28,7 +28,7 @@ class ProfileServiceTest {
     private UserDao userDao;
     private ContentDao contentDao;
     private FollowDao followDao;
-    private ContentCacheManager cache;
+    private ContentCache contentCache;
     private LikeService likeService;
     private TransactionTemplate tt;
     private Connection conn;
@@ -39,11 +39,11 @@ class ProfileServiceTest {
         userDao = mock(UserDao.class);
         contentDao = mock(ContentDao.class);
         followDao = mock(FollowDao.class);
-        cache = mock(ContentCacheManager.class);
+        contentCache = mock(ContentCache.class);
         likeService = mock(LikeService.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
-        service = new ProfileService(userDao, contentDao, followDao, cache, likeService, tt);
+        service = new ProfileService(userDao, contentDao, followDao, contentCache, likeService, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);
@@ -103,10 +103,10 @@ class ProfileServiceTest {
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L, 2L));
         ContentCacheDTO dto1 = dto(1L);
         ContentCacheDTO dto2 = dto(2L);
-        when(cache.getContentFromCache(1L)).thenReturn(dto1);
-        when(cache.getContentFromCache(2L)).thenReturn(dto2);
-        when(cache.toContentVO(dto1)).thenReturn(vo(1L));
-        when(cache.toContentVO(dto2)).thenReturn(vo(2L));
+        when(contentCache.getContent(1L)).thenReturn(dto1);
+        when(contentCache.getContent(2L)).thenReturn(dto2);
+        when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
+        when(contentCache.toContentVO(dto2)).thenReturn(vo(2L));
         when(followDao.getFollowedIds(conn, 8L, java.util.List.of(7L))).thenReturn(java.util.Set.of(7L));
         when(likeService.batchIsContentLiked(8L, java.util.List.of(1L, 2L)))
                 .thenReturn(java.util.Map.of(1L, true, 2L, false));
@@ -127,10 +127,10 @@ class ProfileServiceTest {
     void getProfileSkipsCacheMissAndQueriesLikedForSurvivors() throws SQLException {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L, 2L));
-        when(cache.getContentFromCache(1L)).thenReturn(null);
+        when(contentCache.getContent(1L)).thenReturn(null);
         ContentCacheDTO dto2 = dto(2L);
-        when(cache.getContentFromCache(2L)).thenReturn(dto2);
-        when(cache.toContentVO(dto2)).thenReturn(vo(2L));
+        when(contentCache.getContent(2L)).thenReturn(dto2);
+        when(contentCache.toContentVO(dto2)).thenReturn(vo(2L));
         when(likeService.batchIsContentLiked(8L, java.util.List.of(2L)))
                 .thenReturn(java.util.Map.of(2L, true));
 
@@ -146,8 +146,8 @@ class ProfileServiceTest {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L));
         ContentCacheDTO dto1 = dto(1L);
-        when(cache.getContentFromCache(1L)).thenReturn(dto1);
-        when(cache.toContentVO(dto1)).thenReturn(vo(1L));
+        when(contentCache.getContent(1L)).thenReturn(dto1);
+        when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
         when(likeService.batchIsContentLiked(7L, java.util.List.of(1L)))
                 .thenReturn(java.util.Map.of(1L, true));
 
@@ -163,8 +163,8 @@ class ProfileServiceTest {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L));
         ContentCacheDTO dto1 = dto(1L);
-        when(cache.getContentFromCache(1L)).thenReturn(dto1);
-        when(cache.toContentVO(dto1)).thenReturn(vo(1L));
+        when(contentCache.getContent(1L)).thenReturn(dto1);
+        when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
 
         ProfileVO profile = service.getProfile(7L, null, 1, 10);
 
@@ -179,8 +179,8 @@ class ProfileServiceTest {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L));
         ContentCacheDTO dto1 = dto(1L);
-        when(cache.getContentFromCache(1L)).thenReturn(dto1);
-        when(cache.toContentVO(dto1)).thenReturn(vo(1L));
+        when(contentCache.getContent(1L)).thenReturn(dto1);
+        when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
         when(likeService.batchIsContentLiked(8L, java.util.List.of(1L))).thenReturn(null);
 
         ProfileVO profile = service.getProfile(7L, 8L, 1, 10);
@@ -197,7 +197,7 @@ class ProfileServiceTest {
 
         assertTrue(profile.getContentPage().getList().isEmpty());
         assertEquals(1, profile.getContentPage().getTotal());
-        verify(cache, never()).getContentFromCache(anyLong());
+        verify(contentCache, never()).getContent(anyLong());
     }
 
     @Test
@@ -205,8 +205,8 @@ class ProfileServiceTest {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L, 2L, 3L));
         ContentCacheDTO dto3 = dto(3L);
-        when(cache.getContentFromCache(3L)).thenReturn(dto3);
-        when(cache.toContentVO(dto3)).thenReturn(vo(3L));
+        when(contentCache.getContent(3L)).thenReturn(dto3);
+        when(contentCache.toContentVO(dto3)).thenReturn(vo(3L));
 
         ProfileVO profile = service.getProfile(7L, 8L, 2, 2);
 

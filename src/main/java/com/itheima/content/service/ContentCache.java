@@ -1,0 +1,442 @@
+package com.itheima.content.service;
+
+import com.itheima.cache.CacheAside;
+import com.itheima.cache.CacheKeys;
+import com.itheima.cache.RedisAccess;
+import com.itheima.cache.SingleFlight;
+import com.itheima.config.AppConfig;
+import com.itheima.content.dao.ContentDao;
+import com.itheima.content.dao.ContentMediaDao;
+import com.itheima.content.model.cache.ContentCacheDTO;
+import com.itheima.content.model.entity.ContentMedia;
+import com.itheima.content.model.vo.ContentDetailVO;
+import com.itheima.content.model.vo.ContentVO;
+import com.itheima.exception.CacheException;
+import com.itheima.exception.NotFoundException;
+import com.itheima.exception.ParamException;
+import com.itheima.exception.ServerException;
+import com.itheima.ioc.Initializable;
+import com.itheima.ioc.annotation.Component;
+import com.itheima.ioc.annotation.InjectConstructor;
+import com.itheima.util.LogUtil;
+import com.itheima.util.RequestContext;
+import com.itheima.util.TransactionTemplate;
+
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+/**
+ * 内容缓存（C 周期 T2，拆 ContentCacheManager 的内容职责）：统一 Redis 缓存层。
+ *
+ * <p>内容详情走 T1 CacheAside 三态（miss/hit-empty/hit-data + 空标记 60s + 单飞 + 写失败 DEL），
+ * 类型分区索引迁为 Redis LIST {@code content:index:{type}:{category}}（4 key/内容，新前序），
+ * 点赞/评论数/评论区开关变更 = 失效内容 key 让读自愈（DB 列为源真理，见 NEEDS 4.5）。
+ *
+ * <p>本类只负责内容；评论缓存仍在 ContentCacheManager（T3 迁出）。任何缓存失败一律降级（4.2），
+ * init 不 crash 应用（旧 ContentCacheManager.init 会因 Redis/DB 异常抛 CacheException 导致启动失败）。
+ * 索引懒重建：索引 key 缺失（Redis 重启/被清）时按需从 DB 重建，防 /start 空推荐。
+ */
+@Component
+public class ContentCache implements Initializable {
+
+    private static final Logger LOGGER = LogUtil.getLogger(ContentCache.class);
+
+    /** 索引懒重建单飞 key（进程内，非 Redis key）。 */
+    private static final String INDEX_REBUILD_KEY = "content:index:rebuild";
+
+    private final ContentDao contentDao;
+    private final ContentMediaDao contentMediaDao;
+    private final TransactionTemplate transactionTemplate;
+    private final CacheAside cacheAside;
+    private final RedisAccess redisAccess;
+    private final SingleFlight singleFlight;
+
+    @InjectConstructor
+    public ContentCache(ContentDao contentDao, ContentMediaDao contentMediaDao,
+                        TransactionTemplate transactionTemplate, CacheAside cacheAside,
+                        RedisAccess redisAccess, SingleFlight singleFlight) {
+        this.contentDao = contentDao;
+        this.contentMediaDao = contentMediaDao;
+        this.transactionTemplate = transactionTemplate;
+        this.cacheAside = cacheAside;
+        this.redisAccess = redisAccess;
+        this.singleFlight = singleFlight;
+    }
+
+    // ==================== 读路径 ====================
+
+    /**
+     * 三态 Cache-Aside 读内容详情。
+     *
+     * @return 内容 DTO；DB 无此内容/媒体损坏/读取异常 → null（hit-empty 空标记 60s 防穿透，
+     *          Controller 侧 404 语义与旧实现一致）
+     */
+    public ContentCacheDTO getContent(long contentId) {
+        return cacheAside.get(CacheKeys.content(contentId), ContentCacheDTO.class,
+                () -> loadContentFromDb(contentId), ttlSeconds());
+    }
+
+    /**
+     * 首页推荐（类型/分区过滤）。索引为 Redis LIST，读取去重 + shuffle + limit（沿用旧 getRecommendByFilter 语义）。
+     * type/category 参数校验与旧 buildQueryKey 一致（ParamException 同文案）。
+     */
+    public List<ContentVO> getRecommendByFilter(Integer type, Integer categoryId, int limit) {
+        String indexKey = buildQueryKey(type, categoryId);
+        ensureIndex(indexKey);
+
+        List<Long> idList = readIndex(indexKey);
+        if (idList.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<Long> distinctIds = new ArrayList<>(new LinkedHashSet<>(idList));
+        Collections.shuffle(distinctIds);
+        List<ContentVO> result = new ArrayList<>();
+        for (Long contentId : distinctIds) {
+            ContentCacheDTO dto = getContent(contentId);
+            if (dto == null) {
+                continue;
+            }
+            result.add(toContentVO(dto));
+            if (result.size() >= limit) {
+                break;
+            }
+        }
+        return result;
+    }
+
+    // ==================== 写路径（均应在 DB 事务提交后调用） ====================
+
+    /** 新增内容后入缓存（H3 修复：不携带 Connection，事务外调用）。写失败由 CacheAside 自愈。 */
+    public void addContent(long contentId) {
+        ContentCacheDTO dto = loadContentFromDb(contentId);
+        if (dto == null) {
+            return; // 回滚/并发删除兜底
+        }
+        writeContent(dto);
+        addToIndex(dto);
+    }
+
+    /** 编辑媒体/文案/恢复内容后重载缓存；DB 已删 → 走移除语义。 */
+    public void refreshContent(long contentId) {
+        ContentCacheDTO dto = loadContentFromDb(contentId);
+        if (dto == null) {
+            removeContent(contentId);
+            return;
+        }
+        writeContent(dto);
+        addToIndex(dto);
+    }
+
+    /** 删除/下架后移除：失效内容 key（含空标记）+ 从全部索引 key 剔除该 id。 */
+    public void removeContent(long contentId) {
+        cacheAside.invalidate(CacheKeys.content(contentId));
+        try {
+            redisAccess.executeVoid(j -> {
+                Set<String> keys = j.keys("content:index:*");
+                if (keys != null) {
+                    for (String k : keys) {
+                        j.lrem(k, 0, String.valueOf(contentId));
+                    }
+                }
+            });
+        } catch (CacheException e) {
+            LOGGER.log(Level.WARNING, "内容索引移除失败, contentId=" + contentId, e);
+        }
+    }
+
+    /** 点赞/取消点赞后：失效内容 key，读自愈回填 DB 最新 like_count（4.5 显式失效）。 */
+    public void notifyLikeCountChanged(long contentId) {
+        cacheAside.invalidate(CacheKeys.content(contentId));
+    }
+
+    /** 评论增删后：失效内容 key，读自愈回填 DB 最新 comment_count。 */
+    public void notifyCommentCountChanged(long contentId) {
+        cacheAside.invalidate(CacheKeys.content(contentId));
+    }
+
+    /** 作者开关评论区后：失效内容 key，读自愈回填 comment_enabled。 */
+    public void updateCommentEnabled(long contentId) {
+        cacheAside.invalidate(CacheKeys.content(contentId));
+    }
+
+    // ==================== VO 复制（自 ContentCacheManager 迁入，T6 清理旧类对应方法） ====================
+
+    public ContentVO toContentVO(ContentCacheDTO dto) {
+        ContentVO cVO = new ContentVO();
+        copyToContentVO(cVO, dto);
+        return cVO;
+    }
+
+    public ContentDetailVO toDetailVO(ContentCacheDTO dto) {
+        ContentDetailVO cdVO = new ContentDetailVO();
+        copyToDetailVO(cdVO, dto);
+        return cdVO;
+    }
+
+    private void copyToContentVO(ContentVO cVO, ContentCacheDTO dto) {
+        cVO.setId(dto.getId());
+        cVO.setAuthorId(dto.getAuthorId());
+        cVO.setType(dto.getType());
+        cVO.setTitle(dto.getTitle());
+        cVO.setDescription(dto.getDescription());
+        cVO.setCategoryId(dto.getCategoryId());
+        cVO.setCommentCount(dto.getCommentCount());
+        cVO.setLikeCount(dto.getLikeCount());
+        cVO.setCommentEnabled(dto.isCommentEnabled());
+        cVO.setAuthorName(dto.getAuthorName());
+        cVO.setCoverUrl(dto.getCoverUrl());
+        cVO.setCreateTime(dto.getCreateTime());
+    }
+
+    private void copyToDetailVO(ContentDetailVO cdVO, ContentCacheDTO dto) {
+        cdVO.setId(dto.getId());
+        cdVO.setAuthorId(dto.getAuthorId());
+        cdVO.setType(dto.getType());
+        cdVO.setTitle(dto.getTitle());
+        cdVO.setDescription(dto.getDescription());
+        cdVO.setCategoryId(dto.getCategoryId());
+        cdVO.setCommentCount(dto.getCommentCount());
+        cdVO.setLikeCount(dto.getLikeCount());
+        cdVO.setCommentEnabled(dto.isCommentEnabled());
+        cdVO.setAuthorName(dto.getAuthorName());
+        cdVO.setCoverUrl(dto.getCoverUrl());
+        cdVO.setVideoUrl(dto.getVideoUrl());
+        cdVO.setImageUrls(dto.getImageUrls());
+        cdVO.setCreateTime(dto.getCreateTime());
+    }
+
+    // ==================== 启动全量重建（对齐现状，O-5 二期再改选择性加载） ====================
+
+    @Override
+    public void init() {
+        try {
+            transactionTemplate.execute(conn -> {
+                List<ContentCacheDTO> all = contentDao.findAllContent(conn);
+                List<ContentCacheDTO> buildable = new ArrayList<>();
+                for (ContentCacheDTO dto : all) {
+                    try {
+                        Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, dto.getId());
+                        buildContentMedia(dto, mediaMap);
+                        buildable.add(dto);
+                    } catch (NotFoundException | ServerException e) {
+                        // 单个内容媒体损坏：跳过内容 key（读时仍会兜底 404），索引仍按 type/category 重建
+                        LOGGER.log(Level.WARNING, "初始化跳过媒体损坏内容, contentId=" + dto.getId(), e);
+                    }
+                }
+                rebuildRedis(buildable);
+                return null;
+            });
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "内容缓存初始化降级跳过（缓存失败不影响业务）", e);
+        }
+    }
+
+    // ==================== 内部 ====================
+
+    /** DB 装载：findContent + 媒体构建；异常/无数据一律返回 null（→ 空标记/降级）。 */
+    private ContentCacheDTO loadContentFromDb(long contentId) {
+        try {
+            return transactionTemplate.execute(conn -> {
+                try {
+                    ContentCacheDTO dto = contentDao.findContent(conn, contentId);
+                    if (dto == null) {
+                        return null;
+                    }
+                    Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, contentId);
+                    buildContentMedia(dto, mediaMap);
+                    return dto;
+                } catch (SQLException e) {
+                    LOGGER.log(Level.SEVERE, "内容装载 DB 查询失败, contentId=" + contentId, e);
+                    return null;
+                }
+            });
+        } catch (NotFoundException | ServerException e) {
+            LOGGER.log(Level.WARNING, "内容装载跳过（媒体损坏）, contentId=" + contentId, e);
+            return null;
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "内容装载异常, contentId=" + contentId, e);
+            return null;
+        }
+    }
+
+    private void writeContent(ContentCacheDTO dto) {
+        cacheAside.writeOrInvalidate(CacheKeys.content(dto.getId()), dto, ttlSeconds());
+    }
+
+    private void buildContentMedia(ContentCacheDTO dto, Map<Integer, List<ContentMedia>> mediaMap) {
+        List<ContentMedia> coverList = mediaMap.get(3);
+        if (coverList != null && !coverList.isEmpty()) {
+            dto.setCoverUrl(jointUrl(coverList.getFirst().getUrl()));
+        }
+        int type = dto.getType();
+        switch (type) {
+            case 1:
+                List<ContentMedia> videoList = mediaMap.get(1);
+                if (videoList != null && !videoList.isEmpty()) {
+                    dto.setVideoUrl(jointUrl(videoList.getFirst().getUrl()));
+                } else {
+                    throw new NotFoundException("资源已丢失");
+                }
+                break;
+            case 2:
+                List<ContentMedia> imageList = mediaMap.get(2);
+                if (imageList != null && !imageList.isEmpty()) {
+                    List<String> imageUrls = new ArrayList<>();
+                    for (ContentMedia media : imageList) {
+                        imageUrls.add(jointUrl(media.getUrl()));
+                    }
+                    dto.setImageUrls(imageUrls);
+                }
+                break;
+            default:
+                throw new ServerException("未知内容类型: " + type);
+        }
+    }
+
+    private String jointUrl(String url) {
+        return RequestContext.getContextPath() + url;
+    }
+
+    // ==================== 索引 ====================
+
+    private static String indexKey(int type, int categoryId) {
+        return "content:index:" + type + ":" + categoryId;
+    }
+
+    private String buildQueryKey(Integer type, Integer categoryId) {
+        if (type != null && type != 0 && (type < 1 || type > 2)) {
+            throw new ParamException("不支持的内容类型: " + type);
+        }
+        if (categoryId != null && (categoryId < 0 || categoryId > 9)) {
+            throw new ParamException("不支持的分区: " + categoryId);
+        }
+        int t = (type != null && type != 0) ? type : -1;
+        int c = (categoryId != null) ? categoryId : -1;
+        return indexKey(t, c);
+    }
+
+    /** 索引懒重建：目标索引 key 不存在时按需从 DB 重建（单飞防惊群；Redis 异常降级为空/不 crash）。 */
+    private void ensureIndex(String indexKey) {
+        try {
+            Boolean exists = redisAccess.execute(j -> j.exists(indexKey));
+            if (Boolean.TRUE.equals(exists)) {
+                return;
+            }
+        } catch (CacheException e) {
+            LOGGER.log(Level.WARNING, "索引检查失败（视为无索引）", e);
+        }
+        try {
+            singleFlight.get(INDEX_REBUILD_KEY, () -> {
+                List<ContentCacheDTO> all = loadAllWithoutMedia();
+                rebuildIndexes(all);
+                return null;
+            });
+        } catch (RuntimeException e) {
+            LOGGER.log(Level.WARNING, "索引懒重建失败，本次推荐降级为空", e);
+        }
+    }
+
+    private List<Long> readIndex(String indexKey) {
+        try {
+            return redisAccess.execute(j -> {
+                List<String> values = j.lrange(indexKey, 0, -1);
+                if (values == null || values.isEmpty()) {
+                    return new ArrayList<>();
+                }
+                List<Long> ids = new ArrayList<>(values.size());
+                for (String v : values) {
+                    try {
+                        ids.add(Long.parseLong(v));
+                    } catch (NumberFormatException ignored) {
+                        // 脏值忽略
+                    }
+                }
+                return ids;
+            });
+        } catch (CacheException e) {
+            LOGGER.log(Level.WARNING, "索引读取失败（降级为空推荐）, key=" + indexKey, e);
+            return new ArrayList<>();
+        }
+    }
+
+    private void addToIndex(ContentCacheDTO dto) {
+        try {
+            redisAccess.executeVoid(j -> {
+                lremAndLpush(j, dto.getType(), dto.getCategoryId(), dto.getId());
+            });
+        } catch (CacheException e) {
+            LOGGER.log(Level.WARNING, "内容索引写入失败, contentId=" + dto.getId(), e);
+        }
+    }
+
+    private void lremAndLpush(redis.clients.jedis.Jedis j, int type, int categoryId, long contentId) {
+        String[] keys = {
+            indexKey(type, categoryId),
+            indexKey(type, -1),
+            indexKey(-1, categoryId),
+            indexKey(-1, -1)
+        };
+        String id = String.valueOf(contentId);
+        for (String k : keys) {
+            j.lrem(k, 0, id);
+            j.lpush(k, id);
+        }
+    }
+
+    /** 索引全量重建：先清掉历史 content:index:*，再按 findAllContent 顺序（新前序）重建。 */
+    private void rebuildIndexes(List<ContentCacheDTO> all) {
+        try {
+            redisAccess.executeVoid(j -> {
+                Set<String> keys = j.keys("content:index:*");
+                if (keys != null) {
+                    for (String k : keys) {
+                        j.del(k);
+                    }
+                }
+            });
+            redisAccess.executeVoid(j -> {
+                for (ContentCacheDTO dto : all) {
+                    lremAndLpush(j, dto.getType(), dto.getCategoryId(), dto.getId());
+                }
+            });
+        } catch (CacheException e) {
+            LOGGER.log(Level.WARNING, "索引重建失败（降级为空推荐）", e);
+        }
+    }
+
+    /** init 全量重建：内容 key + 索引一起写（分批落库后单事务读已由调用方保证）。 */
+    private void rebuildRedis(List<ContentCacheDTO> buildable) {
+        for (ContentCacheDTO dto : buildable) {
+            writeContent(dto);
+        }
+        rebuildIndexes(buildable);
+    }
+
+    private List<ContentCacheDTO> loadAllWithoutMedia() {
+        try {
+            return transactionTemplate.execute(conn -> {
+                try {
+                    return contentDao.findAllContent(conn);
+                } catch (SQLException e) {
+                    LOGGER.log(Level.SEVERE, "索引重建 DB 查询失败", e);
+                    return new ArrayList<>();
+                }
+            });
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "索引重建 DB 装载异常", e);
+            return new ArrayList<>();
+        }
+    }
+
+    private long ttlSeconds() {
+        return AppConfig.getContentTtlMillis() / 1000;
+    }
+}

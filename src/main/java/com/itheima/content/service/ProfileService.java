@@ -27,19 +27,19 @@ public class ProfileService {
     private final UserDao userDao;
     private final ContentDao contentDao;
     private final FollowDao followDao;
-    private final ContentCacheManager contentCacheManager;
+    private final ContentCache contentCache;
     private final LikeService likeService;
     private final TransactionTemplate transactionTemplate;
     private static final Logger LOGGER = LogUtil.getLogger(ProfileService.class);
 
     @InjectConstructor
     public ProfileService(UserDao userDao, ContentDao contentDao, FollowDao followDao,
-                          ContentCacheManager contentCacheManager, LikeService likeService,
+                          ContentCache contentCache, LikeService likeService,
                           TransactionTemplate transactionTemplate) {
         this.userDao = userDao;
         this.contentDao = contentDao;
         this.followDao = followDao;
-        this.contentCacheManager = contentCacheManager;
+        this.contentCache = contentCache;
         this.likeService = likeService;
         this.transactionTemplate = transactionTemplate;
     }
@@ -60,9 +60,9 @@ public class ProfileService {
 
                 List<ContentVO> contentVOList = new ArrayList<>();
                 for (Long contentId : pageIds) {
-                    ContentCacheDTO cached = contentCacheManager.getContentFromCache(contentId);
+                    ContentCacheDTO cached = contentCache.getContent(contentId);
                     if (cached == null) continue;
-                    contentVOList.add(contentCacheManager.toContentVO(cached));
+                    contentVOList.add(contentCache.toContentVO(cached));
                 }
 
                 Boolean isFollowed = null;

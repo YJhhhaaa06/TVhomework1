@@ -22,18 +22,18 @@ public class FeedService {
 
     private final FollowDao followDao;
     private final ContentDao contentDao;
-    private final ContentCacheManager contentCacheManager;
+    private final ContentCache contentCache;
     private final LikeService likeService;
     private final TransactionTemplate transactionTemplate;
     private static final Logger LOGGER = LogUtil.getLogger(FeedService.class);
 
     @InjectConstructor
     public FeedService(FollowDao followDao, ContentDao contentDao,
-                       ContentCacheManager contentCacheManager, LikeService likeService,
+                       ContentCache contentCache, LikeService likeService,
                        TransactionTemplate transactionTemplate) {
         this.followDao = followDao;
         this.contentDao = contentDao;
-        this.contentCacheManager = contentCacheManager;
+        this.contentCache = contentCache;
         this.likeService = likeService;
         this.transactionTemplate = transactionTemplate;
     }
@@ -57,9 +57,9 @@ public class FeedService {
 
                 List<ContentVO> contentVOList = new ArrayList<>();
                 for (Long contentId : pageIds) {
-                    ContentCacheDTO cached = contentCacheManager.getContentFromCache(contentId);
+                    ContentCacheDTO cached = contentCache.getContent(contentId);
                     if (cached == null) continue;
-                    contentVOList.add(contentCacheManager.toContentVO(cached));
+                    contentVOList.add(contentCache.toContentVO(cached));
                 }
 
                 if (!contentVOList.isEmpty()) {

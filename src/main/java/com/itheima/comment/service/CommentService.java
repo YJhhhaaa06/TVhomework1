@@ -2,6 +2,7 @@ package com.itheima.comment.service;
 
 import com.itheima.comment.model.command.CommentCommand;
 import com.itheima.comment.dao.CommentDao;
+import com.itheima.content.service.ContentCache;
 import com.itheima.content.service.ContentCacheManager;
 import com.itheima.content.dao.ContentDao;
 import com.itheima.exception.*;
@@ -26,6 +27,7 @@ public class CommentService {
     private final CommentDao commentDao;
     private final ContentDao contentDao;
     private final ContentCacheManager contentCacheManager;
+    private final ContentCache contentCache;
     private final TransactionTemplate transactionTemplate;
     private static final Logger LOGGER =
             LogUtil.getLogger(CommentService.class);
@@ -33,10 +35,12 @@ public class CommentService {
     @InjectConstructor
     public CommentService(CommentDao commentDao, ContentDao contentDao,
                           ContentCacheManager contentCacheManager,
+                          ContentCache contentCache,
                           TransactionTemplate transactionTemplate) {
         this.commentDao = commentDao;
         this.contentDao = contentDao;
         this.contentCacheManager = contentCacheManager;
+        this.contentCache = contentCache;
         this.transactionTemplate = transactionTemplate;
     }
 
@@ -80,7 +84,7 @@ public class CommentService {
         String message = commentCommand.getMessage();
 
         // 评论区开关门禁（作者关闭后不可发；内容不存在时 dto 为 null，交事务内 isContentExist 抛 404）
-        ContentCacheDTO contentDto = contentCacheManager.getContentFromCache(contentId);
+        ContentCacheDTO contentDto = contentCache.getContent(contentId);
         if (contentDto != null && !contentDto.isCommentEnabled()) {
             throw new ConflictException("评论区已关闭");
         }
@@ -111,7 +115,7 @@ public class CommentService {
             try {
                 long commentId = commentDao.addComment(conn, contentId, userId, message, effectiveParentId[0], replyToUserId[0]);
                 contentDao.updateCommentCount(conn, contentId, 1);
-                contentCacheManager.updateContentCommentCount(contentId, 1);
+                contentCache.notifyCommentCountChanged(contentId);
                 return commentDao.findCommentById(conn, commentId);
             } catch (SQLException e) {
                 LOGGER.log(Level.SEVERE, "评论添加失败", e);
@@ -168,7 +172,9 @@ public class CommentService {
 
         // 缓存/计数同步放在事务提交后
         if (deleted != null) {
-            contentCacheManager.updateContentCommentCount(deleted.contentId, -deleted.deletedCount);
+            // 失效内容 key，读自愈回填 comment_count（DB 为源真理，T2 4.5）
+            contentCache.notifyCommentCountChanged(deleted.contentId);
+            // 评论树内存更新（T3 迁出前暂留）
             contentCacheManager.removeCommentFromCache(deleted.contentId, deleted.commentId, deleted.isMain);
         }
     }

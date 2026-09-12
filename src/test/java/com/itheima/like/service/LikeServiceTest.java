@@ -4,6 +4,7 @@ import com.itheima.comment.dao.CommentDao;
 import com.itheima.like.dao.CommentLikeDao;
 import com.itheima.content.dao.ContentDao;
 import com.itheima.like.dao.ContentLikeDao;
+import com.itheima.content.service.ContentCache;
 import com.itheima.content.service.ContentCacheManager;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.NotFoundException;
@@ -31,6 +32,7 @@ class LikeServiceTest {
     private CommentLikeDao commentLikeDao;
     private LikeCacheService cache;
     private ContentCacheManager contentCacheManager;
+    private ContentCache contentCache;
     private TransactionTemplate tt;
     private Connection conn;
     private LikeService service;
@@ -43,10 +45,11 @@ class LikeServiceTest {
         commentLikeDao = mock(CommentLikeDao.class);
         cache = mock(LikeCacheService.class);
         contentCacheManager = mock(ContentCacheManager.class);
+        contentCache = mock(ContentCache.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
         service = new LikeService(contentDao, commentDao, contentLikeDao, commentLikeDao,
-                cache, contentCacheManager, tt);
+                cache, contentCacheManager, contentCache, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);
@@ -63,7 +66,7 @@ class LikeServiceTest {
         verify(contentLikeDao).addLike(conn, 7L, 1L);
         verify(contentDao).updateLikeCount(conn, 1L, 1);
         verify(cache).likeContent(7L, 1L);
-        verify(contentCacheManager).updateContentLikeCount(1L, 1);
+        verify(contentCache).notifyLikeCountChanged(1L);
     }
 
     @Test
@@ -108,7 +111,7 @@ class LikeServiceTest {
         verify(contentLikeDao).deleteLike(conn, 7L, 1L);
         verify(contentDao).updateLikeCount(conn, 1L, -1);
         verify(cache).unlikeContent(7L, 1L);
-        verify(contentCacheManager).updateContentLikeCount(1L, -1);
+        verify(contentCache).notifyLikeCountChanged(1L);
     }
 
     @Test

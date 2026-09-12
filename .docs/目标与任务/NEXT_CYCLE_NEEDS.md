@@ -73,9 +73,11 @@
 
 ### 4.1 统一 Redis 缓存
 
-- 内容 / 评论 / 点赞 / 关注（若入缓存）全部收敛到 Redis；**废弃 ContentCacheManager 的成员变量 HashMap** 与 `recommendList`/`typeCategoryIndex` 内存结构（或迁为 Redis 索引，方案待定）。
-- 统一序列化规范（JSON 字符串存 value），统一 key 命名（`content:{id}`、`content:comments:{id}` 等）。
+- 内容 / 评论 / 点赞 / 关注（若入缓存）全部收敛到 Redis；**废弃 ContentCacheManager 的成员变量 HashMap** 与 `recommendList`/`typeCategoryIndex` 内存结构。
+- **类型分区索引方案（原"方案待定"，T2 已拍板 2026-09-12）**：`typeCategoryIndex` 迁为 **Redis LIST `content:index:{type}:{category}`**（每个内容写 4 个 key：`(t,c)/(t,-1)/(-1,c)/(-1,-1)`，`LREM+LPUSH` 保持新前序）；启动 `ContentCache.init()` 全量重建 + 索引 key 缺失时单飞懒重建（防 Redis 重启/被清后 /start 空推荐）；`recommendList` 为全仓库无读取的死代码，**废弃不迁移**（随旧类 T6 清理）。
+- 统一序列化规范（JSON 字符串存 value），统一 key 命名（`content:{id}`、`content:comments:{id}`、`content:index:{t}:{c}`、`content:likeCount:{id}` 等）。
 - 判断依据：单实例下本地缓存更快，但"统一"优先于"放哪"；Redis 原生 TTL、重启自愈（miss 回填）、日后多实例兼容。
+- **计数/门禁变更策略（T2 已拍板）**：内容点赞数/评论数/评论区开关（DB 列 like_count/comment_count/comment_enabled 为源真理）变更后只**失效 content key**，由 Cache-Aside 读自愈回填最新值；不做 Redis JSON 读改写（避免并发竞态丢更新）。
 
 ### 4.2 缓存必须可降级
 
@@ -251,3 +253,4 @@ user:follower:{userId}   → Set<userId>           （谁关注了我）
 | 2026-09-12 | 0.1 | 新建本文档：归档 260912-package-refactor（B 方向 T1~T9 完成）后开启 C 缓存改造周期；探索确认用户现状描述 8 条全部属实；列出探索问题 H1~H10 + 占位符 bug H11；拍板核心决策（统一 Redis / 三态 Cache-Aside / 空标记独立 key+短 TTL / 可降级 / 点赞计数分离 / 不引入 MQ / 同生同灭改业务失效）；登记未定项 O-1~O-7 待续聊 |
 | 2026-09-12 | 0.2 | 拍板 O-1~O-4 并回写：新增 4.9 统一单飞组件（ConcurrentHashMap+FutureTask，四处复用，失败必须 remove）、4.10 关注关系入缓存（user:following/follower 双 Set + MULTI 双写 + 失败双 DEL，边界=只做关系不做 feed 聚合）、4.11 全部重写（拆 god class + 业务零变化 + 分阶段切换）、4.12 一版/二期切分；**修正 4.2 写失败语义**：写失败=失效（DEL）让读自愈，而非忽略留旧缓存（用户质疑"热门内容新评论长期不可见"后修正）；未定项重编号 O-5~O-9（TTL 滑动续期 O-8、关注/粉丝计数 O-9） |
 | 2026-09-12 | 0.3 | 新增 4.13 基建归属：新建 `com.itheima.cache` 基建包装技术无关组件（统一 Redis 访问/序列化/key 规范/单飞/三态/空标记/写失败 DEL 封装）；业务缓存类放各自业务域（内容/评论→content、点赞→like、关注→follow），避免其它域反向依赖业务域破坏域边界 |
+| 2026-09-12 | 0.4 | T2 内容缓存重制拍板回写（G7）：① 4.1 索引"方案待定"→已定：类型分区索引 = Redis LIST `content:index:{t}:{c}`（4 key/内容，LREM+LPUSH 新前序，启动全量重建+懒重建），`recommendList` 死代码废弃；② 4.1 新增计数/门禁变更策略：点赞/评论数/评论区开关变更 = 失效 content key 读自愈（DB 列为源真理，不读改写）；③ H3 修复落地：addVideo/addPost 的 Redis 缓存写入（`contentCache.addContent`）移出 DB 事务；④ 说明：旧 `updateCacheAfterAdd`（评论树空列表种子）因签名需 Connection 仍在事务内调用，仅作用于旧内存/评论树且对读路径无影响（H3 修复点=新 Redis 写入已移出），T3 迁出评论时删除；旧 `removeContent`/`refreshContent`（清内存评论树/旧点赞 key、恢复评论树）保留至 T3/T4 |

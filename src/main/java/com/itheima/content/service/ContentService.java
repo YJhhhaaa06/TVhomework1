@@ -39,6 +39,7 @@ public class ContentService {
     private final CommentService commentService;
     private final LikeService likeService;
     private final ContentCacheManager contentCacheManager;
+    private final ContentCache contentCache;
     private final ContentStatusFiller contentStatusFiller;
     private final TransactionTemplate transactionTemplate;
     private static final Logger LOGGER =
@@ -49,6 +50,7 @@ public class ContentService {
                           CommentDao commentDao, ContentLikeDao contentLikeDao,
                           CommentService commentService, LikeService likeService,
                           ContentCacheManager contentCacheManager,
+                          ContentCache contentCache,
                           ContentStatusFiller contentStatusFiller,
                           TransactionTemplate transactionTemplate) {
         this.contentDao = contentDao;
@@ -58,6 +60,7 @@ public class ContentService {
         this.commentService = commentService;
         this.likeService = likeService;
         this.contentCacheManager = contentCacheManager;
+        this.contentCache = contentCache;
         this.contentStatusFiller = contentStatusFiller;
         this.transactionTemplate = transactionTemplate;
     }
@@ -71,9 +74,9 @@ public class ContentService {
                 List<Long> contentIdList = contentDao.keywordSearchInBrief(conn, keyword, page, pageSize);
                 List<ContentVO> result = new ArrayList<>();
                 for (Long contentId : contentIdList) {
-                    ContentCacheDTO cacheDTO = contentCacheManager.getContentFromCache(contentId);
+                    ContentCacheDTO cacheDTO = contentCache.getContent(contentId);
                     if (cacheDTO == null) continue;
-                    result.add(contentCacheManager.toContentVO(cacheDTO));
+                    result.add(contentCache.toContentVO(cacheDTO));
                 }
 
                 if (userId != null && !result.isEmpty()) {
@@ -91,12 +94,12 @@ public class ContentService {
     // ===== 组装响应 VO =====
 
     public ContentDetailVO getContentDetailVO(long contentId, Long userId) {
-        ContentCacheDTO cacheDTO = contentCacheManager.getContentFromCache(contentId);
+        ContentCacheDTO cacheDTO = contentCache.getContent(contentId);
         if (cacheDTO == null) {
             return null;
         }
 
-        ContentDetailVO cdVO = contentCacheManager.toDetailVO(cacheDTO);
+        ContentDetailVO cdVO = contentCache.toDetailVO(cacheDTO);
 
         if (userId != null) {
             contentStatusFiller.fillContentLikeStatus(cdVO, contentId, userId);
@@ -109,11 +112,12 @@ public class ContentService {
     // ===== 评论查询（独立接口用）=====
 
     public List<CommentVO> getCommentsForContent(long contentId, Long userId) {
-        ContentCacheDTO dto = contentCacheManager.getContentFromCache(contentId);
+        ContentCacheDTO dto = contentCache.getContent(contentId);
         // 评论区开关：作者关闭后整体不可见（评论数据保留，重新开启即恢复）
         if (dto != null && !dto.isCommentEnabled()) {
             return new ArrayList<>();
         }
+        // 评论树仍走旧内存评论缓存（T3 迁出 Redis 前暂留）
         List<CommentCacheDTO> commentTree = contentCacheManager.getCommentTree(contentId);
         if (commentTree.isEmpty()) {
             return new ArrayList<>();
@@ -132,38 +136,46 @@ public class ContentService {
     // ===== 管理 =====
 
     public long addVideo(UploadCommand uc, String videoUrl, String coverUrl) {
-        return transactionTemplate.execute(conn -> {
+        long videoId = transactionTemplate.execute(conn -> {
             try {
-                long videoId = doAddContent(conn, uc);
-                contentMediaDao.addMedia(conn, videoId, videoUrl, UploadType.VIDEO.getMediaType(), 1);
-                contentMediaDao.addMedia(conn, videoId, coverUrl, UploadType.COVER.getMediaType(), 1);
-                contentCacheManager.updateCacheAfterAdd(conn, videoId);
-                return videoId;
+                long id = doAddContent(conn, uc);
+                contentMediaDao.addMedia(conn, id, videoUrl, UploadType.VIDEO.getMediaType(), 1);
+                contentMediaDao.addMedia(conn, id, coverUrl, UploadType.COVER.getMediaType(), 1);
+                // 旧内容管理器：仅保留"评论树空列表种子"副作用（T3 评论缓存迁出时随旧调用一并删除）
+                contentCacheManager.updateCacheAfterAdd(conn, id);
+                return id;
             } catch (SQLException e) {
                 LOGGER.log(Level.SEVERE, "添加视频失败, userId=" + uc.getUserId(), e);
                 throw new ServerException("数据库写入失败");
             }
         });
+        // 事务提交后写 Redis 内容缓存（H3 修复：缓存写入不在事务内）
+        contentCache.addContent(videoId);
+        return videoId;
     }
 
     public long addPost(UploadCommand uc, String coverUrl, List<String> imageUrls) {
-        return transactionTemplate.execute(conn -> {
+        long contentId = transactionTemplate.execute(conn -> {
             try {
-                long contentId = doAddContent(conn, uc);
+                long id = doAddContent(conn, uc);
                 if (coverUrl != null) {
-                    contentMediaDao.addMedia(conn, contentId, coverUrl, UploadType.COVER.getMediaType(), 1);
+                    contentMediaDao.addMedia(conn, id, coverUrl, UploadType.COVER.getMediaType(), 1);
                 }
                 int sort = 1;
                 for (String imageUrl : imageUrls) {
-                    contentMediaDao.addMedia(conn, contentId, imageUrl, UploadType.IMAGE.getMediaType(), sort++);
+                    contentMediaDao.addMedia(conn, id, imageUrl, UploadType.IMAGE.getMediaType(), sort++);
                 }
-                contentCacheManager.updateCacheAfterAdd(conn, contentId);
-                return contentId;
+                // 旧内容管理器：仅保留"评论树空列表种子"副作用（T3 评论缓存迁出时随旧调用一并删除）
+                contentCacheManager.updateCacheAfterAdd(conn, id);
+                return id;
             } catch (SQLException e) {
                 LOGGER.log(Level.SEVERE, "添加动态失败, userId=" + uc.getUserId(), e);
                 throw new ServerException("数据库写入失败");
             }
         });
+        // 事务提交后写 Redis 内容缓存（H3 修复：缓存写入不在事务内）
+        contentCache.addContent(contentId);
+        return contentId;
     }
 
     public long doAddContent(Connection conn, UploadCommand uc) throws SQLException {
@@ -197,8 +209,8 @@ public class ContentService {
             }
             return null;
         });
-        // 缓存同步放事务提交后
-        contentCacheManager.updateContentCommentEnabled(contentId, enabled);
+        // 缓存同步放事务提交后：失效内容 key，读自愈回填 comment_enabled
+        contentCache.updateCommentEnabled(contentId);
     }
 
     // ===== 作者编辑作品（B1 扩展 + A3）=====
@@ -222,7 +234,7 @@ public class ContentService {
                 throw new ServerException("数据库写入失败");
             }
         });
-        contentCacheManager.refreshContent(contentId);
+        contentCache.refreshContent(contentId);
         return oldUrl;
     }
 
@@ -249,7 +261,7 @@ public class ContentService {
                 throw new ServerException("数据库写入失败");
             }
         });
-        contentCacheManager.refreshContent(contentId);
+        contentCache.refreshContent(contentId);
         return oldUrl;
     }
 
@@ -279,7 +291,7 @@ public class ContentService {
             }
             return null;
         });
-        contentCacheManager.refreshContent(contentId);
+        contentCache.refreshContent(contentId);
     }
 
     // ===== 作者删除作品（A1）=====
@@ -310,8 +322,11 @@ public class ContentService {
                 throw new ServerException("数据库写入失败");
             }
         });
-        // 缓存同步放事务提交后
+        // 缓存同步放事务提交后：
+        // 旧内容管理器：清内存评论树 + 旧格式点赞 key（T3/T4 迁出时随旧调用一并删除）
         contentCacheManager.removeContent(contentId);
+        // 新内容缓存：失效内容 key + 索引剔除（读自愈 404）
+        contentCache.removeContent(contentId);
         return mediaUrls;
     }
 
@@ -359,7 +374,10 @@ public class ContentService {
             }
             return null;
         });
+        // 旧内容管理器：清内存评论树 + 旧格式点赞 key（T3/T4 迁出时随旧调用一并删除）
         contentCacheManager.removeContent(contentId);
+        // 新内容缓存：失效内容 key + 索引剔除
+        contentCache.removeContent(contentId);
     }
 
     /**
@@ -377,7 +395,10 @@ public class ContentService {
             }
             return null;
         });
+        // 旧内容管理器：重建内存评论树（恢复评论可见；T3 迁出时随旧调用一并删除）
         contentCacheManager.refreshContent(contentId);
+        // 新内容缓存：重载内容 + 索引
+        contentCache.refreshContent(contentId);
     }
 
     /** 下架前置校验：存在且未被删除、未处于下架态 */
