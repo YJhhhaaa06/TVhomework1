@@ -91,6 +91,7 @@ com.itheima/
 ├── config/                 # 基建不动：AppConfig（146 行）
 ├── controller/             # 仅保留跨域基建：BaseServlet/BaseServletUtil/RequestParser/AppShutDownListener（261 行）
 ├── dao/                    # 仅保留跨域基建：ResultMap（88 行）
+├── cache/                  # 基建（C 周期 T1 新增）：统一缓存基建——Redis 访问/JSON 序列化/统一 key 规范/单飞/三态空标记/写失败 DEL 降级（465 行）
 │
 ├── user/                   # 用户/认证域（937 行）
 ├── content/                # 内容域：含首页/搜索/详情/关注流/主页读接口 + 共享缓存组件（3069 行）
@@ -102,7 +103,7 @@ com.itheima/
 └── admin/                  # 运维/审核域（737 行）
 ```
 
-> 每域内部保留 `controller / service / dao / model` 分层子包，与既有技术层级命名一致（B 改造后主代码 114 类 / 9215 行，行数统计 2026-09-11）。
+> 每域内部保留 `controller / service / dao / model` 分层子包，与既有技术层级命名一致（B 改造后主代码 114 类 / 9215 行；C 周期 T1 新增 cache 基建 7 类 / 465 行，主代码 121 类 / 9680 行，行数统计 2026-09-12）。
 > 跨域依赖允许：feature 包间可互相 import（Java 无包环限制）；任何域不反向依赖基建包。
 
 ### 4.2 基建包（保持原位不动）
@@ -187,6 +188,23 @@ com.itheima/
 | ResultMap | 88 | ResultSet → 对象映射 |
 
 > 规范：所有 DAO 方法只接收 `Connection`，不自行获取/释放连接；连接与事务统一由 Service 通过 TransactionTemplate 管理。
+
+#### cache 包 — 统一缓存基建（C 周期 T1 新增，2026-09-12）
+
+> 归属决策见 NEEDS 4.13：技术无关缓存基建放 `com.itheima.cache`，业务缓存类（内容/评论/点赞/关注）放各自业务域（各自域内定义 key 命名/TTL/失效逻辑，import 本基建）。
+> 全部为纯新增（只增不改）：不改任何业务读路径；内部基于 `util/MyRedisPool` 但不改其方法签名；不引入 Spring/MyBatis；不引入 MQ（4.7）。
+
+| 类 | 行数 | 职责 |
+|----|------|------|
+| CacheKeys | 58 | 统一 key 命名/生成规范（本周期唯一源，与六.6.2 一致）+ 空标记常量（EMPTY_MARKER_TTL_SECONDS=60s） |
+| JacksonCodec | 53 | JSON 序列化（复用 jackson-databind + jsr310），异常抛 CacheException |
+| RedisAccess | 51 | 统一 Redis 访问封装：`execute`/`executeVoid` 回调式取还连接（支持同连接 pipeline/MULTI），Jedis 异常包装为 CacheException |
+| SingleFlight | 65 | 统一单飞组件（4.9）：ConcurrentHashMap+FutureTask，失败/成功均 remove（防缓存失败结果 + 防泄漏） |
+| CacheStatus | 15 | 三态枚举：MISS / HIT_EMPTY / HIT_DATA |
+| CacheResult | 39 | 三态读取结果载体（status + value，HIT_EMPTY 时 value=null） |
+| CacheAside | 184 | 统一 Cache-Aside 封装：`read` 三态读 / `get` 带单飞回填 / `writeOrInvalidate`（写失败=DEL 自愈，写数据同时清空标记）/ `markEmpty` / `invalidate`，TTL ±10% 简单抖动，缓存失败一律降级不抛业务异常 |
+
+> 测试：`src/test/java/com/itheima/cache/` 5 类 36 例（mockStatic MyRedisPool + mock Jedis，不碰真实 Redis），见九.9.2。
 
 ### 4.3 业务域包（每域 controller/service/dao/model 分层）
 
@@ -315,12 +333,23 @@ com.itheima/
 | 最大空闲 | 10 | app.properties (redis.maxIdle) / AppConfig |
 | 最小空闲 | 5 | app.properties (redis.minIdle) / AppConfig |
 
-### 6.2 Key 设计
+### 6.2 Key 设计（T1 定稿：统一 Redis 缓存层，唯一源见 com.itheima.cache.CacheKeys）
+
+> 三态 Cache-Aside（NEEDS 4.3/4.4）：数据 key 存 JSON；另起 `empty:{dataKey}` 独立 String key 标记"已确认无数据"，TTL 60s（空标记短 TTL 自动过期，不依赖 Redis 空容器回收；废弃旧 `__placeholder__` hack）。缓存仅作加速器，任何缓存失败必须降级走 DB、不得导致业务失败（4.2）。
 
 | Key 模式 | 类型 | 用途 |
 |----------|------|------|
-| content:like:{contentId} | Set\<userId\> | 内容点赞用户集合 |
-| comment:like:{commentId} | Set\<userId\> | 评论点赞用户集合 |
+| content:{contentId} | String(JSON) | 内容详情缓存（Cache-Aside 数据 key） |
+| content:comments:{contentId} | String(JSON) | 内容评论树缓存（独立 TTL，与内容解耦） |
+| empty:{dataKey} | String "1" | 空标记：已加载确认无数据（短 TTL 60s） |
+| content:likeCount:{contentId} | String(int) | 内容点赞计数（高频读，计数/成员分离 4.6） |
+| content:likeSet:{contentId} | Set\<userId\> | 内容点赞成员（低频"谁点过"查询，miss 允许穿透） |
+| comment:likeCount:{commentId} | String(int) | 评论点赞计数 |
+| comment:likeSet:{commentId} | Set\<userId\> | 评论点赞成员 |
+| user:following:{userId} | Set\<followedUserId\> | 我关注了谁（4.10，MULTI 双写，失败双 DEL） |
+| user:follower:{userId} | Set\<userId\> | 谁关注了我（4.10，MULTI 双写，失败双 DEL） |
+
+> 旧 key 演进：原 `content:like:{id}` / `comment:like:{id}`（单 Set 兼容 SCARD 计数）将在 T4 点赞缓存重制后随旧实现移除；本表为新缓存层目标规范。
 
 ---
 
@@ -481,10 +510,15 @@ src/main/webapp/
 | upload/service/FileUploadServiceTest | 9 | 上传校验/清理旧文件 |
 | admin/service/MediaAuditServiceTest | 14 | 媒体扫描/恢复 |
 | util/MyConnectionPoolTest | 4 | 满池超时/归还重取/失效移除/关闭后拒绝 |
-| **合计** | **201** | - |
+| cache/CacheKeysTest | 8 | 统一 key 生成格式、empty 前缀、空标记常量 |
+| cache/JacksonCodecTest | 4 | DTO 往返、null 处理、TypeReference 泛型、非法 JSON 抛 CacheException |
+| cache/RedisAccessTest | 4 | execute/executeVoid 取还连接、异常包装 CacheException（含连接获取失败） |
+| cache/SingleFlightTest | 4 | 并发同 key 只 load 一次、失败/成功 remove、不同 key 独立 |
+| cache/CacheAsideTest | 16 | 三态 read、Cache-Aside get 命中/回填/空标记、降级不写回、写失败 DEL、清空标记防假空、markEmpty/invalidate best-effort |
+| **合计** | **240** | - |
 
 > 注：`com.itheima.tools.CouponAdmin` 属 tools 测试脚本目录（非测试类，package 保留 `com.itheima.tools`，仅 import java.*，无主代码引用）；`util/MyConnectionPoolTest` 被测类未动（基建），测试文件留在 util 包不迁。
-> 用例数取自 `target/surefire-reports`（2026-09-11 实测，与 latest.json 201 例一致）。
+> 用例数取自 `stage8-target/surefire-reports`（2026-09-12 实测，`tv.py test junit` 全绿 240 例 = 既有 204 + cache 基建 36）。
 
 > 构建输出：沙箱内 Maven 通过 `-Dstage8.buildDir` 指向 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（pom 默认 `./target`），原因是沙箱内 javac 无法把 worktree `target/classes` 作为 classpath（报"程序包不存在"）。
 > 离线仓库：新增测试依赖（junit/mockito/bytebuddy/surefire 等）的 `_remote.repositories` 已补 `>aliyun=` 来源行（只追加不删除），默认 aliyun 镜像下可离线解析。
@@ -497,31 +531,33 @@ src/main/webapp/
 
 | 域 | 文件数 | 代码行数 | 占比 |
 |------|--------|----------|------|
-| content | 23 | 3,069 | 33.3% |
-| user | 12 | 937 | 10.2% |
-| like | 5 | 925 | 10.0% |
-| admin | 8 | 737 | 8.0% |
-| comment | 5 | 555 | 6.0% |
-| upload | 5 | 471 | 5.1% |
-| follow | 3 | 321 | 3.5% |
-| coupon | 4 | 249 | 2.7% |
-| **业务域小计** | **65** | **7,264** | **78.8%** |
+| content | 23 | 3,069 | 31.7% |
+| user | 12 | 937 | 9.7% |
+| like | 5 | 925 | 9.6% |
+| admin | 8 | 737 | 7.6% |
+| comment | 5 | 555 | 5.7% |
+| upload | 5 | 471 | 4.9% |
+| follow | 3 | 321 | 3.3% |
+| coupon | 4 | 249 | 2.6% |
+| **业务域小计** | **65** | **7,264** | **75.0%** |
 
-### 10.2 基建（不动）
+### 10.2 基建（不动 + cache 新增）
 
 | 包 | 文件数 | 代码行数 | 占比 |
 |------|--------|----------|------|
-| util | 11 | 567 | 6.2% |
-| ioc | 8 | 366 | 4.0% |
-| exception | 20 | 326 | 3.5% |
-| controller（基建 4 类） | 4 | 261 | 2.8% |
-| filter | 4 | 197 | 2.1% |
-| config | 1 | 146 | 1.6% |
-| dao（基建 ResultMap） | 1 | 88 | 1.0% |
-| **基建小计** | **49** | **1,951** | **21.2%** |
-| **合计** | **114** | **9,215** | **100%** |
+| util | 11 | 567 | 5.9% |
+| ioc | 8 | 366 | 3.8% |
+| exception | 20 | 326 | 3.4% |
+| controller（基建 4 类） | 4 | 261 | 2.7% |
+| filter | 4 | 197 | 2.0% |
+| config | 1 | 146 | 1.5% |
+| dao（基建 ResultMap） | 1 | 88 | 0.9% |
+| cache（C 周期 T1 新增） | 7 | 465 | 4.8% |
+| **基建小计** | **56** | **2,416** | **25.0%** |
+| **合计** | **121** | **9,680** | **100%** |
 
-> 行数统计 2026-09-11（B 改造后实测，与第四章包清单一致）。
+> 行数统计 2026-09-12（B 改造后 + C 周期 T1 cache 基建实测，与第四章包清单一致）。
+> 占比分母以基建+业务域合计为 100%（原 21.2% 基建口径含 cache 上行后为 25.0%）。
 
 ---
 
@@ -557,6 +593,7 @@ src/main/webapp/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-09-12 | 2.6 | **C 缓存改造 T1 基建完成（refactor(cache-01)）**：新建 `com.itheima.cache` 基建包（7 类，纯新增零改动）：CacheKeys（统一 key 规范定稿 + 空标记 60s 常量）/ JacksonCodec（JSON 序列化）/ RedisAccess（回调式取还连接，支持同连接 pipeline/MULTI，异常包 CacheException）/ SingleFlight（单飞，失败/成功均 remove）/ CacheStatus+CacheResult（三态）/ CacheAside（三态 Cache-Aside 读 + 空标记独立 key + 写失败=DEL 自愈降级 + TTL ±10% 抖动）；KEY 规范：内容/评论/点赞计数与成员分离/关注双 Set/`empty:` 空标记；本任务不改任何业务读路径、不改 MyRedisPool、不引入 Spring/MyBatis/MQ；JUnit 新增 5 类 36 例（tv.py test junit 240 例全绿）；本文件 4.1/4.2/6.2/9.2/10.1/10.2 同步 |
 | 2026-09-11 | 2.5 | **B-feature package 改造完成（T1~T9，8 域迁移 + 收尾）**：业务 controller/service/dao/model 全部按 8 业务域重组（user/content/follow/like/comment/coupon/upload/admin），每域保留分层子包；共享组件（ContentCacheManager/ContentStatusFiller/ContentCacheDTO/CommentCacheDTO/PageResult/CommandConverter/Content相关VO）归 content 域；基建（ioc/filter/util/exception/config + controller 的 BaseServlet/BaseServletUtil/RequestParser/AppShutDownListener + dao 的 ResultMap）保持原位不动；web.xml / @WebServlet URL / IoC 扫描（`scan("com.itheima")`）/ 前端 / pytest 一行不改；JUnit 同包随迁（201 例全绿）；主代码 96 类 → 114 类（含 annotation 子包 4 注解类，行数 6,504 → 9,215 口径含基建）；本章第四章（包结构）、第九章（JUnit 表）、第十章（代码统计）同步重写 |
 | 2026-08-29 | 2.4 | 阶段五完成（A2 内容审核下架）：content.is_deleted 语义扩展为 0正常/1作者删除/2管理员下架（复用字段，无 DDL）；新增 AdminContentController（GET /api/admin/content/list、POST /api/admin/content/hide、POST /api/admin/content/unhide，AuthFilter /api/admin/* role==1 保护）；ContentDao 新增 getContentStatus/updateContentDeletedState/findContentForAdmin；ContentService 新增 listContentForAdmin/hideContent/unhideContent（下架剔除缓存、恢复回填缓存）；前端 admin.js 新增「内容下架管理（审核）」区块；BUSINESS_FLOW 新增 3.10。测试用例待后续补充 |
 | 2026-08-28 | 2.3 | 评论楼中楼回复增强：comment 表新增 reply_to_user_id（楼中楼 @ 引用）；CommentCacheDTO/ResultMap/CommentDao/CommentService 贯通该字段（回复楼内回复时上溯挂主楼并记录被回复作者）；详情页楼内回复增加回复按钮 + 「回复 @xxx」展示；commentTest/pytest/单测同步 |

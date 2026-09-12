@@ -49,7 +49,7 @@
 
 | 编号 | 标题 | 对应域/模块 | 依赖 | 验收关键（动态） | 期望 commit 主题 | 状态 |
 | -- | -- | -- | -- | -- | -- | --- |
-| T1 | 缓存基建骨架：`com.itheima.cache` 基建包（统一 Redis 访问 + 序列化 + key 规范 + 单飞组件 + 三态/空标记/写失败 DEL 封装） | content/基建（新包） | — | 基建类落位 `com.itheima.cache`，`mvn compile` + 新增组件单测绿；业务读路径尚未切换（只增不改） | `refactor(cache-01)` | 待执行 |
+| T1 | 缓存基建骨架：`com.itheima.cache` 基建包（统一 Redis 访问 + 序列化 + key 规范 + 单飞组件 + 三态/空标记/写失败 DEL 封装） | content/基建（新包） | — | 基建类落位 `com.itheima.cache`，`mvn compile` + 新增组件单测绿；业务读路径尚未切换（只增不改） | `refactor(cache-01)` | 已完成（2026-09-12：cache 基建 7 类纯新增，JUnit 新增 36 例，tv.py test junit 240 例全绿） |
 | T2 | 内容缓存重制：ContentCacheManager 内容部分拆分为内容缓存类，三态 Cache-Aside + 空标记 + 写失败 DEL | content | T1 | 内容读路径（Start/Search/Detail/Feed/Profile）全部走新缓存；H2 相关 TTL 策略按 4.12 一版（固定 TTL+简单抖动）；`mvn compile` + JUnit + 相关 pytest 绿 | `refactor(cache-02)` | 待执行 |
 | T3 | 评论缓存重制：评论树独立 TTL + 空标记 + 业务显式失效（内容删除级联删评论 key） | content/comment | T1/T2 | 评论读/写路径走新缓存；评论 miss ≠ 没有评论（三态）；`mvn compile` + JUnit + 相关 pytest 绿 | `refactor(cache-03)` | 待执行 |
 | T4 | 点赞缓存重制：LikeCacheService 重写为计数/成员分离 + 单飞 + 写失败 DEL | like | T1 | 点赞读/写路径走新缓存；清除 `__placeholder__` 占位符（H11）；`mvn compile` + JUnit + 相关 pytest 绿 | `refactor(cache-04)` | 待执行 |
