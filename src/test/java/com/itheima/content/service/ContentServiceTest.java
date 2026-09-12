@@ -46,6 +46,7 @@ class ContentServiceTest {
     private LikeService likeService;
     private ContentCacheManager cache;
     private ContentCache contentCache;
+    private CommentCache commentCache;
     private ContentStatusFiller filler;
     private TransactionTemplate tt;
     private Connection conn;
@@ -61,11 +62,12 @@ class ContentServiceTest {
         likeService = mock(LikeService.class);
         cache = mock(ContentCacheManager.class);
         contentCache = mock(ContentCache.class);
+        commentCache = mock(CommentCache.class);
         filler = mock(ContentStatusFiller.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
         service = new ContentService(contentDao, contentMediaDao, commentDao,
-                contentLikeDao, commentService, likeService, cache, contentCache, filler, tt);
+                contentLikeDao, commentService, likeService, cache, contentCache, commentCache, filler, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);
@@ -140,7 +142,7 @@ class ContentServiceTest {
     void getCommentsForContentWithoutUserSkipsLikeQuery() {
         CommentCacheDTO root = new CommentCacheDTO("alice", 1L, 3L, 7L, "hi", null, 0);
         when(contentCache.getContent(3L)).thenReturn(dto(3L));
-        when(cache.getCommentTree(3L)).thenReturn(List.of(root));
+        when(commentCache.getCommentTree(3L)).thenReturn(List.of(root));
         when(commentService.convertToCommentVOList(anyList(), anyMap()))
                 .thenReturn(List.of(new CommentVO()));
 
@@ -154,8 +156,8 @@ class ContentServiceTest {
     void getCommentsForContentWithUserQueriesLikedMap() {
         CommentCacheDTO root = new CommentCacheDTO("alice", 1L, 3L, 7L, "hi", null, 0);
         when(contentCache.getContent(3L)).thenReturn(dto(3L));
-        when(cache.getCommentTree(3L)).thenReturn(List.of(root));
-        when(cache.collectCommentIds(List.of(root))).thenReturn(List.of(1L));
+        when(commentCache.getCommentTree(3L)).thenReturn(List.of(root));
+        when(commentCache.collectCommentIds(List.of(root))).thenReturn(List.of(1L));
         when(likeService.batchIsCommentLiked(7L, List.of(1L))).thenReturn(Map.of(1L, true));
         when(commentService.convertToCommentVOList(anyList(), anyMap()))
                 .thenReturn(List.of(new CommentVO()));
@@ -169,7 +171,7 @@ class ContentServiceTest {
     @Test
     void getCommentsForContentEmptyTreeReturnsEmpty() {
         when(contentCache.getContent(4L)).thenReturn(dto(4L));
-        when(cache.getCommentTree(4L)).thenReturn(Collections.emptyList());
+        when(commentCache.getCommentTree(4L)).thenReturn(null);
 
         List<CommentVO> result = service.getCommentsForContent(4L, null);
 
@@ -186,7 +188,6 @@ class ContentServiceTest {
         assertEquals(100L, id);
         verify(contentMediaDao).addMedia(conn, 100L, "v.mp4", 1, 1);
         verify(contentMediaDao).addMedia(conn, 100L, "c.png", 3, 1);
-        verify(cache).updateCacheAfterAdd(conn, 100L);
         verify(contentCache).addContent(100L);
     }
 
@@ -210,7 +211,6 @@ class ContentServiceTest {
         verify(contentMediaDao).addMedia(conn, 200L, "c.png", 3, 1);
         verify(contentMediaDao).addMedia(conn, 200L, "i1.jpg", 2, 1);
         verify(contentMediaDao).addMedia(conn, 200L, "i2.jpg", 2, 2);
-        verify(cache).updateCacheAfterAdd(conn, 200L);
         verify(contentCache).addContent(200L);
     }
 
@@ -275,7 +275,20 @@ class ContentServiceTest {
         List<CommentVO> result = service.getCommentsForContent(3L, null);
 
         assertTrue(result.isEmpty());
-        verify(cache, never()).getCommentTree(anyLong());
+        verify(commentCache, never()).getCommentTree(anyLong());
+        verify(commentService, never()).convertToCommentVOList(anyList(), anyMap());
+    }
+
+    @Test
+    void getCommentsForContentReturnsEmptyWhenContentMissing() {
+        // 隐藏/删除内容 contentCache.getContent 返回 null（4.5 读评论前先确认 content 存在），
+        // 直接短路，不触碰评论缓存，防隐藏内容评论泄漏
+        when(contentCache.getContent(3L)).thenReturn(null);
+
+        List<CommentVO> result = service.getCommentsForContent(3L, null);
+
+        assertTrue(result.isEmpty());
+        verify(commentCache, never()).getCommentTree(anyLong());
         verify(commentService, never()).convertToCommentVOList(anyList(), anyMap());
     }
 
@@ -436,6 +449,7 @@ class ContentServiceTest {
         verify(contentLikeDao).deleteByContentId(conn, 1L);
         verify(contentMediaDao).deleteByContentId(conn, 1L);
         verify(cache).removeContent(1L);
+        verify(commentCache).invalidateComments(1L);
     }
 
     @Test
@@ -500,6 +514,7 @@ class ContentServiceTest {
 
         verify(contentDao).updateContentDeletedState(conn, 1L, 2);
         verify(cache).removeContent(1L);
+        verify(commentCache).invalidateComments(1L);
     }
 
     @Test

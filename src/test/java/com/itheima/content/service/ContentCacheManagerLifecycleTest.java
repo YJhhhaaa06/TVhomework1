@@ -5,7 +5,6 @@ import com.itheima.like.service.LikeCacheService;
 import com.itheima.content.dao.ContentDao;
 import com.itheima.content.dao.ContentMediaDao;
 import com.itheima.exception.CacheException;
-import com.itheima.content.model.cache.CommentCacheDTO;
 import com.itheima.content.model.cache.ContentCacheDTO;
 import com.itheima.content.model.entity.ContentMedia;
 import com.itheima.util.TransactionTemplate;
@@ -74,12 +73,10 @@ class ContentCacheManagerLifecycleTest {
     }
 
     @Test
-    void initLoadsContentAndCommentsIntoCache() throws SQLException {
+    void initLoadsContentIntoCache() throws SQLException {
         ContentCacheDTO dto = videoDto();
-        CommentCacheDTO comment = new CommentCacheDTO("alice", 1L, 1L, 7L, "hi", null, 0);
         when(contentDao.findAllContent(conn)).thenReturn(List.of(dto));
         when(contentMediaDao.findMedia(conn, 1L)).thenReturn(mediaMap());
-        when(commentDao.getComments(conn, 1L)).thenReturn(List.of(comment));
 
         ContentCacheManager manager = newManager();
         manager.init();
@@ -88,7 +85,8 @@ class ContentCacheManagerLifecycleTest {
         assertNotNull(cached);
         assertEquals("sample", cached.getTitle());
         assertTrue(cached.getVideoUrl().endsWith(".mp4"));
-        assertEquals(1, manager.getCommentTree(1L).size());
+        // 评论树职责已迁入 CommentCache（T3），init 不再全量加载评论
+        verify(commentDao, never()).getComments(any(), anyLong());
         manager.destroy();
     }
 
@@ -136,63 +134,8 @@ class ContentCacheManagerLifecycleTest {
         assertThrows(CacheException.class, manager::refresh);
     }
 
-    @Test
-    void removeMainFloorRemovesItsChildrenFromCache() throws SQLException {
-        ContentCacheDTO dto = videoDto();
-        CommentCacheDTO main = new CommentCacheDTO("alice", 1L, 1L, 7L, "hi", null, 0);
-        CommentCacheDTO child = new CommentCacheDTO("bob", 2L, 1L, 8L, "reply", 1L, 0);
-        when(contentDao.findAllContent(conn)).thenReturn(List.of(dto));
-        when(contentMediaDao.findMedia(conn, 1L)).thenReturn(mediaMap());
-        when(commentDao.getComments(conn, 1L)).thenReturn(List.of(main, child));
-
-        ContentCacheManager manager = newManager();
-        manager.init();
-        manager.removeCommentFromCache(1L, 1L, true);
-
-        assertTrue(manager.getCommentTree(1L).isEmpty());
-        manager.destroy();
-    }
-
-    @Test
-    void removeReplyOnlyRemovesItselfFromCache() throws SQLException {
-        ContentCacheDTO dto = videoDto();
-        CommentCacheDTO main = new CommentCacheDTO("alice", 1L, 1L, 7L, "hi", null, 0);
-        CommentCacheDTO child = new CommentCacheDTO("bob", 2L, 1L, 8L, "reply", 1L, 0);
-        when(contentDao.findAllContent(conn)).thenReturn(List.of(dto));
-        when(contentMediaDao.findMedia(conn, 1L)).thenReturn(mediaMap());
-        when(commentDao.getComments(conn, 1L)).thenReturn(List.of(main, child));
-
-        ContentCacheManager manager = newManager();
-        manager.init();
-        manager.removeCommentFromCache(1L, 2L, false);
-
-        List<CommentCacheDTO> tree = manager.getCommentTree(1L);
-        assertEquals(1, tree.size());
-        assertNotNull(tree.get(0).getChildren());
-        assertTrue(tree.get(0).getChildren().isEmpty());
-        manager.destroy();
-    }
-
-    @Test
-    void buildCommentTreeNormalizesDeepChainToMainFloor() throws SQLException {
-        ContentCacheDTO dto = videoDto();
-        CommentCacheDTO main = new CommentCacheDTO("alice", 1L, 1L, 7L, "main", null, 0);
-        CommentCacheDTO reply = new CommentCacheDTO("bob", 2L, 1L, 8L, "r1", 1L, 0);
-        CommentCacheDTO deepReply = new CommentCacheDTO("carl", 3L, 1L, 9L, "r2", 2L, 0);
-        when(contentDao.findAllContent(conn)).thenReturn(List.of(dto));
-        when(contentMediaDao.findMedia(conn, 1L)).thenReturn(mediaMap());
-        when(commentDao.getComments(conn, 1L)).thenReturn(List.of(main, reply, deepReply));
-
-        ContentCacheManager manager = newManager();
-        manager.init();
-
-        List<CommentCacheDTO> tree = manager.getCommentTree(1L);
-        assertEquals(1, tree.size());
-        assertEquals(2, tree.get(0).getChildren().size(), "回复的回复也应平铺挂到主楼下");
-        manager.destroy();
-    }
-
     // ===== 评论区开关（C2）=====
+    // 说明（T3）：评论树相关测试（内存构建/增删/归一化）已随职责迁入 CommentCacheTest
 
     @Test
     void toContentVOCarriesCommentEnabled() throws SQLException {

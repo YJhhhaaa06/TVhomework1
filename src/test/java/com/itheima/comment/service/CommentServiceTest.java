@@ -1,8 +1,8 @@
 package com.itheima.comment.service;
 
 import com.itheima.comment.dao.CommentDao;
+import com.itheima.content.service.CommentCache;
 import com.itheima.content.service.ContentCache;
-import com.itheima.content.service.ContentCacheManager;
 import com.itheima.content.dao.ContentDao;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.ForbiddenException;
@@ -25,30 +25,27 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 
 class CommentServiceTest {
 
     private CommentDao commentDao;
     private ContentDao contentDao;
-    private ContentCacheManager contentCacheManager;
     private ContentCache contentCache;
+    private CommentCache commentCache;
     private TransactionTemplate tt;
     private Connection conn;
     private CommentService service;
-    @SuppressWarnings("rawtypes")
-    private final ArgumentCaptor<CommentCacheDTO> commentCaptor = ArgumentCaptor.forClass(CommentCacheDTO.class);
 
     @BeforeEach
     void setUp() throws Exception {
         commentDao = mock(CommentDao.class);
         contentDao = mock(ContentDao.class);
-        contentCacheManager = mock(ContentCacheManager.class);
         contentCache = mock(ContentCache.class);
+        commentCache = mock(CommentCache.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
-        service = new CommentService(commentDao, contentDao, contentCacheManager, contentCache, tt);
+        service = new CommentService(commentDao, contentDao, contentCache, commentCache, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);
@@ -71,7 +68,7 @@ class CommentServiceTest {
 
         verify(contentDao).updateCommentCount(conn, 3L, 1);
         verify(contentCache).notifyCommentCountChanged(3L);
-        verify(contentCacheManager).addCommentToCache(3L, saved, null);
+        verify(commentCache).invalidateComments(3L);
     }
 
     @Test
@@ -118,7 +115,7 @@ class CommentServiceTest {
         service.addComment(command);
 
         verify(commentDao).addComment(conn, 3L, 7L, "hello", 5L, 8L);
-        verify(contentCacheManager).addCommentToCache(3L, saved, 5L);
+        verify(commentCache).invalidateComments(3L);
     }
 
     @Test
@@ -139,11 +136,11 @@ class CommentServiceTest {
         service.addComment(command);
 
         verify(commentDao).addComment(conn, 3L, 7L, "hello", 5L, 8L);
-        ArgumentCaptor<Long> parentIdCaptor = ArgumentCaptor.forClass(Long.class);
-        verify(contentCacheManager).addCommentToCache(eq(3L), commentCaptor.capture(), parentIdCaptor.capture());
-        assertEquals(5L, parentIdCaptor.getValue());
-        assertEquals(8L, commentCaptor.getValue().getReplyToUserId());
-        assertEquals("bob", commentCaptor.getValue().getReplyToUsername());
+        // 楼中楼归一化结果保留在 DB 写入与 DAO 返回的评论上，缓存侧统一失效评论树
+        assertEquals(5L, saved.getParentId());
+        assertEquals(8L, saved.getReplyToUserId());
+        assertEquals("bob", saved.getReplyToUsername());
+        verify(commentCache).invalidateComments(3L);
     }
 
     @Test
@@ -170,7 +167,7 @@ class CommentServiceTest {
         verify(commentDao).softDeleteFloor(conn, 9L);
         verify(contentDao).updateCommentCount(conn, 3L, -4);
         verify(contentCache).notifyCommentCountChanged(3L);
-        verify(contentCacheManager).removeCommentFromCache(3L, 9L, true);
+        verify(commentCache).invalidateComments(3L);
     }
 
     @Test
@@ -196,8 +193,8 @@ class CommentServiceTest {
         service.deleteCommentByUser(10L, 7L);
 
         verify(commentDao).softDeleteOne(conn, 10L);
-        verify(contentDao).updateCommentCount(conn, 3L, -1);
-        verify(contentCacheManager).removeCommentFromCache(3L, 10L, false);
+        verify(contentCache).notifyCommentCountChanged(3L);
+        verify(commentCache).invalidateComments(3L);
     }
 
     @Test
@@ -228,7 +225,8 @@ class CommentServiceTest {
         service.deleteCommentByAdmin(9L);
 
         verify(commentDao).softDeleteFloor(conn, 9L);
-        verify(contentCacheManager).removeCommentFromCache(3L, 9L, true);
+        verify(contentCache).notifyCommentCountChanged(3L);
+        verify(commentCache).invalidateComments(3L);
     }
 
     @Test

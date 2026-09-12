@@ -4,8 +4,8 @@ import com.itheima.comment.dao.CommentDao;
 import com.itheima.like.dao.CommentLikeDao;
 import com.itheima.content.dao.ContentDao;
 import com.itheima.like.dao.ContentLikeDao;
+import com.itheima.content.service.CommentCache;
 import com.itheima.content.service.ContentCache;
-import com.itheima.content.service.ContentCacheManager;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
@@ -27,8 +27,8 @@ public class LikeService {
     private final ContentLikeDao contentLikeDao;
     private final CommentLikeDao commentLikeDao;
     private final LikeCacheService cache;
-    private final ContentCacheManager contentCacheManager;
     private final ContentCache contentCache;
+    private final CommentCache commentCache;
     private final TransactionTemplate transactionTemplate;
     private static final Logger LOGGER =
             LogUtil.getLogger(LikeService.class);
@@ -36,16 +36,16 @@ public class LikeService {
     @InjectConstructor
     public LikeService(ContentDao contentDao, CommentDao commentDao,
                        ContentLikeDao contentLikeDao, CommentLikeDao commentLikeDao,
-                       LikeCacheService cache, ContentCacheManager contentCacheManager,
-                       ContentCache contentCache,
+                       LikeCacheService cache, ContentCache contentCache,
+                       CommentCache commentCache,
                        TransactionTemplate transactionTemplate) {
         this.contentDao = contentDao;
         this.commentDao = commentDao;
         this.contentLikeDao = contentLikeDao;
         this.commentLikeDao = commentLikeDao;
         this.cache = cache;
-        this.contentCacheManager = contentCacheManager;
         this.contentCache = contentCache;
+        this.commentCache = commentCache;
         this.transactionTemplate = transactionTemplate;
     }
 
@@ -119,7 +119,8 @@ public class LikeService {
         });
 
         cache.likeComment(userId, commentId);
-        contentCacheManager.updateCommentLikeCount(commentId, 1);
+        // 失效评论所属内容评论树 key，读自愈回填 DB 最新 like_count（T3 4.5 业务显式失效）
+        commentCache.notifyCommentLikeChanged(commentId);
     }
 
     public void removeLikeComment(long userId, long commentId) {
@@ -141,7 +142,8 @@ public class LikeService {
         });
 
         cache.unlikeComment(userId, commentId);
-        contentCacheManager.updateCommentLikeCount(commentId, -1);
+        // 失效评论所属内容评论树 key，读自愈回填 DB 最新 like_count（T3 4.5 业务显式失效）
+        commentCache.notifyCommentLikeChanged(commentId);
     }
 
     // ==================== 内容点赞查询（单条，缓存优先） ====================

@@ -13,7 +13,6 @@ import com.itheima.ioc.Disposable;
 import com.itheima.ioc.Initializable;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;
-import com.itheima.content.model.cache.CommentCacheDTO;
 import com.itheima.content.model.cache.ContentCacheDTO;
 import com.itheima.content.model.entity.ContentMedia;
 import com.itheima.content.model.vo.ContentDetailVO;
@@ -22,7 +21,6 @@ import com.itheima.util.LogUtil;
 import com.itheima.util.RequestContext;
 import com.itheima.util.TransactionTemplate;
 
-import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.Executors;
@@ -43,7 +41,6 @@ public class ContentCacheManager implements Initializable, Disposable {
 
     private List<ContentVO> recommendList = new ArrayList<>();
     private Map<Long, ContentCacheDTO> contentCache = new HashMap<>();
-    private Map<Long, List<CommentCacheDTO>> commentCache = new HashMap<>();
     private Map<Long, Long> contentTimestamps = new HashMap<>();
     private final long CONTENT_TTL_MS = AppConfig.getContentTtlMillis();
     private Map<String, List<Long>> typeCategoryIndex = new HashMap<>();
@@ -73,14 +70,14 @@ public class ContentCacheManager implements Initializable, Disposable {
             removeFromIndex(contentId, dto.getType(), dto.getCategoryId());
         }
         contentCache.remove(contentId);
-        commentCache.remove(contentId);
         contentTimestamps.remove(contentId);
         likeCacheService.deleteContentLike(contentId);
     }
 
     /**
-     * 删除内容后整体剔除缓存（A1）：
-     * 复用 evictContent 剔除索引/内容/评论/时间戳/Redis 内容点赞，并同步移除推荐列表中的对应项。
+     * 删除内容后整体剔除缓存（A1，T3 后仅剩"旧格式 Redis 点赞 key 清理 + 内存残留"副作用，
+     * T6 收尾随本类移除）：
+     * 复用 evictContent 剔除索引/内容/时间戳/Redis 内容点赞，并同步移除推荐列表中的对应项。
      * recommendList 虽当前未被直接读取，但保持内存结构一致，防未来踩坑。
      */
     public void removeContent(long contentId) {
@@ -90,13 +87,7 @@ public class ContentCacheManager implements Initializable, Disposable {
         }
     }
 
-    private void cacheContent(long contentId, ContentCacheDTO detail, List<CommentCacheDTO> comments) {
-        contentCache.put(contentId, detail);
-        commentCache.put(contentId, comments);
-        contentTimestamps.put(contentId, System.currentTimeMillis());
-    }
-
-    private void cacheContentBasic(long contentId, ContentCacheDTO detail) {
+    private void cacheContent(long contentId, ContentCacheDTO detail) {
         contentCache.put(contentId, detail);
         contentTimestamps.put(contentId, System.currentTimeMillis());
     }
@@ -209,8 +200,6 @@ public class ContentCacheManager implements Initializable, Disposable {
                     newRecommendList.add(toContentVO(dto));
                 }
 
-                Map<Long, List<CommentCacheDTO>> newCommentCache = getCommentCache(newContentCache.keySet());
-
                 Map<String, List<Long>> newIndex = new HashMap<>();
                 for (ContentCacheDTO dto : allContent) {
                     addToIndexInternal(newIndex, dto.getId(), dto.getType(), dto.getCategoryId());
@@ -218,7 +207,6 @@ public class ContentCacheManager implements Initializable, Disposable {
 
                 recommendList = newRecommendList;
                 contentCache = newContentCache;
-                commentCache = newCommentCache;
                 typeCategoryIndex = newIndex;
                 contentTimestamps.clear();
                 long now = System.currentTimeMillis();
@@ -256,64 +244,6 @@ public class ContentCacheManager implements Initializable, Disposable {
         }
     }
 
-    // ===== 构建缓存 =====
-
-    private Map<Long, List<CommentCacheDTO>> getCommentCache(Set<Long> contentIds) {
-        Map<Long, List<CommentCacheDTO>> map = new HashMap<>();
-        for (Long contentId : contentIds) {
-            try {
-                List<CommentCacheDTO> tree = loadCommentTree(contentId);
-                map.put(contentId, tree);
-            } catch (Exception e) {
-                LOGGER.warning("获取评论缓存失败，返回空列表, contentId=" + contentId);
-                map.put(contentId, new ArrayList<>());
-            }
-        }
-        return map;
-    }
-
-    private List<CommentCacheDTO> loadCommentTree(long contentId) {
-        List<CommentCacheDTO> wholeList = transactionTemplate.execute(conn -> {
-            try {
-                return commentDao.getComments(conn, contentId);
-            } catch (SQLException e) {
-                LOGGER.log(Level.SEVERE, "查询评论失败", e);
-                throw new ServerException("服务器异常，查询失败");
-            }
-        });
-        return buildCommentTree(wholeList);
-    }
-
-    private List<CommentCacheDTO> buildCommentTree(List<CommentCacheDTO> list) {
-        Map<Long, CommentCacheDTO> map = new HashMap<>();
-        List<CommentCacheDTO> roots = new ArrayList<>();
-
-        for (CommentCacheDTO c : list) {
-            c.setChildren(new ArrayList<>());
-            map.put(c.getCommentId(), c);
-        }
-
-        for (CommentCacheDTO c : list) {
-            Long parentId = c.getParentId();
-            if (parentId == null || parentId == 0) {
-                roots.add(c);
-                continue;
-            }
-            // 楼中楼：回复一律挂主楼（沿 parent 链上溯到顶，防御存量脏数据）
-            CommentCacheDTO parent = map.get(parentId);
-            if (parent == null) {
-                continue; // 父缺失（理论不可达，迁移前已归一）
-            }
-            while (parent.getParentId() != null && parent.getParentId() != 0) {
-                CommentCacheDTO ancestor = map.get(parent.getParentId());
-                if (ancestor == null) break;
-                parent = ancestor;
-            }
-            parent.getChildren().add(c);
-        }
-        return roots;
-    }
-
     // ===== 查询（缓存）=====
 
 
@@ -339,8 +269,7 @@ public class ContentCacheManager implements Initializable, Disposable {
                 if (dto == null) return null;
                 Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, dto.getId());
                 buildContentMedia(dto, mediaMap);
-                List<CommentCacheDTO> comments = loadCommentTree(contentId);
-                cacheContent(contentId, dto, comments);
+                cacheContent(contentId, dto);
                 addToIndex(contentId, dto.getType(), dto.getCategoryId());
                 LOGGER.info("缓存回填成功, contentId=" + contentId);
                 return null;
@@ -396,32 +325,6 @@ public class ContentCacheManager implements Initializable, Disposable {
         cdVO.setCreateTime(dto.getCreateTime());
     }
 
-    // ===== 评论树工具（缓存用）=====
-
-    public List<CommentCacheDTO> getCommentTree(long contentId) {
-        synchronized (commentCache) {
-            List<CommentCacheDTO> tree = commentCache.get(contentId);
-            return tree == null ? new ArrayList<>() : new ArrayList<>(tree);
-        }
-    }
-
-    public List<Long> collectCommentIds(List<CommentCacheDTO> tree) {
-        List<Long> ids = new ArrayList<>();
-        for (CommentCacheDTO ccVO : tree) {
-            collectIdsRecursive(ccVO, ids);
-        }
-        return ids;
-    }
-
-    private static void collectIdsRecursive(CommentCacheDTO ccVO, List<Long> ids) {
-        ids.add(ccVO.getCommentId());
-        if (ccVO.getChildren() != null) {
-            for (CommentCacheDTO child : ccVO.getChildren()) {
-                collectIdsRecursive(child, ids);
-            }
-        }
-    }
-
     // ===== 媒体填充 =====
 
     private void buildContentMedia(ContentCacheDTO dto, Map<Integer, List<ContentMedia>> mediaMap) {
@@ -451,28 +354,6 @@ public class ContentCacheManager implements Initializable, Disposable {
                 break;
             default:
                 throw new ServerException("未知内容类型: " + type);
-        }
-    }
-
-    // ===== 新增内容后更新缓存 =====
-
-    public void updateCacheAfterAdd(Connection conn, long contentId) {
-        try {
-            ContentCacheDTO dto = contentDao.findContent(conn, contentId);
-            if (dto == null) return;
-            Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, contentId);
-            buildContentMedia(dto, mediaMap);
-            cacheContentBasic(contentId, dto);
-
-            ContentVO cVO = toContentVO(dto);
-            //初始化评论缓存
-            commentCache.put(contentId,new ArrayList<CommentCacheDTO>());
-
-            recommendList.addFirst(cVO);
-            addToIndex(contentId, dto.getType(), dto.getCategoryId());
-            LOGGER.info("新内容已加入缓存, contentId=" + contentId);
-        } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "新内容缓存更新失败, contentId=" + contentId, e);
         }
     }
 
@@ -523,60 +404,7 @@ public class ContentCacheManager implements Initializable, Disposable {
         }
     }
 
-    // ===== 评论缓存实时更新 =====
-
-    public void addCommentToCache(long contentId, CommentCacheDTO newComment, Long parentId) {
-        synchronized (commentCache) {
-            List<CommentCacheDTO> tree = commentCache.get(contentId);
-            if (tree == null) return;
-            newComment.setChildren(new ArrayList<>());
-            if (parentId == null || parentId == 0) {
-                tree.add(newComment);
-            } else {
-                insertChildToTree(tree, parentId, newComment);
-            }
-        }
-    }
-
-    private static boolean insertChildToTree(List<CommentCacheDTO> tree, long parentId, CommentCacheDTO child) {
-        for (CommentCacheDTO node : tree) {
-            if (node.getCommentId() == parentId) {
-                if (node.getChildren() == null) {
-                    node.setChildren(new ArrayList<>());
-                }
-                node.getChildren().add(child);
-                return true;
-            }
-            if (node.getChildren() != null && !node.getChildren().isEmpty()) {
-                if (insertChildToTree(node.getChildren(), parentId, child)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    /**
-     * 删除评论后同步缓存：主楼连楼内回复一起移除；楼内回复仅移除自己
-     * 与 getCommentTree/addCommentToCache 共用 commentCache 锁，防止并发读写同一 List
-     */
-    public void removeCommentFromCache(long contentId, long commentId, boolean isMain) {
-        synchronized (commentCache) {
-            List<CommentCacheDTO> tree = commentCache.get(contentId);
-            if (tree == null) return;
-            if (isMain) {
-                tree.removeIf(c -> c.getCommentId() == commentId);
-            } else {
-                for (CommentCacheDTO root : tree) {
-                    if (root.getChildren() != null) {
-                        root.getChildren().removeIf(c -> c.getCommentId() == commentId);
-                    }
-                }
-            }
-        }
-    }
-
-    // ===== 内存缓存实时同步 =====
+    // ===== 内存缓存实时同步（评论树方法已迁入 CommentCache，T3；本块为内容侧残留，T6 随本类移除） =====
 
     /**
      * 点赞/取消点赞后实时更新内存中 content 的 likeCount
@@ -629,35 +457,6 @@ public class ContentCacheManager implements Initializable, Disposable {
                 }
             }
         }
-    }
-
-    /**
-     * 点赞/取消点赞后实时更新内存中 comment 的 likeCount
-     * 递归遍历 commentCache 树找到对应评论并更新
-     */
-    public void updateCommentLikeCount(long commentId, int delta) {
-        synchronized (commentCache) {
-            for (List<CommentCacheDTO> tree : commentCache.values()) {
-                if (updateCommentLikeCountInTree(tree, commentId, delta)) {
-                    return;
-                }
-            }
-        }
-    }
-
-    private static boolean updateCommentLikeCountInTree(List<CommentCacheDTO> tree, long commentId, int delta) {
-        for (CommentCacheDTO ccvo : tree) {
-            if (ccvo.getCommentId() == commentId) {
-                ccvo.setLikeCount(ccvo.getLikeCount() + delta);
-                return true;
-            }
-            if (ccvo.getChildren() != null && !ccvo.getChildren().isEmpty()) {
-                if (updateCommentLikeCountInTree(ccvo.getChildren(), commentId, delta)) {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     private String jointUrl(String url) {

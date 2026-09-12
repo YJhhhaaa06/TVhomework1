@@ -2,8 +2,8 @@ package com.itheima.comment.service;
 
 import com.itheima.comment.model.command.CommentCommand;
 import com.itheima.comment.dao.CommentDao;
+import com.itheima.content.service.CommentCache;
 import com.itheima.content.service.ContentCache;
-import com.itheima.content.service.ContentCacheManager;
 import com.itheima.content.dao.ContentDao;
 import com.itheima.exception.*;
 import com.itheima.ioc.annotation.Component;
@@ -26,21 +26,21 @@ public class CommentService {
 
     private final CommentDao commentDao;
     private final ContentDao contentDao;
-    private final ContentCacheManager contentCacheManager;
     private final ContentCache contentCache;
+    private final CommentCache commentCache;
     private final TransactionTemplate transactionTemplate;
     private static final Logger LOGGER =
             LogUtil.getLogger(CommentService.class);
 
     @InjectConstructor
     public CommentService(CommentDao commentDao, ContentDao contentDao,
-                          ContentCacheManager contentCacheManager,
                           ContentCache contentCache,
+                          CommentCache commentCache,
                           TransactionTemplate transactionTemplate) {
         this.commentDao = commentDao;
         this.contentDao = contentDao;
-        this.contentCacheManager = contentCacheManager;
         this.contentCache = contentCache;
+        this.commentCache = commentCache;
         this.transactionTemplate = transactionTemplate;
     }
 
@@ -123,9 +123,9 @@ public class CommentService {
             }
         });
 
-        // 缓存更新放在事务提交后
+        // 缓存更新放在事务提交后：失效评论树 key，读自愈回填最新评论（T3 4.5 业务显式失效）
         if (newComment != null) {
-            contentCacheManager.addCommentToCache(contentId, newComment, effectiveParentId[0]);
+            commentCache.invalidateComments(contentId);
         }
     }
 
@@ -174,8 +174,8 @@ public class CommentService {
         if (deleted != null) {
             // 失效内容 key，读自愈回填 comment_count（DB 为源真理，T2 4.5）
             contentCache.notifyCommentCountChanged(deleted.contentId);
-            // 评论树内存更新（T3 迁出前暂留）
-            contentCacheManager.removeCommentFromCache(deleted.contentId, deleted.commentId, deleted.isMain);
+            // 失效评论树 key，读自愈回填最新树（T3 4.5 业务显式失效）
+            commentCache.invalidateComments(deleted.contentId);
         }
     }
 

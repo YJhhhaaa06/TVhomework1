@@ -134,6 +134,10 @@ public final class AppConfig {
         return getLong("cache.content.refreshMinutes");
     }
 
+    public static long getCommentTtlSeconds() {
+        return getLong("cache.comment.ttlMinutes") * 60;
+    }
+
     // ===== 日志 =====
 
     public static String getLogFile() {

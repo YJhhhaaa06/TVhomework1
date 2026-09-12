@@ -4,8 +4,8 @@ import com.itheima.comment.dao.CommentDao;
 import com.itheima.like.dao.CommentLikeDao;
 import com.itheima.content.dao.ContentDao;
 import com.itheima.like.dao.ContentLikeDao;
+import com.itheima.content.service.CommentCache;
 import com.itheima.content.service.ContentCache;
-import com.itheima.content.service.ContentCacheManager;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
@@ -31,8 +31,8 @@ class LikeServiceTest {
     private ContentLikeDao contentLikeDao;
     private CommentLikeDao commentLikeDao;
     private LikeCacheService cache;
-    private ContentCacheManager contentCacheManager;
     private ContentCache contentCache;
+    private CommentCache commentCache;
     private TransactionTemplate tt;
     private Connection conn;
     private LikeService service;
@@ -44,12 +44,12 @@ class LikeServiceTest {
         contentLikeDao = mock(ContentLikeDao.class);
         commentLikeDao = mock(CommentLikeDao.class);
         cache = mock(LikeCacheService.class);
-        contentCacheManager = mock(ContentCacheManager.class);
         contentCache = mock(ContentCache.class);
+        commentCache = mock(CommentCache.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
         service = new LikeService(contentDao, commentDao, contentLikeDao, commentLikeDao,
-                cache, contentCacheManager, contentCache, tt);
+                cache, contentCache, commentCache, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);
@@ -124,7 +124,7 @@ class LikeServiceTest {
         verify(commentLikeDao).addLike(conn, 7L, 9L);
         verify(commentDao).updateLikeCount(conn, 9L, 1);
         verify(cache).likeComment(7L, 9L);
-        verify(contentCacheManager).updateCommentLikeCount(9L, 1);
+        verify(commentCache).notifyCommentLikeChanged(9L);
     }
 
     @Test

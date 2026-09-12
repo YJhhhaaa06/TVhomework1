@@ -307,7 +307,7 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 
 ## 三、内容管理模块
 
-### 3.1 内容缓存机制（C 周期 T2 重制为统一 Redis，2026-09-12）
+### 3.1 内容与评论缓存机制（C 周期 T2/T3 重制为统一 Redis，2026-09-12）
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -321,22 +321,36 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 │  │   4 key/内容（含 type=-1 / category=-1 通配），新前序      │   │
 │  │ TTL：内容 10min（+±10% 抖动，4.12 一版）                  │   │
 │  └──────────────────────────────────────────────────────────┘   │
+│  评论读路径（/comment/show、详情页评论区）                       │
+│    ↓  CommentCache（com.itheima.content.service，T3）          │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │ 评论树：content:comments:{id} → JSON（三态 Cache-Aside）   │   │
+│  │   hit-empty（空标记）=已确认无评论→直接空，不查 DB；        │   │
+│  │   miss=查 DB 回填整树（单飞；无评论→写空标记）；            │   │
+│  │   hit-data=直接返回；评论 miss ≠ 没有评论（4.3）           │   │
+│  │ 独立 TTL：cache.comment.ttlMinutes=10min（+抖动）          │   │
+│  │ 读评论前先确认内容存在（dto==null 直接空，4.5）            │   │
+│  └──────────────────────────────────────────────────────────┘   │
 │  写路径（DB 事务提交后）：                                      │
 │    addVideo/addPost    → contentCache.addContent(id) 入缓存      │
 │    编辑媒体/文案、恢复   → contentCache.refreshContent(id)       │
 │    删除/下架            → contentCache.removeContent(id)（失效+索引剔除）│
+│    + commentCache.invalidateComments(id)（级联失效评论树 key）    │
 │    点赞/取消            → 失效 content:{id}（读自愈回填 DB 计数）  │
-│    评论增删             → 失效 content:{id}（读自愈回填 comment_count）│
+│    评论增删             → 失效 content:{id}（回填 comment_count） │
+│                        + commentCache.invalidateComments(id)（回填评论树）│
+│    评论点赞/取消         → commentCache.notifyCommentLikeChanged(id)（定位所属内容后失效评论树）│
 │    评论区开关           → 失效 content:{id}（读自愈回填 comment_enabled）│
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-> 关键语义（NEEDS 4.2~4.5/4.12）：内容读/写**全部收敛 Redis**（废弃旧内存 HashMap 版
-> ContentCacheManager 的内容部分，评论树内存缓存 T3 迁出）；**任何缓存失败降级走 DB、不导致业务失败**；
-> 计数（like_count/comment_count/comment_enabled）以 DB 列为源真理，变更即失效让读自愈；
+> 关键语义（NEEDS 4.2~4.5/4.12）：内容与评论读/写**全部收敛 Redis**（废弃旧内存 HashMap 版
+> ContentCacheManager：T2 迁出内容部分、T3 迁出评论部分，仅剩内存残留 T6 清理）；
+> **任何缓存失败降级走 DB、不导致业务失败**；
+> 计数（like_count/comment_count/comment_enabled）与评论树内容以 DB 为源真理，变更即失效让读自愈；
 > 类型分区索引启动 init 全量重建 + 索引 key 缺失时单飞懒重建（防 Redis 重启后 /start 空推荐）。
-> 旧 ContentCacheManager 仅保留评论树内存缓存与"评论树空列表种子"副作用（T3 移除），
-> ContentService 内标注 T3/T4 迁出时清理。
+> 评论树不再原地增删（消除 H1 并发竞态）：评论增/删/点赞 = 失效 `content:comments:{id}` + 空标记，
+> 下次读 miss 单飞回填 DB 最新整树。
 
 ### 3.2 发布视频流程
 
@@ -644,8 +658,10 @@ ContentDetailVO 包含：
         4. commentDao.softDeleteByContentId：该内容全部评论软删（含主楼与楼内回复）
         5. contentLikeDao.deleteByContentId：点赞记录物理删除
         6. contentMediaDao.deleteByContentId：媒体记录物理删除
-    → 事务提交后 ContentCacheManager.removeContent 整体剔除缓存
-      （索引/内容/评论/时间戳/推荐列表/Redis 内容点赞）
+    → 事务提交后缓存同步（4.5 显式失效）:
+      ContentCacheManager.removeContent（旧：清内存残留 + 旧格式 Redis 点赞 key，T4/T6 清）
+      + ContentCache.removeContent（失效 content:{id} + 索引剔除，读自愈 404）
+      + CommentCache.invalidateComments（级联失效 content:comments:{id} + 空标记）
     → Controller 逐个 FileUploadService.deleteFileByUrl 删物理文件（尽力而为）
 ```
 
@@ -665,12 +681,12 @@ ContentDetailVO 包含：
 
 1. `ContentService.hideContent`：`getContentStatus` 校验内容存在（404）→ 未被作者删除（409「内容已删除，无法下架」）→ 未处于下架态（409「内容已下架」）→ `updateContentDeletedState(conn, id, 2)`。
 2. 仅改 `content.is_deleted=2` 一个字段；**不动**评论/点赞/媒体记录/物理文件（隐藏≠删除）。
-3. 事务提交后 `ContentCacheManager.removeContent` 剔除缓存（索引/内容/评论/时间戳/推荐列表/Redis 内容点赞），前台即时不可见。
+3. 事务提交后缓存同步：ContentCacheManager.removeContent（旧残留，T4/T6 清）+ ContentCache.removeContent（失效 content:{id} + 索引剔除）+ CommentCache.invalidateComments（级联失效评论树），前台即时不可见。
 
 **恢复**：`POST /api/admin/content/unhide?contentId=X`
 
 1. `ContentService.unhideContent`：校验存在（404）→ 未被删除（409）→ 当前处于下架态（409「内容未下架」）→ `updateContentDeletedState(conn, id, 0)`。
-2. 事务提交后 `ContentCacheManager.refreshContent` 回填缓存与索引，前台立即重新可见。
+2. 事务提交后 `ContentCacheManager.refreshContent`（旧内存残留，T6 清）+ `ContentCache.refreshContent` 回填内容缓存与索引，前台立即重新可见；评论树无需额外动作（hide 已失效评论 key，读时 miss 回填 DB 现存评论）。
 
 **效果**：下架后内容在首页 `/start`（索引剔除）、搜索（`is_deleted=0` 过滤）、关注流 `/feed`、用户主页 `/profile`、作者本人「我的投稿」均不可见；详情 `/search/IdSearch` 返回 404。恢复后重新可见，且评论/点赞数/媒体数据完好。
 
@@ -758,8 +774,8 @@ POST /like/comment/add?commentId=456
 2. 检查是否已点赞
 3. 插入 comment_like 记录
 4. 更新 comment 表 like_count +1
-5. 更新 Redis 缓存
-6. 更新内存缓存
+5. 更新 Redis 点赞缓存（LikeCacheService，T4 重制）
+6. 失效评论所属内容评论树 key（commentCache.notifyCommentLikeChanged，读自愈回填最新 likeCount）
 ```
 
 ---
@@ -797,10 +813,10 @@ POST /like/comment/add?commentId=456
 | 4 | 检查内容是否存在 | 不存在返回 NotFoundException |
 | 5 | 如果是回复，查询被回复评论：不存在/不在该内容下 → Conflict；若被回复评论本身是回复，则上溯挂到其主楼 id，并记录 reply_to_user_id=被回复评论作者 id（楼中楼 @ 引用） | 不正确返回 ConflictException |
 | 6 | 插入 comment 表（楼中楼：回复一律 parent_id=主楼 id） | SQLException 回滚 |
-| 7 | 更新 content 表 comment_count +1 | SQLException 回滚 |
+| 7 | 更新 content 表 comment_count +1（并失效内容 key `content:{id}` 读自愈回填 comment_count） | SQLException 回滚 |
 | 8 | 提交事务 | - |
 | 9 | 查询新评论详情 | - |
-| 10 | 即时更新评论缓存 | 失败只记录日志 |
+| 10 | 失效评论树 key（commentCache.invalidateComments，读自愈回填整树） | 失败只记录日志，不阻塞主流程 |
 
 #### 接口定义
 
@@ -831,10 +847,11 @@ Content-Type: application/json
 GET /comment/show?contentId=123&token=xxx（可选）
 
 步骤：
-1. 从缓存获取评论树（楼中楼两级：主楼 + 楼内回复平铺挂主楼）
-2. 如果已登录，批量查询点赞状态
-3. 转换为 CommentVO 树
-4. 返回评论列表
+1. 先确认内容存在且评论区开启（contentCache.getContent：内容不存在/隐藏/删除或作者关闭 → 直接返回空）
+2. 从评论缓存获取评论树（CommentCache 三态：hit-empty=无评论直接空；miss=查 DB 回填整树+单飞；hit-data=直接返回；楼中楼两级：主楼 + 楼内回复平铺挂主楼）
+3. 如果已登录，批量查询点赞状态
+4. 转换为 CommentVO 树
+5. 返回评论列表
 
 CommentVO 结构：
 {
@@ -876,7 +893,7 @@ CommentVO 结构：
 | 4 | 删**主楼**（parent_id IS NULL）：整栋软删 `WHERE comment_id=? OR parent_id=?`；deletedCount = 1+楼内回复数 | - |
 | 5 | 删**回复**：仅软删自己 `WHERE comment_id=?`；deletedCount = 1 | - |
 | 6 | content 表 comment_count -= deletedCount | SQLException 回滚 |
-| 7 | 提交事务后同步内存缓存：contentCache.commentCount 递减 + removeCommentFromCache | 失败只记录日志 |
+| 7 | 提交事务后同步缓存：失效内容 key `content:{id}`（回填 comment_count）+ 失效评论树 key（commentCache.invalidateComments，回填整树） | 失败只记录日志 |
 
 > **管理员删除**：`POST /api/admin/comment/delete?commentId=X`（AuthFilter 校验 role==1）。逻辑同步骤 4-7，跳过步骤 3 的所有权校验。
 >
