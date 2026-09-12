@@ -142,6 +142,10 @@ public final class AppConfig {
         return getLong("cache.like.ttlMinutes") * 60;
     }
 
+    public static long getFollowTtlSeconds() {
+        return getLong("cache.follow.ttlMinutes") * 60;
+    }
+
     // ===== 日志 =====
 
     public static String getLogFile() {

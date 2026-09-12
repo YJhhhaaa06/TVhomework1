@@ -1,7 +1,7 @@
 package com.itheima.content.service;
 
 import com.itheima.content.dao.ContentDao;
-import com.itheima.follow.dao.FollowDao;
+import com.itheima.follow.service.FollowCache;
 import com.itheima.like.service.LikeService;
 import com.itheima.user.dao.UserDao;
 import com.itheima.exception.NotFoundException;
@@ -27,7 +27,7 @@ class ProfileServiceTest {
 
     private UserDao userDao;
     private ContentDao contentDao;
-    private FollowDao followDao;
+    private FollowCache followCache;
     private ContentCache contentCache;
     private LikeService likeService;
     private TransactionTemplate tt;
@@ -38,12 +38,12 @@ class ProfileServiceTest {
     void setUp() throws Exception {
         userDao = mock(UserDao.class);
         contentDao = mock(ContentDao.class);
-        followDao = mock(FollowDao.class);
+        followCache = mock(FollowCache.class);
         contentCache = mock(ContentCache.class);
         likeService = mock(LikeService.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
-        service = new ProfileService(userDao, contentDao, followDao, contentCache, likeService, tt);
+        service = new ProfileService(userDao, contentDao, followCache, contentCache, likeService, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);
@@ -93,7 +93,7 @@ class ProfileServiceTest {
         assertNull(profile.getIsFollowed());
         assertTrue(profile.getContentPage().getList().isEmpty());
         assertEquals(0, profile.getContentPage().getTotal());
-        verify(followDao, never()).getFollowedIds(any(), anyLong(), anyList());
+        verify(followCache, never()).isFollowing(anyLong(), anyLong());
         verify(likeService, never()).batchIsContentLiked(anyLong(), anyList());
     }
 
@@ -107,7 +107,7 @@ class ProfileServiceTest {
         when(contentCache.getContent(2L)).thenReturn(dto2);
         when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
         when(contentCache.toContentVO(dto2)).thenReturn(vo(2L));
-        when(followDao.getFollowedIds(conn, 8L, java.util.List.of(7L))).thenReturn(java.util.Set.of(7L));
+        when(followCache.isFollowing(8L, 7L)).thenReturn(true);
         when(likeService.batchIsContentLiked(8L, java.util.List.of(1L, 2L)))
                 .thenReturn(java.util.Map.of(1L, true, 2L, false));
 
@@ -155,7 +155,7 @@ class ProfileServiceTest {
 
         assertNull(profile.getIsFollowed());
         assertTrue(profile.getContentPage().getList().get(0).getIsLiked());
-        verify(followDao, never()).getFollowedIds(any(), anyLong(), anyList());
+        verify(followCache, never()).isFollowing(anyLong(), anyLong());
     }
 
     @Test
@@ -170,7 +170,7 @@ class ProfileServiceTest {
 
         assertNull(profile.getIsFollowed());
         assertFalse(profile.getContentPage().getList().get(0).getIsLiked());
-        verify(followDao, never()).getFollowedIds(any(), anyLong(), anyList());
+        verify(followCache, never()).isFollowing(anyLong(), anyLong());
         verify(likeService, never()).batchIsContentLiked(anyLong(), anyList());
     }
 
@@ -219,8 +219,7 @@ class ProfileServiceTest {
     void getProfileNotFollowedSetsFalse() throws SQLException {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(Collections.emptyList());
-        when(followDao.getFollowedIds(conn, 8L, java.util.List.of(7L)))
-                .thenReturn(java.util.Collections.emptySet());
+        when(followCache.isFollowing(8L, 7L)).thenReturn(false);
 
         ProfileVO profile = service.getProfile(7L, 8L, 1, 10);
 
@@ -238,16 +237,6 @@ class ProfileServiceTest {
     void getProfileContentQuerySqlErrorThrowsServerException() throws SQLException {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
         when(contentDao.findContentIdsByUser(conn, 7L)).thenThrow(new SQLException("db down"));
-
-        assertThrows(ServerException.class, () -> service.getProfile(7L, 8L, 1, 10));
-    }
-
-    @Test
-    void getProfileFollowQuerySqlErrorThrowsServerException() throws SQLException {
-        when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
-        when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(Collections.emptyList());
-        when(followDao.getFollowedIds(conn, 8L, java.util.List.of(7L)))
-                .thenThrow(new SQLException("db down"));
 
         assertThrows(ServerException.class, () -> service.getProfile(7L, 8L, 1, 10));
     }

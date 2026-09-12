@@ -1,38 +1,27 @@
 package com.itheima.content.service;
 
-import com.itheima.follow.dao.FollowDao;
+import com.itheima.follow.service.FollowCache;
 import com.itheima.like.service.LikeService;
-import com.itheima.exception.DatabaseException;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.content.model.vo.ContentDetailVO;
 import com.itheima.content.model.vo.ContentVO;
-import com.itheima.util.LogUtil;
-import com.itheima.util.TransactionTemplate;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 @Component
 public class ContentStatusFiller {
 
     private final LikeService likeService;
-    private final FollowDao followDao;
-    private final TransactionTemplate transactionTemplate;
-    private static final Logger LOGGER =
-            LogUtil.getLogger(ContentStatusFiller.class);
+    private final FollowCache followCache;
 
     @InjectConstructor
-    public ContentStatusFiller(LikeService likeService, FollowDao followDao,
-                               TransactionTemplate transactionTemplate) {
+    public ContentStatusFiller(LikeService likeService, FollowCache followCache) {
         this.likeService = likeService;
-        this.followDao = followDao;
-        this.transactionTemplate = transactionTemplate;
+        this.followCache = followCache;
     }
 
     // ===== 点赞状态填充 =====
@@ -77,30 +66,17 @@ public class ContentStatusFiller {
         }
         if (authorIds.isEmpty()) return;
 
-        try {
-            transactionTemplate.execute(conn -> {
-                Set<Long> followedSet = followDao.getFollowedIds(conn, userId, authorIds);
-                for (ContentVO vo : list) {
-                    vo.setIsFollowed(followedSet.contains(vo.getAuthorId()));
-                }
-                return null;
-            });
-        } catch (DatabaseException e) {
-            LOGGER.log(Level.WARNING, "批量填充关注状态失败, userId=" + userId, e);
+        // 批量 isFollowing（FollowCache 内部三态读 + miss 回填 + Redis 挂降级 DB，不抛出缓存异常）
+        Map<Long, Boolean> followedMap = followCache.batchIsFollowing(userId, authorIds);
+        for (ContentVO vo : list) {
+            Boolean followed = followedMap.get(vo.getAuthorId());
+            vo.setIsFollowed(followed != null && followed);
         }
     }
 
     public void fillFollowStatus(ContentDetailVO vo, Long userId) {
         if (userId == null || vo == null) return;
 
-        try {
-            transactionTemplate.execute(conn -> {
-                Set<Long> followedSet = followDao.getFollowedIds(conn, userId, List.of(vo.getAuthorId()));
-                vo.setIsFollowed(followedSet.contains(vo.getAuthorId()));
-                return null;
-            });
-        } catch (DatabaseException e) {
-            LOGGER.log(Level.WARNING, "填充关注状态失败, userId=" + userId, e);
-        }
+        vo.setIsFollowed(followCache.isFollowing(userId, vo.getAuthorId()));
     }
 }

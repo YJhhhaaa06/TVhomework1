@@ -341,6 +341,20 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 │                        + commentCache.invalidateComments(id)（回填评论树）│
 │    评论点赞/取消         → commentCache.notifyCommentLikeChanged(id)（定位所属内容后失效评论树）│
 │    评论区开关           → 失效 content:{id}（读自愈回填 comment_enabled）│
+│  ────────────────────────────────────────────────                  │
+│  关注读路径（/follow/following|followers、内容卡片/主页 isFollowed、│
+│  feed 关注列表）                                                  │
+│    ↓  FollowCache（com.itheima.follow.service，T5）               │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │ user:following:{userId} / user:follower:{userId} 双 Set    │   │
+│  │ 三态：empty 空标记（60s）=确认真无；set 存在=SISMEMBER/SMEMBERS│   │
+│  │  miss=单飞回填 DB 全量（非空 SADD+EXPIRE 10min；空集→空标记，│   │
+│  │  空标记写入带 set 存在守卫防并发覆盖新写）；Redis 挂=降级 DB  │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│  关注/取关写路径（FollowService DB 提交后）：                     │
+│    两 key 均"已加载"（set 或空标记存在）→ MULTI 原子 SADD/SREM 双写+续 TTL │
+│    （新关注时解除空标记）；任一侧冷 key 或空标记命中 → 双双 DEL 失效让读自愈 │
+│    ；Redis 异常 → 双 DEL（4.10 失败双 DEL），不抛出、不影响业务     │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -977,6 +991,7 @@ CommentVO 结构：
 | 4 | 更新关注者 follow_count +1 | - |
 | 5 | 更新被关注者 follower_count +1 | - |
 | 6 | 提交事务 | - |
+| 7 （T5） | 提交后缓存双写 FollowCache.cacheFollow：两 key 已加载 → MULTI SADD 双写；冷 key/空标记 → 双 DEL 失效 | 缓存失败降级（双 DEL），不影响业务 |
 
 #### 接口定义
 

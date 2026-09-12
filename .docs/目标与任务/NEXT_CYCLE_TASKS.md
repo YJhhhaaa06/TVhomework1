@@ -53,7 +53,7 @@
 | T2 | 内容缓存重制：ContentCacheManager 内容部分拆分为内容缓存类，三态 Cache-Aside + 空标记 + 写失败 DEL | content | T1 | 内容读路径（Start/Search/Detail/Feed/Profile）全部走新缓存；H2 相关 TTL 策略按 4.12 一版（固定 TTL+简单抖动）；`mvn compile` + JUnit + 相关 pytest 绿 | `refactor(cache-02)` | 已完成（2026-09-12：ContentCache 7 方法纯新增 + 调用点全切 + 索引迁 Redis LIST + 计数失效自愈 + H3 修复；tv.py test junit 252 例全绿 + pytest all 124 passed） |
 | T3 | 评论缓存重制：评论树独立 TTL + 空标记 + 业务显式失效（内容删除级联删评论 key） | content/comment | T1/T2 | 评论读/写路径走新缓存；评论 miss ≠ 没有评论（三态）；`mvn compile` + JUnit + 相关 pytest 绿 | `refactor(cache-03)` | 已完成（2026-09-12：CommentCache 9 方法新增管理 + 读写路径全切 + 失效式 + 删除/下架级联失效 + H1 评论竞态消除 + H7 启动少一轮 N+1；tv.py test junit 261 例全绿 + pytest all 124 passed） |
 | T4 | 点赞缓存重制：LikeCacheService 重写为计数/成员分离 + 单飞 + 写失败 DEL | like | T1 | 点赞读/写路径走新缓存；清除 `__placeholder__` 占位符（H11）；`mvn compile` + JUnit + 相关 pytest 绿 | `refactor(cache-04)` | 已完成（2026-09-12：LikeCacheService 重写为计数/成员分离+三态读+统一单飞+降级，占位符清零，LikeService 读路径委托；tv.py test junit 264 例全绿 + pytest all 124 passed） |
-| T5 | 关注关系入缓存：user:following / user:follower 双 Set + MULTI 双写 + 失败双 DEL | follow | T1 | 关注读（isFollowing/列表）与写（关注/取关）路径走新缓存；`mvn compile` + JUnit + 相关 pytest 绿 | `refactor(cache-05)` | 待执行 |
+| T5 | 关注关系入缓存：user:following / user:follower 双 Set + MULTI 双写 + 失败双 DEL | follow | T1 | 关注读（isFollowing/列表）与写（关注/取关）路径走新缓存；`mvn compile` + JUnit + 相关 pytest 绿 | `refactor(cache-05)` | 已完成（2026-09-12：FollowCache 双 Set 三态读+条件 MULTI 双写+失败双 DEL+降级新增，读写路径全切，配置 cache.follow.ttlMinutes；tv.py test junit 293 例全绿 + pytest all 124 passed） |
 | T6 | 收尾：旧缓存代码残留清理 + pytest all 全量回归 + 常青文档同步 + 覆盖率地图 | — | T1~T5 | 无旧缓存实现残留（ContentCacheManager/LikeCacheService 旧实现移除）；`pytest all` 全绿；CURRENT_ARCHITECTURE.md（六.Redis 设计）/ BUSINESS_FLOW.md（3.1 缓存机制）同步；覆盖率地图 rerun 无回归 | `refactor(cache-06)` | 待执行 |
 
 > 状态取值：草稿 / 待执行 / 执行中 / 已完成 / 搁置。
@@ -115,6 +115,8 @@
 * **强制探索步骤**：(1) `rg 'FollowDao|getFollowedIds|getAllFollowedUserIds|isFollowing|addFollow|deleteFollow|getFollowerUserIds' src/` 列出全部调用方；(2) 确认关注/取关的事务边界（缓存双写放在 DB 提交后）；(3) 确认 MULTI 事务在单连接上如何与现有事务模板配合（不跨连接）。
 * **验收**：关注关系读/写路径走新缓存（双 Set + MULTI + 失败双 DEL）；关注/取关后关系即时生效；`mvn compile` + JUnit 全绿 + 关注相关 pytest（/follow/*、内容卡片 isFollowed）回归通过。
 
+> **T5 执行回写（2026-09-12，G5/G7）**：① 新增 `com.itheima.follow.service.FollowCache`（484 行）：`user:following`/`user:follower` 双 Set；读路径四方法（isFollowing 单条三态 / batchIsFollowing 同一 set 一趟 pipeline + DB getFollowedIds 兜底 + best-effort 单飞回填 / getFollowingIds / getFollowerIds SMEMBERS·空标记·miss 回填），列表读统一升序（miss/降级与 SMEMBERS 命中路径一致）；写路径 cacheFollow/cacheUnfollow = **条件 MULTI 双写**（两 data key 均"已加载"（set 存在或空标记存在）→ MULTI 原子 SADD/SREM 双写 + EXPIRE + 解除空标记；任一侧冷 key 或空标记命中 → 整对双 DEL（含空标记）失效让读自愈，**不创建冷 key 残缺集**，与 T4 条件写先例同构）；Redis 异常 → 双 DEL，全程不抛出（4.10/4.2）；② 空标记回填带 **set 存在守卫**（`writeSet` 空分支先 `exists` 再 setex，防并发下覆盖刚 SADD 的新关注 → 新关系最长 60s 不可见，subagent review 必修②）；③ 新增配置 `cache.follow.ttlMinutes=10` + `AppConfig.getFollowTtlSeconds`；④ 切读写路径：FollowService 关注/取关 DB 事务提交后调 cacheFollow/cacheUnfollow，getFollowingList/getFollowerList 委托 getFollowingIds/getFollowerIds，列表 isFollowed 走 batchIsFollowing（**事务内 isFollowing 前置校验保留 DB 直读**，业务校验不动）；ContentStatusFiller fillFollowStatus（批量/单条）走 batchIsFollowing/isFollowing；FeedService.getFeed 关注列表走 getFollowingIds（事务外）；ProfileService isFollowed 走 isFollowing（事务外，followCount/followerCount 不动 O-9）；⑤ FollowDao 仅剩 FollowService 业务校验 + FollowCache loader 使用（rg 核验无残留）；⑥ 测试：新增 FollowCacheTest 26 例（三态/空标记守卫/批量/列表排序/条件 MULTI/失败双 DEL/降级/回填 best-effort），FollowServiceTest 缓存联动断言改造（15 例），FeedServiceTest/ProfileServiceTest 构造与读断言随调用点（ProfileServiceTest 12 例，删 follow SQL 残留 1 例）；tv.py test junit 293 例全绿 + pytest all 124 passed；⑦ 常青文档同步：CURRENT_ARCHITECTURE（follow 域表 / 六.6.2 启用列表 / 九.9.2 / 十.10.1/10.2）+ BUSINESS_FLOW（3.1 关注缓存段 + 4.3.1 步骤 7 缓存双写）；subagent review 无必修残留（必修①②已修，建议项 ③ 同对并发写序竞态=边缘定义记录不修）。
+
 ### T6 收尾（方向 C）
 
 * **入口线索**：全仓库巡检 + 回归验证 + 文档同步。基于 T1~T5 完成态。
@@ -132,3 +134,4 @@
 | 2026-09-12 | 0.2 | 落实 NEEDS 4.13 基建归属：T1 落点明确为新建 `com.itheima.cache` 基建包（原"归属执行时定"改为已拍板）；共通注补充 4.13 分工边界（基建=cache 包、业务缓存类=各自业务域） |
 | 2026-09-12 | 0.3 | **T3 评论缓存重制完成**：T3 状态置"已完成"，详情追加 T3 执行回写（失效式代替原地增删、独立 TTL 配置、dto==null 短路、级联失效、ContentCacheManager 清理口径） |
 | 2026-09-12 | 0.4 | **T4 点赞缓存重制完成**：T4 状态置"已完成"，详情追加 T4 执行回写（计数/成员分离、统一单飞拉满 H6、条件写+失败失效 H5、占位符清零 H11、LikeService 读路径委托、删 updateContentLikeCount 死代码、like TTL 配置） |
+| 2026-09-12 | 0.5 | **T5 关注关系入缓存完成**：T5 状态置"已完成"，详情追加 T5 执行回写（FollowCache 双 Set 三态读+条件 MULTI 双写+失败双 DEL、空标记 set 存在守卫、follow TTL 配置、读写路径全切、FollowDao 仅剩业务校验与 loader、JUnit 293 + pytest 124、常青同步、subagent review 必修已修） |
