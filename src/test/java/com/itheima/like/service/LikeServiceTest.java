@@ -136,28 +136,37 @@ class LikeServiceTest {
     }
 
     @Test
-    void isContentLikedCacheHitSkipsDb() {
+    void isContentLikedDelegatesToCache() {
         when(cache.isContentLiked(7L, 1L)).thenReturn(true);
 
         assertTrue(service.isContentLiked(7L, 1L));
+        verify(cache).isContentLiked(7L, 1L);
         verify(tt, never()).execute(any());
     }
 
     @Test
-    void getContentLikeCountCacheHitReturnsDirectly() {
+    void getContentLikeCountDelegatesToCache() {
         when(cache.getContentLikeCount(1L)).thenReturn(5);
 
         assertEquals(5, service.getContentLikeCount(1L));
+        verify(cache).getContentLikeCount(1L);
         verify(tt, never()).execute(any());
     }
 
     @Test
-    void getContentLikeCountCacheMissFillsFromDb() throws SQLException {
-        when(cache.getContentLikeCount(1L)).thenReturn(null);
-        when(contentLikeDao.findLikerIdsByContentId(conn, 1L)).thenReturn(Set.of(10L, 11L, 12L));
+    void isCommentLikedDelegatesToCache() {
+        when(cache.isCommentLiked(7L, 9L)).thenReturn(false);
 
-        assertEquals(3, service.getContentLikeCount(1L));
-        verify(cache).syncContentLikers(1L, Set.of(10L, 11L, 12L));
+        assertFalse(service.isCommentLiked(7L, 9L));
+        verify(cache).isCommentLiked(7L, 9L);
+    }
+
+    @Test
+    void getCommentLikeCountDelegatesToCache() {
+        when(cache.getCommentLikeCount(9L)).thenReturn(3);
+
+        assertEquals(3, service.getCommentLikeCount(9L));
+        verify(cache).getCommentLikeCount(9L);
     }
 
     @Test
@@ -169,7 +178,7 @@ class LikeServiceTest {
     }
 
     @Test
-    void batchIsContentLikedAllCachedSkipsDb() {
+    void batchIsContentLikedDelegatesToCache() {
         when(cache.batchIsContentLiked(7L, List.of(1L, 2L)))
                 .thenReturn(Map.of(1L, true, 2L, false));
 
@@ -181,15 +190,20 @@ class LikeServiceTest {
     }
 
     @Test
-    void batchIsContentLikedPartialMissQueriesAndBackfills() throws SQLException {
-        when(cache.batchIsContentLiked(7L, List.of(1L, 2L))).thenReturn(Map.of(1L, true));
-        when(contentLikeDao.findLikedContentIds(conn, 7L, List.of(2L))).thenReturn(Set.of(2L));
-        when(contentLikeDao.findLikerIdsByContentId(conn, 2L)).thenReturn(Set.of(2L, 3L));
+    void batchIsContentLikedNullInputReturnsEmpty() {
+        Map<Long, Boolean> result = service.batchIsContentLiked(7L, null);
 
-        Map<Long, Boolean> result = service.batchIsContentLiked(7L, List.of(1L, 2L));
+        assertTrue(result.isEmpty());
+        verify(cache, never()).batchIsContentLiked(anyLong(), anyList());
+    }
 
-        assertEquals(true, result.get(1L));
-        assertEquals(true, result.get(2L));
-        verify(cache).syncContentLikers(2L, Set.of(2L, 3L));
+    @Test
+    void batchIsCommentLikedDelegatesToCache() {
+        when(cache.batchIsCommentLiked(7L, List.of(9L))).thenReturn(Map.of(9L, true));
+
+        Map<Long, Boolean> result = service.batchIsCommentLiked(7L, List.of(9L));
+
+        assertEquals(true, result.get(9L));
+        verify(cache).batchIsCommentLiked(7L, List.of(9L));
     }
 }

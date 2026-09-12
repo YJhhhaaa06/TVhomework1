@@ -117,4 +117,21 @@ public class ContentLikeDao {
         }
     }
 
+    /**
+     * 查询某个内容的点赞总数（计数/成员分离专用：只取 COUNT，不加载全量成员）。
+     * @return 该内容点赞数
+     */
+    public int countByContentId(Connection conn, long contentId) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM content_like WHERE content_id = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, contentId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1);
+                }
+                return 0;
+            }
+        }
+    }
+
 }

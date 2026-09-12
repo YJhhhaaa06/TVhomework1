@@ -406,25 +406,6 @@ public class ContentCacheManager implements Initializable, Disposable {
 
     // ===== 内存缓存实时同步（评论树方法已迁入 CommentCache，T3；本块为内容侧残留，T6 随本类移除） =====
 
-    /**
-     * 点赞/取消点赞后实时更新内存中 content 的 likeCount
-     * 同时更新 contentCache 和 recommendList，避免等待 1 分钟定时刷新
-     */
-    public void updateContentLikeCount(long contentId, int delta) {
-        ContentCacheDTO dto = contentCache.get(contentId);
-        if (dto != null) {
-            dto.setLikeCount(dto.getLikeCount() + delta);
-        }
-        synchronized (recommendList) {
-            for (ContentVO cvo : recommendList) {
-                if (cvo.getId() == contentId) {
-                    cvo.setLikeCount(cvo.getLikeCount() + delta);
-                    break;
-                }
-            }
-        }
-    }
-
     public void updateContentCommentCount(long contentId, int delta) {
         ContentCacheDTO dto = contentCache.get(contentId);
         if (dto != null) {

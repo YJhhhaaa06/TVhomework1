@@ -242,8 +242,8 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | LikeController（113，/like/*） | 点赞/取消点赞 |
-| service | LikeService（324）、LikeCacheService（264） | 内容/评论点赞业务 + Redis 点赞缓存 |
-| dao | ContentLikeDao（120）、CommentLikeDao（112） | content_like / comment_like 数据访问 |
+| service | LikeService（205）、LikeCacheService（558） | 内容/评论点赞业务 + Redis 点赞缓存（计数/成员分离，读路径委托缓存类） |
+| dao | ContentLikeDao（137）、CommentLikeDao（129） | content_like / comment_like 数据访问 |
 | model | — | 无专属 model |
 
 > 注：ContentService 删除作品级联清点赞时 import `like.ContentLikeDao`（反向跨域）。
@@ -350,7 +350,7 @@ com.itheima/
 | user:following:{userId} | Set\<followedUserId\> | 我关注了谁（4.10，MULTI 双写，失败双 DEL；T5 启用） |
 | user:follower:{userId} | Set\<userId\> | 谁关注了我（4.10，MULTI 双写，失败双 DEL；T5 启用） |
 
-> 旧 key 演进：原 `content:like:{id}` / `comment:like:{id}`（单 Set 兼容 SCARD 计数）在 T4 前仍生效（LikeCacheService 现行）；本表为新缓存层目标规范，按任务逐行启用（当前已启用：content / content:index / content:comments；空标记随行）。
+> 旧 key 演进：原 `content:like:{id}` / `comment:like:{id}`（单 Set 兼容 SCARD 计数）已随 T4 停用，由本表计数/成员分离 key 取代（旧 key 仅退款前历史遗留在 Redis，TTL 过期自然回收）；本表为新缓存层规范，按任务逐行启用（当前已启用：content / content:index / content:comments / content:likeCount / content:likeSet / comment:likeCount / comment:likeSet；空标记随行）。
 
 ---
 
@@ -500,13 +500,13 @@ src/main/webapp/
 |------|--------|----------|
 | user/service/UserServiceTest | 23 | 登录/注册/改密/改资料/isAdmin |
 | content/service/ContentServiceTest | 48 | 搜索/详情/评论查询/发布/评论区开关/编辑作品（换源/删图/改文案）/删除作品/内容审核下架恢复 |
-| content/service/ContentCacheManagerLifecycleTest | 6 | 初始化/缓存命中/定时器关闭/刷新失败/内容侧计数同步（评论树用例已迁 CommentCacheTest，T3） |
+| content/service/ContentCacheManagerLifecycleTest | 5 | 初始化/缓存命中/定时器关闭/刷新失败/评论区开关同步（updateContentLikeCount 死代码已随 T4 删除） |
 | content/service/ContentCacheTest | 12 | Redis 内容缓存：三态 loader 构建（含媒体 URL）/DB 无媒体损坏降级/索引读取与懒重建/写路径失效契约/init 重建不 crash/失效方法/VO 复制 |
 | content/service/CommentCacheTest | 11 | Redis 评论缓存：三态 loader（树构建/deep-chain 归一化/无评论 null/DB 降级）/invalidateComments 显式失效/评论点赞定位失效/collectCommentIds 展平 |
 | content/service/FeedServiceTest | 8 | 关注动态流 |
 | content/service/ProfileServiceTest | 13 | 用户主页 |
-| like/service/LikeServiceTest | 14 | 点赞/取消/缓存优先/批量查询 |
-| like/service/LikeCacheServiceTest | 18 | Redis 点赞缓存联动 |
+| like/service/LikeServiceTest | 16 | 点赞/取消/读路径委托缓存类/空输入空 map |
+| like/service/LikeCacheServiceTest | 20 | Redis 点赞缓存：计数/成员分离三态+单飞回填+空标记+写失败失效+降级 +批量 pipeline+DB 兜底 +delete 失效 |
 | comment/service/CommentServiceTest | 16 | 评论归属/楼中楼归一化/软删除（自删+管理员删）/缓存更新 |
 | follow/service/FollowServiceTest | 15 | 关注/取关/列表 |
 | coupon/service/CouponServiceTest | 11 | 抢券/幂等/库存 |
@@ -518,10 +518,10 @@ src/main/webapp/
 | cache/RedisAccessTest | 4 | execute/executeVoid 取还连接、异常包装 CacheException（含连接获取失败） |
 | cache/SingleFlightTest | 4 | 并发同 key 只 load 一次、失败/成功 remove、不同 key 独立 |
 | cache/CacheAsideTest | 16 | 三态 read、Cache-Aside get 命中/回填/空标记、降级不写回、写失败 DEL、清空标记防假空、markEmpty/invalidate best-effort |
-| **合计** | **261** | - |
+| **合计** | **264** | - |
 
 > 注：`com.itheima.tools.CouponAdmin` 属 tools 测试脚本目录（非测试类，package 保留 `com.itheima.tools`，仅 import java.*，无主代码引用）；`util/MyConnectionPoolTest` 被测类未动（基建），测试文件留在 util 包不迁。
-> 用例数取自 `stage8-target/surefire-reports`（2026-09-12 实测，`tv.py test junit` 全绿 261 例 = 既有 252 + CommentCacheTest 11 + ContentServiceTest dto==null 短路 1 − ContentCacheManagerLifecycleTest 3 迁出）。
+> 用例数取自 `stage8-target/surefire-reports`（2026-09-12 实测，`tv.py test junit` 全绿 264 例 = T3 末尾 261 + LikeCacheServiceTest 重写 +2 + LikeServiceTest 读路径委托 +2 − ContentCacheManagerLifecycleTest 删 updateContentLikeCount 例 1）。
 
 > 构建输出：沙箱内 Maven 通过 `-Dstage8.buildDir` 指向 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（pom 默认 `./target`），原因是沙箱内 javac 无法把 worktree `target/classes` 作为 classpath（报"程序包不存在"）。
 > 离线仓库：新增测试依赖（junit/mockito/bytebuddy/surefire 等）的 `_remote.repositories` 已补 `>aliyun=` 来源行（只追加不删除），默认 aliyun 镜像下可离线解析。
@@ -536,13 +536,13 @@ src/main/webapp/
 |------|--------|----------|------|
 | content | 24 | 3,103 | 31.9% |
 | user | 12 | 937 | 9.6% |
-| like | 5 | 925 | 9.5% |
+| like | 5 | 1,142 | 11.7% |
 | admin | 8 | 737 | 7.6% |
 | comment | 5 | 555 | 5.7% |
 | upload | 5 | 471 | 4.8% |
 | follow | 3 | 321 | 3.3% |
 | coupon | 4 | 249 | 2.6% |
-| **业务域小计** | **66** | **7,298** | **75.1%** |
+| **业务域小计** | **66** | **7,515** | **77.2%** |
 
 ### 10.2 基建（不动 + cache 新增）
 

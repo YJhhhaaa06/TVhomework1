@@ -109,4 +109,21 @@ public class CommentLikeDao {
             return result;
         }
     }
+
+    /**
+     * 查询某条评论的点赞总数（计数/成员分离专用：只取 COUNT，不加载全量成员）。
+     * @return 该评论点赞数
+     */
+    public int countByCommentId(Connection conn, long commentId) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM comment_like WHERE comment_id = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, commentId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1);
+                }
+                return 0;
+            }
+        }
+    }
 }

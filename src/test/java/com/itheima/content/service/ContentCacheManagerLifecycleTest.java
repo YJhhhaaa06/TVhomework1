@@ -91,21 +91,6 @@ class ContentCacheManagerLifecycleTest {
     }
 
     @Test
-    void updateContentLikeCountChangesCachedDto() throws SQLException {
-        ContentCacheDTO dto = videoDto();
-        when(contentDao.findAllContent(conn)).thenReturn(List.of(dto));
-        when(contentMediaDao.findMedia(conn, 1L)).thenReturn(mediaMap());
-        when(commentDao.getComments(conn, 1L)).thenReturn(List.of());
-
-        ContentCacheManager manager = newManager();
-        manager.init();
-        manager.updateContentLikeCount(1L, 1);
-
-        assertEquals(6, dto.getLikeCount());
-        manager.destroy();
-    }
-
-    @Test
     void destroyShutsDownScheduler() throws Exception {
         ContentCacheDTO dto = videoDto();
         when(contentDao.findAllContent(conn)).thenReturn(List.of(dto));

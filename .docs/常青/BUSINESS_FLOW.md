@@ -725,10 +725,10 @@ ContentDetailVO 包含：
        │   └──────────┘  └──────────┘  └──────────┘  └──────────┘  └──────────┘
        │                                                            │
        │                                                            ▼
-       │                                                     ┌──────────┐
-       │                                                     │ 更新内存 │
-       │                                                     │ 缓存计数 │
-       │                                                     └──────────┘
+       │                                                     ┌──────────────┐
+       │                                                     │ 失效内容 key │
+       │                                                     │ (读自愈回填) │
+       │                                                     └──────────────┘
        │
        └───────────────────── 返回 "点赞成功" ─────────────────┘
 ```
@@ -743,8 +743,10 @@ ContentDetailVO 包含：
 | 4 | 插入 content_like 表 | SQLException 回滚 |
 | 5 | 更新 content 表 like_count +1 | SQLException 回滚 |
 | 6 | 提交事务 | - |
-| 7 | 更新 Redis 缓存 | 失败只记录日志 |
-| 8 | 更新内存缓存 | 失败只记录日志 |
+| 7 | 点赞缓存写：计数/成员分离条件写（`content:likeCount:{id}` 存在才 INCR + `content:likeSet:{id}` 存在才 SADD + 清空 `empty:` 标记；T4 重制） | 写失败→失效 count+set key 让读自愈（4.2），不阻塞主流程 |
+| 8 | 失效内容 key `content:{id}`（`contentCache.notifyLikeCountChanged`，DB like_count 列为源真理，读自愈回填） | 失败只记录日志 |
+
+> 说明（T4）：内存计数残留（旧 updateContentLikeCount 死代码）已删除；count/set key 均带 TTL（cache.like.ttlMinutes=10）自愈，Redis 挂时读写路径降级走 DB，点赞接口不会 500（H5）。
 
 #### 取消点赞流程
 
@@ -758,8 +760,8 @@ POST /like/content/remove?contentId=123
 4. 删除 content_like 记录
 5. 更新 content 表 like_count -1
 6. 提交事务
-7. 更新 Redis 缓存
-8. 更新内存缓存
+7. 更新 Redis 缓存（条件 DECR/SREM，同 T4 计数/成员分离）
+8. 失效内容 key 读自愈回填 DB 最新计数
 ```
 
 ---
