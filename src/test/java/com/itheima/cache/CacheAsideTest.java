@@ -18,7 +18,7 @@ class CacheAsideTest {
 
     /** 真实组件组合 + mock MyRedisPool/Jedis（不碰真实 Redis，沿用 LikeCacheServiceTest 范式）。 */
     private final CacheAside cache = new CacheAside(new RedisAccess(), new JacksonCodec(),
-            new SingleFlight());
+            new SingleFlight(), new CacheStats());
 
     static class SampleDto {
         private long id;
@@ -301,6 +301,58 @@ class CacheAsideTest {
 
             assertDoesNotThrow(() -> cache.invalidate("content:1"));
             assertDoesNotThrow(() -> cache.markEmpty("content:1"));
+        }
+    }
+
+    // ==================== T7 统计接线（CacheAside 自动打点） ====================
+
+    @Test
+    void getHitDataRecordsHitDataForDomain() {
+        CacheStats stats = new CacheStats();
+        CacheAside c = new CacheAside(new RedisAccess(), new JacksonCodec(), new SingleFlight(), stats);
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            when(jedis.exists("empty:content:1")).thenReturn(false);
+            when(jedis.get("content:1")).thenReturn(new JacksonCodec().toJson(new SampleDto(1L, "alice")));
+
+            c.get("content:1", SampleDto.class, () -> new SampleDto(2L, "loader"), 100);
+
+            assertEquals(1, stats.count(CacheDomain.CONTENT, CacheStats.Event.HIT_DATA));
+            assertEquals(0, stats.count(CacheDomain.CONTENT, CacheStats.Event.MISS));
+            assertEquals(1, stats.totalAccesses());
+        }
+    }
+
+    @Test
+    void getMissRecordsMissAndLoad() {
+        CacheStats stats = new CacheStats();
+        CacheAside c = new CacheAside(new RedisAccess(), new JacksonCodec(), new SingleFlight(), stats);
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            when(jedis.exists("empty:content:1")).thenReturn(false);
+            when(jedis.get("content:1")).thenReturn(null);
+
+            SampleDto value = c.get("content:1", SampleDto.class, () -> new SampleDto(1L, "db"), 100);
+
+            assertEquals(1L, value.getId());
+            assertEquals(1, stats.count(CacheDomain.CONTENT, CacheStats.Event.MISS));
+            assertEquals(1, stats.count(CacheDomain.CONTENT, CacheStats.Event.LOAD));
+        }
+    }
+
+    @Test
+    void getRedisErrorRecordsDegradeAndStillServesByLoader() {
+        CacheStats stats = new CacheStats();
+        CacheAside c = new CacheAside(new RedisAccess(), new JacksonCodec(), new SingleFlight(), stats);
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            when(jedis.exists("empty:content:1")).thenThrow(new RuntimeException("redis down"));
+
+            SampleDto value = c.get("content:1", SampleDto.class, () -> new SampleDto(1L, "db"), 100);
+
+            assertEquals(1L, value.getId());
+            assertEquals(1, stats.count(CacheDomain.CONTENT, CacheStats.Event.DEGRADE));
+            assertEquals(1, stats.count(CacheDomain.CONTENT, CacheStats.Event.LOAD));
         }
     }
 }

@@ -2,6 +2,7 @@ package com.itheima.follow.service;
 
 import com.itheima.cache.CacheAside;
 import com.itheima.cache.CacheKeys;
+import com.itheima.cache.CacheStats;
 import com.itheima.cache.RedisAccess;
 import com.itheima.cache.SingleFlight;
 import com.itheima.config.AppConfig;
@@ -61,15 +62,18 @@ public class FollowCache {
     private final RedisAccess redis;
     private final SingleFlight singleFlight;
     private final CacheAside cacheAside;
+    private final CacheStats stats;
 
     @InjectConstructor
     public FollowCache(FollowDao followDao, TransactionTemplate transactionTemplate,
-                       RedisAccess redis, SingleFlight singleFlight, CacheAside cacheAside) {
+                       RedisAccess redis, SingleFlight singleFlight, CacheAside cacheAside,
+                       CacheStats stats) {
         this.followDao = followDao;
         this.transactionTemplate = transactionTemplate;
         this.redis = redis;
         this.singleFlight = singleFlight;
         this.cacheAside = cacheAside;
+        this.stats = stats;
     }
 
     // ==================== 读-单条 isFollowing（三态 + 单飞回填 + 降级） ====================
@@ -86,13 +90,17 @@ public class FollowCache {
         try {
             List<Boolean> scan = scanSet(setKey, String.valueOf(followedUserId));
             if (Boolean.TRUE.equals(scan.get(0))) {
+                stats.record(CacheStats.Event.HIT_EMPTY, setKey);
                 return false; // 空标记：已确认无关注关系
             }
             if (Boolean.TRUE.equals(scan.get(1))) {
+                stats.record(CacheStats.Event.HIT_DATA, setKey);
                 return Boolean.TRUE.equals(scan.get(2)); // set 存在：成员判定
             }
             // miss：单飞回填（负载 = DB 全量关注列表 → 写 set 或空标记）
+            stats.record(CacheStats.Event.MISS, setKey);
             List<Long> following = singleFlight.get(setKey, () -> {
+                stats.record(CacheStats.Event.LOAD, setKey);
                 List<Long> loaded = loadFollowingIds(userId);
                 writeSet(setKey, loaded);
                 return loaded;
@@ -101,6 +109,8 @@ public class FollowCache {
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "关注状态缓存读失败，降级 DB, userId=" + userId
                     + ", followedUserId=" + followedUserId, e);
+            stats.record(CacheStats.Event.DEGRADE, setKey);
+            stats.record(CacheStats.Event.LOAD, setKey); // 降级 DB 装载也计 LOAD（与 CacheAside 口径一致）
             return isFollowingFromDb(userId, followedUserId);
         }
     }
@@ -133,21 +143,25 @@ public class FollowCache {
                 }
                 p.sync();
                 if (Boolean.TRUE.equals(empty.get())) {
+                    stats.record(CacheStats.Event.HIT_EMPTY, setKey);
                     for (Long id : followedUserIds) {
                         result.put(id, false);
                     }
                     return;
                 }
                 if (Boolean.TRUE.equals(exists.get())) {
+                    stats.record(CacheStats.Event.HIT_DATA, setKey);
                     for (int i = 0; i < followedUserIds.size(); i++) {
                         result.put(followedUserIds.get(i), members.get(i).get());
                     }
                     return;
                 }
+                stats.record(CacheStats.Event.MISS, setKey);
                 missed.addAll(followedUserIds);
             });
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "批量关注状态缓存读失败，全部走 DB, userId=" + userId, e);
+            stats.record(CacheStats.Event.DEGRADE, setKey);
             missed.addAll(followedUserIds);
         }
         if (!missed.isEmpty()) {
@@ -159,6 +173,7 @@ public class FollowCache {
             // best-effort：回填失败（如第二次全量查询 DB 抖动）仅记日志，DB 兜底结果照常返回，不 500。
             try {
                 singleFlight.get(setKey, () -> {
+                    stats.record(CacheStats.Event.LOAD, setKey);
                     List<Long> loaded = loadFollowingIds(userId);
                     writeSet(setKey, loaded);
                     return null;
@@ -203,20 +218,26 @@ public class FollowCache {
                 return r;
             });
             if (Boolean.TRUE.equals(probe.get(0))) {
+                stats.record(CacheStats.Event.HIT_EMPTY, setKey);
                 return Collections.emptyList(); // 空标记：已确认无数据
             }
             if (Boolean.TRUE.equals(probe.get(1))) {
+                stats.record(CacheStats.Event.HIT_DATA, setKey);
                 Set<String> members = redis.execute(j -> j.smembers(setKey));
                 return toSortedLongs(members);
             }
             // miss：单飞回填；返回统一排序（与 SMEMBERS 命中路径一致，避免热/冷读顺序波动）
+            stats.record(CacheStats.Event.MISS, setKey);
             return sortIds(singleFlight.get(setKey, () -> {
+                stats.record(CacheStats.Event.LOAD, setKey);
                 List<Long> loaded = loader.load();
                 writeSet(setKey, loaded);
                 return loaded;
             }));
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, desc + "缓存读失败，降级 DB, key=" + setKey, e);
+            stats.record(CacheStats.Event.DEGRADE, setKey);
+            stats.record(CacheStats.Event.LOAD, setKey); // 降级 DB 装载也计 LOAD（与 CacheAside 口径一致）
             return sortIds(loader.load());
         }
     }
@@ -255,6 +276,7 @@ public class FollowCache {
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "关注缓存双写失败，双 DEL 生效让读自愈, userId=" + userId
                     + ", followedUserId=" + followedUserId, e);
+            stats.record(CacheStats.Event.WRITE_FAIL, followingKey);
             cacheAside.invalidate(followingKey, followerKey);
         }
     }
@@ -285,6 +307,7 @@ public class FollowCache {
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "取关缓存双写失败，双 DEL 生效让读自愈, userId=" + userId
                     + ", followedUserId=" + followedUserId, e);
+            stats.record(CacheStats.Event.WRITE_FAIL, followingKey);
             cacheAside.invalidate(followingKey, followerKey);
         }
     }
@@ -435,6 +458,7 @@ public class FollowCache {
                 });
             } catch (CacheException e) {
                 LOGGER.log(Level.WARNING, "空标记写入失败, key=" + setKey, e);
+                stats.record(CacheStats.Event.WRITE_FAIL, setKey);
             }
             return;
         }
@@ -446,6 +470,7 @@ public class FollowCache {
             });
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "关注/粉丝集回填失败，读自愈, key=" + setKey, e);
+            stats.record(CacheStats.Event.WRITE_FAIL, setKey);
         }
     }
 

@@ -1,7 +1,9 @@
 package com.itheima.like.service;
 
 import com.itheima.cache.CacheAside;
+import com.itheima.cache.CacheDomain;
 import com.itheima.cache.CacheKeys;
+import com.itheima.cache.CacheStats;
 import com.itheima.cache.RedisAccess;
 import com.itheima.cache.SingleFlight;
 import com.itheima.exception.CacheException;
@@ -43,6 +45,7 @@ class LikeCacheServiceTest {
     private CacheAside cacheAside;
     private Jedis jedis;
     private LikeCacheService service;
+    private CacheStats stats;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -54,8 +57,9 @@ class LikeCacheServiceTest {
         redis = mock(RedisAccess.class);
         cacheAside = mock(CacheAside.class);
         jedis = mock(Jedis.class);
+        stats = new CacheStats();
         service = new LikeCacheService(contentLikeDao, commentLikeDao, tt, redis,
-                new SingleFlight(), cacheAside);
+                new SingleFlight(), cacheAside, stats);
 
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
@@ -155,6 +159,16 @@ class LikeCacheServiceTest {
 
         assertFalse(service.isContentLiked(7L, 1L));
         verify(tt, never()).execute(any());
+    }
+
+    @Test
+    void isContentLikedEmptyMarkerRecordsHitEmptyToLikeDomain() {
+        stubSetScan(1L, true, null, null);
+
+        assertFalse(service.isContentLiked(7L, 1L));
+
+        assertEquals(1, stats.count(CacheDomain.LIKE, CacheStats.Event.HIT_EMPTY));
+        assertEquals(0, stats.count(CacheDomain.LIKE, CacheStats.Event.MISS));
     }
 
     @Test

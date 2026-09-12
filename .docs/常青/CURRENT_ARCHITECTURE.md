@@ -196,15 +196,17 @@ com.itheima/
 
 | 类 | 行数 | 职责 |
 |----|------|------|
-| CacheKeys | 58 | 统一 key 命名/生成规范（本周期唯一源，与六.6.2 一致）+ 空标记常量（EMPTY_MARKER_TTL_SECONDS=60s） |
+| CacheKeys | 113 | 统一 key 命名/生成规范（本周期唯一源，与六.6.2 一致）+ 空标记常量（EMPTY_MARKER_TTL_SECONDS=60s）+ `domainOf` 统计域解析（T7 新增：key 生成与解析同源，长前缀优先） |
+| CacheDomain | 26 | 统计分域枚举（T7 新增）：CONTENT/COMMENT/LIKE/FOLLOW/OTHER |
+| CacheStats | 130 | 观测统计组件（T7 新增）：六类事件（HIT_DATA/HIT_EMPTY/MISS/LOAD/DEGRADE/WRITE_FAIL）AtomicLong 计数 + 分域分桶 + 惰性日志（每 N=1000 输出摘要），record 异常吞掉不影响主链路 |
 | JacksonCodec | 53 | JSON 序列化（复用 jackson-databind + jsr310），异常抛 CacheException |
 | RedisAccess | 51 | 统一 Redis 访问封装：`execute`/`executeVoid` 回调式取还连接（支持同连接 pipeline/MULTI），Jedis 异常包装为 CacheException |
 | SingleFlight | 65 | 统一单飞组件（4.9）：ConcurrentHashMap+FutureTask，失败/成功均 remove（防缓存失败结果 + 防泄漏） |
 | CacheStatus | 15 | 三态枚举：MISS / HIT_EMPTY / HIT_DATA |
 | CacheResult | 39 | 三态读取结果载体（status + value，HIT_EMPTY 时 value=null） |
-| CacheAside | 184 | 统一 Cache-Aside 封装：`read` 三态读 / `get` 带单飞回填 / `writeOrInvalidate`（写失败=DEL 自愈，写数据同时清空标记）/ `markEmpty` / `invalidate`，TTL ±10% 简单抖动，缓存失败一律降级不抛业务异常 |
+| CacheAside | 230 | 统一 Cache-Aside 封装：`read` 三态读 / `get` 带单飞回填 / `writeOrInvalidate`（写失败=DEL 自愈，写数据同时清空标记）/ `markEmpty` / `invalidate`，TTL ±10% 简单抖动，缓存失败一律降级不抛业务异常；T7 起三态读/降级/LOAD/写失败处自动打点 CacheStats |
 
-> 测试：`src/test/java/com/itheima/cache/` 5 类 36 例（mockStatic MyRedisPool + mock Jedis，不碰真实 Redis），见九.9.2。
+> 测试：`src/test/java/com/itheima/cache/` 6 类 47 例（mockStatic MyRedisPool + mock Jedis，不碰真实 Redis，含 CacheStatsTest 域解析/计数/惰性输出 8 例），见九.9.2。
 
 ### 4.3 业务域包（每域 controller/service/dao/model 分层）
 
@@ -356,6 +358,18 @@ com.itheima/
 > 旧 key 演进：原 `content:like:{id}` / `comment:like:{id}`（单 Set 兼容 SCARD 计数）已随 T4 停用，由本表计数/成员分离 key 取代（旧 key 仅退款前历史遗留在 Redis，TTL 过期自然回收）；本表为新缓存层规范，按任务逐行启用（当前已启用：content / content:index / content:comments / content:likeCount / content:likeSet / comment:likeCount / comment:likeSet / user:following / user:follower；空标记随行）。
 >
 > 定时全量刷新（旧 `ContentCacheManager.startScheduler` 10min `scheduleAtFixedRate`）已随旧类移除（O-6 拍板，T6）：内容/索引一致性由**启动全量重建 + 索引懒重建 + 业务显式失效（增删改/计数/门禁/隐藏恢复）+ Cache-Aside 读自愈（按 key TTL 过期回填）** 承担，不再有周期性全库重载（原 H2/H7 雪崩与 N+1 痛点）。
+
+### 6.3 统计观测（T7 新增，治 H14 无观测能力）
+
+> 二期"测量→优化→再测量"闭环的观测层（NEEDS 4.14），纯计数与日志，**不打任何新 Redis 命令、不改缓存读写语义**（三态判断顺序/空标记/DEL 降级路径一概不动，对外行为零变化）。
+
+- **组件**：`com.itheima.cache.CacheStats`（@Component，固定 `AtomicLong[5][6]` 计数数组，无锁无扩容）。
+- **六类事件**：hitData / hitEmpty / miss / loadCount / degradeCount / writeFailCount（`CacheStats.Event`：HIT_DATA/HIT_EMPTY/MISS/LOAD/DEGRADE/WRITE_FAIL）。
+- **分域分桶**：`CacheKeys.domainOf(String dataKey)` 唯一解析源（key 生成与解析同源）——**长前缀优先**（content:index / content:like / content:comments 先于通用 content:）；`empty:` 空标记先解包到底层数据 key 再归域；映射：content:index→CONTENT、content:like*/comment:like*→LIKE、content:comments//comment:*→COMMENT、content:{id}→CONTENT、user:*→FOLLOW、未知/null→OTHER。
+- **惰性日志输出**：每 **N=1000** 次记录输出一次各域摘要（INFO 单行 `CacheStats 摘要: total=.. content{hitData=.. …}`）；**不引入定时器、不新增 admin 端点**（与 O-6 移除定时刷新的决策一致：统计只读不重建）。
+- **挂点**：CacheAside 自动打点（read/getInternal 三态读 + catch 降级 + `invokeLoader` 入口 LOAD + writeOrInvalidate/markEmpty/deleteQuietly 写失败）；LikeCacheService / FollowCache 原生 Set 三态读分支手动打点（含批量 pipeline 路径，批量记录粒度=**每 (数据 key, 决策) 记一次**：like 批量 key 各异按 id、follow 批量单 key 按一趟）。
+- **红线段**：`record()` 自身异常吞掉记 WARNING，不影响主链路；统计不引入 MQ。
+- **用途**：分域命中率/穿透曲线为 O-8（T9）分域 TTL 调参与 T8 读路径加固前后对比提供数据依据。
 
 ---
 
@@ -510,10 +524,10 @@ src/main/webapp/
 | content/service/FeedServiceTest | 8 | 关注动态流 |
 | content/service/ProfileServiceTest | 12 | 用户主页 |
 | like/service/LikeServiceTest | 16 | 点赞/取消/读路径委托缓存类/空输入空 map |
-| like/service/LikeCacheServiceTest | 20 | Redis 点赞缓存：计数/成员分离三态+单飞回填+空标记+写失败失效+降级 +批量 pipeline+DB 兜底 +delete 失效 |
+| like/service/LikeCacheServiceTest | 21 | Redis 点赞缓存：计数/成员分离三态+单飞回填+空标记+写失败失效+降级 +批量 pipeline+DB 兜底 +delete 失效 +T7 统计接线（LIKE 域 HIT_EMPTY 计数） |
 | comment/service/CommentServiceTest | 16 | 评论归属/楼中楼归一化/软删除（自删+管理员删）/缓存更新 |
 | follow/service/FollowServiceTest | 15 | 关注/取关/列表（读路径委托 FollowCache；写路径 DB 提交后缓存双写） |
-| follow/service/FollowCacheTest | 26 | Redis 关注缓存：双 Set 三态+单飞回填+空标记（set 存在守卫防并发覆盖）/批量 pipeline+DB 兜底+best-effort 回填/列表 smembers 排序/条件 MULTI 双写+失败双 DEL+降级 |
+| follow/service/FollowCacheTest | 27 | Redis 关注缓存：双 Set 三态+单飞回填+空标记（set 存在守卫防并发覆盖）/批量 pipeline+DB 兜底+best-effort 回填/列表 smembers 排序/条件 MULTI 双写+失败双 DEL+降级 +T7 统计接线（FOLLOW 域 MISS/LOAD 计数） |
 | coupon/service/CouponServiceTest | 11 | 抢券/幂等/库存 |
 | upload/service/FileUploadServiceTest | 9 | 上传校验/清理旧文件 |
 | admin/service/MediaAuditServiceTest | 14 | 媒体扫描/恢复 |
@@ -522,11 +536,12 @@ src/main/webapp/
 | cache/JacksonCodecTest | 4 | DTO 往返、null 处理、TypeReference 泛型、非法 JSON 抛 CacheException |
 | cache/RedisAccessTest | 4 | execute/executeVoid 取还连接、异常包装 CacheException（含连接获取失败） |
 | cache/SingleFlightTest | 4 | 并发同 key 只 load 一次、失败/成功 remove、不同 key 独立 |
-| cache/CacheAsideTest | 16 | 三态 read、Cache-Aside get 命中/回填/空标记、降级不写回、写失败 DEL、清空标记防假空、markEmpty/invalidate best-effort |
-| **合计** | **288** | - |
+| cache/CacheAsideTest | 19 | 三态 read、Cache-Aside get 命中/回填/空标记、降级不写回、写失败 DEL、清空标记防假空、markEmpty/invalidate best-effort +T7 统计接线（hitData/MISS+LOAD/降级计数） |
+| cache/CacheStatsTest | 8 |（T7 新增）观测统计组件：domainOf 域解析全形态/前缀重叠优先级、六类计数分桶、惰性日志触发与摘要、打点异常吞掉 |
+| **合计** | **301** | - |
 
 > 注：`com.itheima.tools.CouponAdmin` 属 tools 测试脚本目录（非测试类，package 保留 `com.itheima.tools`，仅 import java.*，无主代码引用）；`util/MyConnectionPoolTest` 被测类未动（基建），测试文件留在 util 包不迁。
-> 用例数取自 `stage8-target/surefire-reports`（2026-09-12 实测，`mvn clean test` 全绿 288 例 = T5 末尾 293 − 删除旧 ContentCacheManagerLifecycleTest 5 例（旧类已随 T6 移除）；ContentServiceTest 断言随新删除/下架路径（likeService.deleteContentLike）调整）。
+> 用例数取自 `stage8-target/surefire-reports`（2026-09-12 实测，`mvn test` 全绿 301 例 = T6 末尾 288 + T7 新增 13（CacheStatsTest 8 + CacheAsideTest +3 + LikeCacheServiceTest +1 + FollowCacheTest +1）；surefire 297 + 独立 fork pool-test 4）。
 
 > 构建输出：沙箱内 Maven 通过 `-Dstage8.buildDir` 指向 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（pom 默认 `./target`），原因是沙箱内 javac 无法把 worktree `target/classes` 作为 classpath（报"程序包不存在"）。
 > 离线仓库：新增测试依赖（junit/mockito/bytebuddy/surefire 等）的 `_remote.repositories` 已补 `>aliyun=` 来源行（只追加不删除），默认 aliyun 镜像下可离线解析。

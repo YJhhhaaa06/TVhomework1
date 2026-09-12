@@ -2,6 +2,7 @@ package com.itheima.like.service;
 
 import com.itheima.cache.CacheAside;
 import com.itheima.cache.CacheKeys;
+import com.itheima.cache.CacheStats;
 import com.itheima.cache.RedisAccess;
 import com.itheima.cache.SingleFlight;
 import com.itheima.config.AppConfig;
@@ -59,17 +60,19 @@ public class LikeCacheService {
     private final RedisAccess redis;
     private final SingleFlight singleFlight;
     private final CacheAside cacheAside;
+    private final CacheStats stats;
 
     @InjectConstructor
     public LikeCacheService(ContentLikeDao contentLikeDao, CommentLikeDao commentLikeDao,
                             TransactionTemplate transactionTemplate, RedisAccess redis,
-                            SingleFlight singleFlight, CacheAside cacheAside) {
+                            SingleFlight singleFlight, CacheAside cacheAside, CacheStats stats) {
         this.contentLikeDao = contentLikeDao;
         this.commentLikeDao = commentLikeDao;
         this.transactionTemplate = transactionTemplate;
         this.redis = redis;
         this.singleFlight = singleFlight;
         this.cacheAside = cacheAside;
+        this.stats = stats;
     }
 
     // ==================== 内容点赞 / 取消（写路径，DB 提交后调用，4.2/4.6） ====================
@@ -100,6 +103,7 @@ public class LikeCacheService {
             });
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "内容点赞缓存写失败，失效 key 让读自愈, contentId=" + contentId, e);
+            stats.record(CacheStats.Event.WRITE_FAIL, setKey);
             cacheAside.invalidate(countKey, setKey);
         }
     }
@@ -122,6 +126,7 @@ public class LikeCacheService {
             });
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "取消内容点赞缓存写失败，失效 key 让读自愈, contentId=" + contentId, e);
+            stats.record(CacheStats.Event.WRITE_FAIL, setKey);
             cacheAside.invalidate(countKey, setKey);
         }
     }
@@ -147,6 +152,7 @@ public class LikeCacheService {
             });
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "评论点赞缓存写失败，失效 key 让读自愈, commentId=" + commentId, e);
+            stats.record(CacheStats.Event.WRITE_FAIL, setKey);
             cacheAside.invalidate(countKey, setKey);
         }
     }
@@ -165,6 +171,7 @@ public class LikeCacheService {
             });
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "取消评论点赞缓存写失败，失效 key 让读自愈, commentId=" + commentId, e);
+            stats.record(CacheStats.Event.WRITE_FAIL, setKey);
             cacheAside.invalidate(countKey, setKey);
         }
     }
@@ -185,13 +192,17 @@ public class LikeCacheService {
         try {
             List<Boolean> scan = scanLikeSet(setKey, String.valueOf(userId));
             if (Boolean.TRUE.equals(scan.get(0))) {
+                stats.record(CacheStats.Event.HIT_EMPTY, setKey);
                 return false; // 空标记：已确认无点赞者
             }
             if (Boolean.TRUE.equals(scan.get(1))) {
+                stats.record(CacheStats.Event.HIT_DATA, setKey);
                 return Boolean.TRUE.equals(scan.get(2)); // set 存在：成员判定
             }
             // miss：单飞回填（负载 = DB 全量点赞者 → 写 set 或空标记）
+            stats.record(CacheStats.Event.MISS, setKey);
             Set<Long> likers = singleFlight.get(setKey, () -> {
+                stats.record(CacheStats.Event.LOAD, setKey);
                 Set<Long> loaded = loadContentLikers(contentId);
                 writeContentLikers(contentId, loaded);
                 return loaded;
@@ -199,6 +210,8 @@ public class LikeCacheService {
             return likers.contains(userId);
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "内容点赞状态缓存读失败，降级 DB, contentId=" + contentId, e);
+            stats.record(CacheStats.Event.DEGRADE, setKey);
+            stats.record(CacheStats.Event.LOAD, setKey); // 降级 DB 装载也计 LOAD（与 CacheAside 口径一致）
             return isContentLikedFromDb(userId, contentId);
         }
     }
@@ -214,7 +227,11 @@ public class LikeCacheService {
                 () -> loadContentLikeCount(contentId), ttlSeconds());
         // count key 从不写空标记、loader 恒返回 int（0 为合法数据），正常流程直接命中；
         // 防御分支仅兜底"hit-empty 时 get 返回 null"的 NPE 可能，不会造成重复 DB 查询
-        return cached != null ? cached : loadContentLikeCount(contentId);
+        if (cached != null) {
+            return cached;
+        }
+        stats.record(CacheStats.Event.LOAD, CacheKeys.contentLikeCount(contentId)); // 兜底 DB 装载与 CacheAside 口径对齐
+        return loadContentLikeCount(contentId);
     }
 
     // ==================== 评论点赞成员 / 计数（同内容，key 换 comment） ====================
@@ -224,12 +241,16 @@ public class LikeCacheService {
         try {
             List<Boolean> scan = scanLikeSet(setKey, String.valueOf(userId));
             if (Boolean.TRUE.equals(scan.get(0))) {
+                stats.record(CacheStats.Event.HIT_EMPTY, setKey);
                 return false;
             }
             if (Boolean.TRUE.equals(scan.get(1))) {
+                stats.record(CacheStats.Event.HIT_DATA, setKey);
                 return Boolean.TRUE.equals(scan.get(2));
             }
+            stats.record(CacheStats.Event.MISS, setKey);
             Set<Long> likers = singleFlight.get(setKey, () -> {
+                stats.record(CacheStats.Event.LOAD, setKey);
                 Set<Long> loaded = loadCommentLikers(commentId);
                 writeCommentLikers(commentId, loaded);
                 return loaded;
@@ -237,6 +258,8 @@ public class LikeCacheService {
             return likers.contains(userId);
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "评论点赞状态缓存读失败，降级 DB, commentId=" + commentId, e);
+            stats.record(CacheStats.Event.DEGRADE, setKey);
+            stats.record(CacheStats.Event.LOAD, setKey); // 降级 DB 装载也计 LOAD（与 CacheAside 口径一致）
             return isCommentLikedFromDb(userId, commentId);
         }
     }
@@ -245,7 +268,11 @@ public class LikeCacheService {
         Integer cached = cacheAside.get(CacheKeys.commentLikeCount(commentId), Integer.class,
                 () -> loadCommentLikeCount(commentId), ttlSeconds());
         // 同 getContentLikeCount：count key 从不写空标记，防御分支仅兜底 NPE
-        return cached != null ? cached : loadCommentLikeCount(commentId);
+        if (cached != null) {
+            return cached;
+        }
+        stats.record(CacheStats.Event.LOAD, CacheKeys.commentLikeCount(commentId)); // 兜底 DB 装载与 CacheAside 口径对齐
+        return loadCommentLikeCount(commentId);
     }
 
     // ==================== 批量点赞状态（pipeline + DB 兜底 + 逐个单飞回填） ====================
@@ -276,17 +303,24 @@ public class LikeCacheService {
                 }
                 p.sync();
                 for (int i = 0; i < ids.size(); i++) {
+                    String setKey = CacheKeys.contentLikeSet(ids.get(i));
                     if (Boolean.TRUE.equals(empties.get(i).get())) {
+                        stats.record(CacheStats.Event.HIT_EMPTY, setKey);
                         result.put(ids.get(i), false);
                     } else if (Boolean.TRUE.equals(existsList.get(i).get())) {
+                        stats.record(CacheStats.Event.HIT_DATA, setKey);
                         result.put(ids.get(i), members.get(i).get());
                     } else {
+                        stats.record(CacheStats.Event.MISS, setKey);
                         missed.add(ids.get(i));
                     }
                 }
             });
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "批量内容点赞状态缓存读失败，全部走 DB, userId=" + userId, e);
+            for (Long cid : contentIds) {
+                stats.record(CacheStats.Event.DEGRADE, CacheKeys.contentLikeSet(cid));
+            }
             missed.addAll(contentIds);
         }
         if (!missed.isEmpty()) {
@@ -319,17 +353,24 @@ public class LikeCacheService {
                 }
                 p.sync();
                 for (int i = 0; i < ids.size(); i++) {
+                    String setKey = CacheKeys.commentLikeSet(ids.get(i));
                     if (Boolean.TRUE.equals(empties.get(i).get())) {
+                        stats.record(CacheStats.Event.HIT_EMPTY, setKey);
                         result.put(ids.get(i), false);
                     } else if (Boolean.TRUE.equals(existsList.get(i).get())) {
+                        stats.record(CacheStats.Event.HIT_DATA, setKey);
                         result.put(ids.get(i), members.get(i).get());
                     } else {
+                        stats.record(CacheStats.Event.MISS, setKey);
                         missed.add(ids.get(i));
                     }
                 }
             });
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "批量评论点赞状态缓存读失败，全部走 DB, userId=" + userId, e);
+            for (Long cid : commentIds) {
+                stats.record(CacheStats.Event.DEGRADE, CacheKeys.commentLikeSet(cid));
+            }
             missed.addAll(commentIds);
         }
         if (!missed.isEmpty()) {
@@ -477,6 +518,7 @@ public class LikeCacheService {
             });
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "内容点赞成员回填失败，读自愈, contentId=" + contentId, e);
+            stats.record(CacheStats.Event.WRITE_FAIL, setKey);
         }
     }
 
@@ -494,6 +536,7 @@ public class LikeCacheService {
             });
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "评论点赞成员回填失败，读自愈, commentId=" + commentId, e);
+            stats.record(CacheStats.Event.WRITE_FAIL, setKey);
         }
     }
 
@@ -512,6 +555,7 @@ public class LikeCacheService {
         }
         for (Long cid : missed) {
             singleFlight.get(CacheKeys.contentLikeSet(cid), () -> {
+                stats.record(CacheStats.Event.LOAD, CacheKeys.contentLikeSet(cid));
                 Set<Long> likers = loadContentLikers(cid);
                 writeContentLikers(cid, likers);
                 return null;
@@ -533,6 +577,7 @@ public class LikeCacheService {
         }
         for (Long cid : missed) {
             singleFlight.get(CacheKeys.commentLikeSet(cid), () -> {
+                stats.record(CacheStats.Event.LOAD, CacheKeys.commentLikeSet(cid));
                 Set<Long> likers = loadCommentLikers(cid);
                 writeCommentLikers(cid, likers);
                 return null;

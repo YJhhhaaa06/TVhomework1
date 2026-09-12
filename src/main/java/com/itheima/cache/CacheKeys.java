@@ -68,4 +68,47 @@ public final class CacheKeys {
     public static String userFollower(long userId) {
         return "user:follower:" + userId;
     }
+
+    /**
+     * 数据 key → 统计域解析（T7 新增，key 生成与解析同源，唯一源收敛于本方法）。
+     *
+     * <p>注意前缀重叠：{@code content:} 是 {@code content:comments:} / {@code content:index:} /
+     * {@code content:like*} 的公共前缀，**长前缀必须先于通用前缀判断**。
+     * {@code empty:{dataKey}} 空标记先解包到内层数据 key 再归域。
+     *
+     * <p>映射（T7 执行定稿，见 {@link CacheDomain}）：
+     * content:index 归 CONTENT（索引归内容域）；content:like* 与 comment:like* 归 LIKE；
+     * content:comments 与 comment:* 归 COMMENT；content:{id} 归 CONTENT；
+     * user:following 与 user:follower（user:* 兜底）归 FOLLOW；未知/null 归 OTHER。
+     */
+    public static CacheDomain domainOf(String dataKey) {
+        if (dataKey == null) {
+            return CacheDomain.OTHER;
+        }
+        if (dataKey.startsWith("empty:")) {
+            return domainOf(dataKey.substring("empty:".length()));
+        }
+        if (dataKey.startsWith("content:index:")) {
+            return CacheDomain.CONTENT;
+        }
+        if (dataKey.startsWith("content:like")) {
+            return CacheDomain.LIKE;
+        }
+        if (dataKey.startsWith("content:comments:")) {
+            return CacheDomain.COMMENT;
+        }
+        if (dataKey.startsWith("comment:like")) {
+            return CacheDomain.LIKE;
+        }
+        if (dataKey.startsWith("comment:")) {
+            return CacheDomain.COMMENT;
+        }
+        if (dataKey.startsWith("content:")) {
+            return CacheDomain.CONTENT;
+        }
+        if (dataKey.startsWith("user:")) {
+            return CacheDomain.FOLLOW;
+        }
+        return CacheDomain.OTHER;
+    }
 }

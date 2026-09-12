@@ -1,7 +1,9 @@
 package com.itheima.follow.service;
 
 import com.itheima.cache.CacheAside;
+import com.itheima.cache.CacheDomain;
 import com.itheima.cache.CacheKeys;
+import com.itheima.cache.CacheStats;
 import com.itheima.cache.RedisAccess;
 import com.itheima.cache.SingleFlight;
 import com.itheima.exception.CacheException;
@@ -45,6 +47,7 @@ class FollowCacheTest {
     private CacheAside cacheAside;
     private Jedis jedis;
     private FollowCache cache;
+    private CacheStats stats;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -55,7 +58,8 @@ class FollowCacheTest {
         redis = mock(RedisAccess.class);
         cacheAside = mock(CacheAside.class);
         jedis = mock(Jedis.class);
-        cache = new FollowCache(followDao, tt, redis, new SingleFlight(), cacheAside);
+        stats = new CacheStats();
+        cache = new FollowCache(followDao, tt, redis, new SingleFlight(), cacheAside, stats);
 
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
@@ -149,6 +153,17 @@ class FollowCacheTest {
         verify(jedis).sadd(eq(followingKey(USER)), any(String[].class));
         verify(jedis).expire(eq(followingKey(USER)), anyLong());
         verify(cacheAside, never()).markEmpty(anyString());
+    }
+
+    @Test
+    void isFollowingMissBackfillRecordsMissAndLoadToFollowDomain() throws SQLException {
+        stubSetScan(followingKey(USER), false, false, null);
+        when(followDao.getAllFollowedUserIds(conn, USER)).thenReturn(List.of(FOLLOWED, 9L));
+
+        assertTrue(cache.isFollowing(USER, FOLLOWED));
+
+        assertEquals(1, stats.count(CacheDomain.FOLLOW, CacheStats.Event.MISS));
+        assertEquals(1, stats.count(CacheDomain.FOLLOW, CacheStats.Event.LOAD));
     }
 
     @Test

@@ -37,13 +37,16 @@ public class CacheAside {
     private final RedisAccess redis;
     private final JacksonCodec codec;
     private final SingleFlight singleFlight;
+    private final CacheStats stats;
     private final Random random = new Random();
 
     @InjectConstructor
-    public CacheAside(RedisAccess redis, JacksonCodec codec, SingleFlight singleFlight) {
+    public CacheAside(RedisAccess redis, JacksonCodec codec, SingleFlight singleFlight,
+                      CacheStats stats) {
         this.redis = redis;
         this.codec = codec;
         this.singleFlight = singleFlight;
+        this.stats = stats;
     }
 
     // ==================== 读路径 ====================
@@ -58,15 +61,20 @@ public class CacheAside {
         try {
             boolean empty = redis.execute(j -> j.exists(CacheKeys.empty(dataKey)));
             if (empty) {
+                stats.record(CacheStats.Event.HIT_EMPTY, dataKey);
                 return CacheResult.hitEmpty();
             }
             String json = redis.execute(j -> j.get(dataKey));
             if (json != null) {
-                return CacheResult.hitData(codec.fromJson(json, type));
+                T value = codec.fromJson(json, type);
+                stats.record(CacheStats.Event.HIT_DATA, dataKey); // 反序列化成功后才算命中（脏 JSON 归降级）
+                return CacheResult.hitData(value);
             }
+            stats.record(CacheStats.Event.MISS, dataKey);
             return CacheResult.miss();
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "缓存读异常，视为 miss, key=" + dataKey, e);
+            stats.record(CacheStats.Event.DEGRADE, dataKey);
             return CacheResult.miss();
         }
     }
@@ -96,14 +104,18 @@ public class CacheAside {
         try {
             boolean empty = redis.execute(j -> j.exists(CacheKeys.empty(dataKey)));
             if (empty) {
+                stats.record(CacheStats.Event.HIT_EMPTY, dataKey);
                 return null;
             }
             String json = redis.execute(j -> j.get(dataKey));
             if (json != null) {
-                return parse.apply(json);
+                T value = parse.apply(json);
+                stats.record(CacheStats.Event.HIT_DATA, dataKey); // 反序列化成功后才算命中（脏 JSON 归降级）
+                return value;
             }
+            stats.record(CacheStats.Event.MISS, dataKey);
             return singleFlight.get(dataKey, () -> {
-                T value = invokeLoader(loader);
+                T value = invokeLoader(dataKey, loader);
                 if (value != null) {
                     writeOrInvalidate(dataKey, value, ttlSeconds);
                 } else {
@@ -113,7 +125,8 @@ public class CacheAside {
             });
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "缓存读降级走 DB, key=" + dataKey, e);
-            return invokeLoader(loader);
+            stats.record(CacheStats.Event.DEGRADE, dataKey);
+            return invokeLoader(dataKey, loader);
         }
     }
 
@@ -136,6 +149,7 @@ public class CacheAside {
             });
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "缓存写失败，失效 key 让读自愈, key=" + dataKey, e);
+            stats.record(CacheStats.Event.WRITE_FAIL, dataKey);
             deleteQuietly(dataKey);
         }
     }
@@ -153,6 +167,7 @@ public class CacheAside {
             });
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "空标记写入失败, key=" + dataKey, e);
+            stats.record(CacheStats.Event.WRITE_FAIL, dataKey);
         }
     }
 
@@ -179,10 +194,13 @@ public class CacheAside {
             // DEL 也失败（Redis 挂）→ 读路径整体降级走 DB，仍然一致，不产生永久不可见窗口（4.2）
             LOGGER.log(Level.WARNING, "缓存失效也失败（疑似 Redis 异常），读路径将降级走 DB, key="
                     + dataKey, e);
+            // 显式失效/自愈 DEL 失败也算写失败（T7 观测）；writeOrInvalidate 失败链叠加 DEL 失败罕见，可接受
+            stats.record(CacheStats.Event.WRITE_FAIL, dataKey);
         }
     }
 
-    private <T> T invokeLoader(Callable<T> loader) {
+    private <T> T invokeLoader(String dataKey, Callable<T> loader) {
+        stats.record(CacheStats.Event.LOAD, dataKey);
         try {
             return loader.call();
         } catch (RuntimeException e) {
