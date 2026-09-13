@@ -104,6 +104,28 @@ public final class AppConfig {
         return getInt("redis.minIdle");
     }
 
+    // T1（cache-01）：显式超时 + 熔断参数（治 U-10 未配置超时 / N1 逐请求等连接超时）
+
+    public static int getRedisConnectTimeoutMs() {
+        return getInt("redis.connectTimeoutMs");
+    }
+
+    public static int getRedisSoTimeoutMs() {
+        return getInt("redis.soTimeoutMs");
+    }
+
+    public static long getRedisPoolMaxWaitMs() {
+        return getLong("redis.pool.maxWaitMs");
+    }
+
+    public static int getRedisBreakerFailureThreshold() {
+        return getInt("redis.breaker.failureThreshold");
+    }
+
+    public static long getRedisBreakerCooldownMillis() {
+        return getLong("redis.breaker.cooldownMillis");
+    }
+
     // ===== JWT =====
 
     public static String getJwtSecret() {

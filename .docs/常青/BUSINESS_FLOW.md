@@ -309,6 +309,8 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 
 ### 3.1 内容与评论缓存机制（C 周期 T2/T3 重制为统一 Redis，2026-09-12）
 
+> **三期 T1（cache-01）熔断注记（2026-09-13）**：所有 Redis 访问经 `RedisAccess` 全局熔断器——Redis 不可用时连续失败 5 次即熔断开启，后续缓存请求**立即快速失败并降级走 DB**（不再逐请求等连接超时）；冷却 10s 后单探针探测，Redis 恢复自动回到正常缓存路径。三态/空标记/降级语义不变（详见 CURRENT_ARCHITECTURE 6.6）。
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  前台读路径（Start/Search/Detail/Feed/Profile）                  │

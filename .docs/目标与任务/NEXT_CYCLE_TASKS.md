@@ -56,7 +56,7 @@
 
 | 编号 | 标题 | 对应候选 | 依赖 | 验收关键（动态） | 期望 commit 主题 | 状态 |
 | -- | -- | ---- | -- | -------- | ------------ | -- |
-| T1 | 韧性底座：Redis 超时 + 快速失败 | U-10、N1 | — | Redis 停机时缓存路径**快速失败**（不再逐请求等连接超时）；恢复后自动回到正常缓存路径；JUnit + 相关 pytest 绿 | `fix(cache-01)` | 草稿 |
+| T1 | 韧性底座：Redis 超时 + 快速失败 | U-10、N1 | — | Redis 停机时缓存路径**快速失败**（不再逐请求等连接超时）；恢复后自动回到正常缓存路径；JUnit + 相关 pytest 绿 | `fix(cache-01)` | 已完成（2026-09-13） |
 | T2 | 降级不放量：降级路径接入单飞 | N1 | T1（软） | Redis 停机时**同一 key 的并发读仍只打一次 DB**；`SingleFlight` 失败清理语义不被破坏 | `fix(cache-02)` | 草稿 |
 | T3 | 负缓存治理：区分"确认无数据"与"加载失败" | N2 | T2（软） | DB 瞬时失败**不再写 60s 空标记、不 DEL 既有数据 key**；新增单测覆盖；三态语义与对外错误约定不变 | `fix(cache-03)` | 草稿 |
 | T4 | 写路径的失败与竞态治理 | N3、N4、N7 | —（独立，可并行窗口） | 空标记写入守卫生效（并发不回填假空）；索引写失败可自愈或至少可检测；条件写竞态有明确结论（修掉 or 记录为已接受）；**含 3 项，允许拆多 commit（G1 例外标注）** | `fix(cache-04)` | 草稿 |
@@ -82,6 +82,11 @@
 * **红线边界**：不引入新的第三方依赖；不改 `MyRedisPool` 现有对外方法签名（他处仍在用）；不改变"缓存失败一律降级、不抛业务异常"的既有语义；不动 TTL 取值与 key 命名。
 * **强制探索步骤**：动刀前先 (1) 确认所有 Redis 访问是否都收敛在 `RedisAccess`（`rg 'MyRedisPool|redis.clients.jedis' src/main`，若有绕过点先记录）(2) 确认 Jedis 连接/读写超时的默认值与可配项 (3) 熔断的粒度（全局 or 按域）、失败判定口径与恢复探测方式——若清单未覆盖 → 回写本文档再动手。
 * **验收**：Redis 停机时缓存路径的失败耗时从"每次等连接超时"降到"立即降级"（有可复现的验证方式，如本地停 Redis 后测单次请求耗时）；Redis 恢复后自动回到正常缓存路径；`mvn compile` + 既有 JUnit 全绿；相关端点 pytest 无回归。
+* **执行回写（2026-09-13，fix(cache-01) 已落地）**：
+  * **强制探索结论**：① Redis 访问已全部收敛在 `RedisAccess`（`MyRedisPool` 主代码仅 RedisAccess 与 AppShutDownListener 关停路径两处引用，后者非热路径，无需熔断）；② Jedis 5.1.0 默认超时 2000ms 未显式化、`maxWait` 默认 -1（池耗尽无限阻塞）——javap 实证 Jedis 5.1.0 **无** `(poolConfig, host, port, connTimeout, soTimeout)` 短构造器，采用 8 参 `(…, connTimeout, soTimeout, password, database, clientName)`，password/clientName=null、database=默认库，与原三参语义一致；③ 熔断设计（清单未覆盖，按本回写执行）——**粒度=全局单熔断**（单 Redis 实例宕机影响所有域，按域只增探针流量）；**失败口径=从 `RedisAccess.execute` 冒出的 CacheException 计一次失败**（包装异常均为 Redis 起源；回调自抛 CacheException 极罕见，计数偏差无害——最坏提前降级）；**恢复探测=半开单探针**（冷却期满 CAS 放行唯一探针，成功闭合/失败重开重置冷却）。
+  * **实现**：新建 `cache/RedisCircuitBreaker`（141 行 @Component，CLOSED→OPEN→HALF_OPEN 状态机，AtomicInteger CAS 无锁，迁移打日志；半开重开分支"先写冷却起点后 CAS"写序经独立评审修正）；`RedisAccess` 接线（tryAcquire 拒绝即抛 CacheException 快速失败不取连接 + finally 按成败回填；双构造器 `@InjectConstructor`/无参兼容既有 6 处测试直调）；`MyRedisPool` 显式超时 + maxWait（public 签名零变化）；`AppConfig` +5 getter、app.properties +5 键（connectTimeoutMs=1000 / soTimeoutMs=1000 / pool.maxWaitMs=1000 / breaker.failureThreshold=5 / breaker.cooldownMillis=10000，均可配）。熔断异常由 CacheAside/业务既有 catch 降级自然接住，**CacheAside 零改动**。
+  * **验证**：`mvn -o compile` 过；JUnit **332 例全绿**（tv.py test junit，沙箱拦截→沙箱外执行；cache 包 58→71：新增 RedisCircuitBreakerTest 8 例含并发唯一探针、RedisAccessTest 4→9 含探针恢复全链路与 CacheException 计失败口径）；pytest **124 passed**（tv.py test all，含全部端点回归）；运行时可复现验证（temp_script/verify_cache_failfast.py + 实例日志）：① 黑洞地址注入（REDIS_HOST=203.0.113.1）启动即熔断开启、后续全部"快速失败（未访问 Redis）"；② 真实 docker stop redis → 8 次 /start 全 200（13~78ms，无超时等待）→ 冷却期满探针失败重开（日志实证探针失败路径）→ docker start redis 后探针成功"熔断恢复，回到正常缓存路径"，响应 38B→4KB；**独立 subagent 评审通过**（无🔴必须修复；🟡 两条已落实：半开重开写序修正 + 恢复路径/口径钉死补测 + 测试冷却 50ms→500ms 防抖）。
+  * **验收对照**：快速失败 ✓（运行时计时）；自动恢复 ✓（日志+数据恢复）；mvn compile + JUnit 全绿 ✓；pytest 无回归 ✓。发现既有问题 `/start` Redis 停机降级为空列表（非 T1 引入，登记 UNPLANNED_ISSUES **U-11**）；U-10 在 UNPLANNED_ISSUES 标注已修复。
 
 ### T2 降级不放量：降级路径接入单飞
 
@@ -131,3 +136,4 @@
 | 2026-09-13 | 0.2 | **R-11 拍板后拆任务**：方向 = 缓存加固（缓存韧性 + 启动加载治理）；G1/G3/G9 三处校准（commit 前缀 `fix(cache-0N)`、验收层级明确、本周期无 DDL 并在任务总览标注）；新增"任务清单理念"（只写做什么/不做什么、不提前过度详细设计、红线只防跑偏）；任务总览填入 **T1~T6**（含 NEEDS 编号映射与顺序理由）；"四、任务详情"填入 6 个任务的四要素骨架；移除已被本周期消费的"候选任务来源映射"（范围见 NEEDS 4.3） |
 | 2026-09-13 | 0.3 | **修订红线措辞约定**（用户要求）：① 明确红线"只列明显越界的项、作用是防跑偏、不穷举做法、不做一刀切禁止"；② 机制表述由"不改本来要守的红线就会阻碍后续工作 → 申请开禁"改为"**某条红线会阻碍正确做法**（过紧 / 过窄 / 已不适用）→ 说明理由**申请调整**"，两个禁止（硬扛 / 自行放开）保留；③ 同步更新任务模板中"红线边界"一行的括号说明 |
 | 2026-09-13 | 0.4 | **T1~T6 逐条红线对齐新口径**（用户要求）：① 四节共通注补"**红线口径**"一段（只列明显越界项、防跑偏不穷举做法、阻碍正确做法即申请调整），各任务不再各自解释机制；② 逐任务去重与去掉做法级指定——T1 删"（熔断自己写）"（已由共通注"不引入新的第三方依赖"覆盖）、"TTL / key"改为"TTL 取值与 key 命名"；T2 合并"不改变降级语义"与"不改成写回缓存"两条重复项；T3 精简"一刀切"表述与标点；T4 合并"不做 U-09 全面收口"与"不顺手重构无关代码"两条；T5 删去与 G7 重复的"开工前停决策点报备"括号说明；T6 保持。**实质边界全部保留，只做去重、去做法级与措辞对齐** |
+| 2026-09-13 | 0.5 | **T1 执行完成回写**（fix(cache-01)）：总览 T1 状态 草稿→已完成（2026-09-13）；T1 详情追加"执行回写"——探索结论（访问已收敛 RedisAccess/Jedis 5.1.0 无短超时构造器用 8 参替代/熔断粒度=全局、失败口径=execute 冒出的 CacheException、恢复=半开单探针）、实现摘要（RedisCircuitBreaker 141 行 + RedisAccess 接线 + MyRedisPool 显式超时/maxWait + AppConfig·app.properties 5 键，CacheAside 零改动；半开重开写序经独立评审修正）、验证结果（mvn compile 过 + JUnit 332 全绿 + pytest 124 passed + 运行时黑洞注入/真实停 Redis 双验证含探针失败重开与恢复实证 + subagent 评审通过且🟡建议全部落实）；登记 U-11（/start 停机空降级，既有语义）、U-10 标注已修复 |
