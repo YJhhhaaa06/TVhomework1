@@ -57,7 +57,7 @@
 | 编号 | 标题 | 对应候选 | 依赖 | 验收关键（动态） | 期望 commit 主题 | 状态 |
 | -- | -- | ---- | -- | -------- | ------------ | -- |
 | T1 | 韧性底座：Redis 超时 + 快速失败 | U-10、N1 | — | Redis 停机时缓存路径**快速失败**（不再逐请求等连接超时）；恢复后自动回到正常缓存路径；JUnit + 相关 pytest 绿 | `fix(cache-01)` | 已完成（2026-09-13） |
-| T2 | 降级不放量：降级路径接入单飞 | N1 | T1（软） | Redis 停机时**同一 key 的并发读仍只打一次 DB**；`SingleFlight` 失败清理语义不被破坏 | `fix(cache-02)` | 草稿 |
+| T2 | 降级不放量：降级路径接入单飞 | N1 | T1（软） | Redis 停机时**同一 key 的并发读仍只打一次 DB**；`SingleFlight` 失败清理语义不被破坏 | `fix(cache-02)` | 已完成（2026-09-13） |
 | T3 | 负缓存治理：区分"确认无数据"与"加载失败" | N2 | T2（软） | DB 瞬时失败**不再写 60s 空标记、不 DEL 既有数据 key**；新增单测覆盖；三态语义与对外错误约定不变 | `fix(cache-03)` | 草稿 |
 | T4 | 写路径的失败与竞态治理 | N3、N4、N7 | —（独立，可并行窗口） | 空标记写入守卫生效（并发不回填假空）；索引写失败可自愈或至少可检测；条件写竞态有明确结论（修掉 or 记录为已接受）；**含 3 项，允许拆多 commit（G1 例外标注）** | `fix(cache-04)` | 草稿 |
 | T5 | 启动加载治理 | N5、R-01、R-04 | T1~T4（软） | Redis 写入**移出 DB 事务**；批量操作 pipeline 化、启动往返次数显著下降（前后对比）；**开工前须用户拍板 R-01 取向**；`pytest all` 全绿 | `fix(cache-05)` | 草稿 |
@@ -94,6 +94,11 @@
 * **红线边界**：不改变降级语义（仍是"直接走 DB、失败**不写回**"）；不引入分布式锁（多实例是 R-03，不在本周期）。
 * **强制探索步骤**：动刀前先 (1) 列出全部降级分支（`rg 'catch \(CacheException' src/main/java`）逐一确认是否已有单飞保护 (2) 确认"降级 + 单飞"组合下 loader 失败/超时的行为——**不能把失败结果共享给其他等待者** (3) 确认与 T1 熔断的关系（熔断命中后是否还需要单飞）——回写本文档再动手。
 * **验收**：Redis 停机时，同一 key 的并发读只触发一次 DB 装载（有可复现验证）；`SingleFlight` 的失败清理语义未被破坏（既有 `SingleFlightTest` 语义保持）；`mvn compile` + JUnit 全绿 + 相关 pytest 无回归。
+* **执行回写（2026-09-13，fix(cache-02) 已落地）**：
+  * **强制探索结论**：① 全部 30 处 `catch (CacheException)` 逐一确认——需治理的**降级读分支 10 处**（`CacheAside` getInternal/getBatch 整批/getBatch 脏 JSON 3 处；`FollowCache` isFollowing/getSetMembers/batchIsFollowing 3 处；`LikeCacheService` isContentLiked/isCommentLiked/两批量 4 处，含任务点名之外的对称孪生与批量）；不在范围：`read`（无生产调用方）、写路径 catch、`ensureIndex`（已单飞）、`readIndex`（降级空、无 DB 装载，U-11 既有语义）；② **失败语义**：loader 失败 → FutureTask 异常完成 → leader/joiner 均以异常收场（**失败不以数据形式共享**，无人拿到伪结果）→ 条目 remove → 下一请求全新重试；等待无超时=与现状逐请求阻塞等价（R-03 不在本周期）；③ **与 T1 熔断关系**：正交互补——熔断管"Redis 快速失败"，单飞管"降级后 DB 去重"，熔断 OPEN 后单飞仍然必需。
+  * **实现（统一规则=降级读与 miss 回填共用同一单飞 key 空间、全量 loader 作答、仅装载不写回/D4）**：`CacheAside` 3 处降级 catch 包 `singleFlight.get(key, loader)`；`FollowCache` isFollowing/getSetMembers catch 单飞全量装载作答（替代原单行/targeted 查询，删 `isFollowingFromDb`）、batchIsFollowing 增 `degraded` 标志——降级态单飞全量作答、**不再走 targeted 批量查询与必失败的回填写入尝试**（正常 miss 路径不变）；`LikeCacheService` isContentLiked/isCommentLiked 同构改造（删 `isContentLikedFromDb`/`isCommentLikedFromDb`）、两批量降级态逐 cid 单飞装载作答（正常 miss 的 backfill 不变）；防漂移：降级装载唯一入口 `FollowCache.loadViaSingleFlight` / `LikeCacheService.loadLikersViaSingleFlight`（🟡 评审建议落实）。**红线对照**：降级语义未变（仍直接走 DB、不写回；批量降级移除的是"Redis 挂时必失败的写入尝试"，对外观察行为不变）；DAO 单行方法（isLiked/isFollowing）保留——FollowService/LikeService 写路径仍用；`SingleFlight` 类零改动。
+  * **统计口径微调**：`LOAD` 从"每降级请求记一次"变为"实际去重后装载记一次（leader 记）"，与 miss 单飞口径一致；`DEGRADE` 仍按请求/key 记。
+  * **验证**：`tv.py test junit` **337 例全绿**（T1 末 332 +5：CacheAsideTest +3——降级并发同 key loader 只执行一次且无写回/降级 loader 失败异常传播不缓存且下次重试/批量降级逐 key 去重；LikeCacheServiceTest +1、FollowCacheTest +1 并发去重；降级断言改造为"全量装载作答+无写尝试"。并发用例用 mock RedisAccess 恒抛 CacheException——**MockedStatic 线程局部不可跨线程**，改法经实测确认）+ `tv.py test all` **pytest 124 passed** + **运行时黑洞验证**（REDIS_HOST=203.0.113.1 启动即熔断开启（tv.py 预检查真实 6379 不受影响），20 线程并发同 key `/search/IdSearch`：全部 200 且数据一致，MySQL `Com_select` 差值仅 **8** 次（无单飞应 ≈60~120，未随并发线性放大），tomcat_stderr.log 实证"熔断开启中，快速失败（未访问 Redis）"；脚本 `temp_script/verify_cache02_degrade_singleflight.py`）+ **独立 subagent 评审通过**（无🔴；🟡 抽公共降级装载方法已落实、🟡 并发窗口观测维持 sleep 惯例与 SingleFlightTest 一致记录不修）。
 
 ### T3 负缓存治理：区分"确认无数据"与"加载失败"
 
@@ -137,3 +142,4 @@
 | 2026-09-13 | 0.3 | **修订红线措辞约定**（用户要求）：① 明确红线"只列明显越界的项、作用是防跑偏、不穷举做法、不做一刀切禁止"；② 机制表述由"不改本来要守的红线就会阻碍后续工作 → 申请开禁"改为"**某条红线会阻碍正确做法**（过紧 / 过窄 / 已不适用）→ 说明理由**申请调整**"，两个禁止（硬扛 / 自行放开）保留；③ 同步更新任务模板中"红线边界"一行的括号说明 |
 | 2026-09-13 | 0.4 | **T1~T6 逐条红线对齐新口径**（用户要求）：① 四节共通注补"**红线口径**"一段（只列明显越界项、防跑偏不穷举做法、阻碍正确做法即申请调整），各任务不再各自解释机制；② 逐任务去重与去掉做法级指定——T1 删"（熔断自己写）"（已由共通注"不引入新的第三方依赖"覆盖）、"TTL / key"改为"TTL 取值与 key 命名"；T2 合并"不改变降级语义"与"不改成写回缓存"两条重复项；T3 精简"一刀切"表述与标点；T4 合并"不做 U-09 全面收口"与"不顺手重构无关代码"两条；T5 删去与 G7 重复的"开工前停决策点报备"括号说明；T6 保持。**实质边界全部保留，只做去重、去做法级与措辞对齐** |
 | 2026-09-13 | 0.5 | **T1 执行完成回写**（fix(cache-01)）：总览 T1 状态 草稿→已完成（2026-09-13）；T1 详情追加"执行回写"——探索结论（访问已收敛 RedisAccess/Jedis 5.1.0 无短超时构造器用 8 参替代/熔断粒度=全局、失败口径=execute 冒出的 CacheException、恢复=半开单探针）、实现摘要（RedisCircuitBreaker 141 行 + RedisAccess 接线 + MyRedisPool 显式超时/maxWait + AppConfig·app.properties 5 键，CacheAside 零改动；半开重开写序经独立评审修正）、验证结果（mvn compile 过 + JUnit 332 全绿 + pytest 124 passed + 运行时黑洞注入/真实停 Redis 双验证含探针失败重开与恢复实证 + subagent 评审通过且🟡建议全部落实）；登记 U-11（/start 停机空降级，既有语义）、U-10 标注已修复 |
+| 2026-09-13 | 0.6 | **T2 执行完成回写**（fix(cache-02)）：总览 T2 状态 草稿→已完成（2026-09-13）；T2 详情追加"执行回写"——探索结论（30 处 catch 逐一确认、降级读分支 10 处为治理面/失败不以数据共享且条目移除可重试/与 T1 熔断正交）、实现摘要（统一规则=降级读与 miss 共用单飞 key 空间、全量 loader 作答、仅装载不写回/D4；CacheAside 3 处 + FollowCache 3 处 + LikeCacheService 4 处；批量降级移除必失败的回填写入尝试；删 3 个 *FromDb 助手而 DAO 方法保留；防漂移公共入口 loadViaSingleFlight/loadLikersViaSingleFlight；LOAD 口径改 leader 记一次）、验证结果（JUnit 337 全绿 +5、pytest all 124 passed、运行时黑洞验证 20 并发同 key Com_select 差值仅 8 且熔断日志实证、subagent 评审通过无🔴🟡一落实一记录） |

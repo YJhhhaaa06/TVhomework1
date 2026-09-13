@@ -9,9 +9,15 @@ import redis.clients.jedis.Jedis;
 import redis.clients.jedis.Pipeline;
 import redis.clients.jedis.Response;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -639,6 +645,116 @@ class CacheAsideTest {
             assertEquals(1, stats.count(CacheDomain.OTHER, CacheStats.Event.MISS));    // k2
             assertEquals(1, stats.count(CacheDomain.OTHER, CacheStats.Event.LOAD));    // k2 miss 回填
             assertEquals(3, stats.totalAccesses());
+        }
+    }
+
+    // ==================== 三期 T2：降级亦经单飞（同 key 并发只打一次 DB） ====================
+
+    /** 并发测试专用：mock RedisAccess 恒抛 CacheException（MockedStatic 线程局部，多线程下不可用）。 */
+    @SuppressWarnings("unchecked")
+    private static CacheAside newDegradedCache() {
+        RedisAccess down = mock(RedisAccess.class);
+        when(down.execute(any())).thenThrow(new CacheException("redis down"));
+        doThrow(new CacheException("redis down")).when(down).executeVoid(any());
+        return new CacheAside(down, new JacksonCodec(), new SingleFlight(), new CacheStats());
+    }
+
+    @Test
+    void getRedisErrorConcurrentSameKeyLoadsLoaderOnce() throws Exception {
+        CacheAside degradedCache = newDegradedCache();
+        int threads = 8;
+        AtomicInteger loads = new AtomicInteger();
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        try {
+            List<Future<SampleDto>> futures = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                futures.add(pool.submit(() -> degradedCache.get("content:1", SampleDto.class, () -> {
+                    loads.incrementAndGet();
+                    entered.countDown();
+                    release.await();
+                    return new SampleDto(1L, "db");
+                }, 100)));
+            }
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            Thread.sleep(200); // 等其余线程全部进入单飞等待（对齐 SingleFlightTest 放大并发窗口）
+            release.countDown();
+            for (Future<SampleDto> f : futures) {
+                assertEquals(1L, f.get(5, TimeUnit.SECONDS).getId());
+            }
+            assertEquals(1, loads.get());
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void getRedisErrorLoaderFailureNotSharedAndRetriedNextCall() {
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            stubRedisDown(jedis);
+            AtomicInteger calls = new AtomicInteger();
+
+            // 降级 loader 失败：异常上抛（失败不以数据形式共享）、条目移除
+            assertThrows(RuntimeException.class, () -> cache.get("content:1", SampleDto.class, () -> {
+                calls.incrementAndGet();
+                throw new IllegalStateException("db down");
+            }, 100));
+
+            // SingleFlight 失败清理语义保持：下一次降级全新重试 loader
+            SampleDto value = cache.get("content:1", SampleDto.class, () -> {
+                calls.incrementAndGet();
+                return new SampleDto(1L, "db");
+            }, 100);
+            assertEquals("db", value.getName());
+            assertEquals(2, calls.get());
+        }
+    }
+
+    @Test
+    void getBatchRedisErrorConcurrentPerKeyLoadsOnce() throws Exception {
+        CacheAside degradedCache = newDegradedCache();
+        int threads = 8;
+        Map<String, AtomicInteger> loads = Map.of("k1", new AtomicInteger(), "k2", new AtomicInteger());
+        CountDownLatch enteredK1 = new CountDownLatch(1);
+        CountDownLatch enteredK2 = new CountDownLatch(1);
+        CountDownLatch releaseK1 = new CountDownLatch(1);
+        CountDownLatch releaseK2 = new CountDownLatch(1);
+
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        try {
+            List<Future<Map<String, SampleDto>>> futures = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                futures.add(pool.submit(() -> degradedCache.getBatch(List.of("k1", "k2"), SampleDto.class, k -> {
+                    loads.get(k).incrementAndGet();
+                    (k.equals("k1") ? enteredK1 : enteredK2).countDown();
+                    try {
+                        (k.equals("k1") ? releaseK1 : releaseK2).await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException(e);
+                    }
+                    return new SampleDto(9L, "loader-" + k);
+                }, 100)));
+            }
+            // 降级路径逐 key 顺序单飞：放行 k1 → 全员汇合到 k2 → 放行 k2
+            assertTrue(enteredK1.await(5, TimeUnit.SECONDS));
+            Thread.sleep(300); // 等其余线程全部进入 k1 单飞等待（对齐 SingleFlightTest 放大并发窗口）
+            releaseK1.countDown();
+            assertTrue(enteredK2.await(5, TimeUnit.SECONDS));
+            Thread.sleep(300); // 等其余线程全部进入 k2 单飞等待
+            releaseK2.countDown();
+            for (Future<Map<String, SampleDto>> f : futures) {
+                Map<String, SampleDto> r = f.get(5, TimeUnit.SECONDS);
+                assertEquals("loader-k1", r.get("k1").getName());
+                assertEquals("loader-k2", r.get("k2").getName());
+            }
+            assertEquals(1, loads.get("k1").get());
+            assertEquals(1, loads.get("k2").get());
+        } finally {
+            pool.shutdownNow();
         }
     }
 }

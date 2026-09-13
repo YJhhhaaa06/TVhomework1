@@ -76,6 +76,15 @@
 * 全局熔断：粒度=**全局单熔断**（单 Redis 实例，按域只增探针流量）；失败口径=**从 `RedisAccess.execute` 冒出的 CacheException 计一次失败**（包装异常均为 Redis 起源；回调自抛极罕见，偏差无害——最坏提前降级，不违反"缓存失败不导致业务失败"）；恢复探测=**半开单探针**（连续失败 ≥5 开断、冷却 10s，期满 CAS 放行唯一探针，成功闭合/失败重开重置冷却），参数 `redis.breaker.failureThreshold/cooldownMillis` 可配。
 * 落点：`cache/RedisCircuitBreaker`（新）+ `RedisAccess` 接线（唯一出入口，熔断异常由既有 catch 降级自然接住，CacheAside 零改动）+ `MyRedisPool`（public 签名零变化）。详见 `常青/CURRENT_ARCHITECTURE.md` 6.6；运行时验证记录见 `NEXT_CYCLE_TASKS.md` T1 执行回写。
 
+**T2（fix(cache-02)，2026-09-13 拍板并落地——降级不放量：降级路径接入单飞）**：
+
+* 统一规则：**降级读 = 与 miss 回填同款"单飞 + 全量 loader"取数，但仅装载、不写回**（对齐 D4"降级路径不写回"）；降级与 miss 共用同一 `SingleFlight` key 空间（`SingleFlight` 类零改动）。
+* 治理面：读路径降级分支共 10 处——`CacheAside` 3 处（getInternal / getBatch 整批 / getBatch 脏 JSON 单 key）、`FollowCache` 3 处（isFollowing / getSetMembers / batchIsFollowing 降级态）、`LikeCacheService` 4 处（isContentLiked / isCommentLiked / 两批量降级态）。单 key 降级由"单行查询"改为单飞全量装载作答（删 3 个 `*FromDb` 助手，DAO 单行方法保留——写路径仍用）；批量降级由"targeted 批量查询 + 必失败的回填写入尝试"改为"单飞全量装载作答"（DB 总负载不升反降）。`read`（无生产调用方）、写路径 catch、`ensureIndex`（已单飞）、`readIndex`（降级空、无 DB 装载，U-11）不在范围。
+* 失败语义（执行定稿）：loader 失败 → FutureTask 异常完成 → leader/joiner 均以异常收场（**失败不以数据形式共享给等待者**）→ 条目 remove → 下一请求全新重试；等待无超时=与现状等价（分布式锁/超时=R-03）。
+* 与 T1 熔断关系（执行定稿）：正交互补——熔断管"Redis 访问快速失败"，单飞管"降级后 DB 去重"；熔断 OPEN 后每请求仍进降级分支，单飞仍然必需。
+* 统计口径微调：降级路径 `LOAD` 从"每请求记一次"变为"实际去重后装载记一次（leader 记）"，与 miss 单飞口径一致；`DEGRADE` 不变。
+* 落点：`CacheAside`（370 行）+ `FollowCache`（524 行）+ `LikeCacheService`（628 行）；防漂移公共入口 `FollowCache.loadViaSingleFlight` / `LikeCacheService.loadLikersViaSingleFlight`。详见 `常青/CURRENT_ARCHITECTURE.md` 6.7；验证（JUnit 337 + pytest 124 + 黑洞运行时 20 并发同 key Com_select 差值 8）见 `NEXT_CYCLE_TASKS.md` T2 执行回写。
+
 ### 4.1 候选痛点（2026-09-13 代码复查，**待评审纳入，尚未拍板**）
 
 > 编号 `N1`~`N9` 为**本档内部编号**（与已归档周期的 `H*` / `O-*` / `P*` 编号体系无关）。每条给出"如果不改，什么时候会出什么问题"的具体场景。
@@ -149,3 +158,4 @@
 | 2026-09-13 | 0.4 | **R-11 拍板回写**：方向 = **缓存加固**（缓存韧性 + 启动加载治理）。① 状态行改为"方向已拍板"，R-11 行状态置已拍板；② 4.2 补"结论"列——韧性方案采纳、D 方向 feed 延迟（**前置条件 = 缓存加固完成并合并 PR**，用户同期定）、U-09 延后、R-01 随 T5 纳入 / R-02 仍留池；③ **新增 4.3 本周期范围**（纳入 6 项 → T1~T6 映射表 + **"明确不做"反面清单 8 项**，含每项的延后原因与去向）；④ 四节标题去掉"待补写"并说明结构（目标形态/技术决策两段待执行中回写）；⑤ 配套 `NEXT_CYCLE_TASKS.md` 已按 4.3 拆出 T1~T6 |
 | 2026-09-13 | 0.5 | **修订红线措辞约定**（用户要求，与 `NEXT_CYCLE_TASKS.md` 0.3 同步）：① 一节的 ① 改为"红线只列明显越界的项、作用是防跑偏、不把执行 Agent 限制死"；② 机制表述由"申请开禁"改为"**申请调整**"，触发条件明确为"某条红线会阻碍正确做法（过紧 / 过窄 / 已不适用）"，两个禁止（硬扛 / 自行放开）保留；③ 完整表述统一指向 `NEXT_CYCLE_TASKS.md` 二节，避免两处措辞漂移 |
 | 2026-09-13 | 0.6 | **T1 执行定稿回写**（fix(cache-01)）：新增 4.0"已回写技术决策"节——T1 超时配置化（connect/so/maxWait 各 1000ms，Jedis 5.1.0 用 8 参构造器等价替代）+ 全局熔断（粒度=全局、失败口径=execute 冒出的 CacheException、恢复=半开单探针，阈值/冷却可配）；U-10 随 T1 修复（UNPLANNED_ISSUES 已标注）；执行中新发现 U-11（/start 停机空降级，既有语义）登记 UNPLANNED_ISSUES 留池 |
+| 2026-09-13 | 0.7 | **T2 执行定稿回写**（fix(cache-02)）：4.0 追加 T2 技术决策——统一规则（降级读=miss 同款单飞+全量 loader、仅装载不写回/D4，与 miss 共用单飞 key 空间，SingleFlight 零改动）、治理面 10 处降级读分支（单 key 单行查询→全量装载作答删 3 个 *FromDb、批量 targeted+必失败回填→单飞全量作答）、失败语义（异常传播不缓存可重试）、与 T1 熔断正交、LOAD 口径 leader 记一次；验证 JUnit 337 + pytest 124 + 黑洞运行时（20 并发同 key Com_select 差值 8） |

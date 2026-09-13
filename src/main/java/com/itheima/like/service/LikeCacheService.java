@@ -34,6 +34,9 @@ import java.util.logging.Logger;
  * <p>与内容/评论缓存同构（T2/T3 惯例）：缓存类拥有 DAO + TransactionTemplate，内部完成
  * "缓存优先 → miss 单飞回填 → Redis 异常降级 DB"，业务 Service 读路径只做委托。
  *
+ * <p>降级不放量（三期 T2）：Redis 异常的降级读亦经 {@link SingleFlight} 全量装载作答、
+ * 不写回（D4）——同 key 并发读只打一次 DB；失败不以数据形式共享（条目移除，下一请求重试）。
+ *
  * <p>key 规范（T1 定稿，见 {@link CacheKeys}）：
  * <ul>
  *   <li>{@code content:likeCount:{id}}（String int，高频读，仅作计数，0 是合法数据）；</li>
@@ -181,7 +184,7 @@ public class LikeCacheService {
     /**
      * 查询用户是否点赞了某内容（三态）：
      * hit-empty（空标记）→ false；hit-data（set 存在）→ SISMEMBER；miss → 单飞回填后判成员；
-     * Redis 异常 → 降级 DB 单行查询，不写回（4.2 读降级）。
+     * Redis 异常 → 降级 DB（三期 T2：经单飞全量装载作答，同 key 并发只打一次 DB；不写回，4.2 读降级）。
      *
      * @param userId 用户
      * @param contentId 内容
@@ -211,8 +214,10 @@ public class LikeCacheService {
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "内容点赞状态缓存读失败，降级 DB, contentId=" + contentId, e);
             stats.record(CacheStats.Event.DEGRADE, setKey);
-            stats.record(CacheStats.Event.LOAD, setKey); // 降级 DB 装载也计 LOAD（与 CacheAside 口径一致）
-            return isContentLikedFromDb(userId, contentId);
+            // 三期 T2 降级不放量：降级经单飞全量装载作答（与 miss 回填同 key 同 loader）——
+            // 同 key 并发读只打一次 DB；仅装载不写回（D4）
+            return loadLikersViaSingleFlight(setKey, () -> loadContentLikers(contentId))
+                    .contains(userId);
         }
     }
 
@@ -259,8 +264,9 @@ public class LikeCacheService {
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "评论点赞状态缓存读失败，降级 DB, commentId=" + commentId, e);
             stats.record(CacheStats.Event.DEGRADE, setKey);
-            stats.record(CacheStats.Event.LOAD, setKey); // 降级 DB 装载也计 LOAD（与 CacheAside 口径一致）
-            return isCommentLikedFromDb(userId, commentId);
+            // 三期 T2 降级不放量：同 isContentLiked——降级经单飞全量装载作答，不写回（D4）
+            return loadLikersViaSingleFlight(setKey, () -> loadCommentLikers(commentId))
+                    .contains(userId);
         }
     }
 
@@ -278,7 +284,8 @@ public class LikeCacheService {
     // ==================== 批量点赞状态（pipeline + DB 兜底 + 逐个单飞回填） ====================
 
     /**
-     * 批量查询用户对多个内容的点赞状态（一次 pipeline 扫描 + DB 批量兜底）。
+     * 批量查询用户对多个内容的点赞状态（一次 pipeline 扫描 + DB 批量兜底）；
+     * Redis 异常 → 降级 DB（三期 T2：逐 cid 单飞全量装载作答，同 key 并发只打一次 DB；不写回）。
      *
      * @return 完整 contentId → isLiked 映射（含 DB 兜底结果，无缺失）
      */
@@ -288,6 +295,7 @@ public class LikeCacheService {
         }
         Map<Long, Boolean> result = new HashMap<>();
         List<Long> missed = new ArrayList<>();
+        boolean degraded = false;
         try {
             redis.executeVoid(j -> {
                 Pipeline p = j.pipelined();
@@ -323,16 +331,22 @@ public class LikeCacheService {
             for (Long cid : contentIds) {
                 stats.record(CacheStats.Event.DEGRADE, CacheKeys.contentLikeSet(cid));
             }
+            degraded = true;
             missed.addAll(contentIds);
         }
         if (!missed.isEmpty()) {
-            backfillBatchContentLikers(userId, missed, result);
+            if (degraded) {
+                degradeBatchContentLikers(userId, missed, result);
+            } else {
+                backfillBatchContentLikers(userId, missed, result);
+            }
         }
         return result;
     }
 
     /**
-     * 批量查询用户对多个评论的点赞状态（逻辑同内容批量）。
+     * 批量查询用户对多个评论的点赞状态（逻辑同内容批量）；
+     * Redis 异常 → 降级 DB（三期 T2：逐 cid 单飞全量装载作答，不写回）。
      */
     public Map<Long, Boolean> batchIsCommentLiked(long userId, List<Long> commentIds) {
         if (commentIds == null || commentIds.isEmpty()) {
@@ -340,6 +354,7 @@ public class LikeCacheService {
         }
         Map<Long, Boolean> result = new HashMap<>();
         List<Long> missed = new ArrayList<>();
+        boolean degraded = false;
         try {
             redis.executeVoid(j -> {
                 Pipeline p = j.pipelined();
@@ -375,10 +390,15 @@ public class LikeCacheService {
             for (Long cid : commentIds) {
                 stats.record(CacheStats.Event.DEGRADE, CacheKeys.commentLikeSet(cid));
             }
+            degraded = true;
             missed.addAll(commentIds);
         }
         if (!missed.isEmpty()) {
-            backfillBatchCommentLikers(userId, missed, result);
+            if (degraded) {
+                degradeBatchCommentLikers(userId, missed, result);
+            } else {
+                backfillBatchCommentLikers(userId, missed, result);
+            }
         }
         return result;
     }
@@ -470,41 +490,6 @@ public class LikeCacheService {
         }
     }
 
-    /** Redis 挂时降级：DB 单行 isLiked 查询（不写回，下次 miss 自愈）。 */
-    private boolean isContentLikedFromDb(long userId, long contentId) {
-        try {
-            return transactionTemplate.execute(conn -> {
-                try {
-                    return contentLikeDao.isLiked(conn, userId, contentId);
-                } catch (SQLException e) {
-                    LOGGER.log(Level.SEVERE, "内容点赞状态 DB 查询失败, userId=" + userId + ", contentId=" + contentId, e);
-                    throw new ServerException("服务器异常，查询点赞状态失败");
-                }
-            });
-        } catch (RuntimeException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new ServerException("服务器异常，查询点赞状态失败", e);
-        }
-    }
-
-    private boolean isCommentLikedFromDb(long userId, long commentId) {
-        try {
-            return transactionTemplate.execute(conn -> {
-                try {
-                    return commentLikeDao.isLiked(conn, userId, commentId);
-                } catch (SQLException e) {
-                    LOGGER.log(Level.SEVERE, "评论点赞状态 DB 查询失败, userId=" + userId + ", commentId=" + commentId, e);
-                    throw new ServerException("服务器异常，查询点赞状态失败");
-                }
-            });
-        } catch (RuntimeException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new ServerException("服务器异常，查询点赞状态失败", e);
-        }
-    }
-
     // ==================== 内部：回填写入（单飞 loader 内调用；空集 → 空标记替代占位符 H11） ====================
 
     /** 内容点赞成员回填：非空 → SADD-union + EXPIRE（不 DEL，避免丢失并发 SADD）；空集 → 空标记。 */
@@ -586,6 +571,40 @@ public class LikeCacheService {
                 writeCommentLikers(cid, likers);
                 return null;
             });
+        }
+    }
+
+    // ==================== 降级（三期 T2：Redis 异常态，单飞全量装载作答、不写回） ====================
+
+    /**
+     * 三期 T2 降级装载（唯一入口，防多处漂移）：经单飞全量装载成员——
+     * 同 key 并发只打一次 DB；仅装载不写回（D4）；LOAD 由 leader 记一次。
+     */
+    private Set<Long> loadLikersViaSingleFlight(String setKey, java.util.function.Supplier<Set<Long>> loader) {
+        return singleFlight.get(setKey, () -> {
+            stats.record(CacheStats.Event.LOAD, setKey);
+            return loader.get();
+        });
+    }
+
+    /**
+     * 三期 T2 降级路径：逐 cid 经单飞全量装载成员后作答（仅装载不写回，D4）——
+     * 同 contentLikeSet key 的并发批量读只打一次 DB。
+     */
+    private void degradeBatchContentLikers(long userId, List<Long> missed, Map<Long, Boolean> result) {
+        for (Long cid : missed) {
+            Set<Long> likers = loadLikersViaSingleFlight(CacheKeys.contentLikeSet(cid),
+                    () -> loadContentLikers(cid));
+            result.put(cid, likers.contains(userId));
+        }
+    }
+
+    /** 同 {@link #degradeBatchContentLikers}，评论域（commentLikeSet key）。 */
+    private void degradeBatchCommentLikers(long userId, List<Long> missed, Map<Long, Boolean> result) {
+        for (Long cid : missed) {
+            Set<Long> likers = loadLikersViaSingleFlight(CacheKeys.commentLikeSet(cid),
+                    () -> loadCommentLikers(cid));
+            result.put(cid, likers.contains(userId));
         }
     }
 

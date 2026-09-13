@@ -36,6 +36,10 @@ import java.util.Random;
  * （{@link #getBatch}）均 pipeline 化，EXISTS 空标记 + GET 数据 key 一趟往返（治 H12）；
  * 批量三态语义与单 key 完全一致。
  *
+ * <p>降级不放量（三期 T2）：Redis 异常的降级读与 miss 回填共用同一 {@link SingleFlight}——
+ * 同 key 并发读（单 key / 批量 / 脏 JSON）只打一次 DB；降级仅装载、不写回（D4），
+ * loader 失败以异常收场且条目移除（失败不以数据形式共享，下一请求全新重试）。
+ *
  * <p>滑动续期（T9 O-8）：**读命中顺带续期**——{@link #get}（{@link #getInternal}）与
  * {@link #getBatch} 在命中数据 key 时同 pipeline 追加 {@code EXPIRE}（续期值=原 TTL ±10% 抖动），
  * 热点 key 常驻由续期自然达成、不设永不过期 key；**空标记（{@code empty:}）一律不续期**
@@ -99,7 +103,8 @@ public class CacheAside {
      * Cache-Aside 便捷读（带单飞回填）：命中返回缓存值；空标记返回 null（不查 DB）；
      * miss 经单飞组件执行一次 loader 并回填（有数据→写数据 key，无数据→写空标记）。
      *
-     * <p>Redis 异常 → 降级直接调 loader 返回、不写回（4.2/D4）；loader 自身异常原样上抛。
+     * <p>Redis 异常 → 降级经单飞调 loader 返回、不写回（4.2/D4；三期 T2 降级接入单飞，
+     * 同 key 并发只打一次 DB）；loader 自身异常原样上抛。
      *
      * @param dataKey    数据 key
      * @param type       值类型
@@ -142,7 +147,9 @@ public class CacheAside {
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "缓存读降级走 DB, key=" + dataKey, e);
             stats.record(CacheStats.Event.DEGRADE, dataKey);
-            return invokeLoader(dataKey, loader);
+            // 三期 T2 降级不放量：降级亦经单飞（与 miss 回填同 key 空间）——同 key 并发读只打一次 DB；
+            // 仅装载不写回（D4）；LOAD 由 leader 记一次（与 miss 单飞口径一致）
+            return singleFlight.get(dataKey, () -> invokeLoader(dataKey, loader));
         }
     }
 
@@ -157,7 +164,8 @@ public class CacheAside {
      * 调用方按键取值；调用方保证 dataKeys 无重复。
      *
      * <p>降级语义与单 key 一致：整批 Redis 异常或单个 key JSON 解析失败 → 该 key
-     * DEGRADE + 直接 loader（不写回、不单飞）；miss → 单飞回填（LOAD + 写回/空标记）。
+     * DEGRADE + 直接 loader（不写回；三期 T2 起降级亦经单飞，同 key 并发只打一次 DB）；
+     * miss → 单飞回填（LOAD + 写回/空标记）。
      *
      * @param loader key → 数据加载器（查 DB）
      */
@@ -193,10 +201,11 @@ public class CacheAside {
                                 stats.record(CacheStats.Event.HIT_DATA, key); // 反序列化成功后才算命中
                                 result.put(key, value);
                             } catch (CacheException e) {
-                                // 单 key 解析失败语义（对齐 getInternal catch 分支）：该 key 降级直接 loader，不拖垮整批
+                                // 单 key 解析失败语义（对齐 getInternal catch 分支）：该 key 降级直接 loader，不拖垮整批；
+                                // 三期 T2：降级经单飞去重（同 key 并发只打一次 DB），仅装载不写回
                                 LOGGER.log(Level.WARNING, "批量缓存反序列化失败，该 key 降级, key=" + key, e);
                                 stats.record(CacheStats.Event.DEGRADE, key);
-                                result.put(key, loadBatch(key, loader));
+                                result.put(key, singleFlight.get(key, () -> loadBatch(key, loader)));
                             }
                         } else {
                             stats.record(CacheStats.Event.MISS, key);
@@ -209,7 +218,8 @@ public class CacheAside {
             LOGGER.log(Level.WARNING, "批量缓存读降级走 DB, keys=" + dataKeys.size(), e);
             for (String key : dataKeys) {
                 stats.record(CacheStats.Event.DEGRADE, key);
-                result.put(key, loadBatch(key, loader));
+                // 三期 T2：降级逐 key 经单飞——同 key 并发批量读只打一次 DB（仅装载，不写回）
+                result.put(key, singleFlight.get(key, () -> loadBatch(key, loader)));
             }
         }
         if (!missed.isEmpty()) {

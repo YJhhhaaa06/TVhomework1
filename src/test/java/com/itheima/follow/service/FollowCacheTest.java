@@ -20,10 +20,17 @@ import redis.clients.jedis.Transaction;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -216,10 +223,45 @@ class FollowCacheTest {
     @Test
     void isFollowingRedisErrorDegradesToDb() throws SQLException {
         doThrow(new CacheException("redis down")).when(redis).execute(any(Function.class));
-        when(followDao.isFollowing(conn, USER, FOLLOWED)).thenReturn(true);
+        when(followDao.getAllFollowedUserIds(conn, USER)).thenReturn(List.of(FOLLOWED));
 
         assertTrue(cache.isFollowing(USER, FOLLOWED));
-        verify(followDao).isFollowing(conn, USER, FOLLOWED);
+        // 三期 T2：降级经单飞全量装载作答（替代原单行查询），且不写回
+        verify(followDao).getAllFollowedUserIds(conn, USER);
+        verify(jedis, never()).sadd(anyString(), any(String[].class));
+    }
+
+    @Test
+    void isFollowingRedisErrorConcurrentDegradeLoadsDbOnce() throws Exception {
+        // 三期 T2 验收：Redis 停机时同一 key 的并发读只触发一次 DB 装载
+        doThrow(new CacheException("redis down")).when(redis).execute(any(Function.class));
+        int threads = 8;
+        AtomicInteger loads = new AtomicInteger();
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        when(followDao.getAllFollowedUserIds(conn, USER)).thenAnswer(inv -> {
+            loads.incrementAndGet();
+            entered.countDown();
+            release.await();
+            return List.of(FOLLOWED);
+        });
+
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        try {
+            List<Future<Boolean>> futures = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                futures.add(pool.submit(() -> cache.isFollowing(USER, FOLLOWED)));
+            }
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            Thread.sleep(200); // 等其余线程全部进入单飞等待（对齐 SingleFlightTest 放大并发窗口）
+            release.countDown();
+            for (Future<Boolean> f : futures) {
+                assertTrue(f.get(5, TimeUnit.SECONDS));
+            }
+            assertEquals(1, loads.get());
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     // ==================== 读-批量 batchIsFollowing（同一 set 一趟 pipeline） ====================
@@ -296,14 +338,17 @@ class FollowCacheTest {
     }
 
     @Test
-    void batchIsFollowingRedisErrorAllBackfilledFromDb() throws SQLException {
+    void batchIsFollowingRedisErrorDegradesFromDb() throws SQLException {
         doThrow(new CacheException("redis down")).when(redis).executeVoid(any(Consumer.class));
-        when(followDao.getFollowedIds(conn, USER, List.of(8L))).thenReturn(Set.of(8L));
+        when(followDao.getAllFollowedUserIds(conn, USER)).thenReturn(List.of(8L));
 
         Map<Long, Boolean> result = cache.batchIsFollowing(USER, List.of(8L));
 
         assertEquals(true, result.get(8L));
-        verify(followDao).getFollowedIds(conn, USER, List.of(8L));
+        // 三期 T2：降级经单飞全量装载作答——不再走 targeted 批量查询，也不尝试回填写入
+        verify(followDao).getAllFollowedUserIds(conn, USER);
+        verify(followDao, never()).getFollowedIds(any(), anyLong(), anyList());
+        verify(jedis, never()).sadd(anyString(), any(String[].class));
     }
 
     @Test

@@ -19,11 +19,18 @@ import redis.clients.jedis.Response;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -235,10 +242,46 @@ class LikeCacheServiceTest {
     @Test
     void isContentLikedRedisErrorDegradesToDb() throws SQLException {
         doThrow(new CacheException("redis down")).when(redis).execute(any(Function.class));
-        when(contentLikeDao.isLiked(conn, 7L, 1L)).thenReturn(true);
+        when(contentLikeDao.findLikerIdsByContentId(conn, 1L)).thenReturn(Set.of(7L));
 
         assertTrue(service.isContentLiked(7L, 1L));
-        verify(contentLikeDao).isLiked(conn, 7L, 1L);
+        // 三期 T2：降级经单飞全量装载作答（替代原单行查询），且不写回
+        verify(contentLikeDao).findLikerIdsByContentId(conn, 1L);
+        verify(contentLikeDao, never()).isLiked(any(), anyLong(), anyLong());
+        verify(jedis, never()).sadd(anyString(), any(String[].class));
+    }
+
+    @Test
+    void isContentLikedRedisErrorConcurrentDegradeLoadsDbOnce() throws Exception {
+        // 三期 T2 验收：Redis 停机时同一 key 的并发读只触发一次 DB 装载
+        doThrow(new CacheException("redis down")).when(redis).execute(any(Function.class));
+        int threads = 8;
+        AtomicInteger loads = new AtomicInteger();
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        when(contentLikeDao.findLikerIdsByContentId(conn, 1L)).thenAnswer(inv -> {
+            loads.incrementAndGet();
+            entered.countDown();
+            release.await();
+            return Set.of(7L);
+        });
+
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        try {
+            List<Future<Boolean>> futures = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                futures.add(pool.submit(() -> service.isContentLiked(7L, 1L)));
+            }
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            Thread.sleep(200); // 等其余线程全部进入单飞等待（对齐 SingleFlightTest 放大并发窗口）
+            release.countDown();
+            for (Future<Boolean> f : futures) {
+                assertTrue(f.get(5, TimeUnit.SECONDS));
+            }
+            assertEquals(1, loads.get());
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     // ==================== 读路径：内容/评论点赞计数（CacheAside loader） ====================
@@ -337,15 +380,17 @@ class LikeCacheServiceTest {
     }
 
     @Test
-    void batchIsContentLikedRedisErrorAllBackfilledFromDb() throws SQLException {
+    void batchIsContentLikedRedisErrorDegradesFromDb() throws SQLException {
         doThrow(new CacheException("redis down")).when(redis).executeVoid(any(Consumer.class));
-        when(contentLikeDao.findLikedContentIds(conn, 7L, List.of(1L))).thenReturn(Set.of());
         when(contentLikeDao.findLikerIdsByContentId(conn, 1L)).thenReturn(Set.of(7L));
 
         Map<Long, Boolean> result = service.batchIsContentLiked(7L, List.of(1L));
 
-        assertEquals(false, result.get(1L));
-        verify(contentLikeDao).findLikedContentIds(conn, 7L, List.of(1L));
+        assertEquals(true, result.get(1L));
+        // 三期 T2：降级经单飞全量装载作答——不再走 targeted 批量查询，也不尝试回填写入
+        verify(contentLikeDao).findLikerIdsByContentId(conn, 1L);
+        verify(contentLikeDao, never()).findLikedContentIds(any(), anyLong(), anyList());
+        verify(jedis, never()).sadd(anyString(), any(String[].class));
     }
 
     @Test

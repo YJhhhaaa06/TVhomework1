@@ -37,6 +37,9 @@ import java.util.logging.Logger;
  * 内部完成"缓存优先 → miss 单飞回填 → Redis 异常降级 DB"，业务 Service 读路径只做委托；
  * 写路径在业务 DB 事务提交后调用，缓存失败不抛出（4.2 缓存必须可降级）。
  *
+ * <p>降级不放量（三期 T2）：Redis 异常的降级读亦经 {@link SingleFlight} 全量装载作答、
+ * 不写回（D4）——同 key 并发读只打一次 DB；失败不以数据形式共享（条目移除，下一请求重试）。
+ *
  * <p>key 规范（T1 定稿，见 {@link CacheKeys}）：
  * <ul>
  *   <li>{@code user:following:{userId}}（Set&lt;followedUserId）——我关注了谁；</li>
@@ -81,7 +84,7 @@ public class FollowCache {
     /**
      * 查询 userId 是否关注了 followedUserId：
      * hit-empty（空标记）→ false；hit-data（set 存在）→ SISMEMBER；miss → 单飞回填后判成员；
-     * Redis 异常 → 降级 DB 单行查询，不写回（4.2 读降级）。
+     * Redis 异常 → 降级 DB（三期 T2：经单飞全量装载作答，同 key 并发只打一次 DB；不写回，4.2 读降级）。
      *
      * @return 是否已关注（数据库为最终答案，永不抛缓存异常）
      */
@@ -110,8 +113,10 @@ public class FollowCache {
             LOGGER.log(Level.WARNING, "关注状态缓存读失败，降级 DB, userId=" + userId
                     + ", followedUserId=" + followedUserId, e);
             stats.record(CacheStats.Event.DEGRADE, setKey);
-            stats.record(CacheStats.Event.LOAD, setKey); // 降级 DB 装载也计 LOAD（与 CacheAside 口径一致）
-            return isFollowingFromDb(userId, followedUserId);
+            // 三期 T2 降级不放量：降级经单飞全量装载作答（与 miss 回填同 key 同 loader）——
+            // 同 key 并发读只打一次 DB；仅装载不写回（D4）
+            return loadViaSingleFlight(setKey, () -> loadFollowingIds(userId))
+                    .contains(followedUserId);
         }
     }
 
@@ -121,7 +126,8 @@ public class FollowCache {
      * 批量查询 userId 对多个用户的关注状态。
      * following set 是用户维度的单一 key：一趟 pipeline 探测 empty/exists + N 个 SISMEMBER；
      * 空标记 → 全部 false；set 存在 → 逐个成员判定；miss → DB {@code getFollowedIds} 兜底
-     * + 逐个单飞回填全量（防并发惊群）。
+     * + 逐个单飞回填全量（防并发惊群）；
+     * Redis 异常 → 降级 DB（三期 T2：经单飞全量装载作答，同 key 并发只打一次 DB；不写回）。
      *
      * @return 完整 userId → isFollowing 映射（含 DB 兜底结果，无缺失）
      */
@@ -132,6 +138,7 @@ public class FollowCache {
         String setKey = CacheKeys.userFollowing(userId);
         Map<Long, Boolean> result = new HashMap<>();
         List<Long> missed = new ArrayList<>();
+        boolean degraded = false;
         try {
             redis.executeVoid(j -> {
                 Pipeline p = j.pipelined();
@@ -164,24 +171,34 @@ public class FollowCache {
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "批量关注状态缓存读失败，全部走 DB, userId=" + userId, e);
             stats.record(CacheStats.Event.DEGRADE, setKey);
+            degraded = true;
             missed.addAll(followedUserIds);
         }
         if (!missed.isEmpty()) {
-            Set<Long> followedSet = loadFollowedIdsByUser(userId, missed);
-            for (Long id : missed) {
-                result.put(id, followedSet.contains(id));
-            }
-            // 同一 following set 只回填一次（singleFlight 内 load 全量 + 写 set），不按 miss 成员逐条重复。
-            // best-effort：回填失败（如第二次全量查询 DB 抖动）仅记日志，DB 兜底结果照常返回，不 500。
-            try {
-                singleFlight.get(setKey, () -> {
-                    stats.record(CacheStats.Event.LOAD, setKey);
-                    List<Long> loaded = loadFollowingIds(userId);
-                    writeSet(setKey, loaded);
-                    return null;
-                });
-            } catch (RuntimeException e) {
-                LOGGER.log(Level.WARNING, "批量关注状态回填失败，仅影响缓存, userId=" + userId, e);
+            if (degraded) {
+                // 三期 T2 降级不放量：降级经单飞全量装载作答（仅装载不写回，D4）——
+                // 同 set key 并发批量读只打一次 DB；不再做降级态必失败的回填写入尝试
+                List<Long> following = loadViaSingleFlight(setKey, () -> loadFollowingIds(userId));
+                for (Long id : missed) {
+                    result.put(id, following.contains(id));
+                }
+            } else {
+                Set<Long> followedSet = loadFollowedIdsByUser(userId, missed);
+                for (Long id : missed) {
+                    result.put(id, followedSet.contains(id));
+                }
+                // 同一 following set 只回填一次（singleFlight 内 load 全量 + 写 set），不按 miss 成员逐条重复。
+                // best-effort：回填失败（如第二次全量查询 DB 抖动）仅记日志，DB 兜底结果照常返回，不 500。
+                try {
+                    singleFlight.get(setKey, () -> {
+                        stats.record(CacheStats.Event.LOAD, setKey);
+                        List<Long> loaded = loadFollowingIds(userId);
+                        writeSet(setKey, loaded);
+                        return null;
+                    });
+                } catch (RuntimeException e) {
+                    LOGGER.log(Level.WARNING, "批量关注状态回填失败，仅影响缓存, userId=" + userId, e);
+                }
             }
         }
         return result;
@@ -241,8 +258,8 @@ public class FollowCache {
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, desc + "缓存读失败，降级 DB, key=" + setKey, e);
             stats.record(CacheStats.Event.DEGRADE, setKey);
-            stats.record(CacheStats.Event.LOAD, setKey); // 降级 DB 装载也计 LOAD（与 CacheAside 口径一致）
-            return sortIds(loader.load());
+            // 三期 T2 降级不放量：降级经单飞（仅装载不写回，D4）——同 key 并发读只打一次 DB
+            return sortIds(loadViaSingleFlight(setKey, loader::load));
         }
     }
 
@@ -424,26 +441,18 @@ public class FollowCache {
         }
     }
 
-    /** Redis 挂时降级：DB 单行 isFollowing 查询（不写回，下次 miss 自愈）。 */
-    private boolean isFollowingFromDb(long userId, long followedUserId) {
-        try {
-            return transactionTemplate.execute(conn -> {
-                try {
-                    return followDao.isFollowing(conn, userId, followedUserId);
-                } catch (SQLException e) {
-                    LOGGER.log(Level.SEVERE, "关注状态 DB 查询失败, userId=" + userId
-                            + ", followedUserId=" + followedUserId, e);
-                    throw new ServerException("服务器异常，查询关注状态失败");
-                }
-            });
-        } catch (RuntimeException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new ServerException("服务器异常，查询关注状态失败", e);
-        }
-    }
-
     // ==================== 内部：回填写入 / 扫描 / 工具（单飞 loader 内调用） ====================
+
+    /**
+     * 三期 T2 降级装载（唯一入口，防多处漂移）：经单飞执行 loader 并返回结果——
+     * 同 key 并发只打一次 DB；仅装载不写回（D4）；LOAD 由 leader 记一次（与 miss 单飞口径一致）。
+     */
+    private <T> T loadViaSingleFlight(String setKey, java.util.function.Supplier<T> loader) {
+        return singleFlight.get(setKey, () -> {
+            stats.record(CacheStats.Event.LOAD, setKey);
+            return loader.get();
+        });
+    }
 
     /** 关注/粉丝集回填：非空 → SADD-union + EXPIRE；空 → 仅当 set 不存在才写空标记（4.4）。
      *
