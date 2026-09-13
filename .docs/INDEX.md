@@ -10,7 +10,7 @@
 .docs/
 ├── INDEX.md          ← 本文件（唯一入口）
 ├── 常青/             ← 启动必读，随代码更新
-├── 目标与任务/        ← 当前目标与任务（暂空，未来放这里）
+├── 目标与任务/        ← 当前周期目标与任务（周期文档在此新建；UNPLANNED_ISSUES.md 常驻）
 ├── 说明书/           ← 按需读的参考手册
 ├── archive/          ← 历史存档（勿读，追踪可追溯，结构与顶层一致）
 └── temp/             ← 临时文档（勿读，可随时删除，永不追踪）
@@ -27,13 +27,13 @@
 
 ## 目标与任务（目标与任务/）
 
+> **当前无进行中的周期**：C 方向缓存改造周期（一版 T1~T6 + 二期 T7~T9）已完成并归档，见下方"历史周期"。新周期的 NEEDS/TASKS 在本目录新建。
+
 | 文件 | 内容 |
 |------|------|
-| 目标与任务/NEXT_CYCLE_NEEDS.md | 本周期需求与痛点（Why）：C 方向缓存改造——一版（统一 Redis + 三态 + 空标记 + 可降级 + 单飞 + 点赞/关注，T1~T6）已完成；二期范围已拍板（4.14）：观测埋点 + 读路径加固 + O-8 TTL 精调（T7~T9）；O-5/O-9 留池、O-7 拍板维持直查 |
-| 目标与任务/NEXT_CYCLE_TASKS.md | 本周期任务（How）：**周期约定 G1-G10** + **任务模板四要素** + 任务总览（一版 T1~T6 已完成；二期 T7 观测埋点 / T8 读路径加固 / T9 TTL 精调骨架已立，四要素待执行细化） |
-| 目标与任务/UNPLANNED_ISSUES.md | 待决策池：登记"发现需要改、但暂未排进任务清单"的内容（文档滞后/代码债/观察），已预填 7 条候选（U-01~U-07），按登记规则新增 |
+| 目标与任务/UNPLANNED_ISSUES.md | 待决策池：登记"发现需要改、但暂未排进任务清单"的内容（文档滞后/代码债/观察），按登记规则新增（U-07 包层循环依赖仍待定） |
 
-> 历史周期：`260908-test-hardening`（测试体系改造 T1-T5）已归档 `archive/目标与任务/260908-test-hardening/`；`260910-test-gap-fill`（补测试缺口 A 方向 T1~T8，test(12)~test(19)）已归档 `archive/目标与任务/260910-test-gap-fill/`；`260912-package-refactor`（B 方向 feature package 改造：8 域迁移 + 1 收尾 T1~T9，pkg-01~pkg-09，仅搬移不改名、行为零变化）已归档 `archive/目标与任务/260912-package-refactor/`（勿读，追踪可追溯）。
+> 历史周期：`260908-test-hardening`（测试体系改造 T1-T5）已归档 `archive/目标与任务/260908-test-hardening/`；`260910-test-gap-fill`（补测试缺口 A 方向 T1~T8，test(12)~test(19)）已归档 `archive/目标与任务/260910-test-gap-fill/`；`260912-package-refactor`（B 方向 feature package 改造：8 域迁移 + 1 收尾 T1~T9，pkg-01~pkg-09，仅搬移不改名、行为零变化）已归档 `archive/目标与任务/260912-package-refactor/`；`260913-cache-architecture`（C 方向缓存改造：一版 T1~T6 + 二期 T7~T9，refactor(cache-01)~cache-09，统一 Redis + 三态 Cache-Aside + 空标记 + 可降级 + 统一单飞 + 点赞计数/成员分离 + 关注双 Set + 观测埋点 + 读路径加固 + TTL 精调，对外行为零变化）已归档 `archive/目标与任务/260913-cache-architecture/`（勿读，追踪可追溯）。
 
 > 术语：周期 > 任务。（历史文档中的"阶段"仅指 260830 周期内部顺序，已归档。）
 
