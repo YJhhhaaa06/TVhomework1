@@ -85,6 +85,14 @@
 * 统计口径微调：降级路径 `LOAD` 从"每请求记一次"变为"实际去重后装载记一次（leader 记）"，与 miss 单飞口径一致；`DEGRADE` 不变。
 * 落点：`CacheAside`（370 行）+ `FollowCache`（524 行）+ `LikeCacheService`（628 行）；防漂移公共入口 `FollowCache.loadViaSingleFlight` / `LikeCacheService.loadLikersViaSingleFlight`。详见 `常青/CURRENT_ARCHITECTURE.md` 6.7；验证（JUnit 337 + pytest 124 + 黑洞运行时 20 并发同 key Com_select 差值 8）见 `NEXT_CYCLE_TASKS.md` T2 执行回写。
 
+**T3（fix(cache-03)，2026-09-14 拍板并落地——负缓存治理：区分"确认无数据"与"加载失败"，治 N2）**：
+
+* 拍板取向（用户 2026-09-14）：**对外行为保持**——loader 失败仍表现为"本次读无数据"（内容 404 / 评论空 / 批量逐 key 跳过），只治理"loader 失败时怎么写 / 不写缓存"这一层；**不统一各域对外错误约定**（like/follow 的 500 语义不动）。
+* 区分载体：loader 失败抛 **`DatabaseException`**（现成，事务模板已把 SQLException 包成它）；`return null` 仅保留"确认无数据"（DB 无行 / 媒体损坏 / 未知类型）；意外异常统一包成 `DatabaseException`（防 NPE 等静默污染空标记）。
+* CacheAside 契约（新增）：所有装载点（getInternal miss、getInternal 降级、getBatch miss 循环、getBatch 整批降级、getBatch 脏 JSON 单 key 降级）捕获 `DatabaseException` → 记日志转 null——**不写空标记、不 DEL 既有数据 key**（读路径不把瞬时故障固化成假空）；miss 路径失败直接 return null **跳过 markEmpty**；降级路径共用 `loadDegraded` helper。契约仅对 `DatabaseException` 生效，like/follow 的 `ServerException` 不受影响。
+* 写路径守卫：`ContentCache.addContent`/`refreshContent`（DB 提交后缓存同步）遇 `DatabaseException` 静默跳过（refresh 保留旧缓存，读自愈），防提交后 500。
+* 落点：`CacheAside` + `ContentCache` + `CommentCache`（详见 `常青/CURRENT_ARCHITECTURE.md` 6.8；验证 JUnit 348 + pytest 124 + subagent 评审无🔴见 `NEXT_CYCLE_TASKS.md` T3 执行回写）。
+
 ### 4.1 候选痛点（2026-09-13 代码复查，**待评审纳入，尚未拍板**）
 
 > 编号 `N1`~`N9` 为**本档内部编号**（与已归档周期的 `H*` / `O-*` / `P*` 编号体系无关）。每条给出"如果不改，什么时候会出什么问题"的具体场景。
@@ -159,3 +167,4 @@
 | 2026-09-13 | 0.5 | **修订红线措辞约定**（用户要求，与 `NEXT_CYCLE_TASKS.md` 0.3 同步）：① 一节的 ① 改为"红线只列明显越界的项、作用是防跑偏、不把执行 Agent 限制死"；② 机制表述由"申请开禁"改为"**申请调整**"，触发条件明确为"某条红线会阻碍正确做法（过紧 / 过窄 / 已不适用）"，两个禁止（硬扛 / 自行放开）保留；③ 完整表述统一指向 `NEXT_CYCLE_TASKS.md` 二节，避免两处措辞漂移 |
 | 2026-09-13 | 0.6 | **T1 执行定稿回写**（fix(cache-01)）：新增 4.0"已回写技术决策"节——T1 超时配置化（connect/so/maxWait 各 1000ms，Jedis 5.1.0 用 8 参构造器等价替代）+ 全局熔断（粒度=全局、失败口径=execute 冒出的 CacheException、恢复=半开单探针，阈值/冷却可配）；U-10 随 T1 修复（UNPLANNED_ISSUES 已标注）；执行中新发现 U-11（/start 停机空降级，既有语义）登记 UNPLANNED_ISSUES 留池 |
 | 2026-09-13 | 0.7 | **T2 执行定稿回写**（fix(cache-02)）：4.0 追加 T2 技术决策——统一规则（降级读=miss 同款单飞+全量 loader、仅装载不写回/D4，与 miss 共用单飞 key 空间，SingleFlight 零改动）、治理面 10 处降级读分支（单 key 单行查询→全量装载作答删 3 个 *FromDb、批量 targeted+必失败回填→单飞全量作答）、失败语义（异常传播不缓存可重试）、与 T1 熔断正交、LOAD 口径 leader 记一次；验证 JUnit 337 + pytest 124 + 黑洞运行时（20 并发同 key Com_select 差值 8） |
+| 2026-09-14 | 0.8 | **T3 执行定稿回写**（fix(cache-03)）：4.0 追加 T3 技术决策——拍板=对外行为保持（用户 2026-09-14），loader 失败抛 DatabaseException（事务模板已包 SQLException），CacheAside 5 装载点捕获转 null（不写空标记不 DEL，miss 跳过 markEmpty，降级共用 loadDegraded），addContent/refreshContent 写路径守卫；N2 治理闭环（4.1 行 N2 对应 T3）；验证 JUnit 348 + pytest 124 + subagent 评审无🔴 |

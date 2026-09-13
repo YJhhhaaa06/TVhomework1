@@ -6,6 +6,7 @@ import com.itheima.cache.CacheKeys;
 import com.itheima.comment.dao.CommentDao;
 import com.itheima.config.AppConfig;
 import com.itheima.content.model.cache.CommentCacheDTO;
+import com.itheima.exception.DatabaseException;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.util.LogUtil;
@@ -89,24 +90,26 @@ public class CommentCache {
 
     // ==================== 内部 ====================
 
-    /** DB 装载评论树：DB 无评论/异常一律返回 null（→ 空标记或降级），非空则归一化为树。 */
+    /**
+     * DB 装载评论树。loader 契约（三期 T3 负缓存治理，NEEDS N2）：
+     * 返回 null = 确认无评论（DB 无行）→ 允许写空标记；抛 {@link DatabaseException} =
+     * 加载失败（SQLException 由事务模板包装；意外异常统一包成 DatabaseException）→
+     * CacheAside 不写空标记、不 DEL，本次读转 null（对外行为不变）。
+     */
     private List<CommentCacheDTO> loadCommentTree(long contentId) {
         try {
-            List<CommentCacheDTO> wholeList = transactionTemplate.execute(conn -> {
-                try {
-                    return commentDao.getComments(conn, contentId);
-                } catch (SQLException e) {
-                    LOGGER.log(Level.SEVERE, "评论树 DB 查询失败, contentId=" + contentId, e);
-                    return null;
-                }
-            });
+            List<CommentCacheDTO> wholeList = transactionTemplate.execute(conn ->
+                    commentDao.getComments(conn, contentId));
             if (wholeList == null || wholeList.isEmpty()) {
                 return null; // 无评论 → 空标记（hit-empty），防持续穿透
             }
             return buildCommentTree(wholeList);
+        } catch (DatabaseException e) {
+            LOGGER.log(Level.SEVERE, "评论树 DB 查询失败（加载失败，不写空标记）, contentId=" + contentId, e);
+            throw e;
         } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "评论树装载失败（降级为空）, contentId=" + contentId, e);
-            return null;
+            LOGGER.log(Level.WARNING, "评论树装载异常（按加载失败处理，不写空标记）, contentId=" + contentId, e);
+            throw new DatabaseException("评论树装载失败", e);
         }
     }
 

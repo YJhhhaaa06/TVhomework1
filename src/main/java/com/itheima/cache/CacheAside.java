@@ -2,6 +2,7 @@ package com.itheima.cache;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.itheima.exception.CacheException;
+import com.itheima.exception.DatabaseException;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.util.LogUtil;
@@ -39,6 +40,12 @@ import java.util.Random;
  * <p>降级不放量（三期 T2）：Redis 异常的降级读与 miss 回填共用同一 {@link SingleFlight}——
  * 同 key 并发读（单 key / 批量 / 脏 JSON）只打一次 DB；降级仅装载、不写回（D4），
  * loader 失败以异常收场且条目移除（失败不以数据形式共享，下一请求全新重试）。
+ *
+ * <p>负缓存治理（三期 T3）：loader 契约——返回 null 仅表示"确认无数据"（允许写空标记）；
+ * 抛 {@link DatabaseException} 表示"加载失败"（DB 瞬时故障/意外异常），装载处捕获后转 null，
+ * **不写空标记、不 DEL 既有数据 key**（读路径不把瞬时故障固化成假空）。该契约仅对
+ * {@link DatabaseException} 生效；like/follow 域 loader 抛 {@code ServerException}（500 语义）
+ * 不受影响。对外行为零变化（内容 404 / 评论空 / 批量跳过），只治理缓存写层。
  *
  * <p>滑动续期（T9 O-8）：**读命中顺带续期**——{@link #get}（{@link #getInternal}）与
  * {@link #getBatch} 在命中数据 key 时同 pipeline 追加 {@code EXPIRE}（续期值=原 TTL ±10% 抖动），
@@ -136,7 +143,14 @@ public class CacheAside {
             }
             stats.record(CacheStats.Event.MISS, dataKey);
             return singleFlight.get(dataKey, () -> {
-                T value = invokeLoader(dataKey, loader);
+                T value;
+                try {
+                    value = invokeLoader(dataKey, loader);
+                } catch (DatabaseException e) {
+                    // 三期 T3：加载失败 ≠ 确认无数据——不写空标记、不 DEL（读路径不固化瞬时故障）
+                    LOGGER.log(Level.WARNING, "缓存加载失败（不写空标记、不 DEL 数据 key）, key=" + dataKey, e);
+                    return null;
+                }
                 if (value != null) {
                     writeOrInvalidate(dataKey, value, ttlSeconds);
                 } else {
@@ -149,7 +163,7 @@ public class CacheAside {
             stats.record(CacheStats.Event.DEGRADE, dataKey);
             // 三期 T2 降级不放量：降级亦经单飞（与 miss 回填同 key 空间）——同 key 并发读只打一次 DB；
             // 仅装载不写回（D4）；LOAD 由 leader 记一次（与 miss 单飞口径一致）
-            return singleFlight.get(dataKey, () -> invokeLoader(dataKey, loader));
+            return singleFlight.get(dataKey, () -> loadDegraded(dataKey, loader));
         }
     }
 
@@ -205,7 +219,8 @@ public class CacheAside {
                                 // 三期 T2：降级经单飞去重（同 key 并发只打一次 DB），仅装载不写回
                                 LOGGER.log(Level.WARNING, "批量缓存反序列化失败，该 key 降级, key=" + key, e);
                                 stats.record(CacheStats.Event.DEGRADE, key);
-                                result.put(key, singleFlight.get(key, () -> loadBatch(key, loader)));
+                                result.put(key, singleFlight.get(key,
+                                        () -> loadDegraded(key, () -> loader.apply(key))));
                             }
                         } else {
                             stats.record(CacheStats.Event.MISS, key);
@@ -218,14 +233,23 @@ public class CacheAside {
             LOGGER.log(Level.WARNING, "批量缓存读降级走 DB, keys=" + dataKeys.size(), e);
             for (String key : dataKeys) {
                 stats.record(CacheStats.Event.DEGRADE, key);
-                // 三期 T2：降级逐 key 经单飞——同 key 并发批量读只打一次 DB（仅装载，不写回）
-                result.put(key, singleFlight.get(key, () -> loadBatch(key, loader)));
+                // 三期 T2：降级逐 key 经单飞——同 key 并发批量读只打一次 DB（仅装载，不写回）；
+                // 三期 T3：DB 加载失败转 null（逐 key 优雅降级，不拖垮整批）
+                result.put(key, singleFlight.get(key,
+                        () -> loadDegraded(key, () -> loader.apply(key))));
             }
         }
         if (!missed.isEmpty()) {
             for (String key : missed) {
                 result.put(key, singleFlight.get(key, () -> {
-                    T value = invokeLoader(key, () -> loader.apply(key));
+                    T value;
+                    try {
+                        value = invokeLoader(key, () -> loader.apply(key));
+                    } catch (DatabaseException e) {
+                        // 三期 T3：加载失败 ≠ 确认无数据——不写空标记、不 DEL（读路径不固化瞬时故障）
+                        LOGGER.log(Level.WARNING, "批量缓存加载失败（不写空标记、不 DEL 数据 key）, key=" + key, e);
+                        return null;
+                    }
                     if (value != null) {
                         writeOrInvalidate(key, value, ttlSeconds);
                     } else {
@@ -327,9 +351,14 @@ public class CacheAside {
         });
     }
 
-    /** 批量 loader 包装：记 LOAD（对齐单 key 口径）并执行。 */
-    private <T> T loadBatch(String dataKey, Function<String, T> loader) {
-        return invokeLoader(dataKey, () -> loader.apply(dataKey));
+    /** 降级装载：记 LOAD（invokeLoader 口径）；DatabaseException（DB 加载失败）→ 记日志转 null（不写回，D4）。 */
+    private <T> T loadDegraded(String dataKey, Callable<T> loader) {
+        try {
+            return invokeLoader(dataKey, loader);
+        } catch (DatabaseException e) {
+            LOGGER.log(Level.WARNING, "降级装载失败（不写回）, key=" + dataKey, e);
+            return null;
+        }
     }
 
     private void deleteQuietly(String dataKey) {

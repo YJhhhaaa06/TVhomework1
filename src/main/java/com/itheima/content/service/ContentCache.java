@@ -12,6 +12,7 @@ import com.itheima.content.model.entity.ContentMedia;
 import com.itheima.content.model.vo.ContentDetailVO;
 import com.itheima.content.model.vo.ContentVO;
 import com.itheima.exception.CacheException;
+import com.itheima.exception.DatabaseException;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ParamException;
 import com.itheima.exception.ServerException;
@@ -150,7 +151,14 @@ public class ContentCache implements Initializable {
 
     /** 新增内容后入缓存（H3 修复：不携带 Connection，事务外调用）。写失败由 CacheAside 自愈。 */
     public void addContent(long contentId) {
-        ContentCacheDTO dto = loadContentFromDb(contentId);
+        ContentCacheDTO dto;
+        try {
+            dto = loadContentFromDb(contentId);
+        } catch (DatabaseException e) {
+            // 三期 T3：DB 瞬时失败 = 加载失败，跳过缓存同步（读自愈回填），不抛 500
+            LOGGER.log(Level.WARNING, "新增内容缓存装载失败（跳过缓存同步）, contentId=" + contentId, e);
+            return;
+        }
         if (dto == null) {
             return; // 回滚/并发删除兜底
         }
@@ -160,7 +168,14 @@ public class ContentCache implements Initializable {
 
     /** 编辑媒体/文案/恢复内容后重载缓存；DB 已删 → 走移除语义。 */
     public void refreshContent(long contentId) {
-        ContentCacheDTO dto = loadContentFromDb(contentId);
+        ContentCacheDTO dto;
+        try {
+            dto = loadContentFromDb(contentId);
+        } catch (DatabaseException e) {
+            // 三期 T3：DB 瞬时失败 = 加载失败，保留旧缓存让读自愈，不做删除语义
+            LOGGER.log(Level.WARNING, "刷新内容缓存装载失败（保留旧缓存，读自愈）, contentId=" + contentId, e);
+            return;
+        }
         if (dto == null) {
             removeContent(contentId);
             return;
@@ -270,29 +285,39 @@ public class ContentCache implements Initializable {
 
     // ==================== 内部 ====================
 
-    /** DB 装载：findContent + 媒体构建；异常/无数据一律返回 null（→ 空标记/降级）。 */
+    /**
+     * DB 装载：findContent + 媒体构建。loader 契约（三期 T3 负缓存治理，NEEDS N2）：
+     * <ul>
+     *   <li>返回 null = 确认无数据（DB 无行 / 媒体损坏 / 未知类型）→ 允许 CacheAside 写空标记；</li>
+     *   <li>抛 {@link DatabaseException} = 加载失败（SQLException 由事务模板包装）→ CacheAside
+     *       不写空标记、不 DEL 数据 key，本次读转 null（对外行为不变）；</li>
+     *   <li>其余意外异常统一包成 {@link DatabaseException} 上抛（防静默污染空标记）。</li>
+     * </ul>
+     */
     private ContentCacheDTO loadContentFromDb(long contentId) {
         try {
             return transactionTemplate.execute(conn -> {
-                try {
-                    ContentCacheDTO dto = contentDao.findContent(conn, contentId);
-                    if (dto == null) {
-                        return null;
-                    }
-                    Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, contentId);
-                    buildContentMedia(dto, mediaMap);
-                    return dto;
-                } catch (SQLException e) {
-                    LOGGER.log(Level.SEVERE, "内容装载 DB 查询失败, contentId=" + contentId, e);
+                ContentCacheDTO dto = contentDao.findContent(conn, contentId);
+                if (dto == null) {
                     return null;
                 }
+                Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, contentId);
+                buildContentMedia(dto, mediaMap);
+                return dto;
             });
-        } catch (NotFoundException | ServerException e) {
+        } catch (DatabaseException e) {
+            LOGGER.log(Level.SEVERE, "内容装载 DB 查询失败（加载失败，不写空标记）, contentId=" + contentId, e);
+            throw e;
+        } catch (NotFoundException e) {
             LOGGER.log(Level.WARNING, "内容装载跳过（媒体损坏）, contentId=" + contentId, e);
             return null;
-        } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "内容装载异常, contentId=" + contentId, e);
+        } catch (ServerException e) {
+            // 未知内容类型（buildContentMedia 抛出）= 确认无法构建，按无数据（空标记）
+            LOGGER.log(Level.WARNING, "内容装载跳过（类型异常）, contentId=" + contentId, e);
             return null;
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "内容装载异常（按加载失败处理，不写空标记）, contentId=" + contentId, e);
+            throw new DatabaseException("内容装载失败", e);
         }
     }
 

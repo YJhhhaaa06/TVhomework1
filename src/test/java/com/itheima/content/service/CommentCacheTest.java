@@ -5,6 +5,7 @@ import com.itheima.cache.CacheAside;
 import com.itheima.cache.CacheKeys;
 import com.itheima.comment.dao.CommentDao;
 import com.itheima.content.model.cache.CommentCacheDTO;
+import com.itheima.exception.DatabaseException;
 import com.itheima.util.TransactionTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -74,17 +75,19 @@ class CommentCacheTest {
     }
 
     @Test
-    void getCommentTreeSqlErrorReturnsNullWithoutThrowing() throws SQLException {
+    void getCommentTreeSqlErrorThrowsDatabaseException() throws SQLException {
+        // 三期 T3：DB 查询失败 = 加载失败（抛 DatabaseException），不再是"确认无数据"→ 不写空标记
         when(commentDao.getComments(conn, 3L)).thenThrow(new SQLException("db down"));
 
-        assertNull(cache.getCommentTree(3L));
+        assertThrows(DatabaseException.class, () -> cache.getCommentTree(3L));
     }
 
     @Test
-    void getCommentTreeDbErrorReturnsNullWithoutThrowing() throws SQLException {
+    void getCommentTreeDbErrorThrowsDatabaseException() throws SQLException {
+        // 三期 T3：意外异常按加载失败处理（包成 DatabaseException），不静默污染空标记
         when(commentDao.getComments(conn, 3L)).thenThrow(new RuntimeException("connection lost"));
 
-        assertNull(cache.getCommentTree(3L));
+        assertThrows(DatabaseException.class, () -> cache.getCommentTree(3L));
     }
 
     @Test

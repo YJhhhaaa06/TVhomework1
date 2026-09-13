@@ -1,7 +1,7 @@
 # 当前系统架构地图
 
-> 版本：2.13
-> 最后更新：2026-09-13
+> 版本：2.14
+> 最后更新：2026-09-14
 > 维护说明：每次架构改动后必须更新本文档
 
 ---
@@ -205,9 +205,9 @@ com.itheima/
 | SingleFlight | 65 | 统一单飞组件（4.9）：ConcurrentHashMap+FutureTask，失败/成功均 remove（防缓存失败结果 + 防泄漏）；**三期 T2 起降级读路径与 miss 回填共用同一 key 空间（本类零改动）** |
 | CacheStatus | 15 | 三态枚举：MISS / HIT_EMPTY / HIT_DATA |
 | CacheResult | 39 | 三态读取结果载体（status + value，HIT_EMPTY 时 value=null） |
-| CacheAside | 370 | 统一 Cache-Aside 封装：`read` 三态读 / `get` 带单飞回填 / `writeOrInvalidate`（写失败=DEL 自愈，写数据同时清空标记）/ `markEmpty` / `invalidate`，TTL ±10% 简单抖动，缓存失败一律降级不抛业务异常；T7 起三态读/降级/LOAD/写失败处自动打点 CacheStats；**T8 起读路径 pipeline 化**（单 key 与批量均 EXISTS 空标记+GET 一趟往返）并新增 **`getBatch` 批量读接口**（三态语义与单 key 一致、miss 逐个单飞回填、解析失败/整批降级逐 key 直接 loader 不写回）；**T9 起读命中滑动续期**（`get`/`getInternal` 与 `getBatch` 命中数据 key 时同 pipeline 追加 EXPIRE，续期值=原 TTL ±10% 抖动，空标记从不续期；`read` 纯三态读不续期）；**三期 T2 起降级亦经单飞**（getInternal catch / getBatch 整批 catch / getBatch 脏 JSON catch 三处降级改 `singleFlight.get(key, loader)`：同 key 并发只打一次 DB、仅装载不写回、失败条目移除可重试） |
+| CacheAside | 399 | 统一 Cache-Aside 封装：`read` 三态读 / `get` 带单飞回填 / `writeOrInvalidate`（写失败=DEL 自愈，写数据同时清空标记）/ `markEmpty` / `invalidate`，TTL ±10% 简单抖动，缓存失败一律降级不抛业务异常；T7 起三态读/降级/LOAD/写失败处自动打点 CacheStats；**T8 起读路径 pipeline 化**（单 key 与批量均 EXISTS 空标记+GET 一趟往返）并新增 **`getBatch` 批量读接口**（三态语义与单 key 一致、miss 逐个单飞回填、解析失败/整批降级逐 key 直接 loader 不写回）；**T9 起读命中滑动续期**（`get`/`getInternal` 与 `getBatch` 命中数据 key 时同 pipeline 追加 EXPIRE，续期值=原 TTL ±10% 抖动，空标记从不续期；`read` 纯三态读不续期）；**三期 T2 起降级亦经单飞**（getInternal catch / getBatch 整批 catch / getBatch 脏 JSON catch 三处降级改 `singleFlight.get(key, loader)`：同 key 并发只打一次 DB、仅装载不写回、失败条目移除可重试）；**三期 T3 起"loader 失败不得上报为空"契约**（治 N2）：所有装载点捕获 `DatabaseException` 转 null——不写空标记、不 DEL 数据 key（miss 回填内联 try/catch 直接 return null 跳过 markEmpty；getInternal 降级 / getBatch 整批降级 / getBatch 脏 JSON 单 key 降级共用 `loadDegraded` helper） |
 
-> 测试：`src/test/java/com/itheima/cache/` 7 类 74 例（mockStatic MyRedisPool + mock Jedis，不碰真实 Redis，含 CacheStatsTest 域解析/计数/惰性输出 8 例；CacheAsideTest 33 例含单 key pipeline 往返断言与批量三态/降级/脏 JSON 用例 + **T9 滑动续期 4 例**：命中续期抖动/空标记不续/批量续期/续期失败降级 + **三期 T2 新增 3 例降级单飞**：降级并发同 key 只装载一次/降级 loader 失败不共享且可重试/批量降级逐 key 去重——并发用例用 mock RedisAccess 恒抛 CacheException（MockedStatic 线程局部不可跨线程）；**三期 T1 新增 RedisCircuitBreakerTest 8 例**（状态机全迁移含并发唯一探针）+ **RedisAccessTest 扩至 9 例**（熔断开启快速失败不触达连接池/连续失败达阈值拒绝/成功重置不误开/冷却期满探针恢复全链路/回调 CacheException 计失败口径）），见九.9.2。
+> 测试：`src/test/java/com/itheima/cache/` 7 类 79 例（mockStatic MyRedisPool + mock Jedis，不碰真实 Redis，含 CacheStatsTest 域解析/计数/惰性输出 8 例；CacheAsideTest 38 例含单 key pipeline 往返断言与批量三态/降级/脏 JSON 用例 + **T9 滑动续期 4 例**：命中续期抖动/空标记不续/批量续期/续期失败降级 + **三期 T2 新增 3 例降级单飞**：降级并发同 key 只装载一次/降级 loader 失败不共享且可重试/批量降级逐 key 去重——并发用例用 mock RedisAccess 恒抛 CacheException（MockedStatic 线程局部不可跨线程）；**三期 T3 新增 5 例负缓存治理**：miss/降级/批量 miss 逐 key/批量整批降级/批量脏 JSON 单 key 降级 遇 DatabaseException 均转 null 且不写空标记不 DEL；**三期 T1 新增 RedisCircuitBreakerTest 8 例**（状态机全迁移含并发唯一探针）+ **RedisAccessTest 扩至 9 例**（熔断开启快速失败不触达连接池/连续失败达阈值拒绝/成功重置不误开/冷却期满探针恢复全链路/回调 CacheException 计失败口径）），见九.9.2。
 
 ### 4.3 业务域包（每域 controller/service/dao/model 分层）
 
@@ -225,7 +225,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | ContentController（182，/content/*）、StartController（49，/start）、SearchController（95，/search/*）、FeedController（57，/feed）、ProfileController（70，/profile） | 内容管理 + 首页推荐 + 搜索 + 关注流 + 用户主页 |
-| service | ContentService（445）、ContentCache（400，T2 新增：Redis 内容缓存=三态 Cache-Aside+索引）、CommentCache（173，T3 新增：Redis 评论缓存=三态 Cache-Aside+独立 TTL+空标记+显式失效）、ContentStatusFiller（90）、FeedService（74）、ProfileService（86） | 内容业务 + Redis 内容缓存 + Redis 评论树缓存 + 状态填充 + 关注流 + 主页 |
+| service | ContentService（445）、ContentCache（502，T2 新增：Redis 内容缓存=三态 Cache-Aside+索引；**三期 T3 起 loader 失败抛 DatabaseException，不污染空标记**）、CommentCache（176，T3 新增：Redis 评论缓存=三态 Cache-Aside+独立 TTL+空标记+显式失效；**三期 T3 起 loader 失败抛 DatabaseException，不污染空标记**）、ContentStatusFiller（90）、FeedService（74）、ProfileService（86） | 内容业务 + Redis 内容缓存 + Redis 评论树缓存 + 状态填充 + 关注流 + 主页 |
 | dao | ContentDao（366）、ContentMediaDao（163） | content/content_media 数据访问（ContentLikeDao 按 like 域归属） |
 | model | entity/ContentMedia（63）、cache/ContentCacheDTO（136）/CommentCacheDTO（110）、vo/ContentVO（42）/ContentDetailVO（26）/CommentVO（22）/ProfileVO（43）、dto/PageResult（62）/SearchDTO（51）、command/CommandConverter（139）/ContentType（16） | 内容模型 + 共享缓存 DTO + 共享 VO/DTO/转换器 |
 
@@ -424,6 +424,15 @@ com.itheima/
 - **统计口径微调**：`LOAD` 从"每降级请求记一次"变为"实际去重后装载记一次（leader 记）"，与 miss 单飞口径一致；`DEGRADE` 仍按请求/key 记。
 - **验证**：JUnit **337 例全绿**（CacheAsideTest +3：降级并发同 key 只装载一次且无写回/降级 loader 失败不共享且可重试/批量降级逐 key 去重——并发用例用 mock RedisAccess 恒抛 CacheException，因 MockedStatic 线程局部；FollowCacheTest/LikeCacheServiceTest 降级断言改造 + 各 +1 并发去重）+ pytest all 124 passed + **运行时黑洞验证**（REDIS_HOST=203.0.113.1 启动即熔断开启，20 线程并发同 key `/search/IdSearch`：全部 200 且数据一致，MySQL Com_select 差值仅 **8** 次（无单飞应 ≈60-120，未随并发线性放大），日志实证"熔断开启中，快速失败（未访问 Redis）"；脚本 `temp_script/verify_cache02_degrade_singleflight.py`）+ 独立 subagent 评审通过（无🔴；🟡 抽降级装载公共方法防漂移已落实、🟡 并发窗口观测维持 sleep 惯例记录不修）。
 
+### 6.8 负缓存治理：区分"确认无数据"与"加载失败"（三期 T3 cache-03 新增，治 N2）
+
+> 目标：DB 瞬时抖动时，读路径**不把瞬时故障固化成假数据**——loader 的"确认无数据"与"加载失败"必须可区分，失败**不写 60s 空标记、不 DEL 既有数据 key**。对外行为零变化（内容 404 / 评论空 / 批量逐 key 跳过），只治理缓存写层（用户 2026-09-14 拍板=行为保持，不统一各域对外错误约定）。
+
+- **loader 契约（ContentCache/CommentCache）**：`return null` 仅表示**确认无数据**（DB 无行 / 媒体损坏 / 未知类型）→ 允许 `markEmpty`；**抛 `DatabaseException`** 表示**加载失败**（`TransactionTemplate` 已把 SQLException 包成它；意外异常统一包成 DatabaseException，防 NPE 等静默污染）；`ContentCache.addContent`/`refreshContent`（DB 提交后缓存同步）遇 DatabaseException 静默跳过（refresh 保留旧缓存读自愈，防提交后 500）。
+- **CacheAside 契约（新增）**：所有装载点捕获 `DatabaseException` → 记日志转 null——**不写空标记、不 DEL 数据 key**。5 个装载点：`getInternal` miss（内联 try/catch 直接 return null，**跳过 markEmpty**）/ `getInternal` 降级、`getBatch` 整批降级、`getBatch` 脏 JSON 单 key 降级（共用 `loadDegraded` helper，仅装载不写回 D4）/ `getBatch` miss 循环（内联 try/catch 跳过 markEmpty）。契约**仅对 `DatabaseException` 生效**——like/follow 域 loader 抛 `ServerException`（500 语义）不受影响，不统一对外错误约定。
+- **单飞语义**：DatabaseException 在单飞 lambda 内被转 null 后 FutureTask 正常完成、条目必然 remove（无残留）；并发等待者同得 null、下一请求全新重试，失败不以数据形式共享。
+- **验证**：JUnit **348 例全绿**（surefire 344 + pool 4；新增 7 例：CacheAsideTest +5——miss/降级/批量 miss 逐 key/批量整批降级/批量脏 JSON 单 key 降级 失败均不写空标记不 DEL；ContentCacheTest +2——loader 抛 DatabaseException、addContent 静默跳过；CommentCacheTest 改 2 断言 assertThrows）+ pytest all 124 passed + 独立 subagent 评审通过（无🔴；🟡 4 条：批量降级两路径补 2 例已落实、测试 mock 未走真实事务模板包装=已知限制、双日志级别可接受、全限定名已修）。
+
 ---
 
 ## 七、API 接口清单
@@ -572,8 +581,8 @@ src/main/webapp/
 |------|--------|----------|
 | user/service/UserServiceTest | 23 | 登录/注册/改密/改资料/isAdmin |
 | content/service/ContentServiceTest | 48 | 搜索/详情/评论查询/发布/评论区开关/编辑作品（换源/删图/改文案）/删除作品/内容审核下架恢复 |
-| content/service/ContentCacheTest | 16 | Redis 内容缓存：三态 loader 构建（含媒体 URL）/DB 无媒体损坏降级/索引读取与懒重建/**getContentsBatch 批量读映射与空值透传/推荐批量跳过 null 截断 limit/SCAN 遍历索引**/写路径失效契约/init 重建不 crash/失效方法/VO 复制 |
-| content/service/CommentCacheTest | 11 | Redis 评论缓存：三态 loader（树构建/deep-chain 归一化/无评论 null/DB 降级）/invalidateComments 显式失效/评论点赞定位失效/collectCommentIds 展平 |
+| content/service/ContentCacheTest | 18 | Redis 内容缓存：三态 loader 构建（含媒体 URL）/DB 无媒体损坏降级/索引读取与懒重建/**getContentsBatch 批量读映射与空值透传/推荐批量跳过 null 截断 limit/SCAN 遍历索引**/写路径失效契约/init 重建不 crash/失效方法/VO 复制 +**三期 T3 负缓存（loader SQLException 抛 DatabaseException、addContent DB 失败静默跳过）** |
+| content/service/CommentCacheTest | 11 | Redis 评论缓存：三态 loader（树构建/deep-chain 归一化/无评论 null/**三期 T3 起 SQLException 与意外异常抛 DatabaseException**）/invalidateComments 显式失效/评论点赞定位失效/collectCommentIds 展平 |
 | content/service/FeedServiceTest | 8 | 关注动态流 |
 | content/service/ProfileServiceTest | 12 | 用户主页 |
 | like/service/LikeServiceTest | 16 | 点赞/取消/读路径委托缓存类/空输入空 map |
@@ -590,13 +599,13 @@ src/main/webapp/
 | cache/RedisAccessTest | 9 | execute/executeVoid 取还连接、异常包装 CacheException（含连接获取失败）+ **三期 T1 熔断接线（熔断开启快速失败不触达连接池/连续失败达阈值拒绝/成功重置不误开/冷却期满探针恢复全链路/回调 CacheException 计失败口径）** |
 | cache/RedisCircuitBreakerTest | 8 | 熔断状态机（三期 T1）：默认 CLOSED 放行/连续失败达阈值 OPEN/成功重置计数/冷却期内拒绝/期满唯一探针（含并发抢闸恰一放行）/探针成功闭合/探针失败重开重置冷却 |
 | cache/SingleFlightTest | 4 | 并发同 key 只 load 一次、失败/成功 remove、不同 key 独立 |
-| cache/CacheAsideTest | 33 | 三态 read、Cache-Aside get 命中/回填/空标记、降级不写回、写失败 DEL、清空标记防假空、markEmpty/invalidate best-effort +T7 统计接线（hitData/MISS+LOAD/降级计数）+**T8 批量读（混合三态/全空标记跳过 loader/miss 空标记回填/整批降级/脏 JSON 单 key 降级/空入参/批量统计打点 + 单 key 一趟 pipeline 往返断言）** +**T9 滑动续期（命中续期抖动/空标记不续/批量续期/续期失败降级不影响读）**+**三期 T2 降级单飞（降级并发同 key loader 只执行一次且无写回/降级 loader 失败异常传播不缓存且下次重试/批量降级逐 key 去重）** |
+| cache/CacheAsideTest | 38 | 三态 read、Cache-Aside get 命中/回填/空标记、降级不写回、写失败 DEL、清空标记防假空、markEmpty/invalidate best-effort +T7 统计接线（hitData/MISS+LOAD/降级计数）+**T8 批量读（混合三态/全空标记跳过 loader/miss 空标记回填/整批降级/脏 JSON 单 key 降级/空入参/批量统计打点 + 单 key 一趟 pipeline 往返断言）** +**T9 滑动续期（命中续期抖动/空标记不续/批量续期/续期失败降级不影响读）**+**三期 T2 降级单飞（降级并发同 key loader 只执行一次且无写回/降级 loader 失败异常传播不缓存且下次重试/批量降级逐 key 去重）**+**三期 T3 负缓存（miss/降级/批量 miss 逐 key/批量整批降级/批量脏 JSON 单 key 降级 遇 DatabaseException 转 null 且不写空标记不 DEL）** |
 | cache/CacheStatsTest | 8 |（T7 新增）观测统计组件：domainOf 域解析全形态/前缀重叠优先级、六类计数分桶、惰性日志触发与摘要、打点异常吞掉 |
 | config/AppConfigCacheTtlTest | 5 |（T9 新增）分域 TTL 配置读取：content/comment/like/follow 四 getter 与 app.properties 绑定生效、非 0 互不串读 |
-| **合计** | **337** | - |
+| **合计** | **348** | - |
 
 > 注：`com.itheima.tools.CouponAdmin` 属 tools 测试脚本目录（非测试类，package 保留 `com.itheima.tools`，仅 import java.*，无主代码引用）；`util/MyConnectionPoolTest` 被测类未动（基建），测试文件留在 util 包不迁。
-> 用例数取自 `stage8-target/surefire-reports`（2026-09-13 实测，`mvn test` 全绿 337 例 = T1 末尾 332 + T2 新增 5（CacheAsideTest +3 降级单飞并发/失败语义、LikeCacheServiceTest +1 并发去重、FollowCacheTest +1 并发去重）；surefire 333 + 独立 fork pool-test 4）。
+> 用例数取自 `stage8-target/surefire-reports`（2026-09-14 实测，`mvn test` 全绿 348 例 = surefire 344 + 独立 fork pool-test 4；**三期 T3 新增 7 例**：CacheAsideTest +5（负缓存治理五路径）、ContentCacheTest +2（loader 抛 DatabaseException / addContent 静默跳过）、CommentCacheTest 改 2 断言 assertThrows）。
 
 > 构建输出：沙箱内 Maven 通过 `-Dstage8.buildDir` 指向 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（pom 默认 `./target`），原因是沙箱内 javac 无法把 worktree `target/classes` 作为 classpath（报"程序包不存在"）。
 > 离线仓库：新增测试依赖（junit/mockito/bytebuddy/surefire 等）的 `_remote.repositories` 已补 `>aliyun=` 来源行（只追加不删除），默认 aliyun 镜像下可离线解析。
@@ -670,6 +679,7 @@ src/main/webapp/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-09-14 | 2.14 | **三期缓存加固 T3 负缓存治理（fix(cache-03)，治 N2：区分"确认无数据"与"加载失败"）**：`ContentCache.loadContentFromDb` / `CommentCache.loadCommentTree` 移除内层 `catch(SQLException)→null`，SQLException 交由事务模板包成 `DatabaseException` 上抛（=加载失败，不污染空标记）；`return null` 仅保留"确认无数据"（DB 无行/媒体损坏/未知类型）；意外异常统一包成 DatabaseException；`ContentCache.addContent`/`refreshContent`（DB 提交后缓存同步）遇 DatabaseException 静默跳过（refresh 保留旧缓存读自愈，防提交后 500）；`CacheAside` 新增"loader 失败不得上报为空"契约——5 个装载点捕获 DatabaseException 转 null（getInternal miss / getBatch miss 循环 内联 try/catch 跳过 markEmpty；getInternal 降级 / getBatch 整批降级 / getBatch 脏 JSON 单 key 降级 共用 `loadDegraded` helper，删死代码 `loadBatch`），**不写空标记、不 DEL 数据 key**；契约仅对 DatabaseException 生效（like/follow 的 ServerException 500 语义不受影响）；用户拍板=对外行为保持（内容 404/评论空/批量逐 key 跳过），三态/空标记/TTL/key 命名/对外错误约定零改动；JUnit **348 例全绿**（surefire 344 + pool 4，T3 新增 7 例）+ pytest all 124 passed + 独立 subagent 评审通过（无🔴）；本文件 4.2/4.3/6.8/9.2/12 同步；BUSINESS_FLOW 3.1 注记；TASKS T3 已完成 + 执行回写；NEEDS 4.0 T3 执行定稿 |
 | 2026-09-13 | 2.13 | **三期缓存加固 T2 降级不放量（fix(cache-02)，治 N1 放量面：降级路径接入单飞）**：`CacheAside` 3 处降级 catch（getInternal / getBatch 整批 / getBatch 脏 JSON 单 key）改 `singleFlight.get(key, loader)`；`FollowCache` isFollowing/getSetMembers catch 改单飞全量装载作答（替代原单行/targeted 查询，删 isFollowingFromDb）、batchIsFollowing 增 degraded 标志降级态单飞全量作答（不再 targeted 批量查询与必失败的回填写入尝试）、删 isFollowingFromDb；`LikeCacheService` isContentLiked/isCommentLiked catch 全量装载作答（删 isContentLikedFromDb/isCommentLikedFromDb）、两批量降级态逐 cid 单飞装载作答；防漂移公共入口 `FollowCache.loadViaSingleFlight` / `LikeCacheService.loadLikersViaSingleFlight`；**统一规则=降级读与 miss 回填共用同一单飞 key 空间、仅装载不写回（D4）；SingleFlight 类零改动；失败异常传播不缓存可重试；与 T1 熔断正交**；LOAD 口径改为 leader 记一次；DAO 单行方法保留（写路径仍用）；JUnit **337 例全绿**（+5：CacheAsideTest +3 / LikeCacheServiceTest +1 / FollowCacheTest +1，并发用例用 mock RedisAccess 因 MockedStatic 线程局部）+ pytest all 124 passed + 运行时黑洞验证（20 并发同 key Com_select 差值仅 8、响应一致、熔断日志实证，temp_script/verify_cache02_degrade_singleflight.py）+ 独立 subagent 评审通过（无🔴）；本文件 4.1/4.2/4.3/6.7/9.2/12 同步；BUSINESS_FLOW 3.1 注记；TASKS T2 已完成 + 执行回写；NEEDS 4.0 T2 执行定稿 |
 | 2026-09-13 | 2.12 | **三期缓存加固 T1 韧性底座（fix(cache-01)，治 U-10/N1：Redis 超时 + 熔断快速失败）**：`MyRedisPool` 显式超时化（connect/so 各 1000ms + `setMaxWait(1000ms)`，8 参 JedisPool 构造器 `password/clientName=null` 保持原语义，public 签名零变化；治 U-10 此前走 Jedis 默认 2000ms 未显式化 + 池耗尽无限阻塞）；新建 `cache/RedisCircuitBreaker`（141 行，@Component，无新依赖）——全局单熔断（执行定稿：单 Redis 实例按域无收益）、连续失败 ≥5 开断、冷却 10s 期满 CAS 放行唯一探针、探针成功闭合/失败重开重置冷却（半开重开分支"先写冷却起点后 CAS"，写序经独立评审修正），AtomicInteger CAS 无锁 + 状态迁移日志；`RedisAccess.execute` 接线（tryAcquire 拒绝即抛 CacheException 快速失败不取连接 + finally 按成败回填；失败口径=从 execute 冒出的 CacheException 计一次，执行定稿已回写任务清单），熔断异常由 CacheAside/业务既有 catch 降级路径自然接住、**CacheAside 零改动**；`AppConfig` +5 getter、app.properties +5 键（connectTimeoutMs/soTimeoutMs/pool.maxWaitMs/breaker.failureThreshold/breaker.cooldownMillis）；双构造器兼容（@InjectConstructor IoC + 无参测试直调）；**验证**：JUnit **332 例全绿**（cache 包 58→71：RedisCircuitBreakerTest 8 例 + RedisAccessTest 4→9）+ pytest all 124 passed + 运行时双验证（黑洞地址注入 + 真实 docker stop Redis：熔断开启→快速失败×21 全 200 无超时等待→冷却期满探针失败重开→Redis 恢复探针成功"熔断恢复"，脚本 temp_script/verify_cache_failfast.py）+ 独立 subagent 评审通过（无🔴，🟡 写序与补测两条已落实）；发现既有问题 /start 索引路径 Redis 停机降级为空列表（非 T1 引入，登记 UNPLANNED_ISSUES U-11）；本文件 4.2/4.3/6.1/6.6/9.2/12 同步；BUSINESS_FLOW 3.1 注记；TASKS T1 已完成 + 执行回写；NEEDS 四.0 T1 执行定稿 |
 | 2026-09-13 | 2.11 | **C 缓存改造 T9 二期 O-8 TTL 精调（refactor(cache-09)，滑动续期 + 分域取值）**：`CacheAside` 读命中滑动续期——`get`/`getInternal`（新增 `probeRenew`）与 `getBatch` 命中数据 key 时同 pipeline 追加 `EXPIRE`（续期值=原 TTL ±10% 抖动、零额外往返），**空标记（`empty:`）从不续期**（防"假空"窗口延长，执行定稿），`read` 纯三态读不续期；`LikeCacheService`（scanLikeSet/两个批量）与 `FollowCache`（scanSet/getSetMembers/batchIsFollowing）原生 Set 三态读命中同样续期（值=域 TTL）；分域 TTL 取值（app.properties：content 10→30min、comment 保持 10min、like 10→15min、follow 10→30min），依据=双轮轻量压测 CacheStats 摘要（temp_script/pressure_cache.py，基线 vs 续期后：content 恒 100% hitData、comment 38.4%→42.5%、like 59.0%→64.8%）+ 各域读写特性；对外行为零变化（三态/空标记/DEL 降级/key 命名/TTL 永生一律不碰）；JUnit 323 例全绿（surefire 319 + pool 4 = T8 末尾 312 + 新增 11：CacheAsideTest +4 续期、LikeCacheServiceTest/FollowCacheTest 各 +1、AppConfigCacheTtlTest +5）+ pytest all 124 passed；本文件 4.2/6.2/6.5/9.2/12 同步；BUSINESS_FLOW 3.1 注记；NEEDS 4.14 T9 执行定稿 |

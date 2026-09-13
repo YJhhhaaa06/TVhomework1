@@ -2,6 +2,7 @@ package com.itheima.cache;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.itheima.exception.CacheException;
+import com.itheima.exception.DatabaseException;
 import com.itheima.util.MyRedisPool;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
@@ -263,6 +264,39 @@ class CacheAsideTest {
         }
     }
 
+    // ==================== 三期 T3 负缓存治理：加载失败 ≠ 确认无数据 ====================
+
+    @Test
+    void getMissLoaderDbFailureReturnsNullWithoutEmptyMarkerOrDel() {
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            stubProbe(jedis, false, null);
+
+            assertNull(cache.get("content:1", SampleDto.class,
+                    () -> { throw new DatabaseException("db down"); }, 100));
+
+            // 加载失败 ≠ 确认无数据：不写空标记、不 DEL 数据 key（读路径不固化瞬时故障）
+            verify(jedis, never()).setex(eq("empty:content:1"), anyLong(), anyString());
+            verify(jedis, never()).del("content:1");
+            verify(jedis, never()).setex(eq("content:1"), anyLong(), anyString());
+        }
+    }
+
+    @Test
+    void getRedisErrorAndLoaderDbFailureReturnsNullWithoutWriteBack() {
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            stubRedisDown(jedis);
+
+            assertNull(cache.get("content:1", SampleDto.class,
+                    () -> { throw new DatabaseException("db down"); }, 100));
+
+            // 降级路径：DB 加载失败转 null（不写回，D4）
+            verify(jedis, never()).setex(anyString(), anyLong(), anyString());
+            verify(jedis, never()).del(anyString());
+        }
+    }
+
     // ==================== getBatch() 批量读（T8） ====================
 
     @Test
@@ -305,6 +339,79 @@ class CacheAsideTest {
             verify(jedis, times(1)).pipelined();
             verify(jedis, never()).exists(anyString());
             verify(jedis, never()).get(anyString());
+        }
+    }
+
+    @Test
+    void getBatchLoaderDbFailureOnOneKeyReturnsNullForThatKeyWithoutEmptyMarker() {
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            Pipeline p = mock(Pipeline.class);
+            when(jedis.pipelined()).thenReturn(p);
+            Response<Boolean> notEmpty = boolResponse(false);
+            Response<String> noJson = strResponse(null);
+            when(p.exists(anyString())).thenReturn(notEmpty);
+            when(p.get(anyString())).thenReturn(noJson);
+
+            Map<String, SampleDto> result = cache.getBatch(
+                    List.of("k1", "k2"), SampleDto.class,
+                    k -> {
+                        if (k.equals("k2")) {
+                            throw new DatabaseException("db down");
+                        }
+                        return new SampleDto(1L, "one");
+                    }, 100);
+
+            assertEquals("one", result.get("k1").getName());
+            assertNull(result.get("k2")); // 该 key 加载失败 → null（逐 key 优雅降级，不拖垮整批）
+            // 失败的 k2 不写空标记、不 DEL 数据 key
+            verify(jedis, never()).setex(eq("empty:k2"), anyLong(), anyString());
+            verify(jedis, never()).del("k2");
+            verify(jedis).setex(eq("k1"), anyLong(), anyString());
+        }
+    }
+
+    @Test
+    void getBatchRedisErrorAndLoaderDbFailureReturnsAllNullWithoutWriteBack() {
+        CacheAside degradedCache = newDegradedCache();
+
+        Map<String, SampleDto> result = degradedCache.getBatch(
+                List.of("k1", "k2"), SampleDto.class,
+                k -> { throw new DatabaseException("db down"); }, 100);
+
+        // 整批 Redis 降级 + DB 加载失败 → 逐 key 转 null（不 500、不拖垮整批；降级路径不写回）
+        assertNull(result.get("k1"));
+        assertNull(result.get("k2"));
+    }
+
+    @Test
+    void getBatchDirtyJsonLoaderDbFailureReturnsNullForThatKey() {
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            Pipeline p = mock(Pipeline.class);
+            when(jedis.pipelined()).thenReturn(p);
+            // Response 必须先建好再 stub Pipeline（避免 thenReturn 内嵌 stubbing）
+            Response<Boolean> notEmpty = boolResponse(false);
+            Response<String> badJson = strResponse("{not-json");
+            Response<String> noJson = strResponse(null);
+            when(p.exists(anyString())).thenReturn(notEmpty);
+            when(p.get("k1")).thenReturn(badJson);
+            when(p.get("k2")).thenReturn(noJson);
+
+            Map<String, SampleDto> result = cache.getBatch(
+                    List.of("k1", "k2"), SampleDto.class,
+                    k -> {
+                        if (k.equals("k1")) {
+                            throw new DatabaseException("db down");
+                        }
+                        return new SampleDto(1L, "one");
+                    }, 100);
+
+            // k1 脏 JSON → 单 key 降级 → DB 加载失败 → null（不写空标记、不 DEL）；k2 miss 正常回填
+            assertNull(result.get("k1"));
+            assertEquals("one", result.get("k2").getName());
+            verify(jedis, never()).setex(eq("empty:k1"), anyLong(), anyString());
+            verify(jedis, never()).del("k1");
         }
     }
 

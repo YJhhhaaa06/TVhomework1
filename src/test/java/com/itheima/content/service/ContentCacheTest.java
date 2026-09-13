@@ -10,6 +10,7 @@ import com.itheima.content.model.cache.ContentCacheDTO;
 import com.itheima.content.model.entity.ContentMedia;
 import com.itheima.content.model.vo.ContentDetailVO;
 import com.itheima.content.model.vo.ContentVO;
+import com.itheima.exception.DatabaseException;
 import com.itheima.util.TransactionTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -140,6 +141,25 @@ class ContentCacheTest {
         when(contentDao.findContent(conn, 1L)).thenReturn(null);
 
         assertNull(cache.getContent(1L));
+    }
+
+    @Test
+    void getContentSqlErrorThrowsDatabaseException() throws SQLException {
+        // 三期 T3：DB 查询失败 = 加载失败（抛 DatabaseException），不再是"确认无数据"→ 不写空标记
+        when(contentDao.findContent(conn, 1L)).thenThrow(new SQLException("db down"));
+
+        assertThrows(DatabaseException.class, () -> cache.getContent(1L));
+    }
+
+    @Test
+    void addContentDbErrorSkipsCacheSyncSilently() throws SQLException {
+        // 三期 T3：提交后缓存同步遇 DB 瞬时失败 → 静默跳过（不 500、不写缓存，读自愈）
+        when(contentDao.findContent(conn, 5L)).thenThrow(new SQLException("db down"));
+
+        assertDoesNotThrow(() -> cache.addContent(5L));
+
+        verify(cacheAside, never()).writeOrInvalidate(anyString(), any(ContentCacheDTO.class), anyLong());
+        verify(jedis, never()).lpush(anyString(), anyString());
     }
 
     @Test
