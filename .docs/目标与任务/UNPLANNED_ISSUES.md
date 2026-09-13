@@ -22,10 +22,13 @@
 
 | 编号 | 类别 | 问题 | 位置/证据 | 来源 | 状态 |
 |----|------|------|-----------|------|------|
-| U-05 | 代码债 | `LikeService.likeContent` 缓存更新在事务外，靠定时刷新兜底（计数暂可能不准）——已结转至后续方向 C，此处留痕 | LikeService.java（缓存写入点） | 结转向 P5（需求文档二） | 已结转方向 C |
-| U-07 | 观察（包架构） | content ↔ comment 包层循环依赖：content 域共享组件（ContentCacheDTO 等）被 comment 域引用，而 content 域又引用 comment 域的 CommentService。**非 IoC/Bean 环**（依赖链 ContentService→CommentService→ContentCacheManager 有向无环，容器可正常构建、测试全绿），仅包架构不纯净，Java 允许 | ContentService 注入 CommentService；CommentService 注入 ContentCacheManager | 本期（B）探索记录（2026-09-10） | 待定（消化点：后续 C 缓存改造） |
+| U-05 | 代码债 | `LikeService.likeContent` 缓存更新在事务外，靠定时刷新兜底（计数暂可能不准）——已结转至后续方向 C，此处留痕 | LikeService.java（缓存写入点） | 结转向 P5（需求文档二） | 已消化（260913 周期 T6，P5 已关闭） |
+| U-07 | 观察（包架构） | content ↔ comment 包层循环依赖：content 域共享组件（ContentCacheDTO / ContentCache / CommentCache 等）被 comment 域引用，而 content 域又引用 comment 域的 CommentService。**非 IoC/Bean 环**（依赖链有向无环，容器可正常构建、测试全绿），仅包架构不纯净，Java 允许 | content.ContentService 注入 comment.CommentService（含 comment.dao.CommentDao）；comment.CommentService 注入 content.service 的 ContentCache / CommentCache | 260912 周期（B）探索记录（2026-09-10）；260913 周期复查（2026-09-13） | 待定（C 周期复查：**仍在**，未自然解除；消化点顺延至后续周期） |
+| U-08 | 代码债 | 缓存 key 规范"唯一源"已出现漂移：内容索引 key `content:index:{type}:{category}` 由业务包内的 `ContentCache.indexKey()` 自行拼接（`CacheKeys` 无对应生成方法），却由基建 `CacheKeys.domainOf()` 按 `content:index:` 前缀解析——生成与解析不同源 | `ContentCache.java:339` `indexKey()`；`CacheKeys.java:91` `domainOf` 分支 | 260913 周期归档后代码探查（2026-09-13） | **已排期 → 本周期 T6**（R-11 拍板，2026-09-13） |
+| U-09 | 代码债 | 缓存行为（三态/空标记/降级/单飞/续期）存在 **5 份重复实现**：`CacheAside` 1 份 + `ContentCache`/`CommentCache`/`LikeCacheService`/`FollowCache` 各 1 份（原生 Set 路径走不了 CacheAside，只能各域手搓）。域缓存类合计 ≈1774 行 > cache 基建包 ≈881 行 | `CacheAside.java`；`FollowCache.java`（scanSet/writeSet/单飞/降级各一段）；`LikeCacheService.java`（scanLikeSet 等） | 260913 周期归档后代码探查（2026-09-13） | 待定（**本周期明确不做**：不与"改行为"的修复混在同一周期，理由见 NEEDS 4.3；只在 T2/T4 必要处做定向复用） |
+| U-10 | 代码债 | Redis 宕机缺"快速失败"：`app.properties` 只有 host/port/maxTotal/maxIdle/minIdle，**无 timeout 配置**（走 Jedis 默认 ≈2s），**无熔断**。降级语义本身正确（不 500），但 Redis 宕机期间每个请求都要先等一次连接超时，延迟被放大 | `app.properties:10-15`；`MyRedisPool.java`（静态池，未设 timeout） | 260913 周期归档后代码探查（2026-09-13） | **已排期 → 本周期 T1**（R-11 拍板，2026-09-13） |
 
-> 注：U-05 与需求文档"二、结转遗留未决项 P5"重复，但按"颗粒度"归本档留痕，方向归属仍以需求文档为准（C 缓存改造时消化）。
+> 注：U-05 与需求文档"二、结转遗留未决项 P5"重复，但按"颗粒度"归本档留痕；P5 已随 260913 周期 T6 消化，本行仅留痕。
 
 ***
 
