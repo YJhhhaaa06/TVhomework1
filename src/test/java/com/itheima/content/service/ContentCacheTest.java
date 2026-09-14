@@ -10,6 +10,7 @@ import com.itheima.content.model.cache.ContentCacheDTO;
 import com.itheima.content.model.entity.ContentMedia;
 import com.itheima.content.model.vo.ContentDetailVO;
 import com.itheima.content.model.vo.ContentVO;
+import com.itheima.exception.CacheException;
 import com.itheima.exception.DatabaseException;
 import com.itheima.util.TransactionTemplate;
 import org.junit.jupiter.api.BeforeEach;
@@ -274,6 +275,46 @@ class ContentCacheTest {
         verify(jedis).lpush("content:index:2:-1", "5");
         verify(jedis).lpush("content:index:-1:1", "5");
         verify(jedis).lpush("content:index:-1:-1", "5");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void addContentIndexWriteFailureDeletesIndexKeysForSelfHeal() throws SQLException {
+        // 三期 T4/N4：索引写失败（Redis 抖动）→ best-effort DEL 所属 4 个索引 key，
+        // 下次推荐读 ensureIndex 发现缺失即触发既有单飞懒重建全量自愈
+        when(contentDao.findContent(conn, 5L)).thenReturn(dto(5L, 2, 1));
+        when(contentMediaDao.findMedia(conn, 5L)).thenReturn(videoMediaMap());
+        // 第一次调用（写索引）抛 CacheException；第二次（自愈 DEL）直通 mock Jedis
+        doThrow(new CacheException("redis blip"))
+                .doAnswer(inv -> {
+                    Consumer<Jedis> fn = inv.getArgument(0);
+                    fn.accept(jedis);
+                    return null;
+                })
+                .when(redisAccess).executeVoid(any());
+
+        assertDoesNotThrow(() -> cache.addContent(5L));
+
+        // content key 写入不受索引失败影响（writeOrInvalidate 正常执行）；4 个索引 key 各被 DEL 一次（自愈触发器）；写入确实失败过（无 lpush）
+        verify(cacheAside).writeOrInvalidate(eq(CacheKeys.content(5L)), any(ContentCacheDTO.class), anyLong());
+        verify(jedis).del("content:index:2:1");
+        verify(jedis).del("content:index:2:-1");
+        verify(jedis).del("content:index:-1:1");
+        verify(jedis).del("content:index:-1:-1");
+        verify(jedis, never()).lpush(anyString(), anyString());
+    }
+
+    @Test
+    void addContentIndexWriteAndHealDeleteFailureDoesNotThrow() throws SQLException {
+        // 三期 T4/N4：Redis 持续挂（写失败 + 自愈 DEL 也失败）→ 双层 best-effort，绝不抛业务异常
+        when(contentDao.findContent(conn, 5L)).thenReturn(dto(5L, 2, 1));
+        when(contentMediaDao.findMedia(conn, 5L)).thenReturn(videoMediaMap());
+        doThrow(new CacheException("redis down")).when(redisAccess).executeVoid(any());
+
+        assertDoesNotThrow(() -> cache.addContent(5L));
+
+        verify(jedis, never()).lpush(anyString(), anyString());
+        verify(jedis, never()).del(anyString());
     }
 
     @Test

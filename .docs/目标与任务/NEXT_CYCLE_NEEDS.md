@@ -100,6 +100,13 @@
 * 残余竞态（已接受）：exists 检查→setex 的毫秒间隙内并发写入时空标记可能覆盖其上——数据 key 未被删，空标记 60s 过期或下次业务写 `writeOrInvalidate` 清空标记即自愈，无真数据丢失。
 * 落点：`CacheAside.markEmpty` + `FollowCache.writeSet` 空分支（详见 `常青/CURRENT_ARCHITECTURE.md` 6.9；验证 JUnit 351 全绿含并发不假空时序测试 + pytest 124 见 `NEXT_CYCLE_TASKS.md` T4 执行回写 04a）。
 
+**T4-②（fix(cache-04b)，2026-09-14 拍板并落地——索引写失败自愈，治 N4）**：
+
+* 拍板取向（plan 定稿）：**自愈 = `addToIndex` 写失败时 catch 内 best-effort DEL 本内容所属 4 个索引 key** → 下次推荐读 `ensureIndex` 发现缺失即触发既有单飞懒重建（`loadAllWithoutMedia` + `rebuildIndexes`）全量重建——**复用既有懒重建基建、零新增 key**（否决脏标记 key：触碰 key 命名边界且 T6 U-08 要管；否决完整性校验：无便宜一致性信号、成本高）。`indexKeysOf` 与 `lremAndLpush` 同源提取；双层 best-effort（DEL 也失败不抛，读路径同样降级）。
+* 失败场景三分收敛：抖动已过 → DEL 成功自愈；Redis 持续挂 → DEL 也失败与现状一致（无新增伤害）；DEL 部分成功 → 已 DEL 的 key 缺失照样触发全量重建 → 收敛。
+* 残余窗口（已接受）：Redis 持续挂恢复后索引仍可能不完整（与现状一致，读路径降级兜底）；懒重建触发面仍限 `getRecommendByFilter`（与现状一致，不做 R-10）。
+* 落点：`ContentCache.addToIndex` + `indexKeysOf` + `deleteIndexKeysQuietly`（详见 `常青/CURRENT_ARCHITECTURE.md` 6.10；验证 JUnit 353 全绿 +2 + pytest 124 见 `NEXT_CYCLE_TASKS.md` T4 执行回写 04b）。
+
 ### 4.1 候选痛点（2026-09-13 代码复查，**待评审纳入，尚未拍板**）
 
 > 编号 `N1`~`N9` 为**本档内部编号**（与已归档周期的 `H*` / `O-*` / `P*` 编号体系无关）。每条给出"如果不改，什么时候会出什么问题"的具体场景。
@@ -176,3 +183,4 @@
 | 2026-09-13 | 0.7 | **T2 执行定稿回写**（fix(cache-02)）：4.0 追加 T2 技术决策——统一规则（降级读=miss 同款单飞+全量 loader、仅装载不写回/D4，与 miss 共用单飞 key 空间，SingleFlight 零改动）、治理面 10 处降级读分支（单 key 单行查询→全量装载作答删 3 个 *FromDb、批量 targeted+必失败回填→单飞全量作答）、失败语义（异常传播不缓存可重试）、与 T1 熔断正交、LOAD 口径 leader 记一次；验证 JUnit 337 + pytest 124 + 黑洞运行时（20 并发同 key Com_select 差值 8） |
 | 2026-09-14 | 0.8 | **T3 执行定稿回写**（fix(cache-03)）：4.0 追加 T3 技术决策——拍板=对外行为保持（用户 2026-09-14），loader 失败抛 DatabaseException（事务模板已包 SQLException），CacheAside 5 装载点捕获转 null（不写空标记不 DEL，miss 跳过 markEmpty，降级共用 loadDegraded），addContent/refreshContent 写路径守卫；N2 治理闭环（4.1 行 N2 对应 T3）；验证 JUnit 348 + pytest 124 + subagent 评审无🔴 |
 | 2026-09-14 | 0.9 | **T4-① 执行定稿回写**（fix(cache-04a)）：4.0 追加 T4-① 技术决策——拍板=exists 守卫（对齐 writeSet 260913 先例，非 Lua），markEmpty 守卫"数据 key 不存在才写空标记"+ del(dataKey) 随守卫移除（死代码+竞态危害源），writeSet 空分支定向复用（U-09 T4 定向复用）；残余竞态=exists→setex 毫秒间隙可自愈（已接受）；N3 治理闭环（4.1 行 N3 对应 T4）；验证 JUnit 351（+3 含并发不假空时序测试）+ pytest 124；T4 拆 3 commit 校准 fix(cache-04a/04b/04c) |
+| 2026-09-14 | 1.0 | **T4-② 执行定稿回写**（fix(cache-04b)）：4.0 追加 T4-② 技术决策——自愈=addToIndex 写失败 catch 内 best-effort DEL 所属 4 个索引 key 复用既有懒重建（零新增 key，否决脏标记/完整性校验），indexKeysOf 与 lremAndLpush 同源，双层 best-effort；失败三分收敛；残余窗口=持续挂恢复后仍可能不完整（与现状一致，不做 R-10）；N4 治理闭环（4.1 行 N4 对应 T4）；验证 JUnit 353（+2）+ pytest 124 |

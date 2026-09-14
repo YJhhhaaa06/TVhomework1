@@ -46,7 +46,8 @@ import redis.clients.jedis.resps.ScanResult;
  *
  * <p>本类只负责内容；评论缓存见 {@link CommentCache}（T3 迁出）。任何缓存失败一律降级（4.2），
  * init 不 crash 应用（旧 ContentCacheManager 的 HashMap 实现已随 T6 移除）。
- * 索引懒重建：索引 key 缺失（Redis 重启/被清）时按需从 DB 重建，防 /start 空推荐。
+ * 索引懒重建：索引 key 缺失（Redis 重启/被清）时按需从 DB 重建，防 /start 空推荐；
+ * 索引写入失败（三期 T4/N4）时 best-effort DEL 所属索引 key 让读路径触发懒重建自愈。
  */
 @Component
 public class ContentCache implements Initializable {
@@ -427,21 +428,44 @@ public class ContentCache implements Initializable {
                 lremAndLpush(j, dto.getType(), dto.getCategoryId(), dto.getId());
             });
         } catch (CacheException e) {
-            LOGGER.log(Level.WARNING, "内容索引写入失败, contentId=" + dto.getId(), e);
+            // 三期 T4/N4：索引写失败不自愈会导致内容长期不进推荐（索引 key 存在则懒重建永不触发）——
+            // best-effort DEL 本内容所属索引 key，下次推荐读 ensureIndex 发现缺失即触发既有单飞懒重建全量自愈
+            LOGGER.log(Level.WARNING, "内容索引写入失败，DEL 索引 key 让读路径懒重建自愈, contentId="
+                    + dto.getId(), e);
+            deleteIndexKeysQuietly(indexKeysOf(dto.getType(), dto.getCategoryId()));
         }
     }
 
     private void lremAndLpush(redis.clients.jedis.Jedis j, int type, int categoryId, long contentId) {
-        String[] keys = {
+        String[] keys = indexKeysOf(type, categoryId);
+        String id = String.valueOf(contentId);
+        for (String k : keys) {
+            j.lrem(k, 0, id);
+            j.lpush(k, id);
+        }
+    }
+
+    /** 一条内容所属的 4 个索引 key（本 type/cid + 两个通配维度 + 全通配）；写入与自愈 DEL 同源。 */
+    private static String[] indexKeysOf(int type, int categoryId) {
+        return new String[]{
             indexKey(type, categoryId),
             indexKey(type, -1),
             indexKey(-1, categoryId),
             indexKey(-1, -1)
         };
-        String id = String.valueOf(contentId);
-        for (String k : keys) {
-            j.lrem(k, 0, id);
-            j.lpush(k, id);
+    }
+
+    /** 索引自愈 DEL（best-effort，三期 T4/N4）：DEL 失败（Redis 持续挂）不抛出——读路径同样降级，与现状一致。 */
+    private void deleteIndexKeysQuietly(String[] indexKeys) {
+        try {
+            redisAccess.executeVoid(j -> {
+                for (String k : indexKeys) {
+                    j.del(k);
+                }
+            });
+        } catch (CacheException e) {
+            LOGGER.log(Level.WARNING, "索引自愈 DEL 也失败（疑似 Redis 持续异常），维持降级, firstKey="
+                    + indexKeys[0], e);
         }
     }
 

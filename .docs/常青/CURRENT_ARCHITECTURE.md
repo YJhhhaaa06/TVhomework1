@@ -443,6 +443,16 @@ com.itheima/
 - **writeSet 定向复用（U-09）**：`FollowCache.writeSet` 空分支由手写"exists 守卫 + setex + del(setKey)"（260913 T5 review 必修②的先例，同一坑只修了 follow 一半）改为统一调 `cacheAside.markEmpty(setKey)`——守卫语义同源、先例守卫内的 del 一并消除；5 处 markEmpty 调用方（CacheAside miss 两处 / LikeCacheService 空分支两处 / FollowCache.writeSet 空分支）全部内聚同一实现。
 - **验证**：JUnit **351 例全绿**（T3 末 348 +3：markEmptySkipsWhenDataKeyExists 守卫生效 / markEmptyExistsFailureSkipsQuietly 守卫检查失败保守不写 / concurrentBackfillAndWriteNoFakeEmpty 两线程确定性时序——B 写真数据完成后 A 的 loader 才返回 null，断言无空标记无 DEL 真数据保留；测试适配 6 处断言随 del 移除与 writeSet 复用调整）+ pytest all 124 passed 无回归。
 
+### 6.10 索引写失败自愈（三期 T4-② cache-04b 新增，治 N4）
+
+> 目标：发布内容时 Redis 一次抖动导致 `addToIndex` 失败（content key 已写成功）→ 该内容不在任何 `content:index:*` 里，而 `ensureIndex` 只判索引 key 是否存在 → 懒重建永不触发 → **内容长期不进首页推荐**，只能等重启 init 全量重建。对外行为零变化。
+
+- **自愈机制**：`ContentCache.addToIndex` 写失败（catch `CacheException`）时 **best-effort DEL 本内容所属 4 个索引 key**（`indexKeysOf(type, categoryId)` 与 `lremAndLpush` 同源提取，防两处硬编码漂移）→ 下次推荐读 `getRecommendByFilter` → `ensureIndex` 发现索引 key 缺失 → 走既有单飞懒重建（`INDEX_REBUILD_KEY` 单飞 + `loadAllWithoutMedia` + `rebuildIndexes` 全量 DEL/重建）→ 内容重新进推荐。**复用既有懒重建基建、零新增 key**（否决脏标记 key：触碰 key 命名边界且 T6 U-08 归一要管；否决完整性校验：无便宜一致性信号）。
+- **双层 best-effort**：自愈 DEL 也失败（Redis 持续挂）→ `deleteIndexKeysQuietly` 仅记日志不抛——读路径同样降级走 DB，与现状一致、无新增伤害（"任何缓存失败不得导致业务失败"）。
+- **失败场景三分收敛**：抖动已过 → DEL 成功自愈；Redis 持续挂 → DEL 也失败与现状一致；DEL 部分成功（命令序列中断）→ 已 DEL 的 key 缺失照样触发全量重建（rebuildIndexes 本身全量 DEL+重建）→ 收敛。
+- **残余窗口（已接受）**：Redis 持续挂恢复后索引仍可能不完整（与现状一致，读路径降级兜底）；懒重建触发面仍限 `getRecommendByFilter` 读路径（与现状一致，不做 R-10 定期重建）。
+- **验证**：JUnit **353 例全绿**（04a 末 351 +2：addContentIndexWriteFailureDeletesIndexKeysForSelfHeal——写抛/DEL 直通差异化 stub，断言 4 key 各 DEL 一次且无 lpush；addContentIndexWriteAndHealDeleteFailureDoesNotThrow——恒抛双层失败不抛）+ pytest all 124 passed 无回归。
+
 ---
 
 ## 七、API 接口清单
