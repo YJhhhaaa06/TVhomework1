@@ -433,6 +433,16 @@ com.itheima/
 - **单飞语义**：DatabaseException 在单飞 lambda 内被转 null 后 FutureTask 正常完成、条目必然 remove（无残留）；并发等待者同得 null、下一请求全新重试，失败不以数据形式共享。
 - **验证**：JUnit **348 例全绿**（surefire 344 + pool 4；新增 7 例：CacheAsideTest +5——miss/降级/批量 miss 逐 key/批量整批降级/批量脏 JSON 单 key 降级 失败均不写空标记不 DEL；ContentCacheTest +2——loader 抛 DatabaseException、addContent 静默跳过；CommentCacheTest 改 2 断言 assertThrows）+ pytest all 124 passed + 独立 subagent 评审通过（无🔴；🟡 4 条：批量降级两路径补 2 例已落实、测试 mock 未走真实事务模板包装=已知限制、双日志级别可接受、全限定名已修）。
 
+### 6.9 空标记写入存在守卫（三期 T4-① cache-04a 新增，治 N3）
+
+> 目标：写路径竞态治理——miss 回填 leader 的 loader 读 DB（读到"无数据"）与回填写空标记之间，若并发业务写刚把真数据写入数据 key，旧实现 `setex(empty:)+del(dataKey)` 会把真数据删掉并固化成 60s 假空（刚发布的内容/评论/点赞状态不可见）。对外行为零变化，只治缓存写层。
+
+- **markEmpty 存在守卫**：`CacheAside.markEmpty` 改为 `if (!j.exists(dataKey))` 才 `setex(empty:{dataKey}, 60)`——数据 key 已存在（并发回填/业务写 `writeOrInvalidate` 刚写入真数据）时跳过，**不写空标记、不 DEL**；**原 `del(dataKey)` 随守卫移除**（守卫内为死代码——进入分支前提即数据 key 不存在；且旧实现竞态下它是 N3 危害组成部分——删并发刚写入的真数据）。守卫检查（exists）失败同归 `CacheException` catch：宁可少写空标记（多一次 DB 查），绝不误写（假空）。
+- **残余竞态（已接受）**：exists 检查→setex 之间的毫秒间隙内并发写入时空标记可能覆盖其上——数据 key 未被删，空标记 60s 过期或下次业务写 `writeOrInvalidate` 清空标记即自愈，无真数据丢失。
+- **del 移除的行为差异（评审备注，接受）**：缓存 set 已有数据但 DB 已变空（陈旧缓存）时，回填读 DB 空集 → 守卫见数据 key 存在跳过 → **陈旧 set 存活至自身 TTL**（旧实现会 DEL 并固化空标）；期间读命中陈旧数据、TTL 过期后自愈——属"守卫不删真数据"设计的对称代价，权衡可接受。
+- **writeSet 定向复用（U-09）**：`FollowCache.writeSet` 空分支由手写"exists 守卫 + setex + del(setKey)"（260913 T5 review 必修②的先例，同一坑只修了 follow 一半）改为统一调 `cacheAside.markEmpty(setKey)`——守卫语义同源、先例守卫内的 del 一并消除；5 处 markEmpty 调用方（CacheAside miss 两处 / LikeCacheService 空分支两处 / FollowCache.writeSet 空分支）全部内聚同一实现。
+- **验证**：JUnit **351 例全绿**（T3 末 348 +3：markEmptySkipsWhenDataKeyExists 守卫生效 / markEmptyExistsFailureSkipsQuietly 守卫检查失败保守不写 / concurrentBackfillAndWriteNoFakeEmpty 两线程确定性时序——B 写真数据完成后 A 的 loader 才返回 null，断言无空标记无 DEL 真数据保留；测试适配 6 处断言随 del 移除与 writeSet 复用调整）+ pytest all 124 passed 无回归。
+
 ---
 
 ## 七、API 接口清单

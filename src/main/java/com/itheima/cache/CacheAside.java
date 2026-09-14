@@ -287,15 +287,26 @@ public class CacheAside {
     }
 
     /**
-     * 写空标记（独立 key + 短 TTL，4.4）：确认"已加载、无数据"，并清掉旧数据 key。
-     * 失败仅记日志，不抛出（读路径会视同 miss 走 DB 自愈）。
+     * 写空标记（独立 key + 短 TTL，4.4）：确认"已加载、无数据"。
+     *
+     * <p>三期 T4/N3 存在守卫：数据 key 已存在（并发回填/业务写刚写入真数据）时跳过，
+     * 防止空标记 + DEL 把真数据固化成 60s 假空（对齐 FollowCache.writeSet 260913 先例）；
+     * 原 del(dataKey) 一并移除——守卫内为死代码，且竞态下会删真数据，是 N3 危害的一部分。
+     *
+     * <p>失败仅记日志，不抛出（读路径会视同 miss 走 DB 自愈）。守卫检查（exists）失败
+     * 同样归入此分支：宁可少写空标记（多一次 DB 查询），绝不误写（假空）。
+     *
+     * <p>残余竞态（已接受，见任务清单 T4 回写）：exists 检查 → setex 之间的毫秒间隙内
+     * 并发写入时，空标记可能覆盖其上——数据 key 未被删，空标记 60s 过期或下次业务写
+     * {@link #writeOrInvalidate} 清空标记即自愈，无真数据丢失。
      */
     public void markEmpty(String dataKey) {
         try {
             redis.executeVoid(j -> {
-                j.setex(CacheKeys.empty(dataKey), CacheKeys.EMPTY_MARKER_TTL_SECONDS,
-                        CacheKeys.EMPTY_MARKER_VALUE);
-                j.del(dataKey);
+                if (!j.exists(dataKey)) {
+                    j.setex(CacheKeys.empty(dataKey), CacheKeys.EMPTY_MARKER_TTL_SECONDS,
+                            CacheKeys.EMPTY_MARKER_VALUE);
+                }
             });
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "空标记写入失败, key=" + dataKey, e);

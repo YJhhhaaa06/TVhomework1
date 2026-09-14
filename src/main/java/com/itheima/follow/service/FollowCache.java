@@ -454,25 +454,15 @@ public class FollowCache {
         });
     }
 
-    /** 关注/粉丝集回填：非空 → SADD-union + EXPIRE；空 → 仅当 set 不存在才写空标记（4.4）。
+    /** 关注/粉丝集回填：非空 → SADD-union + EXPIRE；空 → 空标记（统一走 CacheAside.markEmpty）。
      *
-     * <p>空分支先判 set 存在再写：防并发下新关注已 SADD 进 set、而另一回填读到旧空 DB 时
-     * 用空标记覆盖刚写入的 set，造成新关系最长空标记 TTL（60s）不可见（读路径空标记优先）。
+     * <p>三期 T4/N3：空集写空标记统一走 {@link CacheAside#markEmpty}（内含"数据 key 不存在
+     * 才写"的存在守卫，U-09 定向复用）——原手写块"exists 守卫 + setex + del(setKey)"与公共
+     * 实现重复，且守卫内的 del 为死代码（竞态下会删并发刚写入的真数据），随复用一并消除。
      */
     private void writeSet(String setKey, List<Long> ids) {
         if (ids == null || ids.isEmpty()) {
-            try {
-                redis.executeVoid(j -> {
-                    if (!j.exists(setKey)) {
-                        j.setex(CacheKeys.empty(setKey), CacheKeys.EMPTY_MARKER_TTL_SECONDS,
-                                CacheKeys.EMPTY_MARKER_VALUE);
-                        j.del(setKey);
-                    }
-                });
-            } catch (CacheException e) {
-                LOGGER.log(Level.WARNING, "空标记写入失败, key=" + setKey, e);
-                stats.record(CacheStats.Event.WRITE_FAIL, setKey);
-            }
+            cacheAside.markEmpty(setKey);
             return;
         }
         try {

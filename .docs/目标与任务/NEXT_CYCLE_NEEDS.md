@@ -93,6 +93,13 @@
 * 写路径守卫：`ContentCache.addContent`/`refreshContent`（DB 提交后缓存同步）遇 `DatabaseException` 静默跳过（refresh 保留旧缓存，读自愈），防提交后 500。
 * 落点：`CacheAside` + `ContentCache` + `CommentCache`（详见 `常青/CURRENT_ARCHITECTURE.md` 6.8；验证 JUnit 348 + pytest 124 + subagent 评审无🔴见 `NEXT_CYCLE_TASKS.md` T3 执行回写）。
 
+**T4-①（fix(cache-04a)，2026-09-14 拍板并落地——空标记写入存在守卫，治 N3）**：
+
+* 拍板取向（用户 2026-09-14）：**exists 守卫**（对齐 `FollowCache.writeSet` 260913 先例）而非 Lua 原子化——Lua 需 RedisAccess 新增 eval 路径且 mock 复杂化，守卫已把竞态窗口从"loader 全程"缩到毫秒级。T4 拆 3 commit（G1 校准）：`fix(cache-04a/04b/04c)`，本项=a。
+* 实现：`CacheAside.markEmpty` 加 `if (!j.exists(dataKey))` 守卫——数据 key 已存在（并发回填/业务写刚写入真数据）时跳过，**不写空标记、不 DEL**；**原 `del(dataKey)` 随守卫移除**（守卫内为死代码，且现状竞态下是 N3 危害的组成部分——删掉并发刚写入的真数据）；`FollowCache.writeSet` 空分支定向复用 `markEmpty`（U-09 允许的 T4 定向复用，先例守卫内的 del 一并消除）。
+* 残余竞态（已接受）：exists 检查→setex 的毫秒间隙内并发写入时空标记可能覆盖其上——数据 key 未被删，空标记 60s 过期或下次业务写 `writeOrInvalidate` 清空标记即自愈，无真数据丢失。
+* 落点：`CacheAside.markEmpty` + `FollowCache.writeSet` 空分支（详见 `常青/CURRENT_ARCHITECTURE.md` 6.9；验证 JUnit 351 全绿含并发不假空时序测试 + pytest 124 见 `NEXT_CYCLE_TASKS.md` T4 执行回写 04a）。
+
 ### 4.1 候选痛点（2026-09-13 代码复查，**待评审纳入，尚未拍板**）
 
 > 编号 `N1`~`N9` 为**本档内部编号**（与已归档周期的 `H*` / `O-*` / `P*` 编号体系无关）。每条给出"如果不改，什么时候会出什么问题"的具体场景。
@@ -168,3 +175,4 @@
 | 2026-09-13 | 0.6 | **T1 执行定稿回写**（fix(cache-01)）：新增 4.0"已回写技术决策"节——T1 超时配置化（connect/so/maxWait 各 1000ms，Jedis 5.1.0 用 8 参构造器等价替代）+ 全局熔断（粒度=全局、失败口径=execute 冒出的 CacheException、恢复=半开单探针，阈值/冷却可配）；U-10 随 T1 修复（UNPLANNED_ISSUES 已标注）；执行中新发现 U-11（/start 停机空降级，既有语义）登记 UNPLANNED_ISSUES 留池 |
 | 2026-09-13 | 0.7 | **T2 执行定稿回写**（fix(cache-02)）：4.0 追加 T2 技术决策——统一规则（降级读=miss 同款单飞+全量 loader、仅装载不写回/D4，与 miss 共用单飞 key 空间，SingleFlight 零改动）、治理面 10 处降级读分支（单 key 单行查询→全量装载作答删 3 个 *FromDb、批量 targeted+必失败回填→单飞全量作答）、失败语义（异常传播不缓存可重试）、与 T1 熔断正交、LOAD 口径 leader 记一次；验证 JUnit 337 + pytest 124 + 黑洞运行时（20 并发同 key Com_select 差值 8） |
 | 2026-09-14 | 0.8 | **T3 执行定稿回写**（fix(cache-03)）：4.0 追加 T3 技术决策——拍板=对外行为保持（用户 2026-09-14），loader 失败抛 DatabaseException（事务模板已包 SQLException），CacheAside 5 装载点捕获转 null（不写空标记不 DEL，miss 跳过 markEmpty，降级共用 loadDegraded），addContent/refreshContent 写路径守卫；N2 治理闭环（4.1 行 N2 对应 T3）；验证 JUnit 348 + pytest 124 + subagent 评审无🔴 |
+| 2026-09-14 | 0.9 | **T4-① 执行定稿回写**（fix(cache-04a)）：4.0 追加 T4-① 技术决策——拍板=exists 守卫（对齐 writeSet 260913 先例，非 Lua），markEmpty 守卫"数据 key 不存在才写空标记"+ del(dataKey) 随守卫移除（死代码+竞态危害源），writeSet 空分支定向复用（U-09 T4 定向复用）；残余竞态=exists→setex 毫秒间隙可自愈（已接受）；N3 治理闭环（4.1 行 N3 对应 T4）；验证 JUnit 351（+3 含并发不假空时序测试）+ pytest 124；T4 拆 3 commit 校准 fix(cache-04a/04b/04c) |

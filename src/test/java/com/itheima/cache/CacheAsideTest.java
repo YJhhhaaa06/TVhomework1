@@ -19,7 +19,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -218,16 +221,18 @@ class CacheAsideTest {
     }
 
     @Test
-    void getMissLoaderNullWritesEmptyMarkerAndDeletesDataKey() {
+    void getMissLoaderNullWritesEmptyMarker() {
         try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
             Jedis jedis = mockJedis(ms);
             stubProbe(jedis, false, null);
+            // 三期 T4/N3：markEmpty 含存在守卫（数据 key 不存在→写空标记），del 已随守卫移除
+            when(jedis.exists("content:1")).thenReturn(false);
 
             assertNull(cache.get("content:1", SampleDto.class, () -> null, 100));
 
             verify(jedis).setex("empty:content:1", CacheKeys.EMPTY_MARKER_TTL_SECONDS,
                     CacheKeys.EMPTY_MARKER_VALUE);
-            verify(jedis).del("content:1");
+            verify(jedis, never()).del(anyString());
             verify(jedis, never()).setex(eq("content:1"), anyLong(), anyString());
         }
     }
@@ -450,6 +455,8 @@ class CacheAsideTest {
             Response<String> noJson = strResponse(null);
             when(p.exists("empty:k1")).thenReturn(notEmpty);
             when(p.get("k1")).thenReturn(noJson);
+            // 三期 T4/N3：markEmpty 含存在守卫（数据 key 不存在→写空标记），del 已随守卫移除
+            when(jedis.exists("k1")).thenReturn(false);
 
             Map<String, SampleDto> result = cache.getBatch(List.of("k1"), SampleDto.class,
                     k -> null, 100);
@@ -457,7 +464,7 @@ class CacheAsideTest {
             assertNull(result.get("k1"));
             verify(jedis).setex("empty:k1", CacheKeys.EMPTY_MARKER_TTL_SECONDS,
                     CacheKeys.EMPTY_MARKER_VALUE);
-            verify(jedis).del("k1");
+            verify(jedis, never()).del(anyString());
         }
     }
 
@@ -644,15 +651,110 @@ class CacheAsideTest {
     }
 
     @Test
-    void markEmptyWritesEmptyMarkerAndDeletesDataKey() {
+    void markEmptyWritesEmptyMarkerWhenDataKeyAbsent() {
         try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
             Jedis jedis = mockJedis(ms);
+            // 三期 T4/N3：存在守卫——数据 key 不存在才写空标记（del 已随守卫移除）
+            when(jedis.exists("content:1")).thenReturn(false);
 
             cache.markEmpty("content:1");
 
             verify(jedis).setex("empty:content:1", CacheKeys.EMPTY_MARKER_TTL_SECONDS,
                     CacheKeys.EMPTY_MARKER_VALUE);
-            verify(jedis).del("content:1");
+            verify(jedis, never()).del(anyString());
+        }
+    }
+
+    @Test
+    void markEmptySkipsWhenDataKeyExists() {
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            // 三期 T4/N3：数据 key 已存在（并发回填/业务写刚写入真数据）→ 不写空标记、不 DEL
+            when(jedis.exists("content:1")).thenReturn(true);
+
+            cache.markEmpty("content:1");
+
+            verify(jedis, never()).setex(startsWith("empty:"), anyLong(), anyString());
+            verify(jedis, never()).del(anyString());
+        }
+    }
+
+    @Test
+    void markEmptyExistsFailureSkipsQuietly() {
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            // 守卫检查失败（Redis 抖动）= 保守不写：宁可少写空标记（多一次 DB 查），绝不误写（假空）
+            when(jedis.exists(anyString())).thenThrow(new RuntimeException("redis down"));
+
+            assertDoesNotThrow(() -> cache.markEmpty("content:1"));
+
+            verify(jedis, never()).setex(startsWith("empty:"), anyLong(), anyString());
+        }
+    }
+
+    /**
+     * 三期 T4/N3 验收：并发"业务写真数据 + miss 回填写空标记"不产生假空。
+     * 时序确定性：线程 A 的 loader 阻塞到线程 B 写入完成才返回 null，
+     * 故 markEmpty 的 exists 守卫必然看到数据 key 已存在 → 跳过写空标记。
+     * 注意：MockedStatic 线程局部不可跨线程（T2 教训），用 mock RedisAccess 直通共享 mock Jedis。
+     */
+    @Test
+    void concurrentBackfillAndWriteNoFakeEmpty() throws Exception {
+        RedisAccess sharedRedis = mock(RedisAccess.class);
+        Jedis jedis = mock(Jedis.class);
+        when(sharedRedis.execute(any(Function.class))).thenAnswer(inv -> {
+            Function<Jedis, Object> fn = inv.getArgument(0);
+            return fn.apply(jedis);
+        });
+        doAnswer(inv -> {
+            Consumer<Jedis> c = inv.getArgument(0);
+            c.accept(jedis);
+            return null;
+        }).when(sharedRedis).executeVoid(any(Consumer.class));
+        CacheAside shared = new CacheAside(sharedRedis, new JacksonCodec(),
+                new SingleFlight(), new CacheStats());
+
+        // 单趟 pipeline 探测桩（get 走 probeRenew）：miss 态
+        Pipeline p = mock(Pipeline.class);
+        when(jedis.pipelined()).thenReturn(p);
+        Response<Boolean> emptyResp = boolResponse(false);
+        Response<String> jsonResp = strResponse(null);
+        when(p.exists(anyString())).thenReturn(emptyResp);
+        when(p.get(anyString())).thenReturn(jsonResp);
+
+        // 内存态数据 key：writeOrInvalidate 的 setex 置 true，markEmpty 的 exists 读
+        AtomicBoolean dataKeyExists = new AtomicBoolean(false);
+        when(jedis.exists("content:1")).thenAnswer(inv -> dataKeyExists.get());
+        when(jedis.setex(eq("content:1"), anyLong(), anyString())).thenAnswer(inv -> {
+            dataKeyExists.set(true);
+            return "OK";
+        });
+
+        CountDownLatch written = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            // 线程 B：业务写路径写入真数据（模拟评论/点赞提交后的缓存同步）
+            Future<?> writer = pool.submit(() -> {
+                shared.writeOrInvalidate("content:1", new SampleDto(1L, "real"), 100);
+                written.countDown();
+            });
+            // 线程 A：miss 回填——loader 等 B 写完才返回 null（读到"无数据"，回填时真数据已写入）
+            Future<SampleDto> reader = pool.submit(() -> shared.get("content:1", SampleDto.class, () -> {
+                written.await();
+                return null;
+            }, 100));
+
+            assertNull(reader.get(5, TimeUnit.SECONDS));
+            writer.get(5, TimeUnit.SECONDS);
+
+            // 守卫生效：无假空（空标记未写）、真数据保留（数据 key 未被 DEL）；
+            // exists 断言钉死 miss→markEmpty 守卫路径确实执行（防降级路径"空洞通过"）
+            verify(jedis, never()).setex(eq("empty:content:1"), anyLong(), anyString());
+            verify(jedis, never()).del("content:1");
+            verify(jedis).setex(eq("content:1"), anyLong(), anyString());
+            verify(jedis).exists("content:1");
+        } finally {
+            pool.shutdownNow();
         }
     }
 

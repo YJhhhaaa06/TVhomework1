@@ -200,24 +200,25 @@ class FollowCacheTest {
     void isFollowingMissEmptyFollowsWritesEmptyMarker() throws SQLException {
         stubSetScan(followingKey(USER), false, false, null);
         when(followDao.getAllFollowedUserIds(conn, USER)).thenReturn(Collections.emptyList());
-        when(jedis.exists(followingKey(USER))).thenReturn(false);
 
         assertFalse(cache.isFollowing(USER, FOLLOWED));
-        verify(jedis).setex(eq(CacheKeys.empty(followingKey(USER))),
-                eq(CacheKeys.EMPTY_MARKER_TTL_SECONDS), eq(CacheKeys.EMPTY_MARKER_VALUE));
+        // 三期 T4/N3：空集写空标记统一走 CacheAside.markEmpty（内含存在守卫，U-09 定向复用）
+        verify(cacheAside).markEmpty(followingKey(USER));
         verify(jedis, never()).sadd(anyString(), any(String[].class));
     }
 
     @Test
     void writeEmptyMarkerSkipsWhenSetAlreadyExists() throws SQLException {
-        // 并发守卫回归（review 必修②）：回填读到旧空 DB，但 set 已被并发 cacheFollow 写入 → 不得覆盖
+        // 并发守卫回归（review 必修②）：回填读到旧空 DB，但 set 已被并发 cacheFollow 写入 → 不得覆盖。
+        // 三期 T4/N3 起守卫内聚于 CacheAside.markEmpty（行为断言在 CacheAsideTest.markEmptySkipsWhenDataKeyExists），
+        // 此处验证空集回填委托 markEmpty（守卫随公共实现生效）
         stubSetScan(followingKey(USER), false, false, null);
         when(followDao.getAllFollowedUserIds(conn, USER)).thenReturn(Collections.emptyList());
         when(jedis.exists(followingKey(USER))).thenReturn(true);
 
         assertFalse(cache.isFollowing(USER, FOLLOWED));
-        verify(jedis, never()).setex(anyString(), anyLong(), anyString());
-        verify(jedis, never()).del(anyString());
+        verify(cacheAside).markEmpty(followingKey(USER));
+        verify(jedis, never()).sadd(anyString(), any(String[].class));
     }
 
     @Test
@@ -410,13 +411,12 @@ class FollowCacheTest {
     void getFollowingIdsMissEmptyWritesEmptyMarker() throws SQLException {
         stubExistsProbe(followingKey(USER), false, false);
         when(followDao.getAllFollowedUserIds(conn, USER)).thenReturn(Collections.emptyList());
-        when(jedis.exists(followingKey(USER))).thenReturn(false);
 
         List<Long> result = cache.getFollowingIds(USER);
 
         assertTrue(result.isEmpty());
-        verify(jedis).setex(eq(CacheKeys.empty(followingKey(USER))),
-                eq(CacheKeys.EMPTY_MARKER_TTL_SECONDS), eq(CacheKeys.EMPTY_MARKER_VALUE));
+        // 三期 T4/N3：空集写空标记统一走 CacheAside.markEmpty（内含存在守卫，U-09 定向复用）
+        verify(cacheAside).markEmpty(followingKey(USER));
     }
 
     @Test
