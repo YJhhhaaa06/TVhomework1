@@ -607,6 +607,48 @@ class CacheAsideTest {
     // ==================== 写路径：写失败=DEL 降级 ====================
 
     @Test
+    void writeBatchPipelinesAllKeysAndDelsEmptyMarkers() {
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            Pipeline p = mock(Pipeline.class);
+            when(jedis.pipelined()).thenReturn(p);
+
+            Map<String, Object> values = Map.of(
+                    "content:1", new SampleDto(1L, "alice"),
+                    "content:2", new SampleDto(2L, "bob"));
+            cache.writeBatch(values, 100);
+
+            // 一趟 pipeline：逐 key setex（per-key TTL 抖动）+ del 空标记，恰一次 pipelined/sync
+            verify(jedis, times(1)).pipelined();
+            verify(p).setex(eq("content:1"), longThat(t -> t >= 90 && t <= 110),
+                    eq(new JacksonCodec().toJson(new SampleDto(1L, "alice"))));
+            verify(p).setex(eq("content:2"), longThat(t -> t >= 90 && t <= 110),
+                    eq(new JacksonCodec().toJson(new SampleDto(2L, "bob"))));
+            verify(p).del("empty:content:1");
+            verify(p).del("empty:content:2");
+            verify(p, times(1)).sync();
+        }
+    }
+
+    @Test
+    void writeBatchOnFailureDeletesAllKeysForSelfHeal() {
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            Pipeline p = mock(Pipeline.class);
+            when(jedis.pipelined()).thenReturn(p);
+            // pipeline sync 抛异常（Redis 异常）→ 批量写失败
+            doThrow(new RuntimeException("redis down")).when(p).sync();
+
+            assertDoesNotThrow(() -> cache.writeBatch(
+                    Map.of("content:1", new SampleDto(1L, "alice")), 100));
+
+            // 自愈：逐 key DEL 数据 key + 空标记
+            verify(jedis).del("content:1");
+            verify(jedis).del("empty:content:1");
+        }
+    }
+
+    @Test
     void writeOrInvalidateOnSuccessSetsDataKey() {
         try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
             Jedis jedis = mockJedis(ms);

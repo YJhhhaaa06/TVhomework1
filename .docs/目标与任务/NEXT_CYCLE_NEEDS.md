@@ -33,7 +33,7 @@
 
 | 编号 | 事项 | 类别 | 来源（归档周期） | 状态 | 说明 |
 | ---- | ---- | ---- | ---- | ---- | ---- |
-| R-01 | 初始化选择性加载 | 需求（方案待拍板） | `260913/O-5` | 留池未排期 | 启动全量加载（现状 `ContentCache.init()`：全表 content + 逐条媒体）改为按需回填 or 分级加载？评论是否仍全量。与 R-04 同源 |
+| R-01 | 初始化选择性加载 | 需求（方案待拍板） | `260913/O-5` | **已拍板（2026-09-14）：全量 + 工程化优化**（用户拍板，理由：个人项目流量小、全量在当前数据量无压力；未来数据量成瓶颈再另周期评估按需回填/分级加载，本期不预埋开关） | 启动全量加载（现状 `ContentCache.init()`：全表 content + 逐条媒体）保留，但工程化：`findMediaByContentIds` 批量装载消 N+1（R-04）、Redis 写入移出 DB 事务、内容 key 与索引写入 pipeline 化（T5 落地，见 4.0） |
 | R-02 | 关注/粉丝计数入缓存 | 需求（方案待拍板） | `260913/O-9` | 留池未排期 | Profile 的 followCount/followerCount 是否一并入缓存：关系 Set 是成员、计数是独立 key；注意 SCARD 冷 set 返 0 的坑 |
 | R-03 | 单飞进程内锁的多实例化 | 需求（架构） | `260913/分布式` | 继续延后 | 260913 周期 4.9 约定"进程内锁只对单实例有效；当前单 Tomcat 够用，不过度设计"；多实例需分布式锁 |
 | R-04 | 初始化 N+1 未根治 | 需求（性能） | `260913/H7` | 只缓解 | T3 让启动少一轮评论 N+1（评论不再全量加载）；内容仍全表 + 逐条媒体查询，且串在一个长事务里 |
@@ -114,6 +114,16 @@
 * 条件语义验证口径（已接受）：EXISTS 判定内聚脚本由 Redis 服务端原子执行，单测验证 eval 调用参数（脚本 + KEYS/ARGV）；运行时 Lua 冒烟（`temp_script/verify_cache04c_lua.py` 对真实 Redis EVAL，5 场景 10 断言全过：like 命中/冷 key 不建/unlike 命中/防 -1 重建/保留空标记）补齐脚本文本零执行验证缺口；comment 版写路径对称补测 + unlike 失效降级对称覆盖填补既有缺口。
 * 落点：`LikeCacheService` 4 写方法 + 两脚本常量（详见 `常青/CURRENT_ARCHITECTURE.md` 6.11；验证 JUnit 356 全绿 + pytest 124 + Lua 冒烟见 `NEXT_CYCLE_TASKS.md` T4 执行回写 04c）。N7 治理闭环。
 
+**T5（fix(cache-05)，2026-09-14 拍板并落地——启动加载治理，治 N5/R-01/R-04）**：
+
+* 拍板取向（用户 2026-09-14）：**R-01 = 全量 + 工程化优化**——保留"启动预加载全部内容+索引"语义（个人项目流量小、全量在当前数据量无压力；未来数据量成瓶颈再另周期评估按需回填/分级加载，本期不预埋开关）。
+* 事务外写（治 N5 一半/H3）：`ContentCache.init()` 拆两段——DB 阶段 `transactionTemplate.execute(this::loadBuildableFromDb)` **事务内只读**（findAllContent + 批量媒体装载 + 构建 DTO，无任何 Redis 调用），事务提交后 `rebuildRedis` 在**事务外**写 Redis；DB 失败记日志 return 不触发任何 Redis 写。
+* 批量媒体装载（治 R-04 N+1）：新增 `ContentMediaDao.findMediaByContentIds`（IN 查询），一趟装载全部媒体 + 内存按 contentId 分组，替代逐条 findMedia（DB N+1 → 恒 2）；不复用 findAllMedia（避免加载删除/孤儿媒体）。媒体损坏跳过逻辑原样保留。
+* 内容 key 批量写（新增 `CacheAside.writeBatch`）：一趟 pipeline `setex[per-key TTL 抖动]+del empty:×N`，失败 → 逐 key deleteQuietly 自愈 + WRITE_FAIL（与 writeOrInvalidate 语义一致）；批内单命令 server 错误依赖 `Pipeline.sync()` 抛异常兜底。单写路径不变。
+* 索引 pipeline 化：`rebuildIndexes` 单条 executeVoid——SCAN 顺序收集旧索引 key → 一趟 pipeline DEL 全部 + lremAndLpush 全部（新增 `lremAndLpush(Pipeline,...)` 重载）；`ensureIndex` 懒重建/`addToIndex`/`removeContent` 零改动。
+* 前后对比（验收）：Redis ≈12N 往返（内容 2 + 索引 8/内容）→ ≈3（内容 pipeline 1 + 索引 SCAN 页 + 索引 pipeline 1）；DB N+1 → 2；与内容量解耦。
+* 落点：`ContentCache`/`CacheAside`/`ContentMediaDao`（详见 `常青/CURRENT_ARCHITECTURE.md` 6.12；验证 JUnit 362 全绿 + pytest 124 + subagent 评审无🔴见 `NEXT_CYCLE_TASKS.md` T5 执行回写）。N5/R-01/R-04 治理闭环。
+
 ### 4.1 候选痛点（2026-09-13 代码复查，**待评审纳入，尚未拍板**）
 
 > 编号 `N1`~`N9` 为**本档内部编号**（与已归档周期的 `H*` / `O-*` / `P*` 编号体系无关）。每条给出"如果不改，什么时候会出什么问题"的具体场景。
@@ -192,3 +202,4 @@
 | 2026-09-14 | 0.9 | **T4-① 执行定稿回写**（fix(cache-04a)）：4.0 追加 T4-① 技术决策——拍板=exists 守卫（对齐 writeSet 260913 先例，非 Lua），markEmpty 守卫"数据 key 不存在才写空标记"+ del(dataKey) 随守卫移除（死代码+竞态危害源），writeSet 空分支定向复用（U-09 T4 定向复用）；残余竞态=exists→setex 毫秒间隙可自愈（已接受）；N3 治理闭环（4.1 行 N3 对应 T4）；验证 JUnit 351（+3 含并发不假空时序测试）+ pytest 124；T4 拆 3 commit 校准 fix(cache-04a/04b/04c) |
 | 2026-09-14 | 1.0 | **T4-② 执行定稿回写**（fix(cache-04b)）：4.0 追加 T4-② 技术决策——自愈=addToIndex 写失败 catch 内 best-effort DEL 所属 4 个索引 key 复用既有懒重建（零新增 key，否决脏标记/完整性校验），indexKeysOf 与 lremAndLpush 同源，双层 best-effort；失败三分收敛；残余窗口=持续挂恢复后仍可能不完整（与现状一致，不做 R-10）；N4 治理闭环（4.1 行 N4 对应 T4）；验证 JUnit 353（+2）+ pytest 124 |
 | 2026-09-14 | 1.1 | **T4-③ 执行定稿回写**（fix(cache-04c)）：4.0 追加 T4-③ 技术决策——拍板=Lua 原子化 + 4 方法全治理（unlike 的 DECR 以 -1 重建同款竞态一并消除，对称孪生对齐 T2 先例）；LIKE/UNLIKE_CONDITIONAL_SCRIPT 两脚本常量，4 方法体统一 eval（like 两趟往返合并为一趟），零新增 key、不设 TTL、失败降级与熔断口径不变；条件语义内聚脚本单测验证调用参数（已接受）；N7 治理闭环（4.1 行 N7 对应 T4）；验证 JUnit 354（−1+2 含 comment 写路径对称补测）+ pytest 124 |
+| 2026-09-14 | 1.2 | **T5 执行定稿回写（R-01 拍板 + 落实，fix(cache-05)）**：R-01 状态 → **已拍板（2026-09-14）：全量 + 工程化优化**（二表行更新：来源列保持 `260913/O-5`、状态列写入拍板结论与用户理由"个人项目流量小、全量在当前数据量无压力；未来数据量成瓶颈再另周期评估"）；4.0 追加 T5 技术决策（事务外写/批量媒体装载消 N+1/pipeline 双写，前后对比 12N→3、N+1→2）；N5/R-01/R-04 治理闭环（4.1 行 N5 对应 T5）；验证 JUnit 362（surefire 358 + pool 4 = T4 354 基数 + 8 含评审补测媒体损坏跳过）+ pytest 124 + subagent 评审无🔴（🟡4 条全落实） |

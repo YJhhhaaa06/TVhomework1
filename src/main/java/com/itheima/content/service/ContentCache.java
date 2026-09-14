@@ -23,6 +23,7 @@ import com.itheima.util.LogUtil;
 import com.itheima.util.RequestContext;
 import com.itheima.util.TransactionTemplate;
 
+import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -34,6 +35,7 @@ import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import redis.clients.jedis.Jedis;
+import redis.clients.jedis.Pipeline;
 import redis.clients.jedis.params.ScanParams;
 import redis.clients.jedis.resps.ScanResult;
 
@@ -258,30 +260,56 @@ public class ContentCache implements Initializable {
         cdVO.setCreateTime(dto.getCreateTime());
     }
 
-    // ==================== 启动全量重建（对齐现状，O-5 二期再改选择性加载） ====================
+    // ==================== 启动全量重建（三期 T5：Redis 写入移出 DB 事务 + 批量 pipeline） ====================
 
     @Override
     public void init() {
+        // 阶段一（DB 事务内，只读）：全表 content + 批量媒体装载，返回可构建列表；
+        // 事务提交后阶段二在**事务外**写 Redis（H3 原则：Redis 写入不占 DB 事务）。
+        List<ContentCacheDTO> buildable;
         try {
-            transactionTemplate.execute(conn -> {
-                List<ContentCacheDTO> all = contentDao.findAllContent(conn);
-                List<ContentCacheDTO> buildable = new ArrayList<>();
-                for (ContentCacheDTO dto : all) {
-                    try {
-                        Map<Integer, List<ContentMedia>> mediaMap = contentMediaDao.findMedia(conn, dto.getId());
-                        buildContentMedia(dto, mediaMap);
-                        buildable.add(dto);
-                    } catch (NotFoundException | ServerException e) {
-                        // 单个内容媒体损坏：跳过内容 key（读时仍会兜底 404），索引仍按 type/category 重建
-                        LOGGER.log(Level.WARNING, "初始化跳过媒体损坏内容, contentId=" + dto.getId(), e);
-                    }
-                }
-                rebuildRedis(buildable);
-                return null;
-            });
+            buildable = transactionTemplate.execute(this::loadBuildableFromDb);
         } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "内容缓存初始化降级跳过（缓存失败不影响业务）", e);
+            LOGGER.log(Level.WARNING, "内容缓存初始化 DB 装载失败（跳过，缓存走读自愈）", e);
+            return;
         }
+        rebuildRedis(buildable);
+    }
+
+    /**
+     * 初始化 DB 装载（事务内）：findAllContent + 一趟批量媒体查询（三期 T5 消 N+1），
+     * 媒体损坏内容跳过 content key（读时 404 兜底），返回按新前序的可构建列表。
+     */
+    private List<ContentCacheDTO> loadBuildableFromDb(Connection conn) throws Exception {
+        List<ContentCacheDTO> all = contentDao.findAllContent(conn);
+        List<ContentCacheDTO> buildable = new ArrayList<>();
+        List<Long> contentIds = new ArrayList<>(all.size());
+        for (ContentCacheDTO dto : all) {
+            contentIds.add(dto.getId());
+        }
+        List<ContentMedia> mediaList = contentMediaDao.findMediaByContentIds(conn, contentIds);
+        Map<Long, Map<Integer, List<ContentMedia>>> mediaByContent = groupMediaByContent(mediaList);
+        for (ContentCacheDTO dto : all) {
+            try {
+                buildContentMedia(dto, mediaByContent.getOrDefault(dto.getId(), Collections.emptyMap()));
+                buildable.add(dto);
+            } catch (NotFoundException | ServerException e) {
+                // 单个内容媒体损坏：跳过内容 key（读时仍会兜底 404），索引仍按 type/category 重建
+                LOGGER.log(Level.WARNING, "初始化跳过媒体损坏内容, contentId=" + dto.getId(), e);
+            }
+        }
+        return buildable;
+    }
+
+    /** 扁平行媒体按 contentId 分组为 type → media 列表。 */
+    private static Map<Long, Map<Integer, List<ContentMedia>>> groupMediaByContent(List<ContentMedia> mediaList) {
+        Map<Long, Map<Integer, List<ContentMedia>>> byContent = new HashMap<>();
+        for (ContentMedia media : mediaList) {
+            byContent.computeIfAbsent(media.getContentId(), k -> new HashMap<>())
+                    .computeIfAbsent(media.getType(), k -> new ArrayList<>())
+                    .add(media);
+        }
+        return byContent;
     }
 
     // ==================== 内部 ====================
@@ -445,6 +473,16 @@ public class ContentCache implements Initializable {
         }
     }
 
+    /** Pipeline 版（三期 T5：rebuildIndexes 全量重建一趟入队）。 */
+    private static void lremAndLpush(Pipeline p, int type, int categoryId, long contentId) {
+        String[] keys = indexKeysOf(type, categoryId);
+        String id = String.valueOf(contentId);
+        for (String k : keys) {
+            p.lrem(k, 0, id);
+            p.lpush(k, id);
+        }
+    }
+
     /** 一条内容所属的 4 个索引 key（本 type/cid + 两个通配维度 + 全通配）；写入与自愈 DEL 同源。 */
     private static String[] indexKeysOf(int type, int categoryId) {
         return new String[]{
@@ -469,14 +507,24 @@ public class ContentCache implements Initializable {
         }
     }
 
-    /** 索引全量重建：先清掉历史 content:index:*（SCAN 遍历，T8 替代 KEYS），再按 findAllContent 顺序（新前序）重建。 */
+    /**
+     * 索引全量重建（三期 T5 pipeline 化）：先 SCAN 清掉历史 content:index:*（顺序读），
+     * 再按 findAllContent 顺序（新前序）一趟 pipeline 重建全部索引。
+     */
     private void rebuildIndexes(List<ContentCacheDTO> all) {
         try {
-            redisAccess.executeVoid(j -> forEachIndexKey(j, k -> j.del(k)));
             redisAccess.executeVoid(j -> {
-                for (ContentCacheDTO dto : all) {
-                    lremAndLpush(j, dto.getType(), dto.getCategoryId(), dto.getId());
+                // SCAN 段需逐页读游标，无法入 pipeline；先收集旧索引 key
+                List<String> staleKeys = new ArrayList<>();
+                forEachIndexKey(j, staleKeys::add);
+                Pipeline p = j.pipelined();
+                for (String k : staleKeys) {
+                    p.del(k);
                 }
+                for (ContentCacheDTO dto : all) {
+                    lremAndLpush(p, dto.getType(), dto.getCategoryId(), dto.getId());
+                }
+                p.sync();
             });
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "索引重建失败（降级为空推荐）", e);
@@ -496,11 +544,16 @@ public class ContentCache implements Initializable {
         } while (!cursor.equals(ScanParams.SCAN_POINTER_START));
     }
 
-    /** init 全量重建：内容 key + 索引一起写（分批落库后单事务读已由调用方保证）。 */
+    /**
+     * init 全量重建（三期 T5：DB 阶段已事务外提交）：
+     * 内容 key 一趟 pipeline 批量写（writeBatch 逐 key 清空标记），索引一趟 pipeline 重建。
+     */
     private void rebuildRedis(List<ContentCacheDTO> buildable) {
+        Map<String, Object> contentByKey = new HashMap<>(buildable.size());
         for (ContentCacheDTO dto : buildable) {
-            writeContent(dto);
+            contentByKey.put(CacheKeys.content(dto.getId()), dto);
         }
+        cacheAside.writeBatch(contentByKey, ttlSeconds());
         rebuildIndexes(buildable);
     }
 

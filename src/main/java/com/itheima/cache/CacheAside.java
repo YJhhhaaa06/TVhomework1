@@ -287,6 +287,41 @@ public class CacheAside {
     }
 
     /**
+     * 批量写数据 key（三期 T5：启动全量重建专属，一趟 pipeline 写全部 key 并同步清空标记）。
+     *
+     * <p>语义与 {@link #writeOrInvalidate} 逐 key 完全一致：per-key TTL 抖动、SETEX + DEL 空标记；
+     * 失败 → 逐 key 失效（DEL 数据 key + 空标记）让读自愈、记 WRITE_FAIL，**不抛出**。
+     * 仅 {@code ContentCache.init()} 全量重建使用；hot path 单写仍走 {@link #writeOrInvalidate}。
+     * 与单写不同：批内单命令的 server 级错误依赖 {@code Pipeline.sync()} 抛异常统一兜底
+     * （与 probe/getBatch 的 pipeline 可靠性模型一致；断连/超时主失败形态下 sync 必抛）。
+     */
+    public void writeBatch(Map<String, Object> dataKeyToValue, long ttlSeconds) {
+        if (dataKeyToValue == null || dataKeyToValue.isEmpty()) {
+            return;
+        }
+        try {
+            Map<String, String> jsonByKey = new HashMap<>(dataKeyToValue.size());
+            for (Map.Entry<String, Object> e : dataKeyToValue.entrySet()) {
+                jsonByKey.put(e.getKey(), codec.toJson(e.getValue()));
+            }
+            redis.executeVoid(j -> {
+                Pipeline p = j.pipelined();
+                for (Map.Entry<String, String> e : jsonByKey.entrySet()) {
+                    p.setex(e.getKey(), applyJitter(ttlSeconds), e.getValue());
+                    p.del(CacheKeys.empty(e.getKey()));
+                }
+                p.sync();
+            });
+        } catch (CacheException e) {
+            LOGGER.log(Level.WARNING, "缓存批量写失败，逐 key 失效让读自愈, keys=" + dataKeyToValue.size(), e);
+            for (String dataKey : dataKeyToValue.keySet()) {
+                stats.record(CacheStats.Event.WRITE_FAIL, dataKey);
+                deleteQuietly(dataKey);
+            }
+        }
+    }
+
+    /**
      * 写空标记（独立 key + 短 TTL，4.4）：确认"已加载、无数据"。
      *
      * <p>三期 T4/N3 存在守卫：数据 key 已存在（并发回填/业务写刚写入真数据）时跳过，

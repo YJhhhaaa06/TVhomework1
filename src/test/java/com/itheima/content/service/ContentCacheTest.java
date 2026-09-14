@@ -15,6 +15,7 @@ import com.itheima.exception.DatabaseException;
 import com.itheima.util.TransactionTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import redis.clients.jedis.Jedis;
 
 import java.sql.Connection;
@@ -28,6 +29,7 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import redis.clients.jedis.Pipeline;
 import redis.clients.jedis.params.ScanParams;
 import redis.clients.jedis.resps.ScanResult;
 
@@ -87,6 +89,13 @@ class ContentCacheTest {
                 .thenReturn(new ScanResult<>("0", new ArrayList<>(keys)));
     }
 
+    /** Pipeline 桩（三期 T5：rebuildIndexes 走 pipeline）。 */
+    private Pipeline stubPipeline() {
+        Pipeline p = mock(Pipeline.class);
+        when(jedis.pipelined()).thenReturn(p);
+        return p;
+    }
+
     /** getBatch 桩（T8：getRecommendByFilter/getContentsBatch 改走批量读，cacheAside 为 mock）。
      * 模拟真实 getBatch 语义：请求的全部 key 都返回（未提供值 → null，等价 hit-empty/加载为空）。 */
     @SuppressWarnings("unchecked")
@@ -120,6 +129,14 @@ class ContentCacheTest {
         return Map.of(
                 1, List.of(new ContentMedia(10L, 1L, "/video/1.mp4", 1, 1)),
                 3, List.of(new ContentMedia(11L, 1L, "/cover/1.png", 3, 1))
+        );
+    }
+
+    /** findMediaByContentIds 的扁平行版（三期 T5 批量装载）。 */
+    private static List<ContentMedia> videoMediaList(long contentId) {
+        return List.of(
+                new ContentMedia(10L, contentId, "/video/1.mp4", 1, 1),
+                new ContentMedia(11L, contentId, "/cover/1.png", 3, 1)
         );
     }
 
@@ -196,6 +213,7 @@ class ContentCacheTest {
         stubIndexScan(Set.of("content:index:1:2"));
         when(singleFlight.get(eq("content:index:rebuild"), any(Callable.class)))
                 .thenAnswer(inv -> ((Callable<?>) inv.getArgument(1)).call());
+        Pipeline p = stubPipeline();
         // 重建后索引有 5
         when(jedis.lrange("content:index:1:2", 0, -1)).thenReturn(List.of("5"));
         stubGetBatch(Map.of(5L, dto(5L, 2, 1)));
@@ -204,12 +222,12 @@ class ContentCacheTest {
 
         assertEquals(1, result.size());
         assertEquals(5L, result.get(0).getId());
-        // 懒重建先 SCAN 删旧索引 key，再写入 4 个索引 key
-        verify(jedis).del("content:index:1:2");
-        verify(jedis).lpush("content:index:2:1", "5");
-        verify(jedis).lpush("content:index:2:-1", "5");
-        verify(jedis).lpush("content:index:-1:1", "5");
-        verify(jedis).lpush("content:index:-1:-1", "5");
+        // 懒重建（三期 T5 pipeline 化）：先 SCAN 收集旧索引 key，再一趟 pipeline 删旧 + 写入 4 个索引 key
+        verify(p).del("content:index:1:2");
+        verify(p).lpush("content:index:2:1", "5");
+        verify(p).lpush("content:index:2:-1", "5");
+        verify(p).lpush("content:index:-1:1", "5");
+        verify(p).lpush("content:index:-1:-1", "5");
     }
 
     @Test
@@ -352,26 +370,103 @@ class ContentCacheTest {
         verify(cacheAside, times(3)).invalidate(CacheKeys.content(5L));
     }
 
-    // ==================== init 全量重建（降级不 crash）====================
+    // ==================== init 全量重建（三期 T5：事务外写 + 批量装载 + pipeline） ====================
 
     @Test
-    void initRebuildsContentKeysAndIndexes() throws SQLException {
+    void initRebuildsContentKeysAndIndexes() throws Exception {
         when(contentDao.findAllContent(conn)).thenReturn(List.of(dto(5L, 2, 1)));
-        when(contentMediaDao.findMedia(conn, 5L)).thenReturn(videoMediaMap());
+        when(contentMediaDao.findMediaByContentIds(eq(conn), anyCollection())).thenReturn(videoMediaList(5L));
         stubIndexScan(Set.of("content:index:2:1"));
+        Pipeline p = stubPipeline();
 
         assertDoesNotThrow(() -> cache.init());
 
-        verify(cacheAside).writeOrInvalidate(eq(CacheKeys.content(5L)), any(ContentCacheDTO.class), anyLong());
-        verify(jedis).del("content:index:2:1");
-        verify(jedis).lpush("content:index:2:1", "5");
+        verify(cacheAside).writeBatch(argThat(m -> m.containsKey((String) CacheKeys.content(5L))), anyLong());
+        verify(p).del("content:index:2:1");
+        verify(p).lpush("content:index:2:1", "5");
     }
 
     @Test
-    void initDbErrorDoesNotCrash() throws SQLException {
+    void initMovesRedisWritesOutsideDbTransaction() throws Exception {
+        when(contentDao.findAllContent(conn)).thenReturn(List.of(dto(5L, 2, 1)));
+        when(contentMediaDao.findMediaByContentIds(eq(conn), anyCollection())).thenReturn(videoMediaList(5L));
+        stubIndexScan(Set.of("content:index:2:1"));
+        stubPipeline();
+
+        cache.init();
+
+        // Redis 写入（writeBatch + 索引重建）必须发生在 DB 事务提交之后：InOrder 断言事务先于缓存写
+        InOrder inOrder = inOrder(tt, cacheAside, redisAccess);
+        inOrder.verify(tt).execute(any(TransactionTemplate.TransactionAction.class));
+        inOrder.verify(cacheAside).writeBatch(anyMap(), anyLong());
+        inOrder.verify(redisAccess).executeVoid(any(Consumer.class));
+    }
+
+    @Test
+    void initLoadsMediaInOneBatchQueryEliminatingNPlusOne() throws Exception {
+        when(contentDao.findAllContent(conn)).thenReturn(List.of(dto(5L, 2, 1), dto(6L, 1, 3)));
+        when(contentMediaDao.findMediaByContentIds(eq(conn), anyCollection()))
+                .thenReturn(videoMediaList(5L));
+        stubIndexScan(Set.of());
+        stubPipeline();
+
+        cache.init();
+
+        // 批量媒体装载恰一次（不逐条 findMedia → N+1 消除）
+        verify(contentMediaDao, times(1)).findMediaByContentIds(eq(conn), anyCollection());
+        verify(contentMediaDao, never()).findMedia(any(Connection.class), anyLong());
+    }
+
+    @Test
+    void initRedisRoundTripsConstantForLargeContentCount() throws Exception {
+        // 多内容场景：索引重建 executeVoid 恰 1 次（rebuildIndexes 单趟 pipeline）且 execute 为 0；
+        // 内容 key 批量写往返（writeBatch 单趟 pipeline）在 CacheAsideTest.writeBatchPipelines 断言，
+        // 此处 cacheAside 为 mock 只验证"调用了 writeBatch"——往返次数与内容量解耦
+        when(contentDao.findAllContent(conn)).thenReturn(
+                List.of(dto(1L, 2, 1), dto(2L, 2, 1), dto(3L, 2, 1)));
+        when(contentMediaDao.findMediaByContentIds(eq(conn), anyCollection())).thenReturn(
+                List.of());
+        stubIndexScan(Set.of());
+        stubPipeline();
+
+        cache.init();
+
+        verify(cacheAside).writeBatch(anyMap(), anyLong());
+        verify(redisAccess, times(1)).executeVoid(any(Consumer.class));
+        verify(redisAccess, times(0)).execute(any(Function.class));
+    }
+
+    @Test
+    void initSkipsMediaBrokenContentButRebuildsIndexesForIntactOnes() throws Exception {
+        // type=1（视频）无视频媒体 → 构建失败（NotFound）→ 跳过 content key 与索引；
+        // type=2（图文）正常 → 正常入缓存。断言批量路径的跳过程序（三期 T5 重写）有效
+        when(contentDao.findAllContent(conn)).thenReturn(
+                List.of(dto(7L, 1, 2), dto(8L, 2, 2)));
+        when(contentMediaDao.findMediaByContentIds(eq(conn), anyCollection()))
+                .thenReturn(videoMediaList(8L));  // 仅 8 有媒体；7 无视频媒体 → 损坏
+        stubIndexScan(Set.of());
+        Pipeline p = stubPipeline();
+
+        cache.init();
+
+        // 内容 key 只写完好内容 8（不含损坏内容 7）
+        verify(cacheAside).writeBatch(argThat(m ->
+                !m.containsKey((String) CacheKeys.content(7L))
+                        && m.containsKey((String) CacheKeys.content(8L))), anyLong());
+        // 索引只重建完好内容 8
+        verify(p).lpush("content:index:2:2", "8");
+        verify(p, never()).lpush("content:index:1:2", "7");
+    }
+
+    @Test
+    void initDbErrorDoesNotCrash() throws Exception {
         when(contentDao.findAllContent(conn)).thenThrow(new SQLException("db down"));
 
         assertDoesNotThrow(() -> cache.init());
+
+        // DB 装载失败：不触发任何 Redis 写（缓存走读自愈）
+        verify(cacheAside, never()).writeBatch(anyMap(), anyLong());
+        verify(redisAccess, never()).executeVoid(any(Consumer.class));
     }
 
     // ==================== VO 复制 ====================
