@@ -48,7 +48,8 @@ import java.util.logging.Logger;
  * set 存在 → SISMEMBER；miss → 单飞回填（全量点赞者 SADD-union + EXPIRE；空集→空标记，替代
  * 已失效的 {@code __placeholder__} hack（H11））。计数走 CacheAside（Integer JSON），0 不写空标记。
  *
- * <p>写路径（LikeService DB 事务提交后调用）：条件写——仅当 key 已存在才 INCR/DECR/SADD/SREM，
+ * <p>写路径（LikeService DB 事务提交后调用）：条件写——仅当 key 已存在才 INCR/DECR/SADD/SREM
+ * （三期 T4/N7：Lua 脚本原子执行，消除"探存在→写"竞态窗口，like 两趟往返合并为一趟 EVAL），
  * 冷 key 不创建残缺缓存（防"半套成员/计数"被命中；交给读回填 DB 真理）；any 失败 → 失效 key
  * 让读自愈（4.2），不抛出。计数/成员/空标记全部可降级，Redis 挂不导致点赞接口 500（H5）。
  */
@@ -56,6 +57,29 @@ import java.util.logging.Logger;
 public class LikeCacheService {
 
     private static final Logger LOGGER = LogUtil.getLogger(LikeCacheService.class);
+
+    // ==================== 条件写 Lua 脚本（三期 T4/N7 原子化） ====================
+
+    /**
+     * 点赞条件写（原子，一趟往返）：清空标记 + "set 存在才 SADD、count 存在才 INCR"。
+     * KEYS: [setKey, countKey, emptySetKey]；ARGV: [userId]。
+     * 原有"探 exists → 再写"两步非原子（N7）：并发失效 DEL count key 后 INCR 以 1 重建，
+     * 计数在 TTL 内对所有人显示错误值——脚本内原子判定彻底消除该窗口。
+     * 条件语义内聚于脚本（Redis 服务端执行），单测仅验证调用参数；不设 TTL（由 miss 回填维护，与现状一致）。
+     */
+    static final String LIKE_CONDITIONAL_SCRIPT =
+            "redis.call('DEL', KEYS[3]) "
+            + "if redis.call('EXISTS', KEYS[1]) == 1 then redis.call('SADD', KEYS[1], ARGV[1]) end "
+            + "if redis.call('EXISTS', KEYS[2]) == 1 then redis.call('INCR', KEYS[2]) end";
+
+    /**
+     * 取消点赞条件写（原子）：set 存在才 SREM、count 存在才 DECR（不清空标记——空标记
+     * 表示"确认无点赞者"，unlike 不改变该事实，与现状一致）。
+     * KEYS: [setKey, countKey]；ARGV: [userId]。DECR 同款竞态（并发失效后以 -1 重建）一并消除。
+     */
+    static final String UNLIKE_CONDITIONAL_SCRIPT =
+            "if redis.call('EXISTS', KEYS[1]) == 1 then redis.call('SREM', KEYS[1], ARGV[1]) end "
+            + "if redis.call('EXISTS', KEYS[2]) == 1 then redis.call('DECR', KEYS[2]) end";
 
     private final ContentLikeDao contentLikeDao;
     private final CommentLikeDao commentLikeDao;
@@ -82,28 +106,17 @@ public class LikeCacheService {
 
     /**
      * 缓存：用户给内容点赞。
-     * 清残留空标记 + 条件写（set 存在才 SADD，count 存在才 INCR）；
+     * 三期 T4/N7：条件写 Lua 原子化——清空标记 + "set 存在才 SADD、count 存在才 INCR"
+     * 一趟 EVAL 原子执行，消除"探存在→写"竞态窗口（并发失效 DEL count key 后 INCR 以 1 重建）；
      * 失败 → 失效 count+set 让读自愈，不抛出。
      */
     public void likeContent(long userId, long contentId) {
         String setKey = CacheKeys.contentLikeSet(contentId);
         String countKey = CacheKeys.contentLikeCount(contentId);
         try {
-            redis.executeVoid(j -> {
-                // 第一趟：清空标记 + 探测两个 key 是否存在
-                Pipeline p = j.pipelined();
-                p.del(CacheKeys.empty(setKey));
-                Response<Boolean> setExists = p.exists(setKey);
-                Response<Boolean> countExists = p.exists(countKey);
-                p.sync();
-                // 第二趟：条件写（key 已存在才增值/加成员，避免冷 key 创建残缺缓存）
-                if (Boolean.TRUE.equals(setExists.get())) {
-                    j.sadd(setKey, String.valueOf(userId));
-                }
-                if (Boolean.TRUE.equals(countExists.get())) {
-                    j.incr(countKey);
-                }
-            });
+            redis.executeVoid(j -> j.eval(LIKE_CONDITIONAL_SCRIPT,
+                    List.of(setKey, countKey, CacheKeys.empty(setKey)),
+                    List.of(String.valueOf(userId))));
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "内容点赞缓存写失败，失效 key 让读自愈, contentId=" + contentId, e);
             stats.record(CacheStats.Event.WRITE_FAIL, setKey);
@@ -113,20 +126,16 @@ public class LikeCacheService {
 
     /**
      * 缓存：用户取消内容点赞。
-     * 条件写（set 存在才 SREM，count 存在才 DECR）；失败 → 失效 count+set，不抛出。
+     * 三期 T4/N7：条件写 Lua 原子化——"set 存在才 SREM、count 存在才 DECR"一趟 EVAL
+     * 原子执行（DECR 同款竞态：并发失效后以 -1 重建，一并消除）；失败 → 失效 count+set，不抛出。
      */
     public void unlikeContent(long userId, long contentId) {
         String setKey = CacheKeys.contentLikeSet(contentId);
         String countKey = CacheKeys.contentLikeCount(contentId);
         try {
-            redis.executeVoid(j -> {
-                if (j.exists(setKey)) {
-                    j.srem(setKey, String.valueOf(userId));
-                }
-                if (j.exists(countKey)) {
-                    j.decr(countKey);
-                }
-            });
+            redis.executeVoid(j -> j.eval(UNLIKE_CONDITIONAL_SCRIPT,
+                    List.of(setKey, countKey),
+                    List.of(String.valueOf(userId))));
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "取消内容点赞缓存写失败，失效 key 让读自愈, contentId=" + contentId, e);
             stats.record(CacheStats.Event.WRITE_FAIL, setKey);
@@ -136,23 +145,14 @@ public class LikeCacheService {
 
     // ==================== 评论点赞 / 取消（同上） ====================
 
+    /** 缓存：用户给评论点赞（Lua 原子条件写，同 {@link #likeContent}）。 */
     public void likeComment(long userId, long commentId) {
         String setKey = CacheKeys.commentLikeSet(commentId);
         String countKey = CacheKeys.commentLikeCount(commentId);
         try {
-            redis.executeVoid(j -> {
-                Pipeline p = j.pipelined();
-                p.del(CacheKeys.empty(setKey));
-                Response<Boolean> setExists = p.exists(setKey);
-                Response<Boolean> countExists = p.exists(countKey);
-                p.sync();
-                if (Boolean.TRUE.equals(setExists.get())) {
-                    j.sadd(setKey, String.valueOf(userId));
-                }
-                if (Boolean.TRUE.equals(countExists.get())) {
-                    j.incr(countKey);
-                }
-            });
+            redis.executeVoid(j -> j.eval(LIKE_CONDITIONAL_SCRIPT,
+                    List.of(setKey, countKey, CacheKeys.empty(setKey)),
+                    List.of(String.valueOf(userId))));
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "评论点赞缓存写失败，失效 key 让读自愈, commentId=" + commentId, e);
             stats.record(CacheStats.Event.WRITE_FAIL, setKey);
@@ -160,18 +160,14 @@ public class LikeCacheService {
         }
     }
 
+    /** 缓存：用户取消评论点赞（Lua 原子条件写，同 {@link #unlikeContent}）。 */
     public void unlikeComment(long userId, long commentId) {
         String setKey = CacheKeys.commentLikeSet(commentId);
         String countKey = CacheKeys.commentLikeCount(commentId);
         try {
-            redis.executeVoid(j -> {
-                if (j.exists(setKey)) {
-                    j.srem(setKey, String.valueOf(userId));
-                }
-                if (j.exists(countKey)) {
-                    j.decr(countKey);
-                }
-            });
+            redis.executeVoid(j -> j.eval(UNLIKE_CONDITIONAL_SCRIPT,
+                    List.of(setKey, countKey),
+                    List.of(String.valueOf(userId))));
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "取消评论点赞缓存写失败，失效 key 让读自愈, commentId=" + commentId, e);
             stats.record(CacheStats.Event.WRITE_FAIL, setKey);

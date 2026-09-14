@@ -105,38 +105,26 @@ class LikeCacheServiceTest {
         when(p.sismember(CacheKeys.contentLikeSet(contentId), "7")).thenReturn(memberResp);
     }
 
-    // ==================== 写路径：内容点赞（条件写 + 清空标记 + 失败失效） ====================
+    // ==================== 写路径：内容点赞（Lua 原子条件写 + 失败失效，三期 T4/N7） ====================
 
     @Test
-    void likeContentClearsEmptyMarkerAndConditionalWrites() {
-        Pipeline p = mock(Pipeline.class);
-        when(jedis.pipelined()).thenReturn(p);
-        Response<Boolean> setExists = booleanResponse(true);
-        Response<Boolean> countExists = booleanResponse(true);
-        when(p.exists(CacheKeys.contentLikeSet(1L))).thenReturn(setExists);
-        when(p.exists(CacheKeys.contentLikeCount(1L))).thenReturn(countExists);
-
+    void likeContentRunsConditionalLuaScript() {
+        // 三期 T4/N7：条件语义内聚 EVAL 脚本（Redis 服务端原子执行），单测验证调用参数
         service.likeContent(7L, 1L);
 
-        verify(p).del(CacheKeys.empty(CacheKeys.contentLikeSet(1L)));
-        verify(jedis).sadd(CacheKeys.contentLikeSet(1L), "7");
-        verify(jedis).incr(CacheKeys.contentLikeCount(1L));
+        verify(jedis).eval(eq(LikeCacheService.LIKE_CONDITIONAL_SCRIPT),
+                eq(List.of(CacheKeys.contentLikeSet(1L), CacheKeys.contentLikeCount(1L),
+                        CacheKeys.empty(CacheKeys.contentLikeSet(1L)))),
+                eq(List.of("7")));
     }
 
     @Test
-    void likeContentSkipsWhenKeysAbsent() {
-        Pipeline p = mock(Pipeline.class);
-        when(jedis.pipelined()).thenReturn(p);
-        Response<Boolean> setExists = booleanResponse(false);
-        Response<Boolean> countExists = booleanResponse(false);
-        when(p.exists(CacheKeys.contentLikeSet(1L))).thenReturn(setExists);
-        when(p.exists(CacheKeys.contentLikeCount(1L))).thenReturn(countExists);
+    void unlikeContentRunsConditionalLuaScript() {
+        service.unlikeContent(7L, 1L);
 
-        service.likeContent(7L, 1L);
-
-        verify(jedis, never()).sadd(anyString(), anyString());
-        verify(jedis, never()).incr(anyString());
-        verify(p).del(CacheKeys.empty(CacheKeys.contentLikeSet(1L)));
+        verify(jedis).eval(eq(LikeCacheService.UNLIKE_CONDITIONAL_SCRIPT),
+                eq(List.of(CacheKeys.contentLikeSet(1L), CacheKeys.contentLikeCount(1L))),
+                eq(List.of("7")));
     }
 
     @Test
@@ -149,14 +137,42 @@ class LikeCacheServiceTest {
     }
 
     @Test
-    void unlikeContentConditionallySremAndDecr() {
-        when(jedis.exists(CacheKeys.contentLikeSet(1L))).thenReturn(true);
-        when(jedis.exists(CacheKeys.contentLikeCount(1L))).thenReturn(true);
+    void unlikeContentFailureInvalidatesKeys() {
+        // 三期 T4/N7 评审补齐：unlike 失效降级路径对称覆盖
+        doThrow(new CacheException("redis down")).when(redis).executeVoid(any(Consumer.class));
 
         service.unlikeContent(7L, 1L);
 
-        verify(jedis).srem(CacheKeys.contentLikeSet(1L), "7");
-        verify(jedis).decr(CacheKeys.contentLikeCount(1L));
+        verify(cacheAside).invalidate(CacheKeys.contentLikeCount(1L), CacheKeys.contentLikeSet(1L));
+    }
+
+    @Test
+    void unlikeCommentFailureInvalidatesKeys() {
+        doThrow(new CacheException("redis down")).when(redis).executeVoid(any(Consumer.class));
+
+        service.unlikeComment(7L, 9L);
+
+        verify(cacheAside).invalidate(CacheKeys.commentLikeCount(9L), CacheKeys.commentLikeSet(9L));
+    }
+
+    @Test
+    void likeCommentRunsConditionalLuaScript() {
+        // 三期 T4/N7 对称补测（comment 版写路径此前零覆盖）
+        service.likeComment(7L, 9L);
+
+        verify(jedis).eval(eq(LikeCacheService.LIKE_CONDITIONAL_SCRIPT),
+                eq(List.of(CacheKeys.commentLikeSet(9L), CacheKeys.commentLikeCount(9L),
+                        CacheKeys.empty(CacheKeys.commentLikeSet(9L)))),
+                eq(List.of("7")));
+    }
+
+    @Test
+    void unlikeCommentRunsConditionalLuaScript() {
+        service.unlikeComment(7L, 9L);
+
+        verify(jedis).eval(eq(LikeCacheService.UNLIKE_CONDITIONAL_SCRIPT),
+                eq(List.of(CacheKeys.commentLikeSet(9L), CacheKeys.commentLikeCount(9L))),
+                eq(List.of("7")));
     }
 
     // ==================== 读路径：内容点赞成员三态 ====================

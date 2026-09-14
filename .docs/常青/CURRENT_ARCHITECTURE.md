@@ -453,6 +453,18 @@ com.itheima/
 - **残余窗口（已接受）**：Redis 持续挂恢复后索引仍可能不完整（与现状一致，读路径降级兜底）；懒重建触发面仍限 `getRecommendByFilter` 读路径（与现状一致，不做 R-10 定期重建）。
 - **验证**：JUnit **353 例全绿**（04a 末 351 +2：addContentIndexWriteFailureDeletesIndexKeysForSelfHeal——写抛/DEL 直通差异化 stub，断言 4 key 各 DEL 一次且无 lpush；addContentIndexWriteAndHealDeleteFailureDoesNotThrow——恒抛双层失败不抛）+ pytest all 124 passed 无回归。
 
+### 6.11 条件写 Lua 原子化（三期 T4-③ cache-04c 新增，治 N7）
+
+> 目标：点赞条件写"探 exists → 再 INCR/SADD"两步非原子——并发失效（内容下架 `deleteContentLike` / 另一请求写失败 `invalidate`）把 count key DEL 后，INCR 以 **1** 重建、DECR 以 **-1** 重建，点赞数在 TTL（15 分钟）内对所有人显示错误值（真实可能上千）。对外行为零变化，仅原子性增强。
+
+- **脚本机制**：`LikeCacheService` 两个 `static final` 脚本常量（包可见，同包测试引用）——
+  - `LIKE_CONDITIONAL_SCRIPT`（KEYS=[setKey, countKey, emptySetKey]，ARGV=[userId]）：`DEL empty:` + `EXISTS setKey 才 SADD` + `EXISTS countKey 才 INCR`——与原"pipeline 探测 + 条件写"两趟语义逐条一致，且**合并为一趟 EVAL 往返**；
+  - `UNLIKE_CONDITIONAL_SCRIPT`（KEYS=[setKey, countKey]）：`EXISTS setKey 才 SREM` + `EXISTS countKey 才 DECR`——**保持"不清空标记"语义**（空标记=确认无点赞者，unlike 不改变该事实）。
+- **治理面 4 方法**：`likeContent` / `unlikeContent` / `likeComment` / `unlikeComment` 统一 `executeVoid(j -> j.eval(...))`——入口线索字面仅点名 like 两方法，unlike 的 DECR 同款竞态（并发失效后以 -1 重建）经用户拍板对称孪生同修（对齐 T2 先例）。
+- **语义保持核对**：零新增 key（KEYS 均为既有 key）；不设 TTL（miss 回填路径维护，与现状一致）；冷 key 不创建残缺缓存语义不变；失败降级不变——`executeVoid` 委托 `execute`，一切 RuntimeException 统一包装 `CacheException` + 熔断成败回填，eval 异常/脚本错误走同一通道（catch 降级 = 日志 + WRITE_FAIL + `cacheAside.invalidate(countKey, setKey)`）；Jedis 5.1.0 `eval(String, List<String>, List<String>)` javap 实证，RedisAccess 零改动。
+- **验证口径（已接受）**：条件语义内聚脚本由 Redis 服务端原子执行，单测验证 eval 调用参数（脚本 + KEYS/ARGV）——`likeContentSkipsWhenKeysAbsent` 随语义迁移删除，comment 版写路径对称补测 + unlike 失效降级对称覆盖填补既有零覆盖缺口；**运行时 Lua 冒烟**（`temp_script/verify_cache04c_lua.py` 对真实 Redis EVAL，5 场景 10 断言全过：like 命中含清空标记 / like 冷 key 不建残缺缓存 / unlike 命中 / unlike 冷 key 防以 -1 重建 / unlike 保留空标记）。
+- **验证**：JUnit **356 例全绿**（04b 末 353 −1 +2 参数断言 +2 对称补测 likeComment/unlikeComment 写路径与 unlike 失效降级）+ pytest all 124 passed 无回归。
+
 ---
 
 ## 七、API 接口清单

@@ -107,6 +107,13 @@
 * 残余窗口（已接受）：Redis 持续挂恢复后索引仍可能不完整（与现状一致，读路径降级兜底）；懒重建触发面仍限 `getRecommendByFilter`（与现状一致，不做 R-10）。
 * 落点：`ContentCache.addToIndex` + `indexKeysOf` + `deleteIndexKeysQuietly`（详见 `常青/CURRENT_ARCHITECTURE.md` 6.10；验证 JUnit 353 全绿 +2 + pytest 124 见 `NEXT_CYCLE_TASKS.md` T4 执行回写 04b）。
 
+**T4-③（fix(cache-04c)，2026-09-14 拍板并落地——条件写 Lua 原子化，治 N7）**：
+
+* 拍板取向（用户 2026-09-14）：**Lua 原子化**（非记录接受残余竞态——N7 后果为计数在 15 分钟 TTL 内错误显示，持久性强于 N3 的 60s 空标记）+ **4 方法全治理**（治理面实为 likeContent/unlikeContent/likeComment/unlikeComment——unlike 的 DECR 存在同款竞态，并发失效后计数以 -1 重建；对称孪生同修对齐 T2 先例）。
+* 实现：`LikeCacheService` 两个脚本常量——`LIKE_CONDITIONAL_SCRIPT`（DEL 空标记 + SADD/INCR-if-exists，与原两趟语义逐条一致且合并为一趟 EVAL）、`UNLIKE_CONDITIONAL_SCRIPT`（SREM/DECR-if-exists，保持"不清空标记"语义）；4 方法体统一 `executeVoid(j -> j.eval(...))`，catch 降级（日志 + WRITE_FAIL + invalidate）与熔断口径不变（executeVoid 统一包装 CacheException 已核实）。**零新增 key**（KEYS 均为既有 key）、不设 TTL（回填路径维护，与现状一致）。Jedis 5.1.0 `eval(String, List<String>, List<String>)` javap 实证，RedisAccess 零改动。
+* 条件语义验证口径（已接受）：EXISTS 判定内聚脚本由 Redis 服务端原子执行，单测验证 eval 调用参数（脚本 + KEYS/ARGV）；运行时 Lua 冒烟（`temp_script/verify_cache04c_lua.py` 对真实 Redis EVAL，5 场景 10 断言全过：like 命中/冷 key 不建/unlike 命中/防 -1 重建/保留空标记）补齐脚本文本零执行验证缺口；comment 版写路径对称补测 + unlike 失效降级对称覆盖填补既有缺口。
+* 落点：`LikeCacheService` 4 写方法 + 两脚本常量（详见 `常青/CURRENT_ARCHITECTURE.md` 6.11；验证 JUnit 356 全绿 + pytest 124 + Lua 冒烟见 `NEXT_CYCLE_TASKS.md` T4 执行回写 04c）。N7 治理闭环。
+
 ### 4.1 候选痛点（2026-09-13 代码复查，**待评审纳入，尚未拍板**）
 
 > 编号 `N1`~`N9` 为**本档内部编号**（与已归档周期的 `H*` / `O-*` / `P*` 编号体系无关）。每条给出"如果不改，什么时候会出什么问题"的具体场景。
@@ -184,3 +191,4 @@
 | 2026-09-14 | 0.8 | **T3 执行定稿回写**（fix(cache-03)）：4.0 追加 T3 技术决策——拍板=对外行为保持（用户 2026-09-14），loader 失败抛 DatabaseException（事务模板已包 SQLException），CacheAside 5 装载点捕获转 null（不写空标记不 DEL，miss 跳过 markEmpty，降级共用 loadDegraded），addContent/refreshContent 写路径守卫；N2 治理闭环（4.1 行 N2 对应 T3）；验证 JUnit 348 + pytest 124 + subagent 评审无🔴 |
 | 2026-09-14 | 0.9 | **T4-① 执行定稿回写**（fix(cache-04a)）：4.0 追加 T4-① 技术决策——拍板=exists 守卫（对齐 writeSet 260913 先例，非 Lua），markEmpty 守卫"数据 key 不存在才写空标记"+ del(dataKey) 随守卫移除（死代码+竞态危害源），writeSet 空分支定向复用（U-09 T4 定向复用）；残余竞态=exists→setex 毫秒间隙可自愈（已接受）；N3 治理闭环（4.1 行 N3 对应 T4）；验证 JUnit 351（+3 含并发不假空时序测试）+ pytest 124；T4 拆 3 commit 校准 fix(cache-04a/04b/04c) |
 | 2026-09-14 | 1.0 | **T4-② 执行定稿回写**（fix(cache-04b)）：4.0 追加 T4-② 技术决策——自愈=addToIndex 写失败 catch 内 best-effort DEL 所属 4 个索引 key 复用既有懒重建（零新增 key，否决脏标记/完整性校验），indexKeysOf 与 lremAndLpush 同源，双层 best-effort；失败三分收敛；残余窗口=持续挂恢复后仍可能不完整（与现状一致，不做 R-10）；N4 治理闭环（4.1 行 N4 对应 T4）；验证 JUnit 353（+2）+ pytest 124 |
+| 2026-09-14 | 1.1 | **T4-③ 执行定稿回写**（fix(cache-04c)）：4.0 追加 T4-③ 技术决策——拍板=Lua 原子化 + 4 方法全治理（unlike 的 DECR 以 -1 重建同款竞态一并消除，对称孪生对齐 T2 先例）；LIKE/UNLIKE_CONDITIONAL_SCRIPT 两脚本常量，4 方法体统一 eval（like 两趟往返合并为一趟），零新增 key、不设 TTL、失败降级与熔断口径不变；条件语义内聚脚本单测验证调用参数（已接受）；N7 治理闭环（4.1 行 N7 对应 T4）；验证 JUnit 354（−1+2 含 comment 写路径对称补测）+ pytest 124 |
