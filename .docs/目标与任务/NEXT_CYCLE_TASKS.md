@@ -61,7 +61,7 @@
 | T3 | 负缓存治理：区分"确认无数据"与"加载失败" | N2 | T2（软） | DB 瞬时失败**不再写 60s 空标记、不 DEL 既有数据 key**；新增单测覆盖；三态语义与对外错误约定不变 | `fix(cache-03)` | 已完成（2026-09-14） |
 | T4 | 写路径的失败与竞态治理 | N3、N4、N7 | —（独立，可并行窗口） | 空标记写入守卫生效（并发不回填假空）；索引写失败可自愈或至少可检测；条件写竞态有明确结论（修掉 or 记录为已接受）；**含 3 项，允许拆多 commit（G1 例外标注）** | `fix(cache-04a/04b/04c)`（G1 校准 2026-09-14：T4 内部拆 3 commit，a=①N3 守卫、b=②N4 索引自愈、c=③N7 条件写竞态，任务编号引用仍用 `T4`） | 已完成（04a/04b/04c 2026-09-14） |
 | T5 | 启动加载治理 | N5、R-01、R-04 | T1~T4（软） | Redis 写入**移出 DB 事务**；批量操作 pipeline 化、启动往返次数显著下降（前后对比）；**开工前须用户拍板 R-01 取向**；`pytest all` 全绿 | `fix(cache-05)` | 已完成（2026-09-14） |
-| T6 | 收尾 | U-08 + 全周期 | T1~T5 | U-08 消除（索引 key 生成与解析同源）；T1~T5 无残留；常青文档同步；覆盖率地图 rerun 无回归；`pytest all` 全绿 | `fix(cache-06)` | 草稿 |
+| T6 | 收尾 | U-08 + 全周期 | T1~T5 | U-08 消除（索引 key 生成与解析同源）；T1~T5 无残留；常青文档同步；覆盖率地图 rerun 无回归；`pytest all` 全绿 | `fix(cache-06)` | 已完成（2026-09-14） |
 
 > 状态取值：草稿 / 待执行 / 执行中 / 已完成 / 搁置。
 
@@ -158,6 +158,12 @@
 * **红线边界**：不引入新功能改动；只做残留清理、U-08 归一、验证与文档；发现"要改但未排期"的内容 → **登记 `UNPLANNED_ISSUES.md`**，不在本周期硬做。
 * **强制探索步骤**：动刀前先 (1) `rg` 确认 T1~T5 无残留（旧的直调模式、临时开关、临时日志等）(2) 校验 `@WebServlet` URL / web.xml / IoC 扫描原样 (3) 确认 `CacheStats` 观测口径是否仍准确（T1 引入熔断后 `DEGRADE` 的计数含义可能变化）。
 * **验收**：U-08 消除（索引 key 生成与解析同源，`CacheKeys` 为唯一源）；`pytest all` 全量回归全绿；常青文档同步（`CURRENT_ARCHITECTURE.md` 六.Redis 设计 + `BUSINESS_FLOW.md` 3.1 缓存机制）；NEEDS 中已拍板决策与实现一致；覆盖率地图 rerun 无回归。
+* **执行回写（2026-09-14，fix(cache-06) 已落地，本周期 6 任务全部关闭）**：
+  * **强制探索结论**：① T1~T5 无残留——`*FromDb` 助手（isFollowingFromDb 等）已随 T2 删除、`loadBatch` 死代码已随 T3 删除、无 TODO/FIXME/临时开关/临时日志（`System.out` 仅存在于既有运维工具 CountRepairTool 与 LogUtil，非本周期引入；`FollowCache.probePair` 为既有写路径方法）；② `@WebServlet` 14 个 URL / web.xml（仅 4 filter）/ IoC 扫描 `ClassScanner.scan("com.itheima")` 均原样；③ CacheStats 观测口径确认 **DEGRADE 含义仍准确**——T1 熔断开启时 `RedisAccess.execute` 抛 CacheException（未访问 Redis），catch 分支照旧记 DEGRADE，含义="本次读未命中缓存、走 DB 兜底"按请求/key 计一次，熔断只是让失败更快、不改变计数语义；LOAD 已在 T2 改为 leader 记一次（不变）。
+  * **U-08 归一（唯一源收敛于 CacheKeys）**：新增 `CacheKeys.contentIndex(type, categoryId)` 生成方法 + `CONTENT_INDEX_PREFIX` 常量；`CacheKeys.domainOf` 解析改引用同一常量；`ContentCache.forEachIndexKey` 的 SCAN 匹配模式改 `CONTENT_INDEX_PREFIX + "*"`——**生成 / 解析 / 匹配三处同源**；原 `ContentCache.indexKey` 私有拼接移除，调用点（buildQueryKey / indexKeysOf）改走 `CacheKeys.contentIndex`。`INDEX_REBUILD_KEY`（进程内单飞 key，非 Redis key）保持原位不动。
+  * **观测口径补丁**：`CacheStats.Event.DEGRADE` javadoc 补明示（=本次读未命中缓存、走 DB 兜底次数，含熔断开启快速失败），纯文档零行为变化。
+  * **验证**：`mvn -o compile` 过；JUnit **365 例全绿**（surefire 361 + 独立 fork pool-test 4；T5 末 362 +3：CacheKeysTest 新增 contentIndexKeyUsesTypeAndCategory / contentIndexKeyGenerationAndParsingSameSource / contentIndexPrefixConstantIsPublicForScanMatch——生成与 domainOf 解析同源断言为 U-08 验收证据）+ `tv.py test all` **pytest 124 passed** 无回归 + 覆盖率地图 rerun 无回归（`gen_coverage_map.py`：41 端点全有 pytest，无用例 0）。
+  * **验收对照**：U-08 消除 ✓（生成/解析/匹配同源，CacheKeys 唯一源，单测断言同源）；pytest all 124 全绿 ✓；常青文档同步 ✓（CURRENT_ARCHITECTURE 2.16 的 4.2/6.2/9.2/12 + BUSINESS_FLOW 3.1 T6 注记）；NEEDS 拍板决策与实现一致 ✓（T1~T5 实现已按 4.0 逐条落地，本任务逐条核对无漂移）；覆盖率地图 rerun 无回归 ✓。发现"要改但未排期"内容：无新增登记。
 
 ---
 
@@ -165,6 +171,7 @@
 
 | 日期         | 版本  | 内容                                                                                                                                                                          |
 | ---------- | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-09-14 | 1.2 | **T6 执行完成回写（fix(cache-06)，本周期 6 任务全部关闭）**：总览 T6 状态 草稿→已完成（2026-09-14）；T6 详情追加"执行回写"——探索结论（T1~T5 无残留（*FromDb/loadBatch 已删、无临时开关与日志）/14 URL·web.xml·IoC 扫描原样/DEGRADE 口径确认仍准确=本次读未命中缓存走 DB 兜底、熔断快速失败含在内）、U-08 归一实现（CacheKeys.contentIndex + CONTENT_INDEX_PREFIX，domainOf 解析与 SCAN 匹配同引用，删 ContentCache.indexKey 私有拼接，生成/解析/匹配三处同源）、观测口径补丁（DEGRADE javadoc 明示）、验证结果（JUnit 365 全绿 +3、pytest all 124 passed、覆盖率地图 rerun 无回归 41/41）、验收对照五项全过、无新增登记 |
 | 2026-09-13 | 0.1 | 新建本文档（模板就位）：结转周期约定 G1-G10（G1/G3/G9 三处标注"待 R-11 拍板后校准"）+ 任务模板四要素 + 红线措辞/编号引用约定；任务总览与任务详情**留空待填**，并预置"候选任务来源映射"（按 R-11 四个候选方向列出各自可拆解的 R/N/U 条目）                    |
 | 2026-09-13 | 0.2 | **R-11 拍板后拆任务**：方向 = 缓存加固（缓存韧性 + 启动加载治理）；G1/G3/G9 三处校准（commit 前缀 `fix(cache-0N)`、验收层级明确、本周期无 DDL 并在任务总览标注）；新增"任务清单理念"（只写做什么/不做什么、不提前过度详细设计、红线只防跑偏）；任务总览填入 **T1~T6**（含 NEEDS 编号映射与顺序理由）；"四、任务详情"填入 6 个任务的四要素骨架；移除已被本周期消费的"候选任务来源映射"（范围见 NEEDS 4.3） |
 | 2026-09-13 | 0.3 | **修订红线措辞约定**（用户要求）：① 明确红线"只列明显越界的项、作用是防跑偏、不穷举做法、不做一刀切禁止"；② 机制表述由"不改本来要守的红线就会阻碍后续工作 → 申请开禁"改为"**某条红线会阻碍正确做法**（过紧 / 过窄 / 已不适用）→ 说明理由**申请调整**"，两个禁止（硬扛 / 自行放开）保留；③ 同步更新任务模板中"红线边界"一行的括号说明 |

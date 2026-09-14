@@ -390,10 +390,6 @@ public class ContentCache implements Initializable {
 
     // ==================== 索引 ====================
 
-    private static String indexKey(int type, int categoryId) {
-        return "content:index:" + type + ":" + categoryId;
-    }
-
     private String buildQueryKey(Integer type, Integer categoryId) {
         if (type != null && type != 0 && (type < 1 || type > 2)) {
             throw new ParamException("不支持的内容类型: " + type);
@@ -403,7 +399,7 @@ public class ContentCache implements Initializable {
         }
         int t = (type != null && type != 0) ? type : -1;
         int c = (categoryId != null) ? categoryId : -1;
-        return indexKey(t, c);
+        return CacheKeys.contentIndex(t, c);
     }
 
     /** 索引懒重建：目标索引 key 不存在时按需从 DB 重建（单飞防惊群；Redis 异常降级为空/不 crash）。 */
@@ -486,10 +482,10 @@ public class ContentCache implements Initializable {
     /** 一条内容所属的 4 个索引 key（本 type/cid + 两个通配维度 + 全通配）；写入与自愈 DEL 同源。 */
     private static String[] indexKeysOf(int type, int categoryId) {
         return new String[]{
-            indexKey(type, categoryId),
-            indexKey(type, -1),
-            indexKey(-1, categoryId),
-            indexKey(-1, -1)
+            CacheKeys.contentIndex(type, categoryId),
+            CacheKeys.contentIndex(type, -1),
+            CacheKeys.contentIndex(-1, categoryId),
+            CacheKeys.contentIndex(-1, -1)
         };
     }
 
@@ -531,9 +527,10 @@ public class ContentCache implements Initializable {
         }
     }
 
-    /** content:index:* 索引 key 的 SCAN 遍历助手（T8：KEYS→SCAN，治 H13 REDIS 主线程 O(N) 阻塞）。 */
+    /** content:index:* 索引 key 的 SCAN 遍历助手（T8：KEYS→SCAN，治 H13 REDIS 主线程 O(N) 阻塞）。
+     * 匹配模式与 key 生成同源（三期 T6 U-08 归一：{@link CacheKeys#CONTENT_INDEX_PREFIX}）。 */
     private static void forEachIndexKey(Jedis j, Consumer<String> action) {
-        ScanParams params = new ScanParams().match("content:index:*").count(100);
+        ScanParams params = new ScanParams().match(CacheKeys.CONTENT_INDEX_PREFIX + "*").count(100);
         String cursor = ScanParams.SCAN_POINTER_START;
         do {
             ScanResult<String> r = j.scan(cursor, params);

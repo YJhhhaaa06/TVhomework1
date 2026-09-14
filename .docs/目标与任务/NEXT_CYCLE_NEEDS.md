@@ -124,6 +124,13 @@
 * 前后对比（验收）：Redis ≈12N 往返（内容 2 + 索引 8/内容）→ ≈3（内容 pipeline 1 + 索引 SCAN 页 + 索引 pipeline 1）；DB N+1 → 2；与内容量解耦。
 * 落点：`ContentCache`/`CacheAside`/`ContentMediaDao`（详见 `常青/CURRENT_ARCHITECTURE.md` 6.12；验证 JUnit 362 全绿 + pytest 124 + subagent 评审无🔴见 `NEXT_CYCLE_TASKS.md` T5 执行回写）。N5/R-01/R-04 治理闭环。
 
+**T6（fix(cache-06)，2026-09-14 拍板并落地——收尾，治 U-08 + 全周期闭环）**：
+
+* 拍板取向（执行定稿）：**U-08 归一 = 生成/解析/匹配三处同源，唯一源收敛于 `CacheKeys`**——新增 `CacheKeys.contentIndex(type, categoryId)` 生成方法 + `CONTENT_INDEX_PREFIX` 前缀常量；`domainOf` 解析与 `ContentCache.forEachIndexKey` 的 SCAN 匹配模式均引用同一前缀常量；原 `ContentCache.indexKey` 私有拼接移除，调用点（buildQueryKey/indexKeysOf）改走 `CacheKeys.contentIndex`。`INDEX_REBUILD_KEY`（进程内单飞 key，非 Redis key）不在归一范围。
+* 观测口径确认（强制探索③）：**DEGRADE 计数含义在 T1 熔断后仍准确**——=本次读未命中缓存、走 DB 兜底次数（按请求/key 计一次），含熔断开启快速失败（未访问 Redis 即抛 CacheException）与 Redis 操作异常，两者语义一致；仅给 `CacheStats.Event.DEGRADE` javadoc 补明示，零行为变化。LOAD 已在 T2 改 leader 记一次（不变）。
+* 残留巡检（强制探索①②）：T1~T5 无残留（`*FromDb` 助手与 `loadBatch` 已删、无 TODO/临时开关/临时日志；`@WebServlet` 14 URL、web.xml、IoC 扫描 `scan("com.itheima")` 原样）。
+* 验证：JUnit 365 全绿（surefire 361 + pool 4，+3 为 CacheKeysTest contentIndex 生成格式/生成与解析同源/前缀常量） + pytest all 124 passed + 覆盖率地图 rerun 无回归（41/41）。落点：`CacheKeys`/`ContentCache`/`CacheStats`（详见 `常青/CURRENT_ARCHITECTURE.md` 6.2 注记；见 `NEXT_CYCLE_TASKS.md` T6 执行回写）。U-08 治理闭环。
+
 ### 4.1 候选痛点（2026-09-13 代码复查，**待评审纳入，尚未拍板**）
 
 > 编号 `N1`~`N9` 为**本档内部编号**（与已归档周期的 `H*` / `O-*` / `P*` 编号体系无关）。每条给出"如果不改，什么时候会出什么问题"的具体场景。
@@ -191,6 +198,7 @@
 
 | 日期 | 版本 | 内容 |
 | ---- | ---- | ---- |
+| 2026-09-14 | 1.3 | **T6 执行定稿回写（fix(cache-06)）**：4.0 追加 T6 技术决策——U-08 归一=生成/解析/匹配三处同源唯一源收敛于 CacheKeys（新增 contentIndex 方法 + CONTENT_INDEX_PREFIX 常量，domainOf 解析与 SCAN 匹配同引用，删 ContentCache.indexKey 私有拼接）；DEGRADE 口径确认仍准确（含熔断快速失败，javadoc 补明示零行为变化）；残留巡检无发现；U-08 治理闭环（UNPLANNED_ISSUES 标注已消化）；验证 JUnit 365（surefire 361 + pool 4，+3）+ pytest 124 + 覆盖率地图 41/41 |
 | 2026-09-13 | 0.1 | 新建本文档（结转稿）：接 260913-cache-architecture 归档周期，结转 ① 通用约定（C-1~C-3 + 6 条延续约定）、② 未完成需求 10 项（O-5/O-9/分布式/H7~H10/TTL 复调/T9 review 测试缺口/索引定期重建）、③ 未拍板决策 4 项（第三期方向/P6/U-07/O-5·O-9 方案）；四（本周期痛点与目标方案）留空待方向拍板；同步登记 U-08~U-10 代码债入 UNPLANNED_ISSUES |
 | 2026-09-13 | 0.2 | 补 4.1 候选痛点（代码复查，待评审纳入）：N1 降级路径绕开单飞（Redis 挂→DB 连带崩）、N2 loader 把查库失败当"确实没有数据"（瞬时 DB 错→60s 假 404）、N3 `CacheAside.markEmpty` 无条件 DEL 数据 key（缺 FollowCache 已有的存在守卫→假空窗口）、N4 索引写失败不自愈（内容永不出现在推荐）、N5 `init()` 在 DB 事务内写 Redis 且无 pipeline（启动放大并占住连接）、N6 点赞成员全量装载（内存/延迟随点赞量放大）、N7 条件写"探存在→INCR"非原子（计数被以 1 重建）、N8 缓存 JSON 无格式版本（DTO 改动后降级且不写回）、N9 观测只能看惰性日志（T7 已知取舍，列出待确认）；4.2 候选方向由 3 个扩为 4 个（补"缓存韧性专项"） |
 | 2026-09-13 | 0.3 | **结转项统一重编号**：二/三两表由"带周期前缀编号"（`260913/O-5` 等）统一为**本档内部连续编号 `R-01`~`R-13`**（R-01~R-10 = 未完成需求，R-11~R-13 = 未拍板决策；R-11 = 第三期方向这一"元决策"），原编号退入"来源"列供追溯；新增"编号体系"说明（C-# / R-## / N# / T# 四类）；同步修正 4.1/4.2 内对新编号的交叉引用；补充配套 TASKS 文档指引 |

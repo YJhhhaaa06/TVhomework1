@@ -17,6 +17,9 @@ public final class CacheKeys {
     /** 空标记短 TTL（秒）：NEEDS 4.4 约定约 30s~5min，取 60s。 */
     public static final long EMPTY_MARKER_TTL_SECONDS = 60;
 
+    /** 内容索引 key 前缀：{@code content:index:}（生成、{@link #domainOf} 解析、SCAN 匹配同源，防漂移）。 */
+    public static final String CONTENT_INDEX_PREFIX = "content:index:";
+
     private CacheKeys() {
     }
 
@@ -28,6 +31,17 @@ public final class CacheKeys {
     /** 内容评论树：{@code content:comments:{id}}（JSON，Cache-Aside 数据 key）。 */
     public static String contentComments(long contentId) {
         return "content:comments:" + contentId;
+    }
+
+    /**
+     * 内容类型分区索引：{@code content:index:{type}:{categoryId}}（LIST，新前序推荐索引）。
+     *
+     * <p>type=-1 / categoryId=-1 表示通配维度（推荐接口 type/category 为空时的 -1 归一）。
+     * 三期 T6 归一：原 {@code ContentCache.indexKey} 私有拼接并入本方法，生成与
+     * {@link #domainOf} 解析、SCAN 匹配（{@link #CONTENT_INDEX_PREFIX}）同源。
+     */
+    public static String contentIndex(int type, int categoryId) {
+        return CONTENT_INDEX_PREFIX + type + ":" + categoryId;
     }
 
     /**
@@ -88,7 +102,7 @@ public final class CacheKeys {
         if (dataKey.startsWith("empty:")) {
             return domainOf(dataKey.substring("empty:".length()));
         }
-        if (dataKey.startsWith("content:index:")) {
+        if (dataKey.startsWith(CONTENT_INDEX_PREFIX)) {
             return CacheDomain.CONTENT;
         }
         if (dataKey.startsWith("content:like")) {

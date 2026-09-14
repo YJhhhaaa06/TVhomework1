@@ -28,7 +28,10 @@ public class CacheStats {
 
     /** 六类事件（NEEDS 4.14：hitData / hitEmpty / miss / loadCount / degradeCount / writeFailCount）。
      * <p>LOAD=**DB 装载尝试次数**：仅在真实 loader 执行处打（singleFlight 回调与降级 DB 兜底路径统一口径），
-     * 单飞并发去重后同一 key 一次 miss 只计一次；loader 抛异常（装载失败）也计入——语义为"尝试装载"。 */
+     * 单飞并发去重后同一 key 一次 miss 只计一次；loader 抛异常（装载失败）也计入——语义为"尝试装载"。
+     * <p>DEGRADE=**本次读未命中缓存、走 DB 兜底的次数**（按请求/key 计一次）：含 Redis 操作异常
+     * 与 T1 熔断开启时的快速失败（未访问 Redis 即抛 CacheException）——两者语义一致，均为"缓存不可用"，
+     * 熔断只是让失败来得更快，不改变计数含义。 */
     public enum Event {
         HIT_DATA, HIT_EMPTY, MISS, LOAD, DEGRADE, WRITE_FAIL
     }

@@ -3,6 +3,7 @@ package com.itheima.cache;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CacheKeysTest {
 
@@ -44,6 +45,28 @@ class CacheKeysTest {
     @Test
     void userFollowerKeyUsesUserId() {
         assertEquals("user:follower:7", CacheKeys.userFollower(7L));
+    }
+
+    @Test
+    void contentIndexKeyUsesTypeAndCategory() {
+        assertEquals("content:index:1:2", CacheKeys.contentIndex(1, 2));
+        assertEquals("content:index:2:-1", CacheKeys.contentIndex(2, -1));
+        assertEquals("content:index:-1:1", CacheKeys.contentIndex(-1, 1));
+        assertEquals("content:index:-1:-1", CacheKeys.contentIndex(-1, -1));
+    }
+
+    @Test
+    void contentIndexKeyGenerationAndParsingSameSource() {
+        // 三期 T6 U-08：生成（contentIndex）与解析（domainOf）同源，CacheKeys 为唯一源
+        assertEquals(CacheDomain.CONTENT, CacheKeys.domainOf(CacheKeys.contentIndex(1, 2)));
+        assertEquals(CacheDomain.CONTENT, CacheKeys.domainOf(CacheKeys.contentIndex(-1, -1)));
+        assertEquals(CacheDomain.CONTENT, CacheKeys.domainOf("empty:" + CacheKeys.contentIndex(1, 2)));
+    }
+
+    @Test
+    void contentIndexPrefixConstantIsPublicForScanMatch() {
+        assertEquals("content:index:", CacheKeys.CONTENT_INDEX_PREFIX);
+        assertTrue(CacheKeys.contentIndex(1, 2).startsWith(CacheKeys.CONTENT_INDEX_PREFIX));
     }
 
     @Test
