@@ -364,6 +364,12 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+> **第四期 T3（cache-03）FollowCache 收口注记（2026-09-15）**：关注**读路径**（`isFollowing` 单成员三态 /
+> `batchIsFollowing` 单 set 批量 / `getFollowingIds`/`getFollowerIds` 全量列表）已全部改走基建组件 `cache/SetCache`
+> （U-09/N3 收敛落点，与 like 域 T2 同模式）；**写路径（MULTI 条件双写 + 失败双 DEL）仍由 `FollowCache` 保有**
+> （follow 特有双 key 原子语义，不在收口面）。行为零变化——key/三态/空标记 TTL/降级语义/打点口径不变；
+> 全量列表升序由 `FollowCache.sortIds` 唯一包装点统一（详情见 CURRENT_ARCHITECTURE 6.15）。
+
 > 关键语义（NEEDS 4.2~4.5/4.12）：内容与评论读/写**全部收敛 Redis**（旧内存 HashMap 版
 > ContentCacheManager 已随 T6 整体移除，职责由 ContentCache/CommentCache 承接）；
 > **任何缓存失败降级走 DB、不导致业务失败**；

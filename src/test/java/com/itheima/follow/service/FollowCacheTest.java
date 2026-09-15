@@ -5,6 +5,7 @@ import com.itheima.cache.CacheDomain;
 import com.itheima.cache.CacheKeys;
 import com.itheima.cache.CacheStats;
 import com.itheima.cache.RedisAccess;
+import com.itheima.cache.SetCache;
 import com.itheima.cache.SingleFlight;
 import com.itheima.config.AppConfig;
 import com.itheima.exception.CacheException;
@@ -40,8 +41,10 @@ import static org.mockito.Mockito.*;
 
 /**
  * T5 关注关系缓存（双 Set + MULTI 双写 + 失败双 DEL + 三态读 + 单飞 + 降级）单测。
- * 风格对齐 LikeCacheServiceTest：mock DAO/RedisAccess/CacheAside + 真实 SingleFlight + tt 跑 loader；
- * 通过 Mockito 令 RedisAccess.execute/Void 作用于 mock Jedis（含 pipeline/multi），可验证 key 与写命令。
+ * 第四期 T3 起：读路径收口 SetCache（同一 mock redis + 真实 SingleFlight + 同一 stats
+ * 组合注入），用例桩透明平移；风格对齐 LikeCacheServiceTest：mock DAO/RedisAccess/CacheAside
+ * + tt 跑 loader；通过 Mockito 令 RedisAccess.execute/Void 作用于 mock Jedis（含 pipeline/multi），
+ * 可验证 key 与写命令。
  */
 class FollowCacheTest {
 
@@ -67,7 +70,10 @@ class FollowCacheTest {
         cacheAside = mock(CacheAside.class);
         jedis = mock(Jedis.class);
         stats = new CacheStats();
-        cache = new FollowCache(followDao, tt, redis, new SingleFlight(), cacheAside, stats);
+        // 第四期 T3：读路径收口 SetCache（复用同一 mock redis / 真实 SingleFlight / 同一 stats，
+        // 保证既有三态/回填/降级并发与统计断言不因组件平移而破）
+        SetCache setCache = new SetCache(redis, cacheAside, new SingleFlight(), stats);
+        cache = new FollowCache(followDao, tt, redis, setCache, cacheAside, stats);
 
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);

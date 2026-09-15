@@ -79,7 +79,7 @@
 | -- | -- | ---- | -- | -------- | ------------ | -- |
 | T1 | 基建：Set 缓存组件收敛 | U-09、N3 | — | 新组件覆盖原生 Set 三态读/回填/批量/降级装载，单测齐全；**此时尚无业务接入，全量行为零变化** | `refactor(cache-01)` | 已完成 |
 | T2 | LikeCacheService 收口 + 孪生合并 | U-09、N3 | T1 | content/comment 成对方法合并、扫描/回填/降级走基建；行为与统计打点口径零变化；JUnit + 相关 pytest 绿 | `refactor(cache-02)` | 已完成 |
-| T3 | FollowCache 收口 | U-09、N3 | T1 | 接入基建；MULTI 双写等 follow 特有逻辑语义保持；**`pytest all` 全量绿**（收口后第一个全量回归点） | `refactor(cache-03)` | 草稿 |
+| T3 | FollowCache 收口 | U-09、N3 | T1 | 接入基建；MULTI 双写等 follow 特有逻辑语义保持；**`pytest all` 全量绿**（收口后第一个全量回归点） | `refactor(cache-03)` | 已完成 |
 | T4 | 点赞成员装载反转 | R-08 | T2（硬） | `content:likeSet` → `user:likeSet`；**方案开工前须用户拍板**（G7）；对外行为零变化；装载量前后对比 | `refactor(cache-04)` | 草稿 |
 | T5 | 推荐读路径优化 + 索引重建退避 | N1、N2、R-04、R-07、U-11 加重面 | —（独立，可并行窗口） | 惰性探测（探测量前后对比）；停机期间不再逐请求全表查询（可复现验证）；R-07 评估结论回写 NEEDS；**`pytest all` 全量绿** | `refactor(cache-05)` | 草稿 |
 | T6 | 关注/粉丝计数入缓存 | R-01 | T3（软） | Profile 计数命中缓存；follow/unfollow 后计数一致性方案拍板落地（G7）；SCARD 冷 set 返 0 的坑有结论 | `refactor(cache-06)` | 草稿 |
@@ -121,7 +121,7 @@
 * **红线边界**：行为零变化（同 T2 口径）；**MULTI 双写、`probePair`、`invalidateKeysQuietly` 等 follow 特有写路径逻辑语义保持**（写路径是双 key 原子语义，不在收口面，是否部分复用由窗口探索定并回写）；`getSetMembers` 的排序语义（确定性顺序）不变。
 * **强制探索步骤**：动刀前先 (0) 复核证据 (1) 参照 T2 落地模式适配差异点（双 Set、Loader 泛型、排序）(2) `batchIsFollowing` miss 回填的"answer + 回填两趟"结构保持 (3) 若清单未覆盖 → 回写本文档再动手。
 * **验收**：读路径走基建；`pytest all` 全量绿（收口后第一个全量回归点）；JUnit 全绿。
-* **执行回写（<日期>，<commit scope> 已落地）**：`<任务完成后追加>`。
+* **执行回写（2026-09-15，`refactor(cache-03)` 已落地）**：N3 证据复核**成立**（FollowCache 的 `scanSet`/`writeSet`/`getSetMembers`/`loadViaSingleFlight`/批量扫描段与 SetCache 逐字重复，G11 第 (0) 步过）。**落点**：`isFollowing` → `SetCache.isMember`；`batchIsFollowing` → `SetCache.batchIsMember`（单 set 多成员·Follow 形态，"answer 查询 + 回填全量两趟"结构由组件内保持，空输入早退守卫保留）；`getFollowingIds/getFollowerIds` → `SetCache.getMembers` + `sortIds` 唯一包装点统一升序（hit-data/miss/降级三路径一致，落实 SetCache.getMembers javadoc 排序交接提示）；构造注入 `SingleFlight`→`SetCache`；删除类内与 SetCache 重复的 `scanSet`/`writeSet`/`loadViaSingleFlight`/`getSetMembers`/`toSortedLongs`/`Loader` 接口（524→326 行）；关注/粉丝列表孪生 loader 收敛为 `DaoQuery<T>` 参数化 helper（日志 label 与用户可见异常文案逐字不变），批量 answer `loadFollowedIdsByUser` 单处使用保留独立方法（不过度设计）。**写路径零改动**：`cacheFollow`/`cacheUnfollow`/`probePair`/`invalidateKeysQuietly`/`Probe`/WRITE_FAIL 打点逐字保持（follow 特有双 key 原子语义不在收口面）。**行为对照**：批量 miss 回填 FollowCache 现状**已是 best-effort**（与 SetCache 契约一致，无 T2 那种"上抛→best-effort"的 L2 差异）；批量 dbAnswer 失败仍上抛；单成员 miss/降级 loader 失败仍上抛；空集回填统一 `cacheAside.markEmpty`（exists 守卫同源）；降级经 SetCache 单飞装载作答不写回（D4）。**L1 仅记录**：域类内部日志措辞（"关注状态缓存读失败"等）统一为 SetCache 措辞，非对外契约（T2 同先例）。验证：`mvn compile` + `mvn test-compile` 过；JUnit **397 例全绿**（FollowCacheTest 29 例平移适配注入 SetCache，stub 与断言逐字可平移，无增减）；**pytest all 124 passed 无回归**（本周期收口后第一个全量回归点）；常青文档同步见 6.15/2.18；subagent review 通过（无🔴）。关联：T1 执行回写"差异记录 L2：T2 回写对照"——follow 域批量回填本就 best-effort，无新增差异。
 
 ### T4 点赞成员装载反转
 
@@ -169,6 +169,7 @@
 
 | 日期 | 版本 | 内容                                                                                                                                                                       |
 | ---- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-09-15 | 0.4 | **T3 完成（`refactor(cache-03)`）**：任务总览 T3 状态 → 已完成；四、任务详情 T3 追加执行回写（读路径收口 SetCache——isMember/batchIsMember/getMembers+sortIds、524→326 行、写路径 MULTI 双写零改动、批量回填本已 best-effort 无 L2 差异、L1 日志措辞统一；JUnit 397 全绿 + pytest all 124 passed 本周期首个全量回归点）；常青 CURRENT_ARCHITECTURE 2.18（follow 域行 / 新增 6.15 / 9.2 FollowCacheTest 注记 / 12 更新日志）+ BUSINESS_FLOW 3.1 收口注记 |
 | 2026-09-15 | 0.3 | **T2 完成（`refactor(cache-02)`）**：任务总览 T2 状态 → 已完成；四、任务详情 T2 追加执行回写（孪生差异盘点 / SetCache 落点 / L2 差异对照记录——T1 登记"批量回填上抛→best-effort"收敛落地；JUnit 397 pytest 124）；常青 CURRENT_ARCHITECTURE 2.17（4.2 SetCache 行与 like 域行 / 新增 6.14 / 9.2 LikeCacheServiceTest 23→25 / 12 更新日志） |
 | 2026-09-15 | 0.2 | **R-10 拍板后拆任务**：方向 = 缓存体系综合改造（结构收敛 + 装载反转 + 读路径优化 + 补缺口）；G1/G3/G9 校准（commit 前缀 `refactor(cache-0N)`、`pytest all` 全量在 T3/T5/T8 三点、本周期无 DDL）；任务总览填入 **T1~T8**（含 NEEDS 编号映射与顺序理由——T1 基建 → T2 Like 收口（最深）→ T3 Follow 收口 → T4 反转（硬依赖 T2）→ T5 读路径（独立可并行）→ T6 计数（软依赖 T3）→ T7 小项 → T8 收尾）；T4/T6 标注开工前方案拍板点（G7）；"四、任务详情"填入 8 个任务的四要素骨架 |
 | 2026-09-15 | 0.1 | 新建本文档（模板就位）：接 260914-cache-hardening 归档（第三期「缓存加固」T1~T6 全部完成），结转周期约定 G1~G11（G1 commit 前缀 / G9 DDL 标注待方向拍板后校准；G11 质疑协议为 2026-09-15 新增）+ 任务模板四要素（含 (0) 证据复核步）+ 红线措辞 / 编号引用 / 质疑协议约定；任务总览与任务详情**留空待填**（方向待 NEEDS 三节 R-10 拍板） |
