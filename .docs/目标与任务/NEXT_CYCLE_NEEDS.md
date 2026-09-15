@@ -1,10 +1,10 @@
 # 下一周期需求与痛点
 
 > 用途：回答"下一周期为什么做这些"——本周期要解决的痛点、候选任务的优先级映射、以及开工前必须拍板的技术决策。
-> 状态：**方向已拍板（2026-09-13，R-11）**——本周期 = **缓存加固**（缓存韧性 + 启动加载治理）；落地范围见 **4.3**（含"明确不做"清单）。结转事项已**统一编号为 `R-01`~`R-13`**（二表 R-01~R-10 待消化的事实项；三表 R-11~R-13 决策项，R-11 已拍板；旧带周期前缀编号退居"来源"列供追溯）；4.1 的候选痛点 N1~N9 已随方向拍板**部分纳入，纳入项见 4.3**。
-> 配套：How（拆任务）见 `目标与任务/NEXT_CYCLE_TASKS.md`（**已拆 T1~T6**；四要素为骨架，执行方案由执行窗口探索细化）。
+> 状态：**方向已拍板（2026-09-15，R-10）**——本周期 = **缓存体系综合改造**（结构收敛 + 装载反转 + 读路径优化 + 计数入缓存 + 小项打包）；落地范围见 **4.3**（含"明确不做"清单）。结转事项统一编号为 `R-01`~`R-12`（R-10 已拍板）；4.1 的候选痛点 N1~N3（2026-09-15 代码复查）已随方向拍板**全部纳入，纳入项见 4.3**。
+> 配套：How（拆任务）见 `目标与任务/NEXT_CYCLE_TASKS.md`（**已拆 T1~T8**；四要素为骨架，执行方案由执行窗口探索细化）。
 > 注意：二/三为**结转总账**，不等于本周期范围；本周期做什么、不做什么，以 **4.3** 为准。
-> 来源：260913-cache-architecture 周期（C 方向缓存改造，一版 T1~T6 + 二期 T7~T9，共 9 个 commit `refactor(cache-01)`~`refactor(cache-09)`，全部完成）归档后：代码复查发现的失效路径缺陷（4.1 的 N1~N9）+ 已登记代码债（`UNPLANNED_ISSUES.md` 的 U-08~U-10）+ 留池项 R-01/R-04。
+> 来源：260914-cache-hardening 周期（第三期「缓存加固」，T1~T6 全部完成，`fix(cache-01)`~`fix(cache-06)`，T4 拆 04a/04b/04c）归档后：结转的未完成需求与未拍板决策（二/三表）+ 三期候选痛点评审不纳入项（N6/N8 升格为 R-08/R-09）+ `UNPLANNED_ISSUES.md` 留池项（U-07 同步为 R-12；U-09/U-11 留池不编号）+ **2026-09-15 代码复查新发现（4.1 的 N1~N3）**。
 > 术语约定：**周期 > 任务**。本文档只回答 Why（需求与决策），How（拆任务）在任务清单文档。
 
 ***
@@ -17,34 +17,34 @@
 | C-2 | 一任务一窗口一 commit | 默认期望，允许例外需标注；commit message 强制带任务编号 |
 | C-3 | commit 语义闭环 | 代码 + 常青文档更新 + 任务清单勾选进**同一 commit** |
 
-> 另有若干"延续性约定"不单独编号，随周期生效（原文见 `archive/目标与任务/260913-cache-architecture/NEXT_CYCLE_NEEDS.md` 七决策与约束）：
-> ① **红线措辞约定**：红线只列"明显越界"的项，作用是**防跑偏、不把执行 Agent 限制死**（不穷举做法、不做一刀切禁止）；若某条红线会阻碍正确做法（过紧 / 过窄 / 已不适用）——不允许硬扛、也不允许自行放开，**先说明理由申请调整**，获批准后按新口径动手，未获批准则维持原红线（完整表述见 `目标与任务/NEXT_CYCLE_TASKS.md` 二节）；
-> ② **编号引用约定**：禁裸编号引用已归档周期元素，引用一律写成 `<周期>/<编号>`（如 `260913/O-5`）；裸编号仅指本文档内部定义的元素；
-> ③ **技术红线**：禁 Spring/SpringBoot/MyBatis；不擅改 `@WebServlet` URL / web.xml / IoC 扫描；不为缓存便利改业务逻辑语义（点赞去重/楼中楼/搜索）；
+> 另有若干"延续性约定"不单独编号，随周期生效（原文见 `archive/目标与任务/260914-cache-hardening/NEXT_CYCLE_NEEDS.md` 一节）：
+> ① **红线措辞约定**：红线只列"明显越界"的项，作用是**防跑偏、不把执行 Agent 限制死**（不穷举做法、不做一刀切禁止）；若某条红线会阻碍正确做法（过紧 / 过窄 / 已不适用）——不允许硬扛、也不允许自行放开，**先说明理由申请调整**，获批准后按新口径动手，未获批准则维持原红线（完整表述见 `NEXT_CYCLE_TASKS.md` 二节）；
+> ② **编号引用约定**：禁裸编号引用已归档周期元素，引用一律写成 `<周期>/<编号>`（如 `260914/R-02`）；裸编号仅指本文档内部定义的元素；
+> ③ **技术红线**：禁 Spring/SpringBoot/MyBatis；不擅改 `@WebServlet` URL / web.xml / IoC 扫描；不为实现便利改业务逻辑语义；
 > ④ **不引入 MQ**：异步（若需）用进程内线程池（`ExecutorService`），不引入 RabbitMQ/Kafka/RocketMQ；
 > ⑤ **脚本规范**：脚本一律 Python；临时一次性脚本放 `temp_script/`，长期复用/自动化放 `tools/`；
-> ⑥ **DDL 备份**：出现表结构改动，执行前先备份库结构与建表语句到 `.docs/DBbackups/`。
+> ⑥ **DDL 备份**：出现表结构改动，执行前先备份库结构与建表语句到 `.docs/DBbackups/`；
+> ⑦ **质疑协议（G11）**：执行 Agent 对 Why 层（需求真实性/必要性）与 How 层（任务/验收可操作性）有质疑权、亦有报告义务——四时点触发（开窗阅读 / 动手前复核 / 探索中 / 验收时）× L1~L4 分级动作，质疑记录回写 4.0，**裁决权永远在用户**（完整协议与记录格式见 `NEXT_CYCLE_TASKS.md` 二节；2026-09-15 随模板修订新增）。
 
 ***
 
-## 二、结转：未完成的需求（260913-cache-architecture 归档时未关闭）
+## 二、结转：未完成的需求（260914-cache-hardening 归档时未关闭）
 
-> **编号体系（本档内部）**：`C-#` 通用约定；**`R-##` 待评审事项**（本节与三节连续编号，评审时按 R 编号点单）；`N#` 本周期新探查候选痛点（4.1）；`T#` 任务（见任务清单文档）。引用**已归档周期**的元素仍写 `<周期>/<编号>`（见一②）；每行"来源"列保留原编号以便追溯，正文不再使用带周期前缀的旧编号。
+> **编号体系（本档内部）**：`C-#` 通用约定；**`R-##` 待评审事项**（本节与三节连续编号，评审时按 R 编号点单）；`N#` 本周期新探查候选痛点（4.1）；`T#` 任务（见任务清单文档）。引用**已归档周期**的元素仍写 `<周期>/<编号>`（见一②）；每行"来源"列保留原编号以便追溯，正文不使用带周期前缀的旧编号。
 
 | 编号 | 事项 | 类别 | 来源（归档周期） | 状态 | 说明 |
 | ---- | ---- | ---- | ---- | ---- | ---- |
-| R-01 | 初始化选择性加载 | 需求（方案待拍板） | `260913/O-5` | **已拍板（2026-09-14）：全量 + 工程化优化**（用户拍板，理由：个人项目流量小、全量在当前数据量无压力；未来数据量成瓶颈再另周期评估按需回填/分级加载，本期不预埋开关） | 启动全量加载（现状 `ContentCache.init()`：全表 content + 逐条媒体）保留，但工程化：`findMediaByContentIds` 批量装载消 N+1（R-04）、Redis 写入移出 DB 事务、内容 key 与索引写入 pipeline 化（T5 落地，见 4.0） |
-| R-02 | 关注/粉丝计数入缓存 | 需求（方案待拍板） | `260913/O-9` | 留池未排期 | Profile 的 followCount/followerCount 是否一并入缓存：关系 Set 是成员、计数是独立 key；注意 SCARD 冷 set 返 0 的坑 |
-| R-03 | 单飞进程内锁的多实例化 | 需求（架构） | `260913/分布式` | 继续延后 | 260913 周期 4.9 约定"进程内锁只对单实例有效；当前单 Tomcat 够用，不过度设计"；多实例需分布式锁 |
-| R-04 | 初始化 N+1 未根治 | 需求（性能） | `260913/H7` | 只缓解 | T3 让启动少一轮评论 N+1（评论不再全量加载）；内容仍全表 + 逐条媒体查询，且串在一个长事务里 |
-| R-05 | 缓存对象对外共享可变引用 | 需求（待确认闭环） | `260913/H8` | 疑似已解，文档未闭环 | 新实现读路径走 JSON（`codec.fromJson` 每次产生新对象），共享引用实质消失；但归档文档六只声明"H1~H6 修复"，本项未明确闭环 → 需确认后关闭 |
-| R-06 | `authorName` 冗余不同步 | 需求（一致性） | `260913/H9` | 未处理 | 用户改名后内容缓存仍带旧名，需等 TTL/失效；当前无改名接口，属潜在项 |
-| R-07 | 索引全量读 + 拷贝 shuffle | 需求（性能） | `260913/H10` | 明确保留 | T8 明示"`LRANGE 0 -1` 全量读保留（推荐 shuffle 对外语义不变）"；`getRecommendByFilter` 仍每次去重 + shuffle 全量候选、只取 12 条，数据量大时 O(n) |
-| R-08 | follow/like 分域 TTL 真流量复调 | 待数据 | `260913/TTL` | 待真流量 | T9 取参来自本地轻量压测（`temp_script/pressure_cache.py` 双轮 total=21000）；follow 未覆盖真实关系数据，30min 属保守延长并标注"待真流量复调" |
-| R-09 | 批量续期测试覆盖缺口 | 测试 | `260913/T9-Review①②` | 记录不修 | ① `getBatch` 续期未覆盖 miss key 场景；② Like/Follow 批量 pipeline 续期未直接断言（单 key hit-data 已覆盖） |
-| R-10 | 是否需定期重建索引防长尾漂移 | 待评估 | `260913/O-6-尾巴` | 未登记 | 260913 周期 O-6 行明示"如需定期重建索引防长尾漂移，另行登记评估"——尚未评估 |
+| R-01 | 关注/粉丝计数入缓存 | 需求（方案待拍板） | `260914/R-02`（溯源 `260913/O-9`） | **已纳入本周期（T6）** | Profile 的 followCount/followerCount 是否一并入缓存：关系 Set 是成员、计数是独立 key；注意 SCARD 冷 set 返 0 的坑（证据复核 2026-09-15：`ProfileService.getProfile` 每次从 DB user 表读计数） |
+| R-02 | 单飞进程内锁的多实例化 | 需求（架构） | `260914/R-03`（溯源 `260913/分布式`） | 继续延后 | 进程内锁只对单实例有效；当前单 Tomcat 够用，不过度设计；多实例需分布式锁 |
+| R-03 | `authorName` 冗余不同步 | 需求（一致性） | `260914/R-06`（溯源 `260913/H9`） | 未处理 | 用户改名后内容缓存仍带旧名，需等 TTL/失效；当前无改名接口，属潜在项 |
+| R-04 | 索引全量读 + 拷贝 shuffle | 需求（性能） | `260914/R-07`（溯源 `260913/H10`） | 明确保留 | `LRANGE 0 -1` 全量读保留（推荐 shuffle 对外语义不变）；`getRecommendByFilter` 仍每次去重 + shuffle 全量候选、只取 12 条，数据量大时 O(n) |
+| R-05 | follow/like 分域 TTL 真流量复调 | 待数据 | `260914/R-08`（溯源 `260913/TTL`） | 待真流量 | 取参来自本地轻量压测（`temp_script/pressure_cache.py` 双轮 total=21000）；follow 未覆盖真实关系数据，30min 属保守延长并标注"待真流量复调" |
+| R-06 | 批量续期测试覆盖缺口 | 测试 | `260914/R-09`（溯源 `260913/T9-Review①②`） | **已纳入本周期（T7）** | ① `getBatch` 续期未覆盖 miss key 场景；② Like/Follow 批量 pipeline 续期未直接断言（单 key hit-data 已覆盖） |
+| R-07 | 是否需定期重建索引防长尾漂移 | 待评估 | `260914/R-10`（溯源 `260913/O-6-尾巴`） | **已纳入本周期（T5 附带评估）** | 260913 周期 O-6 明示"如需定期重建索引防长尾漂移，另行登记评估"——尚未评估；三期 T4-② 自愈只覆盖"索引写失败"场景，不覆盖长尾漂移 |
+| R-08 | 点赞成员回填按"该内容的全部点赞者"装载 | 需求（设计反转待拍板） | `260914/N6` | **已纳入本周期（T4，方案开工前拍板）** | 内存/延迟随点赞量放大（10 万赞视频一次判断加载 10 万行；`/start` 推荐位 12 条冷 key 时一次 12 倍量级；Redis 挂时降级逐条全量查最糟）；需内容维度 `content:likeSet` → 用户维度 `user:likeSet` 的设计反转（与 `260913/4.10` `user:following` 同构）；证据复核 2026-09-15：批量 miss 对每个 cid 各来一次全量 likers 装载（`backfillBatchContentLikers`），answer 查询与回填查询为两套 |
+| R-09 | 缓存 JSON 无格式版本 | 需求（条件触发） | `260914/N8` | **已纳入本周期（T7 一行修）** | DTO 字段删/改名后旧条目反序列化失败且降级路径不写回（Jackson 未关 `FAIL_ON_UNKNOWN_PROPERTIES`，`CacheAside` 脏 JSON → DEGRADE 直接 loader）→ 这批 key 在各自 TTL 内每次读都走 DB；证据复核 2026-09-15：`JacksonCodec` MAPPER 未 disable 该 feature |
 
-> **已完成、不结转**（供对照）：一版 T1~T6 全部；二期 T7 观测埋点 / T8 读路径加固 / T9 TTL 精调；H1~H6、H11（占位符 bug）、H12/H13/H14 已治理；O-1~O-4、O-6、O-7、O-8 已拍板或已完成；P5 已消化（T6）。
+> **已完成、不结转**（供对照）：三期 T1~T6 全部——超时显式化 + 全局熔断（U-10、N1）/ 降级接入单飞（N1）/ 负缓存 DatabaseException 契约（N2）/ 空标记 exists 守卫（N3）/ 索引写失败自愈（N4）/ 条件写 Lua 原子化（N7）/ 启动加载治理（N5 + R-01 全量+工程化 + R-04 N+1 根治，T5）/ U-08 key 同源归一（T6）；旧 R-05（缓存对象共享可变引用）**2026-09-15 归档复核确认关闭**——`CacheAside` 三条读路径（`read` / `get`→`getInternal` / `getBatch`）均走 `codec.fromJson` 每次产生新对象，Redis 值语义不持有 Java 引用；N9（观测只能看惰性日志）为已接受取舍（`260913/T7` 拍板），不结转。
 
 ***
 
@@ -54,143 +54,82 @@
 
 | 编号 | 待拍板事项 | 来源（归档周期） | 当前状态 | 说明 |
 | ---- | ---- | ---- | ---- | ---- |
-| R-11 | **第三期方向**（本周期主线做什么） | 本档新增 | **已拍板（2026-09-13）**：缓存加固（缓存韧性 + 启动加载治理） | 落地范围与"明确不做"清单见 **4.3**；已拆任务见 `NEXT_CYCLE_TASKS.md` 的 T1~T6；D 方向 feed 的前置条件由用户同期定下（见 4.3） |
-| R-12 | 优惠券抢购限流 | `260913/P6` | 默认不做 | 上周期列为"范围外（默认不做）"；需用户确认才纳入、才拆任务；改动面 `CouponService`/`CouponController` |
-| R-13 | content ↔ comment 包层循环依赖 | `260913/U-07` | 待定（C 周期复查：**仍在**，未自然解除） | content 域共享组件（ContentCacheDTO 等）被 comment 域引用，content 又引用 comment 的 `CommentService`；**非 IoC/Bean 环**，仅包架构不纯净、Java 允许；T3 已移除 `CommentService→ContentCacheManager` 依赖，但包层环未解除 |
+| R-10 | **第四期方向**（本周期主线做什么） | 本档新增 | **已拍板（2026-09-15）**：缓存体系综合改造——U-09 结构收敛 + R-08 点赞装载反转 + 读路径/降级优化（N1/N2）+ R-01 计数入缓存 + 小项打包（用户定调：第四期仍只做缓存体系，能拆的任务均排进本周期，一任务一窗口单独探索/修改/review） | 落地范围见 **4.3**；已拆任务见 `NEXT_CYCLE_TASKS.md` 的 T1~T8；D 方向 feed 延后至第五期（前置条件已满足——三期 T1~T6 全关闭，PR 合并状态待用户在第五期立项前确认） |
+| R-11 | 优惠券抢购限流 | `260914/R-12`（溯源 `260913/P6`） | 默认不做 | 历次周期均列"范围外（默认不做）"；需用户确认才纳入、才拆任务；改动面 `CouponService`/`CouponController` |
+| R-12 | content ↔ comment 包层循环依赖 | `260914/R-13`（即 `UNPLANNED_ISSUES.md` 的 U-07） | 待定（三期复查：**仍在**） | content 域共享组件（ContentCacheDTO 等）被 comment 域引用，content 又引用 comment 的 `CommentService`；**非 IoC/Bean 环**，仅包架构不纯净、Java 允许；三期 T3 已移除 `CommentService→ContentCacheManager` 依赖，包层环未解除 |
 
-> R-01 / R-02 同时是"未完成需求"（见二）和"未拍板决策"——要不要做、怎么做都没定：R-01 需在 全量（现状） / 按需回填 / 分级加载 三取向中选；R-02 需先决定是否补计数缓存。
+> R-01 同时是"未完成需求"（见二）和"未拍板决策"——需先决定是否补计数缓存，再定方案。
 > 已拍板、仅留"未来再评估"口子的（不计入未拍板）：`260913/O-7` 搜索维持 FULLTEXT 直查——"若未来要动，另行登记评估"。
+> `UNPLANNED_ISSUES.md` 留池不编号项：U-09（缓存行为 5 份重复实现的全量收口，三期明确不做、只在 T2/T4 定向复用）、U-11（Redis 停机 `/start` 空推荐，既有语义）——是否纳入本周期，评审时与本表一并过。
 
 ***
 
 ## 四、本周期痛点与目标方案
 
-> 结构：**4.1 痛点清单**（代码复查发现，R-11 拍板后部分纳入）→ **4.2 候选方向与拍板结论** → **4.3 本周期范围与反面清单**。
-> 待补：归档文档风格的"目标形态"与"逐项已拍板技术决策"两段，待 T1~T6 执行中按实际方案回写（G7 允许）。
+> 结构：**4.1 痛点清单**（代码复查发现）→ **4.2 候选方向与拍板结论** → **4.3 本周期范围与反面清单**；**4.0 已回写技术决策与质疑记录**（执行中拍板/质疑追加）。**待方向拍板（R-10）后填写。**
 
-### 4.0 已回写技术决策（执行中拍板，按任务追加）
+### 4.0 已回写技术决策与质疑记录（执行中拍板/质疑，按任务追加）
 
-**T1（fix(cache-01)，2026-09-13 拍板并落地——超时配置化 + 全局熔断）**：
+> 每落地一个任务的技术决策在此追加一段（G7：窗口内新决策先回写本节的"已定/待定"状态，不许自行拍板）：任务编号 + commit 前缀 + 拍板日期 + 拍板取向与理由 + 关键实现点 + 落点（类/模块）+ 验证摘要。
+> **质疑记录（G11）**：Why 层质疑（前提证伪 / 已满足 / 必要性存疑 / 内部矛盾）在此登记——L2 带疑继续、L3 暂停必须留痕（L1 仅记录落任务清单"执行回写"）；**裁决权在用户**，裁决结果即一条新决策，同节留痕。
 
-* 显式超时：connect/so 各 1000ms + 池借用 maxWait 1000ms（app.properties `redis.connectTimeoutMs/soTimeoutMs/pool.maxWaitMs`，此前走 Jedis 默认 2000ms 未显式化 + maxWait -1 无限阻塞）；Jedis 5.1.0 无 `(poolConfig, host, port, connTimeout, soTimeout)` 短构造器，用 8 参 `(…, password, database, clientName)` 等价替代（password/clientName=null 保持原语义）。
-* 全局熔断：粒度=**全局单熔断**（单 Redis 实例，按域只增探针流量）；失败口径=**从 `RedisAccess.execute` 冒出的 CacheException 计一次失败**（包装异常均为 Redis 起源；回调自抛极罕见，偏差无害——最坏提前降级，不违反"缓存失败不导致业务失败"）；恢复探测=**半开单探针**（连续失败 ≥5 开断、冷却 10s，期满 CAS 放行唯一探针，成功闭合/失败重开重置冷却），参数 `redis.breaker.failureThreshold/cooldownMillis` 可配。
-* 落点：`cache/RedisCircuitBreaker`（新）+ `RedisAccess` 接线（唯一出入口，熔断异常由既有 catch 降级自然接住，CacheAside 零改动）+ `MyRedisPool`（public 签名零变化）。详见 `常青/CURRENT_ARCHITECTURE.md` 6.6；运行时验证记录见 `NEXT_CYCLE_TASKS.md` T1 执行回写。
+### 4.1 候选痛点（2026-09-15 代码复查，R-10 拍板后已纳入）
 
-**T2（fix(cache-02)，2026-09-13 拍板并落地——降级不放量：降级路径接入单飞）**：
+> 编号 `N1`~`N3` 为**本档内部编号**（与已归档周期的 `N*` 编号体系无关，历史引用写 `<周期>/N#`）。证据均为 2026-09-15 复核定位（文件:行）；执行窗口动手前按 G11 第 (0) 项复核证据，不成立 → L3 暂停并登记质疑。
+> 其中 N1/N2 为本次复查**新发现**；N3 为 U-09（`UNPLANNED_ISSUES.md`）的证据具体化（`N3 ↔ U-09`）。
 
-* 统一规则：**降级读 = 与 miss 回填同款"单飞 + 全量 loader"取数，但仅装载、不写回**（对齐 D4"降级路径不写回"）；降级与 miss 共用同一 `SingleFlight` key 空间（`SingleFlight` 类零改动）。
-* 治理面：读路径降级分支共 10 处——`CacheAside` 3 处（getInternal / getBatch 整批 / getBatch 脏 JSON 单 key）、`FollowCache` 3 处（isFollowing / getSetMembers / batchIsFollowing 降级态）、`LikeCacheService` 4 处（isContentLiked / isCommentLiked / 两批量降级态）。单 key 降级由"单行查询"改为单飞全量装载作答（删 3 个 `*FromDb` 助手，DAO 单行方法保留——写路径仍用）；批量降级由"targeted 批量查询 + 必失败的回填写入尝试"改为"单飞全量装载作答"（DB 总负载不升反降）。`read`（无生产调用方）、写路径 catch、`ensureIndex`（已单飞）、`readIndex`（降级空、无 DB 装载，U-11）不在范围。
-* 失败语义（执行定稿）：loader 失败 → FutureTask 异常完成 → leader/joiner 均以异常收场（**失败不以数据形式共享给等待者**）→ 条目 remove → 下一请求全新重试；等待无超时=与现状等价（分布式锁/超时=R-03）。
-* 与 T1 熔断关系（执行定稿）：正交互补——熔断管"Redis 访问快速失败"，单飞管"降级后 DB 去重"；熔断 OPEN 后每请求仍进降级分支，单飞仍然必需。
-* 统计口径微调：降级路径 `LOAD` 从"每请求记一次"变为"实际去重后装载记一次（leader 记）"，与 miss 单飞口径一致；`DEGRADE` 不变。
-* 落点：`CacheAside`（370 行）+ `FollowCache`（524 行）+ `LikeCacheService`（628 行）；防漂移公共入口 `FollowCache.loadViaSingleFlight` / `LikeCacheService.loadLikersViaSingleFlight`。详见 `常青/CURRENT_ARCHITECTURE.md` 6.7；验证（JUnit 337 + pytest 124 + 黑洞运行时 20 并发同 key Com_select 差值 8）见 `NEXT_CYCLE_TASKS.md` T2 执行回写。
-
-**T3（fix(cache-03)，2026-09-14 拍板并落地——负缓存治理：区分"确认无数据"与"加载失败"，治 N2）**：
-
-* 拍板取向（用户 2026-09-14）：**对外行为保持**——loader 失败仍表现为"本次读无数据"（内容 404 / 评论空 / 批量逐 key 跳过），只治理"loader 失败时怎么写 / 不写缓存"这一层；**不统一各域对外错误约定**（like/follow 的 500 语义不动）。
-* 区分载体：loader 失败抛 **`DatabaseException`**（现成，事务模板已把 SQLException 包成它）；`return null` 仅保留"确认无数据"（DB 无行 / 媒体损坏 / 未知类型）；意外异常统一包成 `DatabaseException`（防 NPE 等静默污染空标记）。
-* CacheAside 契约（新增）：所有装载点（getInternal miss、getInternal 降级、getBatch miss 循环、getBatch 整批降级、getBatch 脏 JSON 单 key 降级）捕获 `DatabaseException` → 记日志转 null——**不写空标记、不 DEL 既有数据 key**（读路径不把瞬时故障固化成假空）；miss 路径失败直接 return null **跳过 markEmpty**；降级路径共用 `loadDegraded` helper。契约仅对 `DatabaseException` 生效，like/follow 的 `ServerException` 不受影响。
-* 写路径守卫：`ContentCache.addContent`/`refreshContent`（DB 提交后缓存同步）遇 `DatabaseException` 静默跳过（refresh 保留旧缓存，读自愈），防提交后 500。
-* 落点：`CacheAside` + `ContentCache` + `CommentCache`（详见 `常青/CURRENT_ARCHITECTURE.md` 6.8；验证 JUnit 348 + pytest 124 + subagent 评审无🔴见 `NEXT_CYCLE_TASKS.md` T3 执行回写）。
-
-**T4-①（fix(cache-04a)，2026-09-14 拍板并落地——空标记写入存在守卫，治 N3）**：
-
-* 拍板取向（用户 2026-09-14）：**exists 守卫**（对齐 `FollowCache.writeSet` 260913 先例）而非 Lua 原子化——Lua 需 RedisAccess 新增 eval 路径且 mock 复杂化，守卫已把竞态窗口从"loader 全程"缩到毫秒级。T4 拆 3 commit（G1 校准）：`fix(cache-04a/04b/04c)`，本项=a。
-* 实现：`CacheAside.markEmpty` 加 `if (!j.exists(dataKey))` 守卫——数据 key 已存在（并发回填/业务写刚写入真数据）时跳过，**不写空标记、不 DEL**；**原 `del(dataKey)` 随守卫移除**（守卫内为死代码，且现状竞态下是 N3 危害的组成部分——删掉并发刚写入的真数据）；`FollowCache.writeSet` 空分支定向复用 `markEmpty`（U-09 允许的 T4 定向复用，先例守卫内的 del 一并消除）。
-* 残余竞态（已接受）：exists 检查→setex 的毫秒间隙内并发写入时空标记可能覆盖其上——数据 key 未被删，空标记 60s 过期或下次业务写 `writeOrInvalidate` 清空标记即自愈，无真数据丢失。
-* 落点：`CacheAside.markEmpty` + `FollowCache.writeSet` 空分支（详见 `常青/CURRENT_ARCHITECTURE.md` 6.9；验证 JUnit 351 全绿含并发不假空时序测试 + pytest 124 见 `NEXT_CYCLE_TASKS.md` T4 执行回写 04a）。
-
-**T4-②（fix(cache-04b)，2026-09-14 拍板并落地——索引写失败自愈，治 N4）**：
-
-* 拍板取向（plan 定稿）：**自愈 = `addToIndex` 写失败时 catch 内 best-effort DEL 本内容所属 4 个索引 key** → 下次推荐读 `ensureIndex` 发现缺失即触发既有单飞懒重建（`loadAllWithoutMedia` + `rebuildIndexes`）全量重建——**复用既有懒重建基建、零新增 key**（否决脏标记 key：触碰 key 命名边界且 T6 U-08 要管；否决完整性校验：无便宜一致性信号、成本高）。`indexKeysOf` 与 `lremAndLpush` 同源提取；双层 best-effort（DEL 也失败不抛，读路径同样降级）。
-* 失败场景三分收敛：抖动已过 → DEL 成功自愈；Redis 持续挂 → DEL 也失败与现状一致（无新增伤害）；DEL 部分成功 → 已 DEL 的 key 缺失照样触发全量重建 → 收敛。
-* 残余窗口（已接受）：Redis 持续挂恢复后索引仍可能不完整（与现状一致，读路径降级兜底）；懒重建触发面仍限 `getRecommendByFilter`（与现状一致，不做 R-10）。
-* 落点：`ContentCache.addToIndex` + `indexKeysOf` + `deleteIndexKeysQuietly`（详见 `常青/CURRENT_ARCHITECTURE.md` 6.10；验证 JUnit 353 全绿 +2 + pytest 124 见 `NEXT_CYCLE_TASKS.md` T4 执行回写 04b）。
-
-**T4-③（fix(cache-04c)，2026-09-14 拍板并落地——条件写 Lua 原子化，治 N7）**：
-
-* 拍板取向（用户 2026-09-14）：**Lua 原子化**（非记录接受残余竞态——N7 后果为计数在 15 分钟 TTL 内错误显示，持久性强于 N3 的 60s 空标记）+ **4 方法全治理**（治理面实为 likeContent/unlikeContent/likeComment/unlikeComment——unlike 的 DECR 存在同款竞态，并发失效后计数以 -1 重建；对称孪生同修对齐 T2 先例）。
-* 实现：`LikeCacheService` 两个脚本常量——`LIKE_CONDITIONAL_SCRIPT`（DEL 空标记 + SADD/INCR-if-exists，与原两趟语义逐条一致且合并为一趟 EVAL）、`UNLIKE_CONDITIONAL_SCRIPT`（SREM/DECR-if-exists，保持"不清空标记"语义）；4 方法体统一 `executeVoid(j -> j.eval(...))`，catch 降级（日志 + WRITE_FAIL + invalidate）与熔断口径不变（executeVoid 统一包装 CacheException 已核实）。**零新增 key**（KEYS 均为既有 key）、不设 TTL（回填路径维护，与现状一致）。Jedis 5.1.0 `eval(String, List<String>, List<String>)` javap 实证，RedisAccess 零改动。
-* 条件语义验证口径（已接受）：EXISTS 判定内聚脚本由 Redis 服务端原子执行，单测验证 eval 调用参数（脚本 + KEYS/ARGV）；运行时 Lua 冒烟（`temp_script/verify_cache04c_lua.py` 对真实 Redis EVAL，5 场景 10 断言全过：like 命中/冷 key 不建/unlike 命中/防 -1 重建/保留空标记）补齐脚本文本零执行验证缺口；comment 版写路径对称补测 + unlike 失效降级对称覆盖填补既有缺口。
-* 落点：`LikeCacheService` 4 写方法 + 两脚本常量（详见 `常青/CURRENT_ARCHITECTURE.md` 6.11；验证 JUnit 356 全绿 + pytest 124 + Lua 冒烟见 `NEXT_CYCLE_TASKS.md` T4 执行回写 04c）。N7 治理闭环。
-
-**T5（fix(cache-05)，2026-09-14 拍板并落地——启动加载治理，治 N5/R-01/R-04）**：
-
-* 拍板取向（用户 2026-09-14）：**R-01 = 全量 + 工程化优化**——保留"启动预加载全部内容+索引"语义（个人项目流量小、全量在当前数据量无压力；未来数据量成瓶颈再另周期评估按需回填/分级加载，本期不预埋开关）。
-* 事务外写（治 N5 一半/H3）：`ContentCache.init()` 拆两段——DB 阶段 `transactionTemplate.execute(this::loadBuildableFromDb)` **事务内只读**（findAllContent + 批量媒体装载 + 构建 DTO，无任何 Redis 调用），事务提交后 `rebuildRedis` 在**事务外**写 Redis；DB 失败记日志 return 不触发任何 Redis 写。
-* 批量媒体装载（治 R-04 N+1）：新增 `ContentMediaDao.findMediaByContentIds`（IN 查询），一趟装载全部媒体 + 内存按 contentId 分组，替代逐条 findMedia（DB N+1 → 恒 2）；不复用 findAllMedia（避免加载删除/孤儿媒体）。媒体损坏跳过逻辑原样保留。
-* 内容 key 批量写（新增 `CacheAside.writeBatch`）：一趟 pipeline `setex[per-key TTL 抖动]+del empty:×N`，失败 → 逐 key deleteQuietly 自愈 + WRITE_FAIL（与 writeOrInvalidate 语义一致）；批内单命令 server 错误依赖 `Pipeline.sync()` 抛异常兜底。单写路径不变。
-* 索引 pipeline 化：`rebuildIndexes` 单条 executeVoid——SCAN 顺序收集旧索引 key → 一趟 pipeline DEL 全部 + lremAndLpush 全部（新增 `lremAndLpush(Pipeline,...)` 重载）；`ensureIndex` 懒重建/`addToIndex`/`removeContent` 零改动。
-* 前后对比（验收）：Redis ≈12N 往返（内容 2 + 索引 8/内容）→ ≈3（内容 pipeline 1 + 索引 SCAN 页 + 索引 pipeline 1）；DB N+1 → 2；与内容量解耦。
-* 落点：`ContentCache`/`CacheAside`/`ContentMediaDao`（详见 `常青/CURRENT_ARCHITECTURE.md` 6.12；验证 JUnit 362 全绿 + pytest 124 + subagent 评审无🔴见 `NEXT_CYCLE_TASKS.md` T5 执行回写）。N5/R-01/R-04 治理闭环。
-
-**T6（fix(cache-06)，2026-09-14 拍板并落地——收尾，治 U-08 + 全周期闭环）**：
-
-* 拍板取向（执行定稿）：**U-08 归一 = 生成/解析/匹配三处同源，唯一源收敛于 `CacheKeys`**——新增 `CacheKeys.contentIndex(type, categoryId)` 生成方法 + `CONTENT_INDEX_PREFIX` 前缀常量；`domainOf` 解析与 `ContentCache.forEachIndexKey` 的 SCAN 匹配模式均引用同一前缀常量；原 `ContentCache.indexKey` 私有拼接移除，调用点（buildQueryKey/indexKeysOf）改走 `CacheKeys.contentIndex`。`INDEX_REBUILD_KEY`（进程内单飞 key，非 Redis key）不在归一范围。
-* 观测口径确认（强制探索③）：**DEGRADE 计数含义在 T1 熔断后仍准确**——=本次读未命中缓存、走 DB 兜底次数（按请求/key 计一次），含熔断开启快速失败（未访问 Redis 即抛 CacheException）与 Redis 操作异常，两者语义一致；仅给 `CacheStats.Event.DEGRADE` javadoc 补明示，零行为变化。LOAD 已在 T2 改 leader 记一次（不变）。
-* 残留巡检（强制探索①②）：T1~T5 无残留（`*FromDb` 助手与 `loadBatch` 已删、无 TODO/临时开关/临时日志；`@WebServlet` 14 URL、web.xml、IoC 扫描 `scan("com.itheima")` 原样）。
-* 验证：JUnit 365 全绿（surefire 361 + pool 4，+3 为 CacheKeysTest contentIndex 生成格式/生成与解析同源/前缀常量） + pytest all 124 passed + 覆盖率地图 rerun 无回归（41/41）。落点：`CacheKeys`/`ContentCache`/`CacheStats`（详见 `常青/CURRENT_ARCHITECTURE.md` 6.2 注记；见 `NEXT_CYCLE_TASKS.md` T6 执行回写）。U-08 治理闭环。
-
-### 4.1 候选痛点（2026-09-13 代码复查，**待评审纳入，尚未拍板**）
-
-> 编号 `N1`~`N9` 为**本档内部编号**（与已归档周期的 `H*` / `O-*` / `P*` 编号体系无关）。每条给出"如果不改，什么时候会出什么问题"的具体场景。
-> 评审时逐条决定：纳入本周期 / 转 `UNPLANNED_ISSUES.md` 留痕 / 废弃。
-> 与已登记代码债的关系：`N1` 是 `UNPLANNED_ISSUES.md` 的 `U-10` 的另一面（同根因）；`N3` 是 `U-09`（重复实现）的具体后果之一。本节任一项经评审纳入本周期后，升格为正式编号（并入 `R-##` 或任务编号 `T#`）。
-
-| 编号 | 问题 | 证据 | 不改会怎样（具体场景） |
+| 编号 | 问题 | 证据（可复核定位） | 不改会怎样（具体场景） |
 | ---- | ---- | ---- | ---- |
-| N1 | **降级路径绕开单飞**：Redis 异常后直接调 loader，不经 `SingleFlight`、无熔断、无本地兜底 | `CacheAside.getInternal` catch → `invokeLoader` 直调；`getBatch` catch → `loadBatch`；`FollowCache.isFollowing` / `getSetMembers` / `batchIsFollowing` 降级直查 DAO；`LikeCacheService.isContentLiked` 降级 `isContentLikedFromDb` | Redis 宕机时，所有读请求在 catch 之后**既没有缓存、也没有单飞**，全部并发的打到 DB；叠加 `U-10`（没配 timeout）每个请求还要先等约 2 秒连接超时。热门接口一并发 → DB 连接池被占满 → **数据库跟着不可用 → 全站 500**。即"缓存不可用"升级成"数据库不可用" |
-| N2 | **loader 把"查库失败"当成"确实没有数据"**：`null` 同时表示"不存在"和"查失败"，被 CacheAside 判定为 hit-empty 写入空标记 | `ContentCache.loadContentFromDb` catch(SQLException) 返回 null；`CommentCache.loadCommentTree` 同样；`CacheAside.get` 见 null → `markEmpty`（写 `empty:` 60s + DEL 数据 key） | 热门内容的 content key 会因点赞/评论数变化被频繁失效（读自愈），miss 很频繁。某次 miss 恰好撞上 DB 的一次瞬时错误（连接抖动/SQL 超时）→ 缓存判定"该内容不存在"并写 60 秒空标记 → **这条热门内容对全部用户 404 长达一分钟**，而 DB 其实几秒后就恢复了。对比：点赞/关注域 loader 遇 SQLException 是抛 `ServerException`（接口 500、不污染缓存）——同一套缓存层里 DB 错误有**三种不同结局**，只有内容/评论会把瞬时错误固化成假数据 |
-| N3 | **`CacheAside.markEmpty` 无条件 DEL 数据 key**：写空标记前不判断数据 key 是否已被并发写入（缺 `FollowCache.writeSet` 已有的"存在守卫"） | `CacheAside.markEmpty` → `setex(empty:…) + del(dataKey)` 无 exists 前置判断；对照 `FollowCache.writeSet` 空分支有 `if (!j.exists(setKey))`（T5 review 必修②，防的正是这个坑） | 用户刚发完评论，另一请求正在 miss 回填同一棵评论树，其 loader 读到"无评论"（提交前）返回 null，随后评论提交+缓存失效，该请求才执行 `markEmpty` → 写 60 秒空标记 → **刚发的评论 60 秒内对所有人不可见**。同一个坑，关注（原生 Set 路径）已修，内容/评论/like 空集分支没修 |
-| N4 | **索引写失败不自愈**：`addToIndex` 失败只记日志；`ensureIndex` 只判索引 key 是否存在，不做完整性校验/修复 | `ContentCache.addToIndex` catch → 仅 WARNING；`ensureIndex` → `if (exists(indexKey)) return;` | 发布视频时 Redis 一次抖动导致 `addToIndex` 失败（此时 content key 已写成功）→ 该内容不在任何 `content:index:*` 里，而索引 key 存在所以懒重建永不触发 → **首页推荐/Feed 永远刷不到这条视频**，只能等应用重启时的 `init()` 全量重建或索引 key 被清掉 |
-| N5 | **启动初始化在 DB 事务内写 Redis，且逐条无 pipeline** | `ContentCache.init()` 的 `transactionTemplate.execute(conn -> { findAllContent + 逐条 findMedia + rebuildRedis(...) })`——Redis 写入位于事务内；`rebuildRedis` 逐条 `writeContent`（SETEX+DEL），`rebuildIndexes` 逐条 8 次 LREM/LPUSH，全程无 pipeline | 内容到 5 万条时重启应用 → 一个长事务里跑"全表 + 5 万次媒体查询 + 约 10 万次 Redis 往返 + 约 40 万次索引往返" → 启动从秒级涨到分钟级；该事务全程占着 DB 连接，**启动窗口期接口因拿不到连接而大面积超时**。且这与 H3 已确立的原则（Redis 写入必须移出 DB 事务）自相矛盾——`addContent` 修了，`init()` 没修 |
-| N6 | **点赞成员回填按"该内容的全部点赞者"装载**，内存/延迟随点赞量放大 | `loadContentLikers` = `contentLikeDao.findLikerIdsByContentId`（全量）；`isContentLiked` miss 即触发；`backfillBatchContentLikers` 对 missed 里**每个 id 各来一次** | 判断"某用户有没有给这条视频点过赞"，代价是把该视频**全部**点赞者 id 读出来在 JVM 建 Set。10 万赞的热门视频 = 一次判断加载 10 万行；`/start` 推荐位 12 条的 likeSet 若恰好都是冷的，一次请求就是 12 倍量级。Redis 挂时最糟（降级路径逐条全量查） |
-| N7 | **条件写"先探存在、再 INCR"非原子** | `LikeCacheService.likeContent` 第一趟 pipeline 读 `exists(countKey)`，`p.sync()` 之后第二趟才 `j.incr(countKey)` | 点赞请求探到 count key 存在 → 就在这中间，并发失效（内容下架走 `deleteContentLike`，或另一请求写失败触发 `cacheAside.invalidate`）把 count key DEL 掉 → 本请求的 `INCR` 把 key **以 1 重建** → 该内容点赞数在 TTL（15 分钟）内对所有人显示为 1，真实值可能是 1000+ |
-| N8 | **缓存 JSON 无格式版本**：DTO 字段删/改名后旧条目反序列化失败，且降级路径**不写回** | `JacksonCodec` 未关 `FAIL_ON_UNKNOWN_PROPERTIES`（Jackson 默认 true）；`CacheAside` 反序列化失败 → catch → DEGRADE + 直接 loader（不写回） | 第三期若因楼中楼/展示改造删掉或重命名 `ContentCacheDTO` 的字段 → 部署后 Redis 旧 JSON 全部反序列化失败 → 这批 key 在各自 TTL 内（content 最长 30 分钟）**每次读都降级走 DB 且不回写缓存** → 缓存对它们完全失效，DB 独自承担全量流量 |
-| N9 | **观测仍看不到"某段时间的命中率"**（进程内计数、重启即丢、每 1000 次一条 INFO、无重置、无端点） | `CacheStats`：`AtomicLong[5][6]` + `DEFAULT_LOG_INTERVAL=1000` 惰性 INFO | 属于 T7 已拍板（惰性日志、不引入定时器、不新增端点）的**已知取舍**，列出仅供评审时确认是否仍接受；低频环境（本地/演示）流量不足 1000 次则永远不出日志，调优时仍无数据可依 |
+| N1 | **`ensureIndex` 降级态隐藏放量**（U-11 的加重面）：Redis 停机期间每次推荐读都会重试索引全量重建，无失败退避——单飞只防并发重叠，不防串行重复 | `ContentCache.ensureIndex`（L406-424）：`exists` 熔断快速失败 → catch"视为无索引" → `singleFlight` 重建（`loadAllWithoutMedia` **DB 全表查询** + `rebuildIndexes` 写 Redis 必失败）→ 条目移除 → 下一请求从头重来；三期 T2 治理 10 处降级分支时排除了 `ensureIndex`（理由"已单飞"），但单飞 ≠ 退避 | Redis 停机 10 分钟，期间每个 `/start` 请求 = 1 次 DB 全表查询 + 空推荐——**DB 压力随停机时长线性涨**，且查询结果全部作废（推荐仍为空）。与 U-11"空推荐"叠加成完整画像 |
+| N2 | **推荐读对全量候选批量探测**（R-04 的加重证据）：shuffle 只需"全量 id 的随机序"，不需"全量内容探测"，现状却对全部候选发 pipeline 探测 | `ContentCache.getRecommendByFilter`（L135-149）：全量 `LRANGE` → 去重拷贝 → 全量 shuffle → `getContentsBatch(distinctIds)` 对**全部候选**一趟 pipeline EXISTS+GET+EXPIRE → 才按序收集到 limit=12 | 候选 1 万条 = 每次推荐约 3 万命令的 pipeline（EXISTS+GET+EXPIRE 各 1 万），只为取 12 条；按 shuffle 序**惰性探测**（凑满 limit 即止）可把探测量降到 ~12+跳过量，零行为变化 |
+| N3 | **域缓存孪生复制**（U-09 证据具体化）：原生 Set 缓存行为 5 份重复实现，且 LikeCacheService 内部 content/comment 成对复制 | `LikeCacheService`（628 行）：load×4 / write×2 / backfill×2 / degrade×2 / batch×2 成对；`FollowCache`（524 行）与 LikeCacheService 跨类逐字重复：`scanSet`/`scanLikeSet`、`writeSet`/`writeXxxLikers`、`loadViaSingleFlight`/`loadLikersViaSingleFlight`、批量三态扫描结构、loader 12 行样板 ×8 | 每治一个缓存行为缺陷要改多处——历史实证：三期 T4-① markEmpty 竞态改 5 处调用方、T2 降级治理改 10 处分支，同一个行为修复每次花 5 遍钱；下一个缺陷仍会这样 |
 
-### 4.2 候选方向（R-11 已拍板，2026-09-13）
+### 4.2 候选方向（R-10 已拍板，2026-09-15）
 
 | 候选 | 内容 | 依据 | 结论 |
 | ---- | ---- | ---- | ---- |
-| **缓存韧性 + 启动加载治理**（合称"缓存加固"） | 面向"Redis 不可用 / DB 抖动"的加固：超时/熔断/降级不放量（U-10、N1）、负缓存治理（N2）、写路径失败与竞态（N3/N4/N7）、启动与回填放大（N5、R-01、R-04），外加 U-08 key 归一 | 4.1 候选痛点 N1~N5/N7 + 已登记 U-08/U-10 + 留池 R-01/R-04 | ✅ **本周期采纳** |
-| D 方向 feed 流改造 | feed（关注流）聚合改造，含 feed 聚合缓存 | 260913 周期"范围外（默认不做）"明示；其 4.10 边界"本项只缓存关系本身，feed 聚合属 D 方向" | ⏸ **延迟**——前置条件 = 缓存加固完成并合并 PR（用户 2026-09-13 定） |
-| 缓存行为统一收口 | 把三态/空标记/降级/单飞/续期从"5 份重复实现"收敛到基建（`UNPLANNED_ISSUES.md` 的 `U-09`） | 260913 周期归档后代码探查（2026-09-13） | ⏸ 延后；本周期只在 T2/T4 必要处做**定向复用**，不做全面重构 |
-| 消费留池项 | 初始化选择性加载（R-01）+ 关注/粉丝计数入缓存（R-02） | 上周期留池未排期，跑完二期再评估 | ⚠️ 部分纳入：**R-01 随 T5 一起做**（与 N5 同源）；R-02 仍留池 |
+| **缓存体系综合改造** | 结构收敛（U-09/N3，治"改一处缺陷花五遍钱"）→ 点赞装载反转（R-08，装载量从"内容点赞数"变"用户点赞数"）→ 读路径/降级优化（N1/N2 + R-07 评估）→ 计数入缓存（R-01）→ 小项打包（R-09 一行修 + R-06 补测） | 2026-09-15 代码复查（N1~N3）+ 留池项证据复核；用户定调"第四期仍只做缓存体系，能拆的任务均排进本周期，一任务一窗口单独探索/修改/review" | ✅ **本周期采纳** |
+| D 方向 feed 流改造 | 关注流聚合改造，含 feed 聚合缓存 | 前置条件已满足（三期完成；PR 合并状态待确认） | ⏸ **延后至第五期**（用户 2026-09-15 定：第四期仍只做缓存体系） |
+| 优惠券抢购限流（R-11）/ content↔comment 包层环（R-12） | 非缓存主题 | — | ⏸ 维持留池/待定，不随本周期 |
 
-### 4.3 本周期范围（R-11 拍板结果，2026-09-13）
+### 4.3 本周期范围（R-10 拍板结果，2026-09-15）
 
-**主题**：缓存加固——"Redis 不可用 / DB 抖动时，缓存既不撒谎、也不放量"。
+**主题**：缓存体系综合改造——"结构收敛 + 装载反转 + 读路径优化 + 补缺口"。
 
 | 纳入 | 对应编号 | 落到任务 | 一句话 |
 | ---- | ---- | ---- | ---- |
-| Redis 快速失败（超时 + 熔断） | U-10、N1 | T1 | Redis 挂了不该每个请求还去等连接超时 |
-| 降级不放量 | N1 | T2 | 降级路径也接单飞，同 key 并发只打一次 DB |
-| 负缓存治理 | N2 | T3 | 区分"确认无数据"与"加载失败"，不把瞬时故障固化成 60s 假空 |
-| 写路径失败与竞态 | N3、N4、N7 | T4 | 空标记写入守卫、索引写失败自愈、条件写原子性 |
-| 启动加载治理 | N5、R-01、R-04 | T5 | Redis 写入移出 DB 事务 + pipeline 化 + 选择性加载取向拍板 |
-| key 规范归一 | U-08 | T6 | `content:index` 生成与解析同源 |
+| Set 缓存行为收敛进基建（组件新建） | U-09、N3 | T1 | 原生 Set 三态读/回填/批量/降级装载收敛为 cache 基建一处 |
+| LikeCacheService 收口 + content/comment 孪生合并 | U-09、N3 | T2 | 628 行域缓存接入基建，成对方法合并 |
+| FollowCache 收口 | U-09、N3 | T3 | 524 行域缓存接入基建（MULTI 双写等 follow 特有逻辑保持） |
+| 点赞成员装载反转 | R-08（原 `260914/N6`） | T4 | `content:likeSet` → `user:likeSet`（与 `user:following` 同构），方案开工前拍板 |
+| 推荐读路径优化 | N2、R-04 | T5 | shuffle 序惰性探测（全量候选探测 → ~limit+跳过量） |
+| 索引重建失败退避 | N1、U-11 加重面 | T5 | 重建失败后进程内冷却，停机期间不再逐请求全表查询 |
+| R-07 索引长尾漂移评估 | R-07 | T5（附带） | LREM+LPUSH 语义下确认是否漂移，结论回写本文档 |
+| 关注/粉丝计数入缓存 | R-01 | T6 | followCount/followerCount 独立计数 key，Profile 读路径接入；SCARD 冷 set 返 0 的坑 |
+| JSON 格式版本兼容 + 批量续期补测 | R-09（原 `260914/N8`）、R-06 | T7 | Jackson 关 `FAIL_ON_UNKNOWN_PROPERTIES`；getBatch miss key 续期与 Like/Follow 批量 pipeline 续期断言 |
+| 收尾 | 全周期 | T8 | 巡检 + 全量回归 + 常青文档同步 + 覆盖率地图 |
 
 **本周期明确不做（反面清单，与"纳入"同等重要）**：
 
 | 不做 | 原因 / 去向 |
 | ---- | ---- |
-| D 方向 feed 流改造 | **前置条件 = 缓存加固完成并合并 PR**（用户 2026-09-13 定）；缓存层失效路径未验完，此时建 feed 等于在没验完的地基上盖第二层 |
-| U-09 缓存行为全量收口 | 避免把"行为零变化的重构"与"改行为的修复"混在同一周期（测试难判绿）；只在 T2/T4 必须碰的地方做定向复用 |
-| N6 点赞成员全量装载 | 需要一次设计反转（内容维度 `content:likeSet` → 用户维度 `user:likeSet`，与 4.10 `user:following` 同构）；留到 feed 周期前后单独评估 |
-| N8 缓存 JSON 无格式版本 | 无对外影响路径，待真正要改 DTO 时再处理 |
-| N9 观测只能看惰性日志 | T7 已拍板的取舍；本周期只确认是否仍接受，不改 |
-| R-02 关注/粉丝计数入缓存 | 留池，未排期 |
-| R-03 单飞多实例化（分布式） | 继续延后（单实例够用，不过度设计） |
-| R-05~R-10 | 留池：R-05 待确认闭环；R-06/R-07 与 feed 周期合流更合适；R-08 待真流量；R-09 测试缺口；R-10 待评估 |
+| D 方向 feed 流改造 | 用户定调第四期只做缓存体系 → **第五期候选**（前置条件已满足，PR 合并状态立项前确认） |
+| U-11 "/start 停机 DB 兜底推荐" | **对外行为变更**（空推荐 → DB 兜底推荐），未拍板；本期只修零行为的 N1 退避，U-11 语义留池 `UNPLANNED_ISSUES.md` |
+| R-02 单飞分布式化 | 继续延后（单实例够用，不过度设计） |
+| R-03 `authorName` 冗余同步 | 无改名接口、无对外影响路径；待有改名需求时随需求做 |
+| R-04 索引全量读 + 拷贝 shuffle 本体 | `LRANGE 0 -1` + 全量 shuffle 保留（推荐随机语义依赖）；本期只做 N2 的"探测面"收缩，读面不收 |
+| R-05 follow/like 分域 TTL 复调 | 待真流量数据，本期无数据源 |
+| R-11 优惠券限流 / R-12 包层环 | 非缓存主题，维持留池/待定 |
+| N9 观测增强（重置/端点/持久化） | 已接受取舍（`260913/T7` 拍板） |
 
 ***
 
-## 五、本周期范围与边界（初步，待方向拍板后细化）
+## 五、本周期范围与边界（指针节，范围一律以 4.3 为准）
+
+> 本节**不单独维护范围清单**，避免与 4.3 口径分叉：本周期做什么、不做什么（含反面清单），一律以 **4.3 为唯一落点**。本节只保留 4.3 不覆盖的两类边界：
 
 - **留池未排**：见二——是否纳入本周期，评审时决定。
-- **范围外（默认不做）**：P6 优惠券限流；前端；新增缓存之外的业务功能。
-- **禁止（沿用技术红线）**：Spring/SpringBoot/MyBatis；擅改 `@WebServlet` URL、web.xml、IoC 扫描；为缓存便利改业务逻辑语义。
+- **禁止（沿用技术红线）**：Spring/SpringBoot/MyBatis；擅改 `@WebServlet` URL、web.xml、IoC 扫描；为实现便利改业务逻辑语义。
 
 ***
 
@@ -198,16 +137,5 @@
 
 | 日期 | 版本 | 内容 |
 | ---- | ---- | ---- |
-| 2026-09-14 | 1.3 | **T6 执行定稿回写（fix(cache-06)）**：4.0 追加 T6 技术决策——U-08 归一=生成/解析/匹配三处同源唯一源收敛于 CacheKeys（新增 contentIndex 方法 + CONTENT_INDEX_PREFIX 常量，domainOf 解析与 SCAN 匹配同引用，删 ContentCache.indexKey 私有拼接）；DEGRADE 口径确认仍准确（含熔断快速失败，javadoc 补明示零行为变化）；残留巡检无发现；U-08 治理闭环（UNPLANNED_ISSUES 标注已消化）；验证 JUnit 365（surefire 361 + pool 4，+3）+ pytest 124 + 覆盖率地图 41/41 |
-| 2026-09-13 | 0.1 | 新建本文档（结转稿）：接 260913-cache-architecture 归档周期，结转 ① 通用约定（C-1~C-3 + 6 条延续约定）、② 未完成需求 10 项（O-5/O-9/分布式/H7~H10/TTL 复调/T9 review 测试缺口/索引定期重建）、③ 未拍板决策 4 项（第三期方向/P6/U-07/O-5·O-9 方案）；四（本周期痛点与目标方案）留空待方向拍板；同步登记 U-08~U-10 代码债入 UNPLANNED_ISSUES |
-| 2026-09-13 | 0.2 | 补 4.1 候选痛点（代码复查，待评审纳入）：N1 降级路径绕开单飞（Redis 挂→DB 连带崩）、N2 loader 把查库失败当"确实没有数据"（瞬时 DB 错→60s 假 404）、N3 `CacheAside.markEmpty` 无条件 DEL 数据 key（缺 FollowCache 已有的存在守卫→假空窗口）、N4 索引写失败不自愈（内容永不出现在推荐）、N5 `init()` 在 DB 事务内写 Redis 且无 pipeline（启动放大并占住连接）、N6 点赞成员全量装载（内存/延迟随点赞量放大）、N7 条件写"探存在→INCR"非原子（计数被以 1 重建）、N8 缓存 JSON 无格式版本（DTO 改动后降级且不写回）、N9 观测只能看惰性日志（T7 已知取舍，列出待确认）；4.2 候选方向由 3 个扩为 4 个（补"缓存韧性专项"） |
-| 2026-09-13 | 0.3 | **结转项统一重编号**：二/三两表由"带周期前缀编号"（`260913/O-5` 等）统一为**本档内部连续编号 `R-01`~`R-13`**（R-01~R-10 = 未完成需求，R-11~R-13 = 未拍板决策；R-11 = 第三期方向这一"元决策"），原编号退入"来源"列供追溯；新增"编号体系"说明（C-# / R-## / N# / T# 四类）；同步修正 4.1/4.2 内对新编号的交叉引用；补充配套 TASKS 文档指引 |
-| 2026-09-13 | 0.4 | **R-11 拍板回写**：方向 = **缓存加固**（缓存韧性 + 启动加载治理）。① 状态行改为"方向已拍板"，R-11 行状态置已拍板；② 4.2 补"结论"列——韧性方案采纳、D 方向 feed 延迟（**前置条件 = 缓存加固完成并合并 PR**，用户同期定）、U-09 延后、R-01 随 T5 纳入 / R-02 仍留池；③ **新增 4.3 本周期范围**（纳入 6 项 → T1~T6 映射表 + **"明确不做"反面清单 8 项**，含每项的延后原因与去向）；④ 四节标题去掉"待补写"并说明结构（目标形态/技术决策两段待执行中回写）；⑤ 配套 `NEXT_CYCLE_TASKS.md` 已按 4.3 拆出 T1~T6 |
-| 2026-09-13 | 0.5 | **修订红线措辞约定**（用户要求，与 `NEXT_CYCLE_TASKS.md` 0.3 同步）：① 一节的 ① 改为"红线只列明显越界的项、作用是防跑偏、不把执行 Agent 限制死"；② 机制表述由"申请开禁"改为"**申请调整**"，触发条件明确为"某条红线会阻碍正确做法（过紧 / 过窄 / 已不适用）"，两个禁止（硬扛 / 自行放开）保留；③ 完整表述统一指向 `NEXT_CYCLE_TASKS.md` 二节，避免两处措辞漂移 |
-| 2026-09-13 | 0.6 | **T1 执行定稿回写**（fix(cache-01)）：新增 4.0"已回写技术决策"节——T1 超时配置化（connect/so/maxWait 各 1000ms，Jedis 5.1.0 用 8 参构造器等价替代）+ 全局熔断（粒度=全局、失败口径=execute 冒出的 CacheException、恢复=半开单探针，阈值/冷却可配）；U-10 随 T1 修复（UNPLANNED_ISSUES 已标注）；执行中新发现 U-11（/start 停机空降级，既有语义）登记 UNPLANNED_ISSUES 留池 |
-| 2026-09-13 | 0.7 | **T2 执行定稿回写**（fix(cache-02)）：4.0 追加 T2 技术决策——统一规则（降级读=miss 同款单飞+全量 loader、仅装载不写回/D4，与 miss 共用单飞 key 空间，SingleFlight 零改动）、治理面 10 处降级读分支（单 key 单行查询→全量装载作答删 3 个 *FromDb、批量 targeted+必失败回填→单飞全量作答）、失败语义（异常传播不缓存可重试）、与 T1 熔断正交、LOAD 口径 leader 记一次；验证 JUnit 337 + pytest 124 + 黑洞运行时（20 并发同 key Com_select 差值 8） |
-| 2026-09-14 | 0.8 | **T3 执行定稿回写**（fix(cache-03)）：4.0 追加 T3 技术决策——拍板=对外行为保持（用户 2026-09-14），loader 失败抛 DatabaseException（事务模板已包 SQLException），CacheAside 5 装载点捕获转 null（不写空标记不 DEL，miss 跳过 markEmpty，降级共用 loadDegraded），addContent/refreshContent 写路径守卫；N2 治理闭环（4.1 行 N2 对应 T3）；验证 JUnit 348 + pytest 124 + subagent 评审无🔴 |
-| 2026-09-14 | 0.9 | **T4-① 执行定稿回写**（fix(cache-04a)）：4.0 追加 T4-① 技术决策——拍板=exists 守卫（对齐 writeSet 260913 先例，非 Lua），markEmpty 守卫"数据 key 不存在才写空标记"+ del(dataKey) 随守卫移除（死代码+竞态危害源），writeSet 空分支定向复用（U-09 T4 定向复用）；残余竞态=exists→setex 毫秒间隙可自愈（已接受）；N3 治理闭环（4.1 行 N3 对应 T4）；验证 JUnit 351（+3 含并发不假空时序测试）+ pytest 124；T4 拆 3 commit 校准 fix(cache-04a/04b/04c) |
-| 2026-09-14 | 1.0 | **T4-② 执行定稿回写**（fix(cache-04b)）：4.0 追加 T4-② 技术决策——自愈=addToIndex 写失败 catch 内 best-effort DEL 所属 4 个索引 key 复用既有懒重建（零新增 key，否决脏标记/完整性校验），indexKeysOf 与 lremAndLpush 同源，双层 best-effort；失败三分收敛；残余窗口=持续挂恢复后仍可能不完整（与现状一致，不做 R-10）；N4 治理闭环（4.1 行 N4 对应 T4）；验证 JUnit 353（+2）+ pytest 124 |
-| 2026-09-14 | 1.1 | **T4-③ 执行定稿回写**（fix(cache-04c)）：4.0 追加 T4-③ 技术决策——拍板=Lua 原子化 + 4 方法全治理（unlike 的 DECR 以 -1 重建同款竞态一并消除，对称孪生对齐 T2 先例）；LIKE/UNLIKE_CONDITIONAL_SCRIPT 两脚本常量，4 方法体统一 eval（like 两趟往返合并为一趟），零新增 key、不设 TTL、失败降级与熔断口径不变；条件语义内聚脚本单测验证调用参数（已接受）；N7 治理闭环（4.1 行 N7 对应 T4）；验证 JUnit 354（−1+2 含 comment 写路径对称补测）+ pytest 124 |
-| 2026-09-14 | 1.2 | **T5 执行定稿回写（R-01 拍板 + 落实，fix(cache-05)）**：R-01 状态 → **已拍板（2026-09-14）：全量 + 工程化优化**（二表行更新：来源列保持 `260913/O-5`、状态列写入拍板结论与用户理由"个人项目流量小、全量在当前数据量无压力；未来数据量成瓶颈再另周期评估"）；4.0 追加 T5 技术决策（事务外写/批量媒体装载消 N+1/pipeline 双写，前后对比 12N→3、N+1→2）；N5/R-01/R-04 治理闭环（4.1 行 N5 对应 T5）；验证 JUnit 362（surefire 358 + pool 4 = T4 354 基数 + 8 含评审补测媒体损坏跳过）+ pytest 124 + subagent 评审无🔴（🟡4 条全落实） |
+| 2026-09-15 | 0.2 | **R-10 拍板回写**（方向 = 缓存体系综合改造）：① 状态行改为"方向已拍板"；② 4.1 填入 2026-09-15 代码复查痛点 N1~N3（N1 ensureIndex 降级态隐藏放量·U-11 加重面 / N2 推荐读对全量候选批量探测·R-04 加重证据 / N3 域缓存孪生复制·U-09 证据具体化，均带文件:行证据）；③ 4.2 填入拍板结论（缓存体系综合改造采纳；D 方向 feed 延后至第五期；R-11/R-12 非缓存主题不随行）；④ 4.3 填入范围（纳入 9 项 → T1~T8 映射 + "明确不做"反面清单 8 项）；⑤ 二表 R-01/R-06/R-07/R-08/R-09 状态列标注纳入去向（含 2026-09-15 证据复核：ProfileService 计数 DB 读、backfillBatchContentLikers 逐 cid 全量、JacksonCodec 未关 FAIL_ON_UNKNOWN_PROPERTIES）；⑥ 配套 `NEXT_CYCLE_TASKS.md` 已拆 T1~T8 |
+| 2026-09-15 | 0.1 | 新建本文档（结转稿）：接 260914-cache-hardening 归档周期（第三期「缓存加固」T1~T6 全部完成，`fix(cache-01)`~`fix(cache-06)`，T4 拆 04a/04b/04c），结转 ① 通用约定（C-1~C-3 + ⑦ 条延续约定，⑦ 质疑协议 G11 为 2026-09-15 模板新增）、② 未完成需求 9 项（R-01 计数入缓存 / R-02 分布式 / R-03 authorName 冗余 / R-04 索引 shuffle / R-05 TTL 真流量复调 / R-06 批量续期测试缺口 / R-07 索引重建评估 / R-08 点赞成员全量装载（三期 N6 升格）/ R-09 JSON 格式版本（三期 N8 升格））、③ 未拍板决策 3 项（R-10 第四期方向 / R-11 优惠券限流 / R-12 U-07 包层环）；四节留空待方向拍板；旧 R-05（共享可变引用）经 2026-09-15 复核确认关闭（CacheAside 三读路径全走 fromJson）不结转；U-09/U-11 留 `UNPLANNED_ISSUES.md` 池不编号 |
