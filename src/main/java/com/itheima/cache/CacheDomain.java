@@ -11,7 +11,9 @@ package com.itheima.cache;
  * <ul>
  *   <li>{@link #CONTENT}：内容详情 {@code content:{id}}、类型分区索引 {@code content:index:*}；</li>
  *   <li>{@link #COMMENT}：评论树 {@code content:comments:{id}}（comment:* 通用前缀防御兜底）；</li>
- *   <li>{@link #LIKE}：点赞计数/成员 {@code content:likeCount}/{@code content:likeSet}/{@code comment:like...}；</li>
+ *   <li>{@link #LIKE}：点赞计数/成员 {@code content:likeCount}/{@code comment:likeCount}、
+ *       用户维度点赞成员 {@code user:likeSet}/{@code user:commentLikeSet}（第四期 T4 装载反转后新增，
+ *       在 user:* 兜底之前归 LIKE）；</li>
  *   <li>{@link #FOLLOW}：关注关系 {@code user:following}/{@code user:follower}；</li>
  *   <li>{@link #OTHER}：未知前缀 / null 兜底。</li>
  * </ul>

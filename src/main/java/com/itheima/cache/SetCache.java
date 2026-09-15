@@ -222,7 +222,7 @@ public class SetCache {
         return result;
     }
 
-    // ==================== 批量-多 set 单成员（Like 形态：逐 contentLikeSet 判定同 userId） ====================
+    // ==================== 批量-多 set 单成员（原 Like 形态：逐 key 判定同 userId；T4 反转后无生产调用，预留组件 API） ====================
 
     /**
      * 批量查询同一成员在多个 set key 中的存在性（每 key 一趟 pipeline 探 empty/exists + SISMEMBER）。
@@ -230,6 +230,9 @@ public class SetCache {
      * <p>三态逐 key 判定（打点粒度 = 每 (key, 决策) 记一次）；miss → dbAnswer 批量作答
      * （哪些 key 有该成员，DB 为最终真理，失败上抛）+ 逐 key 单飞全量回填（best-effort）；
      * Redis 异常 → 降级：逐 key 单飞全量装载作答、不写回。
+     *
+     * <p>注（第四期 T4 后）：点赞成员 key 已反转为用户维度（单 set 多成员 {@link #batchIsMember}），
+     * 本方法已无生产调用方，作为组件通用 API 预留复用（不删除，防未来形态回退）。
      *
      * @param dbAnswer miss 答案函数（不得返回 null；返回空 Set 表示无命中 key）
      */

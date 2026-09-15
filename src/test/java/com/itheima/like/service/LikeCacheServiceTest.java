@@ -45,6 +45,9 @@ import static org.mockito.Mockito.*;
  * 第四期 T2 起：Set 成员读路径收口 SetCache（同一 mock redis + 真实 SingleFlight + 同一 stats
  * 组合注入），用例桩透明平移；风格对齐 CommentCacheTest：mock DAO/RedisAccess/CacheAside + tt 跑 loader；
  * 通过 Mockito 令 RedisAccess.execute/Void 作用于 mock Jedis（含 pipeline），可验证 key 与写命令。
+ * 第四期 T4 起：成员 key 由内容/评论维度反转为用户维度（user:likeSet:{userId} / user:commentLikeSet:{userId}，
+ * 判成员 = 用户维度 set 是否含内容/评论 id，loader = findXxxByUser 全量；批量收敛为单 set 多成员，
+ * 失效仅计数 key）——用例随反转平移改写，验收锁反转语义。
  */
 class LikeCacheServiceTest {
 
@@ -99,93 +102,102 @@ class LikeCacheServiceTest {
         return r;
     }
 
-    /** 令单条三态扫描（scanLikeSet）命中指定 [空标记, set 存在, 成员] 组合。 */
-    private void stubSetScan(long contentId, Boolean empty, Boolean exists, Boolean member) {
+    /** 令单条三态扫描（scanSet）命中指定 [空标记, set 存在, 成员] 组合（通用 setKey + member）。 */
+    private void stubSetScan(String setKey, long memberId, Boolean empty, Boolean exists, Boolean member) {
         Pipeline p = mock(Pipeline.class);
         when(jedis.pipelined()).thenReturn(p);
         Response<Boolean> emptyResp = booleanResponse(empty);
         Response<Boolean> existsResp = booleanResponse(exists);
         Response<Boolean> memberResp = booleanResponse(member);
-        when(p.exists(CacheKeys.empty(CacheKeys.contentLikeSet(contentId)))).thenReturn(emptyResp);
-        when(p.exists(CacheKeys.contentLikeSet(contentId))).thenReturn(existsResp);
-        when(p.sismember(CacheKeys.contentLikeSet(contentId), "7")).thenReturn(memberResp);
+        when(p.exists(CacheKeys.empty(setKey))).thenReturn(emptyResp);
+        when(p.exists(setKey)).thenReturn(existsResp);
+        when(p.sismember(setKey, String.valueOf(memberId))).thenReturn(memberResp);
     }
 
-    // ==================== 写路径：内容点赞（Lua 原子条件写 + 失败失效，三期 T4/N7） ====================
+    /** 内容成员三态扫描（T4 反转：user:likeSet:{userId} 判 contentId）。 */
+    private void stubContentSetScan(long userId, long contentId, Boolean empty, Boolean exists, Boolean member) {
+        stubSetScan(CacheKeys.userLikeSet(userId), contentId, empty, exists, member);
+    }
+
+    // ==================== 写路径：内容点赞（Lua 原子条件写 + 失败失效，三期 T4/N7；T4 反转 KEYS/ARGV） ====================
 
     @Test
-    void likeContentRunsConditionalLuaScript() {
-        // 三期 T4/N7：条件语义内聚 EVAL 脚本（Redis 服务端原子执行），单测验证调用参数
+    void likeContentRunsConditionalLuaScriptOnUserSet() {
+        // T4 反转：成员写 user:likeSet:{userId}（SADD contentId），计数仍 content:likeCount:{contentId}（INCR）
         service.likeContent(7L, 1L);
 
         verify(jedis).eval(eq(LikeCacheService.LIKE_CONDITIONAL_SCRIPT),
-                eq(List.of(CacheKeys.contentLikeSet(1L), CacheKeys.contentLikeCount(1L),
-                        CacheKeys.empty(CacheKeys.contentLikeSet(1L)))),
-                eq(List.of("7")));
+                eq(List.of(CacheKeys.userLikeSet(7L), CacheKeys.contentLikeCount(1L),
+                        CacheKeys.empty(CacheKeys.userLikeSet(7L)))),
+                eq(List.of("1")));
     }
 
     @Test
-    void unlikeContentRunsConditionalLuaScript() {
+    void unlikeContentRunsConditionalLuaScriptOnUserSet() {
         service.unlikeContent(7L, 1L);
 
         verify(jedis).eval(eq(LikeCacheService.UNLIKE_CONDITIONAL_SCRIPT),
-                eq(List.of(CacheKeys.contentLikeSet(1L), CacheKeys.contentLikeCount(1L))),
-                eq(List.of("7")));
+                eq(List.of(CacheKeys.userLikeSet(7L), CacheKeys.contentLikeCount(1L))),
+                eq(List.of("1")));
     }
 
     @Test
-    void likeContentFailureInvalidatesKeys() {
+    void likeContentFailureInvalidatesCountKeyOnly() {
         doThrow(new CacheException("redis down")).when(redis).executeVoid(any(Consumer.class));
 
         service.likeContent(7L, 1L);
 
-        verify(cacheAside).invalidate(CacheKeys.contentLikeCount(1L), CacheKeys.contentLikeSet(1L));
+        // T4 反转：成员 key 为用户维度，写失败仅失效 count key（成员残留由读自愈对齐用户全量）
+        verify(cacheAside).invalidate(CacheKeys.contentLikeCount(1L));
+        verify(cacheAside, never()).invalidate(CacheKeys.userLikeSet(7L));
     }
 
     @Test
-    void unlikeContentFailureInvalidatesKeys() {
+    void unlikeContentFailureInvalidatesCountKeyOnly() {
         // 三期 T4/N7 评审补齐：unlike 失效降级路径对称覆盖
         doThrow(new CacheException("redis down")).when(redis).executeVoid(any(Consumer.class));
 
         service.unlikeContent(7L, 1L);
 
-        verify(cacheAside).invalidate(CacheKeys.contentLikeCount(1L), CacheKeys.contentLikeSet(1L));
+        verify(cacheAside).invalidate(CacheKeys.contentLikeCount(1L));
+        verify(cacheAside, never()).invalidate(CacheKeys.userLikeSet(7L));
     }
 
     @Test
-    void unlikeCommentFailureInvalidatesKeys() {
+    void unlikeCommentFailureInvalidatesCountKeyOnly() {
         doThrow(new CacheException("redis down")).when(redis).executeVoid(any(Consumer.class));
 
         service.unlikeComment(7L, 9L);
 
-        verify(cacheAside).invalidate(CacheKeys.commentLikeCount(9L), CacheKeys.commentLikeSet(9L));
+        verify(cacheAside).invalidate(CacheKeys.commentLikeCount(9L));
+        verify(cacheAside, never()).invalidate(CacheKeys.userCommentLikeSet(7L));
     }
 
     @Test
-    void likeCommentRunsConditionalLuaScript() {
-        // 三期 T4/N7 对称补测（comment 版写路径此前零覆盖）
+    void likeCommentRunsConditionalLuaScriptOnUserSet() {
+        // T4 反转：成员写 user:commentLikeSet:{userId}（SADD commentId）
         service.likeComment(7L, 9L);
 
         verify(jedis).eval(eq(LikeCacheService.LIKE_CONDITIONAL_SCRIPT),
-                eq(List.of(CacheKeys.commentLikeSet(9L), CacheKeys.commentLikeCount(9L),
-                        CacheKeys.empty(CacheKeys.commentLikeSet(9L)))),
-                eq(List.of("7")));
+                eq(List.of(CacheKeys.userCommentLikeSet(7L), CacheKeys.commentLikeCount(9L),
+                        CacheKeys.empty(CacheKeys.userCommentLikeSet(7L)))),
+                eq(List.of("9")));
     }
 
     @Test
-    void unlikeCommentRunsConditionalLuaScript() {
+    void unlikeCommentRunsConditionalLuaScriptOnUserSet() {
         service.unlikeComment(7L, 9L);
 
         verify(jedis).eval(eq(LikeCacheService.UNLIKE_CONDITIONAL_SCRIPT),
-                eq(List.of(CacheKeys.commentLikeSet(9L), CacheKeys.commentLikeCount(9L))),
-                eq(List.of("7")));
+                eq(List.of(CacheKeys.userCommentLikeSet(7L), CacheKeys.commentLikeCount(9L))),
+                eq(List.of("9")));
     }
 
-    // ==================== 读路径：内容点赞成员三态 ====================
+    // ==================== 读路径：内容点赞成员三态（T4 反转：user:likeSet 判 contentId） ====================
 
     @Test
     void isContentLikedEmptyMarkerReturnsFalseWithoutDb() {
-        stubSetScan(1L, true, null, null);
+        stubContentSetScan(7L, 1L, true, null, null);
 
         assertFalse(service.isContentLiked(7L, 1L));
         verify(tt, never()).execute(any());
@@ -193,7 +205,7 @@ class LikeCacheServiceTest {
 
     @Test
     void isContentLikedEmptyMarkerRecordsHitEmptyToLikeDomain() {
-        stubSetScan(1L, true, null, null);
+        stubContentSetScan(7L, 1L, true, null, null);
 
         assertFalse(service.isContentLiked(7L, 1L));
 
@@ -203,7 +215,7 @@ class LikeCacheServiceTest {
 
     @Test
     void isContentLikedTrueWhenMember() {
-        stubSetScan(1L, false, true, true);
+        stubContentSetScan(7L, 1L, false, true, true);
 
         assertTrue(service.isContentLiked(7L, 1L));
         verify(tt, never()).execute(any());
@@ -211,7 +223,7 @@ class LikeCacheServiceTest {
 
     @Test
     void isContentLikedFalseWhenSetHasNoMember() {
-        stubSetScan(1L, false, true, false);
+        stubContentSetScan(7L, 1L, false, true, false);
 
         assertFalse(service.isContentLiked(7L, 1L));
         verify(tt, never()).execute(any());
@@ -223,14 +235,14 @@ class LikeCacheServiceTest {
     void isContentLikedHitDataRenewsSetTtlButNotEmptyMarker() {
         Pipeline p = mock(Pipeline.class);
         when(jedis.pipelined()).thenReturn(p);
-        String setKey = CacheKeys.contentLikeSet(1L);
+        String setKey = CacheKeys.userLikeSet(7L);
         // Response 必须先建好再 stub Pipeline（避免 thenReturn 内嵌 stubbing，同文件惯例）
         Response<Boolean> emptyResp = booleanResponse(false);
         Response<Boolean> existsResp = booleanResponse(true);
         Response<Boolean> memberResp = booleanResponse(true);
         when(p.exists(CacheKeys.empty(setKey))).thenReturn(emptyResp);
         when(p.exists(setKey)).thenReturn(existsResp);
-        when(p.sismember(setKey, "7")).thenReturn(memberResp);
+        when(p.sismember(setKey, "1")).thenReturn(memberResp);
 
         assertTrue(service.isContentLiked(7L, 1L));
 
@@ -241,51 +253,51 @@ class LikeCacheServiceTest {
     }
 
     @Test
-    void isContentLikedMissBackfillsSetAndReturnsContains() throws SQLException {
-        stubSetScan(1L, false, false, null);
-        when(contentLikeDao.findLikerIdsByContentId(conn, 1L)).thenReturn(Set.of(7L, 8L));
+    void isContentLikedMissBackfillsUserSetAndReturnsContains() throws SQLException {
+        stubContentSetScan(7L, 1L, false, false, null);
+        when(contentLikeDao.findLikedContentIdsByUser(conn, 7L)).thenReturn(Set.of(1L, 8L));
 
         assertTrue(service.isContentLiked(7L, 1L));
-        verify(jedis).sadd(eq(CacheKeys.contentLikeSet(1L)), any(String[].class));
-        verify(jedis).expire(eq(CacheKeys.contentLikeSet(1L)), anyLong());
+        verify(jedis).sadd(eq(CacheKeys.userLikeSet(7L)), any(String[].class));
+        verify(jedis).expire(eq(CacheKeys.userLikeSet(7L)), anyLong());
         verify(cacheAside, never()).markEmpty(anyString());
     }
 
     @Test
-    void isContentLikedMissEmptyLikersWritesEmptyMarker() throws SQLException {
-        stubSetScan(1L, false, false, null);
-        when(contentLikeDao.findLikerIdsByContentId(conn, 1L)).thenReturn(Collections.emptySet());
+    void isContentLikedMissEmptyUserLikesWritesEmptyMarker() throws SQLException {
+        stubContentSetScan(7L, 1L, false, false, null);
+        when(contentLikeDao.findLikedContentIdsByUser(conn, 7L)).thenReturn(Collections.emptySet());
 
         assertFalse(service.isContentLiked(7L, 1L));
-        verify(cacheAside).markEmpty(CacheKeys.contentLikeSet(1L));
+        verify(cacheAside).markEmpty(CacheKeys.userLikeSet(7L));
         verify(jedis, never()).sadd(anyString(), any(String[].class));
     }
 
     @Test
     void isContentLikedRedisErrorDegradesToDb() throws SQLException {
         doThrow(new CacheException("redis down")).when(redis).execute(any(Function.class));
-        when(contentLikeDao.findLikerIdsByContentId(conn, 1L)).thenReturn(Set.of(7L));
+        when(contentLikeDao.findLikedContentIdsByUser(conn, 7L)).thenReturn(Set.of(1L));
 
         assertTrue(service.isContentLiked(7L, 1L));
-        // 三期 T2：降级经单飞全量装载作答（替代原单行查询），且不写回
-        verify(contentLikeDao).findLikerIdsByContentId(conn, 1L);
+        // 三期 T2：降级经单飞全量装载作答（T4 反转后 = 用户点赞的全量内容），且不写回
+        verify(contentLikeDao).findLikedContentIdsByUser(conn, 7L);
         verify(contentLikeDao, never()).isLiked(any(), anyLong(), anyLong());
         verify(jedis, never()).sadd(anyString(), any(String[].class));
     }
 
     @Test
     void isContentLikedRedisErrorConcurrentDegradeLoadsDbOnce() throws Exception {
-        // 三期 T2 验收：Redis 停机时同一 key 的并发读只触发一次 DB 装载
+        // 三期 T2 验收：Redis 停机时同一 key 的并发读只触发一次 DB 装载（T4 反转后同 key = 同一 user:likeSet）
         doThrow(new CacheException("redis down")).when(redis).execute(any(Function.class));
         int threads = 8;
         AtomicInteger loads = new AtomicInteger();
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
-        when(contentLikeDao.findLikerIdsByContentId(conn, 1L)).thenAnswer(inv -> {
+        when(contentLikeDao.findLikedContentIdsByUser(conn, 7L)).thenAnswer(inv -> {
             loads.incrementAndGet();
             entered.countDown();
             release.await();
-            return Set.of(7L);
+            return Set.of(1L);
         });
 
         ExecutorService pool = Executors.newFixedThreadPool(threads);
@@ -306,7 +318,7 @@ class LikeCacheServiceTest {
         }
     }
 
-    // ==================== 读路径：内容/评论点赞计数（CacheAside loader） ====================
+    // ==================== 读路径：内容/评论点赞计数（CacheAside loader，T4 不动） ====================
 
     @Test
     @SuppressWarnings("unchecked")
@@ -339,26 +351,27 @@ class LikeCacheServiceTest {
                 any(Callable.class), anyLong());
     }
 
-    // ==================== 读路径：评论点赞成员（三态 miss 代表用例） ====================
+    // ==================== 读路径：评论点赞成员（T4 反转：user:commentLikeSet 判 commentId） ====================
 
     @Test
-    void isCommentLikedMissBackfillsAndContains() throws SQLException {
+    void isCommentLikedMissBackfillsUserSetAndContains() throws SQLException {
         Pipeline p = mock(Pipeline.class);
         when(jedis.pipelined()).thenReturn(p);
+        String setKey = CacheKeys.userCommentLikeSet(7L);
         Response<Boolean> emptyResp = booleanResponse(false);
         Response<Boolean> existsResp = booleanResponse(false);
         Response<Boolean> memberResp = booleanResponse(false);
-        when(p.exists(CacheKeys.empty(CacheKeys.commentLikeSet(9L)))).thenReturn(emptyResp);
-        when(p.exists(CacheKeys.commentLikeSet(9L))).thenReturn(existsResp);
-        when(p.sismember(CacheKeys.commentLikeSet(9L), "7")).thenReturn(memberResp);
-        when(commentLikeDao.findLikerIdsByCommentId(conn, 9L)).thenReturn(Set.of(7L));
+        when(p.exists(CacheKeys.empty(setKey))).thenReturn(emptyResp);
+        when(p.exists(setKey)).thenReturn(existsResp);
+        when(p.sismember(setKey, "9")).thenReturn(memberResp);
+        when(commentLikeDao.findLikedCommentIdsByUser(conn, 7L)).thenReturn(Set.of(9L));
 
         assertTrue(service.isCommentLiked(7L, 9L));
-        verify(jedis).sadd(eq(CacheKeys.commentLikeSet(9L)), any(String[].class));
-        verify(jedis).expire(eq(CacheKeys.commentLikeSet(9L)), anyLong());
+        verify(jedis).sadd(eq(setKey), any(String[].class));
+        verify(jedis).expire(eq(setKey), anyLong());
     }
 
-    // ==================== 批量 ====================
+    // ==================== 批量（T4 反转：单 set 多成员，一趟 pipeline 判 user:likeSet） ====================
 
     @Test
     void batchIsContentLikedEmptyInputSkipsRedis() {
@@ -369,48 +382,88 @@ class LikeCacheServiceTest {
     }
 
     @Test
-    void batchIsContentLikedMixesHitsMissesAndBackfills() throws SQLException {
+    void batchIsContentLikedHitDataAnswersMembersWithoutDb() {
+        // 单 set 多成员：user:likeSet:{7} 命中即所有成员一趟 SISMEMBER，无 DB
         Pipeline p = mock(Pipeline.class);
         when(jedis.pipelined()).thenReturn(p);
-        Response<Boolean> empty1 = booleanResponse(true);   // id=1 空标记 → false
-        Response<Boolean> empty2 = booleanResponse(false);
-        Response<Boolean> empty3 = booleanResponse(false);
-        Response<Boolean> set1 = booleanResponse(false);
+        String setKey = CacheKeys.userLikeSet(7L);
+        // Response 必须先建好再 stub Pipeline（避免 thenReturn 内嵌 stubbing，同文件惯例）
+        Response<Boolean> emptyResp = booleanResponse(false);
+        Response<Boolean> existsResp = booleanResponse(true);
         Response<Boolean> mem1 = booleanResponse(false);
-        Response<Boolean> set2 = booleanResponse(true);     // id=2 命中成员 → true
         Response<Boolean> mem2 = booleanResponse(true);
-        Response<Boolean> set3 = booleanResponse(false);    // id=3 缺失 → DB 兜底
         Response<Boolean> mem3 = booleanResponse(false);
-        when(p.exists(CacheKeys.empty(CacheKeys.contentLikeSet(1L)))).thenReturn(empty1);
-        when(p.exists(CacheKeys.empty(CacheKeys.contentLikeSet(2L)))).thenReturn(empty2);
-        when(p.exists(CacheKeys.empty(CacheKeys.contentLikeSet(3L)))).thenReturn(empty3);
-        when(p.exists(CacheKeys.contentLikeSet(1L))).thenReturn(set1);
-        when(p.sismember(CacheKeys.contentLikeSet(1L), "7")).thenReturn(mem1);
-        when(p.exists(CacheKeys.contentLikeSet(2L))).thenReturn(set2);
-        when(p.sismember(CacheKeys.contentLikeSet(2L), "7")).thenReturn(mem2);
-        when(p.exists(CacheKeys.contentLikeSet(3L))).thenReturn(set3);
-        when(p.sismember(CacheKeys.contentLikeSet(3L), "7")).thenReturn(mem3);
-        when(contentLikeDao.findLikedContentIds(conn, 7L, List.of(3L))).thenReturn(Set.of(3L));
-        when(contentLikeDao.findLikerIdsByContentId(conn, 3L)).thenReturn(Set.of(3L, 7L));
+        when(p.exists(CacheKeys.empty(setKey))).thenReturn(emptyResp);
+        when(p.exists(setKey)).thenReturn(existsResp);
+        when(p.sismember(setKey, "1")).thenReturn(mem1);
+        when(p.sismember(setKey, "2")).thenReturn(mem2);
+        when(p.sismember(setKey, "3")).thenReturn(mem3);
 
         Map<Long, Boolean> result = service.batchIsContentLiked(7L, List.of(1L, 2L, 3L));
 
         assertEquals(false, result.get(1L));
         assertEquals(true, result.get(2L));
+        assertEquals(false, result.get(3L));
+        verify(tt, never()).execute(any());
+    }
+
+    @Test
+    void batchIsContentLikedEmptyMarkerAnswersAllFalse() {
+        // 空标记（"该用户无点赞"）→ 全 false，无 DB
+        Pipeline p = mock(Pipeline.class);
+        when(jedis.pipelined()).thenReturn(p);
+        String setKey = CacheKeys.userLikeSet(7L);
+        Response<Boolean> emptyResp = booleanResponse(true);
+        Response<Boolean> existsResp = booleanResponse(false);
+        when(p.exists(CacheKeys.empty(setKey))).thenReturn(emptyResp);
+        when(p.exists(setKey)).thenReturn(existsResp);
+
+        Map<Long, Boolean> result = service.batchIsContentLiked(7L, List.of(1L, 2L));
+
+        assertEquals(false, result.get(1L));
+        assertEquals(false, result.get(2L));
+        verify(tt, never()).execute(any());
+    }
+
+    @Test
+    void batchIsContentLikedMissAnswersDbAndBackfillsOnce() throws SQLException {
+        // miss：dbAnswer 批量作答（DB 即真理，失败上抛）+ 单 set 只回填一次全量（best-effort）
+        Pipeline p = mock(Pipeline.class);
+        when(jedis.pipelined()).thenReturn(p);
+        String setKey = CacheKeys.userLikeSet(7L);
+        Response<Boolean> emptyResp = booleanResponse(false);
+        Response<Boolean> existsResp = booleanResponse(false);
+        Response<Boolean> mem1 = booleanResponse(false);
+        Response<Boolean> mem2 = booleanResponse(false);
+        Response<Boolean> mem3 = booleanResponse(false);
+        when(p.exists(CacheKeys.empty(setKey))).thenReturn(emptyResp);
+        when(p.exists(setKey)).thenReturn(existsResp);
+        when(p.sismember(setKey, "1")).thenReturn(mem1);
+        when(p.sismember(setKey, "2")).thenReturn(mem2);
+        when(p.sismember(setKey, "3")).thenReturn(mem3);
+        when(contentLikeDao.findLikedContentIds(conn, 7L, List.of(1L, 2L, 3L))).thenReturn(Set.of(1L, 3L));
+        when(contentLikeDao.findLikedContentIdsByUser(conn, 7L)).thenReturn(Set.of(1L, 3L));
+
+        Map<Long, Boolean> result = service.batchIsContentLiked(7L, List.of(1L, 2L, 3L));
+
+        assertEquals(true, result.get(1L));
+        assertEquals(false, result.get(2L));
         assertEquals(true, result.get(3L));
-        verify(jedis).expire(eq(CacheKeys.contentLikeSet(3L)), anyLong());
+        // 单 set 只回填一次（T4 反转：替代原逐内容 key 各全量装载一次）
+        verify(jedis).sadd(eq(setKey), any(String[].class));
+        verify(jedis).expire(eq(setKey), anyLong());
     }
 
     @Test
     void batchIsContentLikedRedisErrorDegradesFromDb() throws SQLException {
         doThrow(new CacheException("redis down")).when(redis).executeVoid(any(Consumer.class));
-        when(contentLikeDao.findLikerIdsByContentId(conn, 1L)).thenReturn(Set.of(7L));
+        when(contentLikeDao.findLikedContentIdsByUser(conn, 7L)).thenReturn(Set.of(1L));
 
         Map<Long, Boolean> result = service.batchIsContentLiked(7L, List.of(1L));
 
         assertEquals(true, result.get(1L));
         // 三期 T2：降级经单飞全量装载作答——不再走 targeted 批量查询，也不尝试回填写入
-        verify(contentLikeDao).findLikerIdsByContentId(conn, 1L);
+        verify(contentLikeDao).findLikedContentIdsByUser(conn, 7L);
         verify(contentLikeDao, never()).findLikedContentIds(any(), anyLong(), anyList());
         verify(jedis, never()).sadd(anyString(), any(String[].class));
     }
@@ -423,27 +476,72 @@ class LikeCacheServiceTest {
         verify(redis, never()).executeVoid(any(Consumer.class));
     }
 
-    // ==================== 批量回填 best-effort（第四期 T2 收口 SetCache 后的 L2 差异对照） ====================
+    @Test
+    void batchIsCommentLikedHitDataAnswersMembersWithoutDb() {
+        // 单 set 多成员：user:commentLikeSet:{7} 命中即一趟 SISMEMBER，无 DB（与内容侧对称）
+        Pipeline p = mock(Pipeline.class);
+        when(jedis.pipelined()).thenReturn(p);
+        String setKey = CacheKeys.userCommentLikeSet(7L);
+        Response<Boolean> emptyResp = booleanResponse(false);
+        Response<Boolean> existsResp = booleanResponse(true);
+        Response<Boolean> mem9 = booleanResponse(true);
+        Response<Boolean> mem10 = booleanResponse(false);
+        when(p.exists(CacheKeys.empty(setKey))).thenReturn(emptyResp);
+        when(p.exists(setKey)).thenReturn(existsResp);
+        when(p.sismember(setKey, "9")).thenReturn(mem9);
+        when(p.sismember(setKey, "10")).thenReturn(mem10);
+
+        Map<Long, Boolean> result = service.batchIsCommentLiked(7L, List.of(9L, 10L));
+
+        assertEquals(true, result.get(9L));
+        assertEquals(false, result.get(10L));
+        verify(tt, never()).execute(any());
+    }
+
+    @Test
+    void batchIsCommentLikedMissAnswersDbAndBackfillsOnce() throws SQLException {
+        // miss：dbAnswer 批量作答 + 单 set 只回填一次全量（与内容侧对称，锁 userCommentLikeSet 接线）
+        Pipeline p = mock(Pipeline.class);
+        when(jedis.pipelined()).thenReturn(p);
+        String setKey = CacheKeys.userCommentLikeSet(7L);
+        Response<Boolean> emptyResp = booleanResponse(false);
+        Response<Boolean> existsResp = booleanResponse(false);
+        Response<Boolean> mem9 = booleanResponse(false);
+        when(p.exists(CacheKeys.empty(setKey))).thenReturn(emptyResp);
+        when(p.exists(setKey)).thenReturn(existsResp);
+        when(p.sismember(setKey, "9")).thenReturn(mem9);
+        when(commentLikeDao.findLikedCommentIds(conn, 7L, List.of(9L))).thenReturn(Set.of(9L));
+        when(commentLikeDao.findLikedCommentIdsByUser(conn, 7L)).thenReturn(Set.of(9L));
+
+        Map<Long, Boolean> result = service.batchIsCommentLiked(7L, List.of(9L));
+
+        assertEquals(true, result.get(9L));
+        verify(jedis).sadd(eq(setKey), any(String[].class));
+        verify(jedis).expire(eq(setKey), anyLong());
+    }
+
+    // ==================== 批量回填 best-effort（第四期 T2 收口 SetCache 后的 L2 差异对照，T4 反转沿用） ====================
 
     /**
      * T1 登记差异（TASKS T1 执行回写）：收口前批量回填 loader DB 失败上抛（批量 500）；
-     * 收口后 SetCache 契约 = best-effort——DB 答案照常返回，仅缓存受影响（4.2）。
+     * 收口后 SetCache 契约 = best-effort——DB 答案照常返回，仅缓存受影响（4.2）。T4 反转后同契约。
      */
     @Test
     void batchIsContentLikedBackfillLoaderFailureIsBestEffort() throws SQLException {
         Pipeline p = mock(Pipeline.class);
         when(jedis.pipelined()).thenReturn(p);
-        // id=3 miss（三态桩）
-        Response<Boolean> empty3 = booleanResponse(false);
-        Response<Boolean> exists3 = booleanResponse(false);
-        Response<Boolean> member3 = booleanResponse(false);
-        when(p.exists(CacheKeys.empty(CacheKeys.contentLikeSet(3L)))).thenReturn(empty3);
-        when(p.exists(CacheKeys.contentLikeSet(3L))).thenReturn(exists3);
-        when(p.sismember(CacheKeys.contentLikeSet(3L), "7")).thenReturn(member3);
+        String setKey = CacheKeys.userLikeSet(7L);
+        // miss（三态桩）；Response 先建再 stub（避免内嵌 stubbing，同文件惯例）
+        Response<Boolean> emptyResp = booleanResponse(false);
+        Response<Boolean> existsResp = booleanResponse(false);
+        Response<Boolean> memberResp = booleanResponse(false);
+        when(p.exists(CacheKeys.empty(setKey))).thenReturn(emptyResp);
+        when(p.exists(setKey)).thenReturn(existsResp);
+        when(p.sismember(setKey, "3")).thenReturn(memberResp);
         // dbAnswer 成立（DB 即真理）：用户点赞过 id=3
         when(contentLikeDao.findLikedContentIds(conn, 7L, List.of(3L))).thenReturn(Set.of(3L));
-        // 回填全量成员 loader 真失败（DB 故障）
-        when(contentLikeDao.findLikerIdsByContentId(conn, 3L)).thenThrow(new SQLException("db down"));
+        // 回填全量 loader 真失败（DB 故障）
+        when(contentLikeDao.findLikedContentIdsByUser(conn, 7L)).thenThrow(new SQLException("db down"));
 
         Map<Long, Boolean> result = service.batchIsContentLiked(7L, List.of(3L));
 
@@ -452,31 +550,34 @@ class LikeCacheServiceTest {
     }
 
     /**
-     * 单成员 miss 装载 loader DB 失败仍上抛（与收口前一致，无行为漂移）——
+     * 单成员 miss 装载 loader DB 失败仍上抛（与收口前一致，无行为漂移；T4 反转后 loader 换用户全量）——
      * SetCache.isMember 仅 catch CacheException，真实 DB 失败向上抛。
      */
     @Test
     void isContentLikedMissLoaderDbFailureStillThrows() throws SQLException {
-        stubSetScan(1L, false, false, null);
-        when(contentLikeDao.findLikerIdsByContentId(conn, 1L)).thenThrow(new SQLException("db down"));
+        stubContentSetScan(7L, 1L, false, false, null);
+        when(contentLikeDao.findLikedContentIdsByUser(conn, 7L)).thenThrow(new SQLException("db down"));
 
         assertThrows(ServerException.class, () -> service.isContentLiked(7L, 1L));
     }
 
-    // ==================== 失效（内容/评论删除级联，4.5） ====================
+    // ==================== 失效（内容/评论删除级联，4.5；T4 反转为仅计数失效） ====================
 
     @Test
-    void deleteContentLikeInvalidatesCountAndSet() {
+    void deleteContentLikeInvalidatesCountOnly() {
         service.deleteContentLike(5L);
 
-        verify(cacheAside).invalidate(CacheKeys.contentLikeCount(5L), CacheKeys.contentLikeSet(5L));
+        verify(cacheAside).invalidate(CacheKeys.contentLikeCount(5L));
+        // T4 反转：成员 key 为用户维度，内容删除不失效（残留成员指向已删除 id，不复用不外显）
+        verify(cacheAside, never()).invalidate(CacheKeys.userLikeSet(5L));
     }
 
     @Test
-    void deleteCommentLikeInvalidatesCountAndSet() {
+    void deleteCommentLikeInvalidatesCountOnly() {
         service.deleteCommentLike(9L);
 
-        verify(cacheAside).invalidate(CacheKeys.commentLikeCount(9L), CacheKeys.commentLikeSet(9L));
+        verify(cacheAside).invalidate(CacheKeys.commentLikeCount(9L));
+        verify(cacheAside, never()).invalidate(CacheKeys.userCommentLikeSet(9L));
     }
 
     // ==================== 工具 ====================

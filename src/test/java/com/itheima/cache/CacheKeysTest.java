@@ -26,15 +26,31 @@ class CacheKeysTest {
     }
 
     @Test
-    void contentLikeKeysSeparateCountAndSet() {
+    void contentLikeCountKeyUsesContentId() {
         assertEquals("content:likeCount:1", CacheKeys.contentLikeCount(1L));
-        assertEquals("content:likeSet:1", CacheKeys.contentLikeSet(1L));
     }
 
     @Test
-    void commentLikeKeysSeparateCountAndSet() {
+    void commentLikeCountKeyUsesCommentId() {
         assertEquals("comment:likeCount:9", CacheKeys.commentLikeCount(9L));
-        assertEquals("comment:likeSet:9", CacheKeys.commentLikeSet(9L));
+    }
+
+    @Test
+    void userLikeSetsFollowUserShape() {
+        // T4 装载反转：内容/评论点赞成员 key 由内容/评论维度转为用户维度（与 user:following 同构）
+        assertEquals("user:likeSet:7", CacheKeys.userLikeSet(7L));
+        assertEquals("user:commentLikeSet:7", CacheKeys.userCommentLikeSet(7L));
+    }
+
+    @Test
+    void userLikeSetKeysMapToLikeDomain() {
+        // T4 domainOf 扩展：user:like*/user:commentLike* 在 user:* 兜底之前归 LIKE；
+        // user:following/follower 仍归 FOLLOW（长前缀 user:like 不误伤）
+        assertEquals(CacheDomain.LIKE, CacheKeys.domainOf(CacheKeys.userLikeSet(7L)));
+        assertEquals(CacheDomain.LIKE, CacheKeys.domainOf(CacheKeys.userCommentLikeSet(7L)));
+        assertEquals(CacheDomain.LIKE, CacheKeys.domainOf("empty:" + CacheKeys.userLikeSet(7L)));
+        assertEquals(CacheDomain.FOLLOW, CacheKeys.domainOf(CacheKeys.userFollowing(7L)));
+        assertEquals(CacheDomain.FOLLOW, CacheKeys.domainOf(CacheKeys.userFollower(7L)));
     }
 
     @Test

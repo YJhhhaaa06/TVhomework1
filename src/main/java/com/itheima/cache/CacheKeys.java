@@ -58,19 +58,26 @@ public final class CacheKeys {
         return "content:likeCount:" + contentId;
     }
 
-    /** 内容点赞成员：{@code content:likeSet:{id}}（Set&lt;userId，低频成员查询）。 */
-    public static String contentLikeSet(long contentId) {
-        return "content:likeSet:" + contentId;
-    }
-
     /** 评论点赞计数：{@code comment:likeCount:{id}}（int）。 */
     public static String commentLikeCount(long commentId) {
         return "comment:likeCount:" + commentId;
     }
 
-    /** 评论点赞成员：{@code comment:likeSet:{id}}（Set&lt;userId）。 */
-    public static String commentLikeSet(long commentId) {
-        return "comment:likeSet:" + commentId;
+    /**
+     * 我点赞过的内容：{@code user:likeSet:{userId}}（Set&lt;contentId，第四期 T4 装载反转：
+     * 成员 key 由内容维度反转为用户维度，与 {@link #userFollowing(long)} 同构——装载量 = 该用户
+     * 点赞的内容数，与内容热度解耦（R-08）；旧 {@code content:likeSet:{contentId}} 不双写，TTL 自然回收）。
+     */
+    public static String userLikeSet(long userId) {
+        return "user:likeSet:" + userId;
+    }
+
+    /**
+     * 我点赞过的评论：{@code user:commentLikeSet:{userId}}（Set&lt;commentId，第四期 T4 反转，
+     * 逻辑同 {@link #userLikeSet(long)}；旧 {@code comment:likeSet:{commentId}} 不双写，TTL 自然回收）。
+     */
+    public static String userCommentLikeSet(long userId) {
+        return "user:commentLikeSet:" + userId;
     }
 
     /** 我关注了谁：{@code user:following:{userId}}（Set&lt;followedUserId，4.10）。 */
@@ -90,10 +97,11 @@ public final class CacheKeys {
      * {@code content:like*} 的公共前缀，**长前缀必须先于通用前缀判断**。
      * {@code empty:{dataKey}} 空标记先解包到内层数据 key 再归域。
      *
-     * <p>映射（T7 执行定稿，见 {@link CacheDomain}）：
+     * <p>映射（T7 执行定稿 + 第四期 T4 扩展，见 {@link CacheDomain}）：
      * content:index 归 CONTENT（索引归内容域）；content:like* 与 comment:like* 归 LIKE；
      * content:comments 与 comment:* 归 COMMENT；content:{id} 归 CONTENT；
-     * user:following 与 user:follower（user:* 兜底）归 FOLLOW；未知/null 归 OTHER。
+     * user:following 与 user:follower（user:* 兜底）归 FOLLOW；**user:like* 与 user:commentLike*
+     * （T4 装载反转后的用户维度点赞成员）在 user:* 兜底之前归 LIKE**；未知/null 归 OTHER。
      */
     public static CacheDomain domainOf(String dataKey) {
         if (dataKey == null) {
@@ -119,6 +127,13 @@ public final class CacheKeys {
         }
         if (dataKey.startsWith("content:")) {
             return CacheDomain.CONTENT;
+        }
+        // 长前缀优先：user:commentLikeSet 不以 user:like 开头，两条并列，先于通用 user:* 兜底
+        if (dataKey.startsWith("user:commentLike")) {
+            return CacheDomain.LIKE;
+        }
+        if (dataKey.startsWith("user:like")) {
+            return CacheDomain.LIKE;
         }
         if (dataKey.startsWith("user:")) {
             return CacheDomain.FOLLOW;

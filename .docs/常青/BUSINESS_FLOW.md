@@ -705,7 +705,7 @@ ContentDetailVO 包含：
     → 事务提交后缓存同步（4.5 显式失效）:
       ContentCache.removeContent（失效 content:{id} + 索引剔除，读自愈 404）
       + CommentCache.invalidateComments（级联失效 content:comments:{id} + 空标记）
-      + LikeService.deleteContentLike（失效 content:likeCount/Set + 空标记，T6 迁入）
+      + LikeService.deleteContentLike（失效 content:likeCount 计数 key；T6 迁入；**T4 反转后成员 key 为用户维度，删除不清理**——残留成员指向已删除内容，id 不复用/UI 无查询路径，永不外显）
     → Controller 逐个 FileUploadService.deleteFileByUrl 删物理文件（尽力而为）
 ```
 
@@ -725,12 +725,12 @@ ContentDetailVO 包含：
 
 1. `ContentService.hideContent`：`getContentStatus` 校验内容存在（404）→ 未被作者删除（409「内容已删除，无法下架」）→ 未处于下架态（409「内容已下架」）→ `updateContentDeletedState(conn, id, 2)`。
 2. 仅改 `content.is_deleted=2` 一个字段；**不动**评论/点赞/媒体记录/物理文件（隐藏≠删除）。
-3. 事务提交后缓存同步：ContentCache.removeContent（失效 content:{id} + 索引剔除）+ CommentCache.invalidateComments（级联失效评论树）+ LikeService.deleteContentLike（失效点赞缓存），前台即时不可见。
+3. 事务提交后缓存同步：ContentCache.removeContent（失效 content:{id} + 索引剔除）+ CommentCache.invalidateComments（级联失效评论树）+ LikeService.deleteContentLike（失效点赞计数 key；**T4 反转后成员 key 为用户维度不清理**，隐藏时点赞记录保留 DB，残留成员=DB 真理，恢复后读自愈对齐），前台即时不可见。
 
 **恢复**：`POST /api/admin/content/unhide?contentId=X`
 
 1. `ContentService.unhideContent`：校验存在（404）→ 未被删除（409）→ 当前处于下架态（409「内容未下架」）→ `updateContentDeletedState(conn, id, 0)`。
-2. 事务提交后 `ContentCache.refreshContent` 回填内容缓存与索引，前台立即重新可见；评论树无需额外动作（hide 已失效评论 key，读时 miss 回填 DB 现存评论）；点赞 key 无需处理（hide 已失效，读时 miss 回填 DB 现存点赞）。
+2. 事务提交后 `ContentCache.refreshContent` 回填内容缓存与索引，前台立即重新可见；评论树无需额外动作（hide 已失效评论 key，读时 miss 回填 DB 现存评论）；点赞 key 无需处理（hide 已失效计数 key，读时 miss 回填 DB 现存计数；**用户维度成员 key 残留=DB 真理（软删保留点赞记录）**，恢复后一致）。
 
 **效果**：下架后内容在首页 `/start`（索引剔除）、搜索（`is_deleted=0` 过滤）、关注流 `/feed`、用户主页 `/profile`、作者本人「我的投稿」均不可见；详情 `/search/IdSearch` 返回 404。恢复后重新可见，且评论/点赞数/媒体数据完好。
 
@@ -787,10 +787,10 @@ ContentDetailVO 包含：
 | 4 | 插入 content_like 表 | SQLException 回滚 |
 | 5 | 更新 content 表 like_count +1 | SQLException 回滚 |
 | 6 | 提交事务 | - |
-| 7 | 点赞缓存写：计数/成员分离条件写（`content:likeCount:{id}` 存在才 INCR + `content:likeSet:{id}` 存在才 SADD + 清空 `empty:` 标记；T4 重制） | 写失败→失效 count+set key 让读自愈（4.2），不阻塞主流程 |
+| 7 | 点赞缓存写：计数/成员分离条件写（`content:likeCount:{id}` 存在才 INCR + `user:likeSet:{userId}` 存在才 SADD contentId + 清空 `empty:user:likeSet:{userId}` 标记；T4 重制，**第四期 T4 成员反转用户维度**） | 写失败→失效 count key 让读自愈（4.2），不阻塞主流程 |
 | 8 | 失效内容 key `content:{id}`（`contentCache.notifyLikeCountChanged`，DB like_count 列为源真理，读自愈回填） | 失败只记录日志 |
 
-> 说明（T4）：内存计数残留（旧 updateContentLikeCount 死代码）已删除；count/set key 均带 TTL（cache.like.ttlMinutes=10）自愈，Redis 挂时读写路径降级走 DB，点赞接口不会 500（H5）。
+> 说明（T4）：内存计数残留（旧 updateContentLikeCount 死代码）已删除；count/用户维度成员 key 均带 TTL（cache.like.ttlMinutes=15）自愈，Redis 挂时读写路径降级走 DB，点赞接口不会 500（H5）。
 
 #### 取消点赞流程
 
@@ -804,7 +804,7 @@ POST /like/content/remove?contentId=123
 4. 删除 content_like 记录
 5. 更新 content 表 like_count -1
 6. 提交事务
-7. 更新 Redis 缓存（条件 DECR/SREM，同 T4 计数/成员分离）
+7. 更新 Redis 缓存（条件 DECR/SREM，同 T4 计数/成员分离；**T4 反转后 SREM 作用于 user:likeSet:{userId}**）
 8. 失效内容 key 读自愈回填 DB 最新计数
 ```
 

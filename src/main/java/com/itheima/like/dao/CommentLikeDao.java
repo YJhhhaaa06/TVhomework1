@@ -93,17 +93,17 @@ public class CommentLikeDao {
     }
 
     /**
-     * 查询某条评论的所有点赞者（comment 为中心，用于缓存回填）
-     * @return 所有点赞了该评论的 userId 集合
+     * 查询某个用户点赞过的全部评论（用户为中心，T4 装载反转为 user:commentLikeSet 的 miss 回填/降级 loader）。
+     * @return 该用户点赞过的 commentId 集合
      */
-    public Set<Long> findLikerIdsByCommentId(Connection conn, long commentId) throws SQLException {
-        String sql = "SELECT user_id FROM comment_like WHERE comment_id = ?";
+    public Set<Long> findLikedCommentIdsByUser(Connection conn, long userId) throws SQLException {
+        String sql = "SELECT comment_id FROM comment_like WHERE user_id = ?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setLong(1, commentId);
+            pstmt.setLong(1, userId);
             Set<Long> result = new HashSet<>();
             try (ResultSet rs = pstmt.executeQuery()) {
                 while (rs.next()) {
-                    result.add(rs.getLong("user_id"));
+                    result.add(rs.getLong("comment_id"));
                 }
             }
             return result;
