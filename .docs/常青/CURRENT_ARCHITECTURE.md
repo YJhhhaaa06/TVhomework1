@@ -1,7 +1,7 @@
 # 当前系统架构地图
 
-> 版本：2.14
-> 最后更新：2026-09-14
+> 版本：2.17
+> 最后更新：2026-09-15
 > 维护说明：每次架构改动后必须更新本文档
 
 ---
@@ -206,7 +206,7 @@ com.itheima/
 | CacheStatus | 15 | 三态枚举：MISS / HIT_EMPTY / HIT_DATA |
 | CacheResult | 39 | 三态读取结果载体（status + value，HIT_EMPTY 时 value=null） |
 | CacheAside | 399 | 统一 Cache-Aside 封装：`read` 三态读 / `get` 带单飞回填 / `writeOrInvalidate`（写失败=DEL 自愈，写数据同时清空标记）/ `markEmpty` / `invalidate`，TTL ±10% 简单抖动，缓存失败一律降级不抛业务异常；T7 起三态读/降级/LOAD/写失败处自动打点 CacheStats；**T8 起读路径 pipeline 化**（单 key 与批量均 EXISTS 空标记+GET 一趟往返）并新增 **`getBatch` 批量读接口**（三态语义与单 key 一致、miss 逐个单飞回填、解析失败/整批降级逐 key 直接 loader 不写回）；**T9 起读命中滑动续期**（`get`/`getInternal` 与 `getBatch` 命中数据 key 时同 pipeline 追加 EXPIRE，续期值=原 TTL ±10% 抖动，空标记从不续期；`read` 纯三态读不续期）；**三期 T2 起降级亦经单飞**（getInternal catch / getBatch 整批 catch / getBatch 脏 JSON catch 三处降级改 `singleFlight.get(key, loader)`：同 key 并发只打一次 DB、仅装载不写回、失败条目移除可重试）；**三期 T3 起"loader 失败不得上报为空"契约**（治 N2）：所有装载点捕获 `DatabaseException` 转 null——不写空标记、不 DEL 数据 key（miss 回填内联 try/catch 直接 return null 跳过 markEmpty；getInternal 降级 / getBatch 整批降级 / getBatch 脏 JSON 单 key 降级共用 `loadDegraded` helper） |
-| SetCache | 330 | 原生 Set 缓存基建（**第四期 T1 cache-01 新增，U-09/N3 收敛落点**）：单成员三态读 `isMember` / 全量读 `getMembers`（不排序）/ 批量判定（`batchIsMember` 单 set 多成员·Follow 形态、`batchKeysIsMember` 多 set 单成员·Like 形态）/ 回填 `writeSet`（空→复用 `cacheAside.markEmpty`）/ 降级装载 `loadViaSingleFlight`；三态/空标记/降级语义与域缓存现状逐条一致（探针续期精确 TTL 无抖动、空标记不续、批量 DB 答案失败上抛而回填写 best-effort）；**尚未接入业务（T2/T3 收口 LikeCacheService/FollowCache）**，见 6.13 |
+| SetCache | 330 | 原生 Set 缓存基建（**第四期 T1 cache-01 新增，U-09/N3 收敛落点**）：单成员三态读 `isMember` / 全量读 `getMembers`（不排序）/ 批量判定（`batchIsMember` 单 set 多成员·Follow 形态、`batchKeysIsMember` 多 set 单成员·Like 形态）/ 回填 `writeSet`（空→复用 `cacheAside.markEmpty`）/ 降级装载 `loadViaSingleFlight`；三态/空标记/降级语义与域缓存现状逐条一致（探针续期精确 TTL 无抖动、空标记不续、批量 DB 答案失败上抛而回填写 best-effort）；**T2（cache-02）已收口 LikeCacheService 成员读路径**（见 6.14），FollowCache 待 T3 |
 
 > 测试：`src/test/java/com/itheima/cache/` **8 类 117 例**（mockStatic MyRedisPool + mock Jedis，不碰真实 Redis，含 CacheStatsTest 域解析/计数/惰性输出 8 例；CacheAsideTest 43 例含单 key pipeline 往返断言与批量三态/降级/脏 JSON 用例 + **T9 滑动续期 4 例**：命中续期抖动/空标记不续/批量续期/续期失败降级 + **三期 T2 新增 3 例降级单飞**：降级并发同 key 只装载一次/降级 loader 失败不共享且可重试/批量降级逐 key 去重——并发用例用 mock RedisAccess 恒抛 CacheException（MockedStatic 线程局部不可跨线程）；**三期 T3 新增 5 例负缓存治理**：miss/降级/批量 miss 逐 key/批量整批降级/批量脏 JSON 单 key 降级 遇 DatabaseException 均转 null 且不写空标记不 DEL；**三期 T1 新增 RedisCircuitBreakerTest 8 例**（状态机全迁移含并发唯一探针）+ **RedisAccessTest 扩至 9 例**（熔断开启快速失败不触达连接池/连续失败达阈值拒绝/成功重置不误开/冷却期满探针恢复全链路/回调 CacheException 计失败口径）；**第四期 T1 新增 SetCacheTest 30 例**（三态/回填/降级/批量/空标记/续期/统计/并发单飞）），见九.9.2。
 
@@ -249,7 +249,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | LikeController（113，/like/*） | 点赞/取消点赞 |
-| service | LikeService（205）、LikeCacheService（628） | 内容/评论点赞业务 + Redis 点赞缓存（计数/成员分离，读路径委托缓存类；**三期 T2 降级经单飞全量装载作答**） |
+| service | LikeService（205）、LikeCacheService（420） | 内容/评论点赞业务 + Redis 点赞缓存（计数/成员分离，读路径委托缓存类；**三期 T2 降级经单飞全量装载作答**；**第四期 T2 成员读路径收口 SetCache——content/comment 孪生方法合并为 id 维度参数化单实现，批量回填 best-effort**） |
 | dao | ContentLikeDao（137）、CommentLikeDao（129） | content_like / comment_like 数据访问 |
 | model | — | 无专属 model |
 
@@ -488,6 +488,14 @@ com.itheima/
 - **语义要点**：探针续期精确 TTL 无抖动（空标记 key 从不续期）；批量 miss 的 DB 答案（dbAnswer）失败上抛（DB 即真理），回填写 best-effort（失败仅记日志、DB 答案照常返回，4.2 缓存失败不得导致业务失败——**差异记录**：当前 LikeCacheService 批量回填失败上抛，T2 收口后变 best-effort，属收敛方向，T2 执行回写对照）；统计打点粒度保持现状（follow 单 set 一趟一次 / like 每 (key,决策) 一次）。
 - **验证**：SetCacheTest 30 例全绿（三态/回填/降级/批量/空标记/续期/统计/并发单飞）；全量 JUnit **395 例**（基线 365 + 30）无回归；pytest all **124 passed** 基线不变。
 
+### 6.14 LikeCacheService 收口 SetCache（第四期 T2 cache-02，U-09/N3）
+
+> 目标：把 LikeCacheService 的 content/comment 孪生方法收敛为 id 维度参数化单实现，Set 成员读路径全部改走 6.13 的 SetCache 组件。**对外行为零变化**——key 命名、三态顺序、打点口径（CacheStats 分域与 key 粒度）、TTL、降级语义一概不变；Lua 条件写 4 方法与计数 CacheAside 逻辑不动；`LikeService` 及业务调用方签名零感知。
+
+- **落点**：`isContentLiked/isCommentLiked` → `setCache.isMember`；`batchIsContentLiked/batchIsCommentLiked` → `setCache.batchKeysIsMember`（多 set 单成员·Like 形态，调用点用本地 `idToKey/keyToId` 双 Map 桥接 key↔id，不改 CacheKeys）；`getContentLikeCount/getCommentLikeCount` 合并为内部 `getLikeCount(key, loader)`（CacheAside 语义含防 NPE 兜底 LOAD 打点不变）；4 个成对 loader（成员/计数）与批量 answer 收敛为 `DaoQuery<T>`/`BatchQuery` 参数化 helper（`transactionTemplate + DAO lambda`，用户可见异常文案逐字不变，`contentId=`/`commentId=` 日志标签统一为 `id=`）；删除类内与 SetCache 重复的 `scanLikeSet`/`writeXxxLikers`/`loadLikersViaSingleFlight`/`backfillBatch*`/`degradeBatch*`。
+- **L2 差异对照（T1 已登记，T2 回写确认）**：批量 miss 回填全量成员 loader DB 失败由"上抛 500"变 **best-effort**（SetCache 契约：DB 答案照常返回、仅记日志，4.2 缓存失败不得导致业务失败）——收敛方向；批量 dbAnswer 失败仍上抛（DB 即真理，无答案可答）；单成员 miss/降级 loader 失败仍上抛（无行为漂移）。
+- **验证**：LikeCacheServiceTest 23→25（新增 2 例锁 L2 语义：批量回填 loader 失败 best-effort、单成员 miss 装载失败仍上抛）；全量 JUnit **397 例**全绿；pytest all **124 passed** 无回归；subagent review 通过。关联：`NEXT_CYCLE_NEEDS.md` 4.0 T2 决策回写、`NEXT_CYCLE_TASKS.md` T2 执行回写。
+
 ---
 
 ## 七、API 接口清单
@@ -641,7 +649,7 @@ src/main/webapp/
 | content/service/FeedServiceTest | 8 | 关注动态流 |
 | content/service/ProfileServiceTest | 12 | 用户主页 |
 | like/service/LikeServiceTest | 16 | 点赞/取消/读路径委托缓存类/空输入空 map |
-| like/service/LikeCacheServiceTest | 23 | Redis 点赞缓存：计数/成员分离三态+单飞回填+空标记+写失败失效+降级 +批量 pipeline+DB 兜底 +delete 失效 +T7 统计接线（LIKE 域 HIT_EMPTY 计数）+**T9 续期接线（hit-data 续期 set key、空标记不续）**+**三期 T2 降级单飞（Redis 异常全量装载作答不写回 + 并发同 key 只装载一次）** |
+| like/service/LikeCacheServiceTest | 25 | Redis 点赞缓存：计数/成员分离三态+单飞回填+空标记+写失败失效+降级 +批量 pipeline+DB 兜底 +delete 失效 +T7 统计接线（LIKE 域 HIT_EMPTY 计数）+**T9 续期接线（hit-data 续期 set key、空标记不续）**+**三期 T2 降级单飞（Redis 异常全量装载作答不写回 + 并发同 key 只装载一次）**+**第四期 T2 收口 SetCache 后新增 2 例 L2 差异对照（批量回填 loader 失败 best-effort / 单成员 miss 装载失败仍上抛）** |
 | comment/service/CommentServiceTest | 16 | 评论归属/楼中楼归一化/软删除（自删+管理员删）/缓存更新 |
 | follow/service/FollowServiceTest | 15 | 关注/取关/列表（读路径委托 FollowCache；写路径 DB 提交后缓存双写） |
 | follow/service/FollowCacheTest | 29 | Redis 关注缓存：双 Set 三态+单飞回填+空标记（set 存在守卫防并发覆盖）/批量 pipeline+DB 兜底+best-effort 回填/列表 smembers 排序/条件 MULTI 双写+失败双 DEL+降级 +T7 统计接线（FOLLOW 域 MISS/LOAD 计数）+**T9 续期接线（hit-data 续期 set key、空标记不续）**+**三期 T2 降级单飞（Redis 异常全量装载作答不写回 + 并发同 key 只装载一次）** |
@@ -734,6 +742,7 @@ src/main/webapp/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-09-15 | 2.17 | **第四期 T2 LikeCacheService 收口 SetCache（refactor(cache-02)，治 U-09/N3）**：Set 成员读路径（单成员三态 / 批量多 set 单成员）全部改走 6.13 的 `SetCache` 基建组件；content/comment 孪生方法收敛为 id 维度参数化单实现（loaders 与批量 answer 统一为类内 `DaoQuery<T>`/`BatchQuery` 参数化 helper，用户可见异常文案逐字不变，`contentId=`/`commentId=` 日志标签统一为 `id=`）；删除类内与 SetCache 重复的 `scanLikeSet`/`writeXxxLikers`/`loadLikersViaSingleFlight`/`backfillBatch*`/`degradeBatch*`（628→420 行）；Lua 条件写 4 方法与计数 CacheAside、`deleteXxxLike`、`LikeService` 及业务调用方签名零改动；**L2 差异对照（T1 已登记）**：批量 miss 回填全量成员 loader 失败由"上抛 500"变 best-effort（SetCache 契约，4.2）；**JUnit 397 例全绿**（395+2：LikeCacheServiceTest 新增批量回填 best-effort / 单成员 miss 装载失败仍上抛）+ pytest all 124 passed 无回归；本文件 4.2 SetCache 行与 like 域行/6.14/9.2/12 同步；TASKS T2 已完成 + 执行回写；NEEDS 4.0 T2 执行定稿（注：header 版本号 T1 未按惯例 bump——2.16 后直接 2.17，T1 的 6.13 无对应 header/12 行，登记 L1 观察留 T8 统一对齐） |
 | 2026-09-14 | 2.16 | **三期缓存加固 T6 收尾（fix(cache-06)，治 U-08 + 全周期闭环）**：**U-08 归一**——索引 key 生成与解析同源，`CacheKeys` 为唯一源：新增 `CacheKeys.contentIndex(type, categoryId)` 生成方法 + `CONTENT_INDEX_PREFIX` 常量，`domainOf` 解析与 `forEachIndexKey` 的 SCAN 匹配模式均引用同一前缀常量（生成/解析/匹配三处同源），原 `ContentCache.indexKey` 私有拼接移除、调用点（buildQueryKey/indexKeysOf）改走 `CacheKeys.contentIndex`；**CacheStats 观测口径确认（T6 强制探索③）**——T1 熔断后 DEGRADE 计数含义仍准确（=本次读未命中缓存、走 DB 兜底次数，含熔断开启快速失败，两者语义一致），enum javadoc 补明示；**残留巡检（T6 强制探索①②）**：T1~T5 无残留（*FromDb 助手/loadBatch/临时开关/临时日志均无；@WebServlet 14 URL、web.xml、IoC 扫描 `scan("com.itheima")` 原样）；JUnit **365 例全绿**（surefire 361 + pool 4，T5 362 + 3：CacheKeysTest 新增 contentIndex 生成格式/生成与 domainOf 解析同源/前缀常量供 SCAN 匹配）+ pytest all 124 passed + 覆盖率地图 rerun 无回归（41 端点全有 pytest）；本文件 4.2/6.2/9.2/12 同步；BUSINESS_FLOW 3.1 注记；TASKS T6 已完成 + 执行回写；NEEDS 4.0 T6 执行定稿；UNPLANNED_ISSUES U-08 标注已消化 |
 | 2026-09-14 | 2.15 | **三期缓存加固 T5 启动加载治理（fix(cache-05)，治 N5/R-01/R-04，R-01 拍板=全量+工程化优化）**：`ContentCache.init()` 拆两段——DB 阶段事务内只读（`transactionTemplate.execute(this::loadBuildableFromDb)`：findAllContent + **批量媒体装载** `ContentMediaDao.findMediaByContentIds`（IN 查询，替代逐条 findMedia，DB N+1→恒 2）+ 媒体损坏跳过逻辑原样），事务提交后 `rebuildRedis` 在**事务外**写 Redis（治 N5/H3：Redis 写入不占 DB 事务；DB 失败记日志 return 不触发任何 Redis 写）；内容 key 批量写走新增 `CacheAside.writeBatch`（一趟 pipeline `setex[per-key TTL 抖动]+del empty:×N`，失败→逐 key deleteQuietly 自愈 + WRITE_FAIL，与 writeOrInvalidate 语义一致；批内单命令 server 错误依赖 `Pipeline.sync()` 抛异常兜底）；`rebuildIndexes` pipeline 化（SCAN 顺序收集旧索引 key → 一趟 pipeline DEL 全部 + lremAndLpush 全部，新增 `lremAndLpush(Pipeline,...)` 重载；ensureIndex 懒重建/removeContent/addToIndex 零改动）；**前后对比：Redis ≈12N 往返（内容 2 + 索引 8/内容）→ ≈3 往返（内容 pipeline 1 + 索引 SCAN 页 + 索引 pipeline 1），DB N+1 → 2**，与内容量解耦；JUnit **362 例全绿**（surefire 358 + pool 4 = T4 356 + 6：ContentCacheTest init 区 2→5 例含媒体损坏跳过/事务外写 InOrder/N+1 消除/往返恒定 + CacheAsideTest writeBatch 2）+ pytest all 124 passed + 独立 subagent 评审通过（无🔴，🟡4 条全部落实）；本文件 4.2/4.3/6.12/9.2/12 同步；BUSINESS_FLOW 3.1 注记；TASKS T5 已完成 + 执行回写；NEEDS 4.0 T5 决策 + R-01 已拍板 |
 | 2026-09-14 | 2.14 | **三期缓存加固 T3 负缓存治理（fix(cache-03)，治 N2：区分"确认无数据"与"加载失败"）**：`ContentCache.loadContentFromDb` / `CommentCache.loadCommentTree` 移除内层 `catch(SQLException)→null`，SQLException 交由事务模板包成 `DatabaseException` 上抛（=加载失败，不污染空标记）；`return null` 仅保留"确认无数据"（DB 无行/媒体损坏/未知类型）；意外异常统一包成 DatabaseException；`ContentCache.addContent`/`refreshContent`（DB 提交后缓存同步）遇 DatabaseException 静默跳过（refresh 保留旧缓存读自愈，防提交后 500）；`CacheAside` 新增"loader 失败不得上报为空"契约——5 个装载点捕获 DatabaseException 转 null（getInternal miss / getBatch miss 循环 内联 try/catch 跳过 markEmpty；getInternal 降级 / getBatch 整批降级 / getBatch 脏 JSON 单 key 降级 共用 `loadDegraded` helper，删死代码 `loadBatch`），**不写空标记、不 DEL 数据 key**；契约仅对 DatabaseException 生效（like/follow 的 ServerException 500 语义不受影响）；用户拍板=对外行为保持（内容 404/评论空/批量逐 key 跳过），三态/空标记/TTL/key 命名/对外错误约定零改动；JUnit **348 例全绿**（surefire 344 + pool 4，T3 新增 7 例）+ pytest all 124 passed + 独立 subagent 评审通过（无🔴）；本文件 4.2/4.3/6.8/9.2/12 同步；BUSINESS_FLOW 3.1 注记；TASKS T3 已完成 + 执行回写；NEEDS 4.0 T3 执行定稿 |

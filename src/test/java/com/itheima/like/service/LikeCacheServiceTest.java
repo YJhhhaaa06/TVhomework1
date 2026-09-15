@@ -5,9 +5,11 @@ import com.itheima.cache.CacheDomain;
 import com.itheima.cache.CacheKeys;
 import com.itheima.cache.CacheStats;
 import com.itheima.cache.RedisAccess;
+import com.itheima.cache.SetCache;
 import com.itheima.cache.SingleFlight;
 import com.itheima.config.AppConfig;
 import com.itheima.exception.CacheException;
+import com.itheima.exception.ServerException;
 import com.itheima.like.dao.CommentLikeDao;
 import com.itheima.like.dao.ContentLikeDao;
 import com.itheima.util.TransactionTemplate;
@@ -40,7 +42,8 @@ import static org.mockito.Mockito.*;
 
 /**
  * T4 点赞缓存（计数/成员分离 + 单飞 + 降级）单测。
- * 风格对齐 CommentCacheTest：mock DAO/RedisAccess/CacheAside + 真实 SingleFlight + tt 跑 loader；
+ * 第四期 T2 起：Set 成员读路径收口 SetCache（同一 mock redis + 真实 SingleFlight + 同一 stats
+ * 组合注入），用例桩透明平移；风格对齐 CommentCacheTest：mock DAO/RedisAccess/CacheAside + tt 跑 loader；
  * 通过 Mockito 令 RedisAccess.execute/Void 作用于 mock Jedis（含 pipeline），可验证 key 与写命令。
  */
 class LikeCacheServiceTest {
@@ -66,8 +69,11 @@ class LikeCacheServiceTest {
         cacheAside = mock(CacheAside.class);
         jedis = mock(Jedis.class);
         stats = new CacheStats();
+        // 第四期 T2：读路径收口 SetCache（复用同一 mock redis / 真实 SingleFlight / 同一 stats，
+        // 保证既有降级并发与统计断言不因组件平移而破）
+        SetCache setCache = new SetCache(redis, cacheAside, new SingleFlight(), stats);
         service = new LikeCacheService(contentLikeDao, commentLikeDao, tt, redis,
-                new SingleFlight(), cacheAside, stats);
+                setCache, cacheAside, stats);
 
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
@@ -415,6 +421,46 @@ class LikeCacheServiceTest {
 
         assertTrue(result.isEmpty());
         verify(redis, never()).executeVoid(any(Consumer.class));
+    }
+
+    // ==================== 批量回填 best-effort（第四期 T2 收口 SetCache 后的 L2 差异对照） ====================
+
+    /**
+     * T1 登记差异（TASKS T1 执行回写）：收口前批量回填 loader DB 失败上抛（批量 500）；
+     * 收口后 SetCache 契约 = best-effort——DB 答案照常返回，仅缓存受影响（4.2）。
+     */
+    @Test
+    void batchIsContentLikedBackfillLoaderFailureIsBestEffort() throws SQLException {
+        Pipeline p = mock(Pipeline.class);
+        when(jedis.pipelined()).thenReturn(p);
+        // id=3 miss（三态桩）
+        Response<Boolean> empty3 = booleanResponse(false);
+        Response<Boolean> exists3 = booleanResponse(false);
+        Response<Boolean> member3 = booleanResponse(false);
+        when(p.exists(CacheKeys.empty(CacheKeys.contentLikeSet(3L)))).thenReturn(empty3);
+        when(p.exists(CacheKeys.contentLikeSet(3L))).thenReturn(exists3);
+        when(p.sismember(CacheKeys.contentLikeSet(3L), "7")).thenReturn(member3);
+        // dbAnswer 成立（DB 即真理）：用户点赞过 id=3
+        when(contentLikeDao.findLikedContentIds(conn, 7L, List.of(3L))).thenReturn(Set.of(3L));
+        // 回填全量成员 loader 真失败（DB 故障）
+        when(contentLikeDao.findLikerIdsByContentId(conn, 3L)).thenThrow(new SQLException("db down"));
+
+        Map<Long, Boolean> result = service.batchIsContentLiked(7L, List.of(3L));
+
+        // 不抛；DB 答案照常返回（缓存失败不得导致业务失败，4.2）
+        assertEquals(true, result.get(3L));
+    }
+
+    /**
+     * 单成员 miss 装载 loader DB 失败仍上抛（与收口前一致，无行为漂移）——
+     * SetCache.isMember 仅 catch CacheException，真实 DB 失败向上抛。
+     */
+    @Test
+    void isContentLikedMissLoaderDbFailureStillThrows() throws SQLException {
+        stubSetScan(1L, false, false, null);
+        when(contentLikeDao.findLikerIdsByContentId(conn, 1L)).thenThrow(new SQLException("db down"));
+
+        assertThrows(ServerException.class, () -> service.isContentLiked(7L, 1L));
     }
 
     // ==================== 失效（内容/评论删除级联，4.5） ====================

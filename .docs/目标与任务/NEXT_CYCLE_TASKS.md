@@ -78,7 +78,7 @@
 | 编号 | 标题 | 对应候选 | 依赖 | 验收关键（动态） | 期望 commit 主题 | 状态 |
 | -- | -- | ---- | -- | -------- | ------------ | -- |
 | T1 | 基建：Set 缓存组件收敛 | U-09、N3 | — | 新组件覆盖原生 Set 三态读/回填/批量/降级装载，单测齐全；**此时尚无业务接入，全量行为零变化** | `refactor(cache-01)` | 已完成 |
-| T2 | LikeCacheService 收口 + 孪生合并 | U-09、N3 | T1 | content/comment 成对方法合并、扫描/回填/降级走基建；行为与统计打点口径零变化；JUnit + 相关 pytest 绿 | `refactor(cache-02)` | 草稿 |
+| T2 | LikeCacheService 收口 + 孪生合并 | U-09、N3 | T1 | content/comment 成对方法合并、扫描/回填/降级走基建；行为与统计打点口径零变化；JUnit + 相关 pytest 绿 | `refactor(cache-02)` | 已完成 |
 | T3 | FollowCache 收口 | U-09、N3 | T1 | 接入基建；MULTI 双写等 follow 特有逻辑语义保持；**`pytest all` 全量绿**（收口后第一个全量回归点） | `refactor(cache-03)` | 草稿 |
 | T4 | 点赞成员装载反转 | R-08 | T2（硬） | `content:likeSet` → `user:likeSet`；**方案开工前须用户拍板**（G7）；对外行为零变化；装载量前后对比 | `refactor(cache-04)` | 草稿 |
 | T5 | 推荐读路径优化 + 索引重建退避 | N1、N2、R-04、R-07、U-11 加重面 | —（独立，可并行窗口） | 惰性探测（探测量前后对比）；停机期间不再逐请求全表查询（可复现验证）；R-07 评估结论回写 NEEDS；**`pytest all` 全量绿** | `refactor(cache-05)` | 草稿 |
@@ -113,7 +113,7 @@
 * **红线边界**：行为零变化——key 命名、三态顺序、打点口径（CacheStats 分域与 key 粒度）、TTL、降级语义不变；**Lua 条件写 4 方法不在收口面**（`260914` 三期 T4-③ 已原子化，无重复，写路径不动）；不动 `LikeService` 业务调用方签名。
 * **强制探索步骤**：动刀前先 (0) 复核 N3 证据 (1) 孪生差异盘点（DAO 方法名、异常文案、统计 key 前缀）确认合并方式 (2) `backfillBatchContentLikers` 的"answer 查询与回填查询两套"结构在合并后如何保持（语义不变）(3) 若清单未覆盖 → 回写本文档再动手。
 * **验收**：成对方法消除（或收敛为参数化单实现）；JUnit 全绿 + 相关端点 pytest 无回归；`mvn compile` 过。
-* **执行回写（<日期>，<commit scope> 已落地）**：`<任务完成后追加>`。
+* **执行回写（2026-09-15，`refactor(cache-02)` 已落地）**：n3 证据复核**成立**（读/装载/批量孪生逐字重复，G11 第 (0) 步过）。**孪生差异盘点**：DAO 方法名（findLikerIds/count/findLiked… 成对）、日志前缀（内容/评论，`contentId=`/`commentId=` 标签统一为 `id=`，L1）、用户可见异常文案两域**逐字相同**、统计 key=数据 setKey（domainOf 两域均归 LIKE）、TTL 同源。**落点**：`isXxxLiked`/`batchIsXxxLiked` → `SetCache.isMember`/`batchKeysIsMember`（调用点 `idToKey`/`keyToId` 双 Map 桥接，不改 CacheKeys）；`getXxxLikeCount` 合并为 `getLikeCount(key, loader)`（CacheAside 语义含兜底 LOAD 打点不变）；loader 与批量 answer 收敛为 `DaoQuery<T>`/`BatchQuery` 参数化 helper（transactionTemplate + DAO lambda，"answer 查询与回填查询两套"结构保持）；删除 `scanLikeSet`/`writeXxxLikers`/`loadLikersViaSingleFlight`/`backfillBatch*`/`degradeBatch*`（628→420 行）；Lua 条件写 4 方法 / `deleteXxxLike` / `LikeService` 及业务调用方签名零改动。**L2 差异对照（T1 登记，本任务确认收敛落地）**：批量 miss 回填全量成员 loader DB 失败由"上抛 500"变 SetCache 契约 best-effort（DB 答案照常返回、仅记日志，4.2 缓存失败不得导致业务失败）；批量 dbAnswer 失败仍上抛；单成员 miss/降级 loader 失败仍上抛（无漂移）。其他零变化确认：三态顺序/续期（探针精确 TTL、空标记不续）/打点粒度（每 (key,决策)）/降级语义（单飞装载作答不写回 D4）逐位一致。验证：`mvn compile`（tv.py junit 链）过；JUnit **397 例全绿**（T1 基线 395 + 新增 2：批量回填 best-effort / 单成员 miss 装载失败仍上抛）；pytest all **124 passed** 无回归；常青文档同步见 6.14；subagent review 通过（无🔴，🟡 1 条=批量 loader 内部日志措辞词序变化——已在 NEEDS 4.0 登记为 L1 非契约项，无需修复）。关联：T1 执行回写"差异记录 L2：T2 回写对照"——已在本回写对照记录。
 
 ### T3 FollowCache 收口
 
@@ -169,5 +169,6 @@
 
 | 日期 | 版本 | 内容                                                                                                                                                                       |
 | ---- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-09-15 | 0.3 | **T2 完成（`refactor(cache-02)`）**：任务总览 T2 状态 → 已完成；四、任务详情 T2 追加执行回写（孪生差异盘点 / SetCache 落点 / L2 差异对照记录——T1 登记"批量回填上抛→best-effort"收敛落地；JUnit 397 pytest 124）；常青 CURRENT_ARCHITECTURE 2.17（4.2 SetCache 行与 like 域行 / 新增 6.14 / 9.2 LikeCacheServiceTest 23→25 / 12 更新日志） |
 | 2026-09-15 | 0.2 | **R-10 拍板后拆任务**：方向 = 缓存体系综合改造（结构收敛 + 装载反转 + 读路径优化 + 补缺口）；G1/G3/G9 校准（commit 前缀 `refactor(cache-0N)`、`pytest all` 全量在 T3/T5/T8 三点、本周期无 DDL）；任务总览填入 **T1~T8**（含 NEEDS 编号映射与顺序理由——T1 基建 → T2 Like 收口（最深）→ T3 Follow 收口 → T4 反转（硬依赖 T2）→ T5 读路径（独立可并行）→ T6 计数（软依赖 T3）→ T7 小项 → T8 收尾）；T4/T6 标注开工前方案拍板点（G7）；"四、任务详情"填入 8 个任务的四要素骨架 |
 | 2026-09-15 | 0.1 | 新建本文档（模板就位）：接 260914-cache-hardening 归档（第三期「缓存加固」T1~T6 全部完成），结转周期约定 G1~G11（G1 commit 前缀 / G9 DDL 标注待方向拍板后校准；G11 质疑协议为 2026-09-15 新增）+ 任务模板四要素（含 (0) 证据复核步）+ 红线措辞 / 编号引用 / 质疑协议约定；任务总览与任务详情**留空待填**（方向待 NEEDS 三节 R-10 拍板） |
