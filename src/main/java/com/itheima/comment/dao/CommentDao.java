@@ -59,6 +59,20 @@ public class CommentDao {
 
 
     //查
+    /** 评论点赞缓存失效定位用：查评论所属内容 id；不存在/已删除返回 null */
+    public Long getContentIdByCommentId(Connection conn, long commentId) throws SQLException {
+        String sql = "SELECT content_id FROM comment WHERE comment_id = ? AND is_deleted = 0";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, commentId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getLong(1);
+                }
+            }
+        }
+        return null;
+    }
+
     public boolean isCommentExist(Connection conn,long commentId)throws SQLException {
         String sql = "SELECT COUNT(*) " +
                 "FROM comment " +

@@ -53,6 +53,35 @@ public class ContentMediaDao {
 
 
 
+    // 按 contentId 集合批量查询媒体（三期 T5：启动初始化批量装载，消 N+1）
+    public List<ContentMedia> findMediaByContentIds(Connection conn, java.util.Collection<Long> contentIds) throws SQLException {
+        if (contentIds == null || contentIds.isEmpty()) {
+            return new ArrayList<>();
+        }
+        StringBuilder sql = new StringBuilder(
+                "select id,content_id,url,type,sort from content_media where content_id IN (");
+        for (int i = 0; i < contentIds.size(); i++) {
+            if (i > 0) {
+                sql.append(", ");
+            }
+            sql.append("?");
+        }
+        sql.append(") order by content_id,type,sort");
+        List<ContentMedia> list = new ArrayList<>();
+        try (PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+            int idx = 1;
+            for (Long contentId : contentIds) {
+                pstmt.setLong(idx++, contentId);
+            }
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    list.add(ResultMap.buildContentMedia(rs));
+                }
+            }
+        }
+        return list;
+    }
+
     // 查询全部媒体（运维扫描用）
     public List<ContentMedia> findAllMedia(Connection conn) throws SQLException {
         String sql = "select id,content_id,url,type,sort from content_media order by id";

@@ -1,0 +1,326 @@
+package com.itheima.follow.service;
+
+import com.itheima.cache.CacheAside;
+import com.itheima.cache.CacheKeys;
+import com.itheima.cache.CacheStats;
+import com.itheima.cache.RedisAccess;
+import com.itheima.cache.SetCache;
+import com.itheima.config.AppConfig;
+import com.itheima.exception.CacheException;
+import com.itheima.exception.ServerException;
+import com.itheima.follow.dao.FollowDao;
+import com.itheima.ioc.annotation.Component;
+import com.itheima.ioc.annotation.InjectConstructor;
+import com.itheima.util.LogUtil;
+import com.itheima.util.TransactionTemplate;
+import redis.clients.jedis.Jedis;
+import redis.clients.jedis.Pipeline;
+import redis.clients.jedis.Response;
+import redis.clients.jedis.Transaction;
+
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+/**
+ * 关注关系缓存（C 周期 T5 新增，NEEDS 4.10）：以用户为中心维护
+ * {@code user:following:{userId}} / {@code user:follower:{userId}} 双 Set
+ * + MULTI 双写 + 失败双 DEL。
+ *
+ * <p>与内容/评论/点赞缓存同构（T2/T3/T4 惯例）：缓存类拥有 DAO + TransactionTemplate，
+ * 内部完成"缓存优先 → miss 单飞回填 → Redis 异常降级 DB"，业务 Service 读路径只做委托；
+ * 写路径在业务 DB 事务提交后调用，缓存失败不抛出（4.2 缓存必须可降级）。
+ *
+ * <p>第四期 T3 收口：读路径（单成员三态 / 批量判定 / 全量列表）全部经 {@link SetCache}
+ * 基建组件（T1，U-09/N3 收敛落点），本类只保留域配置（key 工厂 / DAO loader）+ 写路径
+ * 双 key 原子语义（MULTI 双写 + 失败双 DEL）。全量列表的确定性升序在 {@link #sortIds}
+ * 一处包装（hit-data/miss/降级三路径一致，防热/冷读顺序波动）。
+ *
+ * <p>降级不放量（三期 T2）：Redis 异常的降级读亦经单飞全量装载作答、不写回（D4）——
+ * 同 key 并发读只打一次 DB；失败不以数据形式共享（条目移除，下一请求重试）。
+ *
+ * <p>key 规范（T1 定稿，见 {@link CacheKeys}）：
+ * <ul>
+ *   <li>{@code user:following:{userId}}（Set&lt;followedUserId）——我关注了谁；</li>
+ *   <li>{@code user:follower:{userId}}（Set&lt;userId）——谁关注了我。</li>
+ * </ul>
+ *
+ * <p>三态读（4.3/4.4）：空标记 {@code empty:user:following:{id}}（写于"确认无关注/无粉丝"）→
+ * false/空列表；set 存在 → SISMEMBER/SMEMBERS；miss → 单飞回填（DB 全量 → SADD+EXPIRE，
+ * 空集 → 空标记）。关注数/粉丝数计数不入缓存（O-9 二期）。
+ *
+ * <p>写路径（4.10）：关注/取关在 DB 提交后调用。条件双写——两条 data key 均"已加载
+ * （set 存在或空标记存在）"时用 Redis MULTI 原子 SADD/SREM 双写并续 TTL；任一侧为冷 key
+ * （未加载）则直接失效（双 DEL 含空标记）让读自愈回填全量，**不创建残缺集**（与 T4
+ * 条件写先例同构）；任何 Redis 异常 → 双 DEL（4.10 失败双 DEL），不抛出，DB 为最终真理。
+ */
+@Component
+public class FollowCache {
+
+    private static final Logger LOGGER = LogUtil.getLogger(FollowCache.class);
+
+    private final FollowDao followDao;
+    private final TransactionTemplate transactionTemplate;
+    private final RedisAccess redis;
+    private final SetCache setCache;
+    private final CacheAside cacheAside;
+    private final CacheStats stats;
+
+    @InjectConstructor
+    public FollowCache(FollowDao followDao, TransactionTemplate transactionTemplate,
+                       RedisAccess redis, SetCache setCache, CacheAside cacheAside,
+                       CacheStats stats) {
+        this.followDao = followDao;
+        this.transactionTemplate = transactionTemplate;
+        this.redis = redis;
+        this.setCache = setCache;
+        this.cacheAside = cacheAside;
+        this.stats = stats;
+    }
+
+    // ==================== 读-单条 isFollowing（三态 + 单飞回填 + 降级，经 SetCache） ====================
+
+    /**
+     * 查询 userId 是否关注了 followedUserId（三态）：经 {@link SetCache#isMember}——
+     * hit-empty（空标记）→ false；hit-data（set 存在）→ SISMEMBER；miss → 单飞回填后判成员；
+     * Redis 异常 → 降级 DB（三期 T2：经单飞全量装载作答，同 key 并发只打一次 DB；不写回，4.2 读降级）。
+     *
+     * @return 是否已关注（数据库为最终答案，永不抛缓存异常）
+     */
+    public boolean isFollowing(long userId, long followedUserId) {
+        return setCache.isMember(CacheKeys.userFollowing(userId), followedUserId,
+                () -> loadFollowingIds(userId), ttlSeconds());
+    }
+
+    // ==================== 读-批量 isFollowing（同一 following set 一趟 pipeline，经 SetCache） ====================
+
+    /**
+     * 批量查询 userId 对多个用户的关注状态（经 {@link SetCache#batchIsMember}：一趟 pipeline
+     * 三态扫描 + DB 批量兜底 answer + 单飞全量回填 best-effort——"answer 查询与回填全量
+     * 两趟"结构由组件内保持）；Redis 异常 → 降级 DB（三期 T2：经单飞全量装载作答，
+     * 同 key 并发只打一次 DB；不写回）。
+     *
+     * @return 完整 userId → isFollowing 映射（含 DB 兜底结果，无缺失）
+     */
+    public Map<Long, Boolean> batchIsFollowing(long userId, List<Long> followedUserIds) {
+        if (followedUserIds == null || followedUserIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        return setCache.batchIsMember(CacheKeys.userFollowing(userId), followedUserIds,
+                missed -> loadFollowedIdsByUser(userId, missed),
+                () -> loadFollowingIds(userId),
+                ttlSeconds());
+    }
+
+    // ==================== 读-关注/粉丝列表（smembers / 空标记 / 单飞回填 / 降级，经 SetCache） ====================
+
+    /**
+     * 获取用户关注的所有博主 ID（feed 拉取关注列表 / 关注列表页）：经 {@link SetCache#getMembers}
+     * （hit-empty → 空列表；set 存在 → SMEMBERS；miss → 单飞回填；Redis 异常 → DB 降级），
+     * 结果统一 {@link #sortIds} 升序（确定性顺序，与既有 SMEMBERS 命中路径一致）。
+     */
+    public List<Long> getFollowingIds(long userId) {
+        return sortIds(setCache.getMembers(CacheKeys.userFollowing(userId),
+                () -> loadFollowingIds(userId), ttlSeconds()));
+    }
+
+    /**
+     * 获取用户的所有粉丝 ID：逻辑同 {@link #getFollowingIds(long)}，loader 换粉表查询。
+     */
+    public List<Long> getFollowerIds(long userId) {
+        return sortIds(setCache.getMembers(CacheKeys.userFollower(userId),
+                () -> loadFollowerIds(userId), ttlSeconds()));
+    }
+
+    // ==================== 写路径（关注/取关，DB 提交后调用 4.10，双 key 原子语义保持） ====================
+
+    /**
+     * 缓存：用户关注他人。条件双写——两条 data key 均"已加载"（set 存在或空标记存在）时
+     * MULTI 原子 SADD 双写 + 续 TTL + 解除空标记；任一侧冷 key → 双 DEL 失效让读自愈；
+     * Redis 异常 → 双 DEL；全程不抛出（失败由 Cache-Aside 读自愈兜底，关注接口不 500）。
+     */
+    public void cacheFollow(long userId, long followedUserId) {
+        String followingKey = CacheKeys.userFollowing(userId);
+        String followerKey = CacheKeys.userFollower(followedUserId);
+        try {
+            redis.executeVoid(j -> {
+                Probe probe = probePair(j, followingKey, followerKey);
+                if (!probe.followingReady() || !probe.followerReady()) {
+                    // 冷 key：不创建残缺集，双 DEL（含空标记）让读自愈回填全量
+                    invalidateKeysQuietly(j, followingKey, followerKey);
+                    return;
+                }
+                Transaction multi = j.multi();
+                if (probe.emptyFollowing) {
+                    multi.del(CacheKeys.empty(followingKey)); // 解除"无关注"空标记
+                }
+                multi.sadd(followingKey, String.valueOf(followedUserId));
+                if (probe.emptyFollower) {
+                    multi.del(CacheKeys.empty(followerKey)); // 解除"无粉丝"空标记
+                }
+                multi.sadd(followerKey, String.valueOf(userId));
+                multi.expire(followingKey, ttlSeconds());
+                multi.expire(followerKey, ttlSeconds());
+                multi.exec();
+            });
+        } catch (CacheException e) {
+            LOGGER.log(Level.WARNING, "关注缓存双写失败，双 DEL 生效让读自愈, userId=" + userId
+                    + ", followedUserId=" + followedUserId, e);
+            stats.record(CacheStats.Event.WRITE_FAIL, followingKey);
+            cacheAside.invalidate(followingKey, followerKey);
+        }
+    }
+
+    /**
+     * 缓存：用户取关。条件双写（SREM）+ 续 TTL；空标记命中或冷 key → 双 DEL 失效；
+     * Redis 异常 → 双 DEL；全程不抛出。
+     */
+    public void cacheUnfollow(long userId, long followedUserId) {
+        String followingKey = CacheKeys.userFollowing(userId);
+        String followerKey = CacheKeys.userFollower(followedUserId);
+        try {
+            redis.executeVoid(j -> {
+                Probe probe = probePair(j, followingKey, followerKey);
+                if (!probe.followingReady() || !probe.followerReady()
+                        || probe.emptyFollowing || probe.emptyFollower) {
+                    // 任一侧确认"无关系"或冷 key：失效整套（含空标记）最安全，读自愈对齐 DB
+                    invalidateKeysQuietly(j, followingKey, followerKey);
+                    return;
+                }
+                Transaction multi = j.multi();
+                multi.srem(followingKey, String.valueOf(followedUserId));
+                multi.srem(followerKey, String.valueOf(userId));
+                multi.expire(followingKey, ttlSeconds());
+                multi.expire(followerKey, ttlSeconds());
+                multi.exec();
+            });
+        } catch (CacheException e) {
+            LOGGER.log(Level.WARNING, "取关缓存双写失败，双 DEL 生效让读自愈, userId=" + userId
+                    + ", followedUserId=" + followedUserId, e);
+            stats.record(CacheStats.Event.WRITE_FAIL, followingKey);
+            cacheAside.invalidate(followingKey, followerKey);
+        }
+    }
+
+    // ==================== 内部：一条连接上的双 key 探测 ====================
+
+    /** 两条 data key 的状态快照：set 存在性 + 各自空标记。 */
+    private static final class Probe {
+        final boolean existsFollowing;
+        final boolean emptyFollowing;
+        final boolean existsFollower;
+        final boolean emptyFollower;
+
+        Probe(boolean existsFollowing, boolean emptyFollowing,
+              boolean existsFollower, boolean emptyFollower) {
+            this.existsFollowing = existsFollowing;
+            this.emptyFollowing = emptyFollowing;
+            this.existsFollower = existsFollower;
+            this.emptyFollower = emptyFollower;
+        }
+
+        /** following 侧已加载（set 存在或空标记存在），可安全增量写。 */
+        boolean followingReady() {
+            return existsFollowing || emptyFollowing;
+        }
+
+        /** follower 侧已加载（set 存在或空标记存在），可安全增量写。 */
+        boolean followerReady() {
+            return existsFollower || emptyFollower;
+        }
+    }
+
+    private Probe probePair(Jedis j, String followingKey, String followerKey) {
+        Pipeline p = j.pipelined();
+        Response<Boolean> existsFollowing = p.exists(followingKey);
+        Response<Boolean> emptyFollowing = p.exists(CacheKeys.empty(followingKey));
+        Response<Boolean> existsFollower = p.exists(followerKey);
+        Response<Boolean> emptyFollower = p.exists(CacheKeys.empty(followerKey));
+        p.sync();
+        return new Probe(existsFollowing.get(), emptyFollowing.get(),
+                existsFollower.get(), emptyFollower.get());
+    }
+
+    /** 同一连接上 DEL 双 data key 及各自空标记（best-effort，静默）。 */
+    private void invalidateKeysQuietly(Jedis j, String... dataKeys) {
+        String[] toDel = new String[dataKeys.length * 2];
+        for (int i = 0; i < dataKeys.length; i++) {
+            toDel[2 * i] = dataKeys[i];
+            toDel[2 * i + 1] = CacheKeys.empty(dataKeys[i]);
+        }
+        j.del(toDel);
+    }
+
+    // ==================== 内部：DB 装载（loader 样板参数化，异常抛 ServerException 属真实失败） ====================
+
+    /** 单参数查询（关注/粉丝列表 loaders 统一形态：userId → 结果）。 */
+    @FunctionalInterface
+    private interface DaoQuery<T> {
+        T apply(Connection conn, long userId) throws SQLException;
+    }
+
+    private List<Long> loadFollowingIds(long userId) {
+        return loadIds(userId, "关注列表", "查询关注列表失败",
+                (conn, id) -> followDao.getAllFollowedUserIds(conn, id));
+    }
+
+    private List<Long> loadFollowerIds(long userId) {
+        return loadIds(userId, "粉丝列表", "查询粉丝列表失败",
+                (conn, id) -> followDao.getFollowerUserIds(conn, id));
+    }
+
+    /** 列表 loader 样板（label 仅用于日志；errMsg 为用户可见异常文案，逐字保持既有）。 */
+    private List<Long> loadIds(long userId, String label, String errMsg, DaoQuery<List<Long>> query) {
+        try {
+            return transactionTemplate.execute(conn -> {
+                try {
+                    return query.apply(conn, userId);
+                } catch (SQLException e) {
+                    LOGGER.log(Level.SEVERE, label + " DB 查询失败, userId=" + userId, e);
+                    throw new ServerException("服务器异常，" + errMsg);
+                }
+            });
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ServerException("服务器异常，" + errMsg, e);
+        }
+    }
+
+    /** 批量 DB 兜底：userId 关注了 ids 中的哪些（同 {@link FollowDao#getFollowedIds}；DB 即真理，失败上抛）。 */
+    private Set<Long> loadFollowedIdsByUser(long userId, List<Long> ids) {
+        try {
+            return transactionTemplate.execute(conn -> {
+                try {
+                    return followDao.getFollowedIds(conn, userId, ids);
+                } catch (SQLException e) {
+                    LOGGER.log(Level.SEVERE, "批量关注状态 DB 查询失败, userId=" + userId, e);
+                    throw new ServerException("服务器异常，批量查询关注状态失败");
+                }
+            });
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ServerException("服务器异常，批量查询关注状态失败", e);
+        }
+    }
+
+    // ==================== 内部：工具 ====================
+
+    /** List 结果统一升序（全量读三路径与既有 SMEMBERS 命中路径保持一致顺序，确定性输出）。 */
+    private List<Long> sortIds(List<Long> ids) {
+        List<Long> copy = new ArrayList<>(ids);
+        Collections.sort(copy);
+        return copy;
+    }
+
+    private long ttlSeconds() {
+        return AppConfig.getFollowTtlSeconds();
+    }
+}

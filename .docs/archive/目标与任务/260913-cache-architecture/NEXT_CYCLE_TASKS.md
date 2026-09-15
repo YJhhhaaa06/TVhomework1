@@ -1,0 +1,187 @@
+# 下一周期任务清单
+
+> **已归档（2026-09-13）**：本周期为 C 方向缓存改造任务清单（一版 T1~T6 + 二期 T7~T9 共 9 个任务全部已完成，commit `refactor(cache-01)`~`refactor(cache-09)`；收尾 JUnit 323 例 + pytest all 124 全绿）。后续周期文档见 `.docs/目标与任务/`（勿改此归档文件，仅追溯用）。
+
+> 关联文档：目标与任务/NEXT_CYCLE_NEEDS.md（决策唯一源；此文件为执行细节）
+> 状态：**一版 6 任务（T1~T6）全部完成（2026-09-12）；二期 T7 观测埋点、T8 读路径加固、T9 TTL 精调全部完成（2026-09-13）**，四要素为骨架、执行方案由执行 Agent 探索细化（G5 允许回写）。
+> 工作流：每个任务开独立窗口执行；"任务清单 + 需求与痛点"为窗口间唯一交接载体。
+> 来源：260912-package-refactor 周期（B 方向 T1~T9 全部完成）归档后的新一轮规划。本周期=NEEDS 中 C 方向缓存改造，一版决策见 NEEDS 4.1~4.13（已落地），二期决策见 NEEDS 4.14（T7~T9）。
+
+***
+
+## 一、周期约定（本次继续沿用）
+
+| 编号  | 约定                   | 内容                                                                                                                                                                                                                                                                                 |
+| --- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1  | 一任务一窗口一 commit（默认期望） | 每个任务开独立窗口，默认期望 1 个 commit；因任务内部依赖需拆多 commit 或小任务合并时，在该任务详情标注；commit message 强制带任务编号（本周期 `refactor(cache-0N)`）                                                                                                                                                                                |
+| G2  | 开窗协议（输入）             | 新窗口顺序读取：① .docs/INDEX.md → ② NEXT_CYCLE_NEEDS.md（决策节必读，含 4.1~4.12、H1~H11、O-5~O-9）→ ③ 本任务清单当前任务 → ④ 常青文档（CURRENT_ARCHITECTURE.md 六.Redis 设计 / BUSINESS_FLOW.md 3.1 缓存机制等）→ ⑤ 上一个任务 commit                                                                                                                              |
+| G3  | 收窗协议（输出）             | ① **跑测试与反馈**：本周期为缓存层重制（对外行为零变化、内部实现全改），以 `mvn compile` + JUnit 为每任务验收，**相关端点 pytest 回归**（测试执行与回传依实际窗口环境安排，不指定角色）；`pytest all` 全量在收尾任务统一跑一次。② 勾选任务清单状态 → ③ 涉及架构/业务改动时同步常青文档 → ④ 提交 |
+| G4  | commit 语义闭环          | 代码改动 + 其对应常青文档更新 + 任务清单勾选进同一 commit；message 强制带任务编号                                                                                                                                                                                                                                 |
+| G5  | 超范围暂停规则              | 执行中发现需求歧义、或任务实际远超预期 → 停在第一个决策点，回写任务清单（拆/改），不得硬扛、不得擅自扩大范围                                                                                                                                                                                                           |
+| G6  | 评审与返工                | 评审以"任务验收标准 + 测试结果"为准；返工记录在任务清单；连续返工 ≥2 次 → 返回周期设计重新评估                                                                                                                                                                                             |
+| G7  | 决策唯一源                | NEXT_CYCLE_NEEDS.md 决策节为唯一决策源；窗口内发现新决策 → 回写该节并标记"已定/待定"，不许自行拍板                                                                                                                                                                                            |
+| G8  | 分支与合并                | **开分支 / 合并回 integration / 合入 master 均由用户手动执行**；任务窗口只负责本任务的代码、测试与 commit（G1），不自行创建/切换分支、不合并 |
+| G9  | DDL 备份               | 任何任务出现表结构改动，执行前必须先备份库结构与建表语句到 .docs/DBbackups/（本周期为缓存层重制，预计无 DDL；若有例外先申请）                                                                                                                                                          |
+| G10 | 脚本规范                 | 临时一次性脚本放 temp_script/，长期复用/自动化脚本放 tools/                                                                                                                                                                                                                                          |
+
+> 本周期为**缓存层重制、对外行为零变化**（用户拍板），周期约定在既往周期基础上延续；G3 相比 B 周期补充"相关端点 pytest 回归"（重制风险高于纯搬移）。
+
+***
+
+## 二、任务模板（每任务必含四要素）
+
+> 背景：任务详情采用"入口线索 + 红线边界 + 强制探索 + 验收"四要素结构（沿用既往周期）；执行 Agent 允许动态调整，但**调整前先回写任务清单/需求文档（G5/G7），再动手**。
+>
+> **红线措辞约定（延续 2026-09-06 用户修订）**：红线不做"一刀切禁止"。若执行中**发现不改本来要守的"红线"就会阻碍后续工作**，不允许硬扛、也不允许擅自开禁——**必须先向用户申请并说明理由，获得批准后才能动手**；未获批准则维持红线。
+>
+> **编号引用约定（延续 2026-09-06）**：禁裸编号引用已归档周期元素（旧 T1-T9 等）；裸编号仅指本文档内部定义的元素（本表 T1-T6 与 NEEDS 的 H1~H11 / O-5~O-9 / 4.1~4.12）。执行中发现引用歧义 → 回写清单用文字澄清，不得自行猜义。
+
+```markdown
+### T1-N 任务标题
+
+* **入口线索**：…
+* **红线边界**：（列明哪些不该动；若发现不动会阻碍后续工作 → 先向用户申请并说明理由，批准后方可动手）
+* **强制探索步骤**：动刀前先 (1) 检索… (2) 确认… (3) 若清单未覆盖 → 回写本文档再动手
+* **验收**：…
+```
+
+***
+
+## 三、任务总览（C=缓存改造：一版 T1~T6 已完成；二期 T7~T9 = 3 commit）
+
+| 编号 | 标题 | 对应域/模块 | 依赖 | 验收关键（动态） | 期望 commit 主题 | 状态 |
+| -- | -- | -- | -- | -- | -- | --- |
+| T1 | 缓存基建骨架：`com.itheima.cache` 基建包（统一 Redis 访问 + 序列化 + key 规范 + 单飞组件 + 三态/空标记/写失败 DEL 封装） | content/基建（新包） | — | 基建类落位 `com.itheima.cache`，`mvn compile` + 新增组件单测绿；业务读路径尚未切换（只增不改） | `refactor(cache-01)` | 已完成（2026-09-12：cache 基建 7 类纯新增，JUnit 新增 36 例，tv.py test junit 240 例全绿） |
+| T2 | 内容缓存重制：ContentCacheManager 内容部分拆分为内容缓存类，三态 Cache-Aside + 空标记 + 写失败 DEL | content | T1 | 内容读路径（Start/Search/Detail/Feed/Profile）全部走新缓存；H2 相关 TTL 策略按 4.12 一版（固定 TTL+简单抖动）；`mvn compile` + JUnit + 相关 pytest 绿 | `refactor(cache-02)` | 已完成（2026-09-12：ContentCache 7 方法纯新增 + 调用点全切 + 索引迁 Redis LIST + 计数失效自愈 + H3 修复；tv.py test junit 252 例全绿 + pytest all 124 passed） |
+| T3 | 评论缓存重制：评论树独立 TTL + 空标记 + 业务显式失效（内容删除级联删评论 key） | content/comment | T1/T2 | 评论读/写路径走新缓存；评论 miss ≠ 没有评论（三态）；`mvn compile` + JUnit + 相关 pytest 绿 | `refactor(cache-03)` | 已完成（2026-09-12：CommentCache 9 方法新增管理 + 读写路径全切 + 失效式 + 删除/下架级联失效 + H1 评论竞态消除 + H7 启动少一轮 N+1；tv.py test junit 261 例全绿 + pytest all 124 passed） |
+| T4 | 点赞缓存重制：LikeCacheService 重写为计数/成员分离 + 单飞 + 写失败 DEL | like | T1 | 点赞读/写路径走新缓存；清除 `__placeholder__` 占位符（H11）；`mvn compile` + JUnit + 相关 pytest 绿 | `refactor(cache-04)` | 已完成（2026-09-12：LikeCacheService 重写为计数/成员分离+三态读+统一单飞+降级，占位符清零，LikeService 读路径委托；tv.py test junit 264 例全绿 + pytest all 124 passed） |
+| T5 | 关注关系入缓存：user:following / user:follower 双 Set + MULTI 双写 + 失败双 DEL | follow | T1 | 关注读（isFollowing/列表）与写（关注/取关）路径走新缓存；`mvn compile` + JUnit + 相关 pytest 绿 | `refactor(cache-05)` | 已完成（2026-09-12：FollowCache 双 Set 三态读+条件 MULTI 双写+失败双 DEL+降级新增，读写路径全切，配置 cache.follow.ttlMinutes；tv.py test junit 293 例全绿 + pytest all 124 passed） |
+| T6 | 收尾：旧缓存代码残留清理 + pytest all 全量回归 + 常青文档同步 + 覆盖率地图 | — | T1~T5 | 无旧缓存实现残留（ContentCacheManager/LikeCacheService 旧实现移除）；`pytest all` 全绿；CURRENT_ARCHITECTURE.md（六.Redis 设计）/ BUSINESS_FLOW.md（3.1 缓存机制）同步；覆盖率地图 rerun 无回归 | `refactor(cache-06)` | 已完成（2026-09-12：旧 ContentCacheManager 整体移除 + 点赞失效迁入 LikeService.deleteContentLike + 死配置删除 + 定时刷新去留拍板；mvn clean test 288 例全绿无残留 + pytest all 124 passed） |
+| T7 | 二期·观测埋点：`CacheStats` 统计组件（六类事件计数 + key 前缀分域 + 惰性日志输出）+ CacheAside 自动挂点 + like/follow 原生 Set 路径手动打点 | 基建/like/follow | T1~T6（一版完成态） | 各域命中率/穿透/降级/写失败计数正确（JUnit）；惰性日志按阈值输出摘要；缓存读写行为零变化（既有 JUnit + pytest all 全绿） | `refactor(cache-07)` | 已完成（2026-09-12：CacheStats 六类事件 AtomicLong 计数/5 域分桶（CacheKeys.domainOf 长前缀优先）/惰性日志 N=1000；CacheAside 自动挂点（三态/降级/LOAD/写失败）+ like/follow Set 路径手动打点；JUnit 301 例全绿（surefire 297 + pool-test 4）+ pytest all 124 passed） |
+| T8 | 二期·读路径加固：CacheAside 单 key 读 pipeline 化（EXISTS+GET 一趟）+ 批量读接口 + getRecommendByFilter 批量化 + KEYS→SCAN | 基建/content | T7（软依赖：用观测对比前后效果） | /start 推荐路径 Redis 往返次数显著下降；SCAN 替换后索引操作行为不变；批量三态语义与单 key 一致；JUnit + pytest all 全绿 | `refactor(cache-08)` | 已完成（2026-09-12：CacheAside read/getInternal pipeline 化（probe 一趟往返）+ getBatch 批量接口（三态与单 key 一致、miss 逐个单飞回填、脏 JSON/整批降级逐 key 直接 loader）；ContentCache.getContentsBatch + 推荐/Feed/Profile 批量接入 + 索引 forEachIndexKey SCAN（removeContent/rebuildIndexes 两处）；tv.py test junit 312 例全绿（surefire 308 + pool 4）+ pytest all 124 passed） |
+| T9 | 二期·O-8 TTL 精调：读命中顺带续期（挂 T8 pipeline 读路径）+ 分域 TTL 取值（依据 T7 观测数据） | 基建/各域配置 | T7/T8 | 热点 key 命中率提升（T7 数据前后对比）；分域 TTL 配置生效；空标记续期与否执行时拍板（倾向不续期）；JUnit + pytest all 全绿 | `refactor(cache-09)` | 已完成（2026-09-13：CacheAside get/getBatch 读命中续期（同一 pipeline 追加 EXPIRE，原 TTL 抖动，空标记不续）+ Like/Follow 原生 Set 读路径续期；分域 TTL 取值 content 30/comment 10/like 15/follow 30（双轮轻量压测 CacheStats 摘要依据）；tv.py test junit 323 例全绿 + pytest all 124 passed） |
+
+> 状态取值：草稿 / 待执行 / 执行中 / 已完成 / 搁置。
+>
+> **重制顺序理由（依赖方向）**：T1 基建先行（统一 Redis 访问/序列化/单飞/三态/降级是全部重制的地基，纯新增零业务改动最安全）；T2 内容 → T3 评论 → T4 点赞 → T5 关注按"读路径切换"递进（评论树构建原在 ContentCacheManager，随 T3 迁出；点赞/关注相互独立可并行窗口）；T6 收尾清残留 + 全量回归。
+>
+> **二期顺序理由（NEEDS 4.14）**：T7 观测埋点先行——T8 加固效果与 T9 TTL 取参都需要命中率数据（"测量→优化→再测量"闭环）；T8 读路径加固独立于 T7 但排其后（软依赖：用 T7 计数对比前后往返/命中变化）；T9 依赖 T7 数据 + T8 pipeline 读路径挂续期点。
+>
+> **二期未排（留池，NEEDS 五）**：O-5 初始化选择性加载、O-9 关注/粉丝计数入缓存——跑完二期再评估；O-7 搜索维持 FULLTEXT 直查（已拍板不做）。
+
+***
+
+## 四、任务详情
+
+> **共通注（所有重制任务通用）**：
+> - 遵循 NEEDS 4.1~4.13：统一 Redis；三态 Cache-Aside（miss/hit-empty/hit-data）；空标记独立 key + 短 TTL；**写失败=失效（DEL）+ 读自愈**；统一单飞组件（ConcurrentHashMap+FutureTask，失败必须 remove）；**基建归属 4.13**——技术无关组件（统一 Redis 访问/序列化/key 规范/单飞/三态/空标记/写失败 DEL 封装）新建于 `com.itheima.cache` 基建包，业务缓存类放各自业务域（内容/评论→content、点赞→like、关注→follow）；
+> - **不引入 MQ**；Redis 写失败不阻塞主流程（4.2/4.7）；
+> - key 命名遵循统一规范（`content:{id}`、`content:comments:{id}`、`empty:...`、`user:following:{id}`、`content:likeCount:{id}` 等，T1 在 `com.itheima.cache` 定稿）；
+> - 序列化统一（JSON 字符串存 value，T1 定稿）；
+> - 单飞只对单实例有效（当前单 Tomcat 够用，不过度设计，4.9）；
+> - **本清单四要素为骨架，执行方案由执行 Agent 探索细化**（G5 允许回写）。
+
+### T1 缓存基建骨架（方向 C）
+
+* **入口线索**：新建 `com.itheima.cache` 基建包（4.13 已拍板，不再"执行时定"）：① 统一 Redis 访问封装（基于 [MyRedisPool.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/util/MyRedisPool.java)）；② JSON 序列化工具；③ 统一 key 命名/生成规范；④ 单飞组件（4.9 ConcurrentHashMap+FutureTask，失败 remove）；⑤ 三态读取 + 空标记写入封装（4.3/4.4，空标记独立 key + 短 TTL）；⑥ 写失败=DEL 降级封装（4.2）。
+* **红线边界**：不改任何业务读路径（本任务**只增不改**）；不改 MyRedisPool 现有对外方法签名（他处仍在用）；不引入 Spring/MyBatis。**若发现不动红线就阻碍基建（如需要改 MyRedisPool 才能封装）→ 先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
+* **强制探索步骤**：(1) 读 [ContentCacheManager.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ContentCacheManager.java) 与 [LikeCacheService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/like/service/LikeCacheService.java) 摸清现有 Redis/序列化用法；(2) 确认 MyRedisPool 线程安全用法（getJedis try-with-resources）；(3) 若 key/TTL 规范需新增决策 → 回写 NEEDS 再动手。
+* **验收**：基建类全部落位；`mvn compile` 通过；新增基建组件有 JUnit 单测覆盖（单飞成功/失败 remove、三态读、空标记 TTL、DEL 降级）；现有测试全绿（本任务无业务切换）。
+
+### T2 内容缓存重制（方向 C）
+
+* **入口线索**：[ContentCacheManager.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ContentCacheManager.java)（666 行 god class，本任务拆出**内容缓存**职责：contentCache/contentTimestamps/类型分区索引/recommendList → 迁入新内容缓存类，用 T1 基建实现三态 + 空标记 + 写失败 DEL）；切换内容读路径：[StartController.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/controller/StartController.java)、[ContentService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ContentService.java)（search/getContentDetailVO）、[FeedService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/FeedService.java)、[ProfileService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ProfileService.java)。**执行方案已细化（见下"T2 执行回写"，2026-09-12 完成）**。
+* **红线边界**：不改内容业务逻辑与 `@WebServlet` URL；评论缓存（commentCache/评论树）本任务**不动**（T3 处理）；不定时刷新（O-6 二期）；不引入滑动续期（O-8 二期，一版固定 TTL+简单抖动）。**若发现不动上述红线就阻碍重制 → 先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
+* **强制探索步骤**：(1) `rg 'getContentFromCache|backfillContent|evictContent|getRecommendByFilter|updateCacheAfterAdd|refreshContent|removeContent' src/` 全量列出调用方；(2) 确认定时刷新 `startScheduler` 的去留对一版的影响（先保留 or 先停，执行时评估，倾向保留至 T6 决定）；(3) 若 T2 范围需碰评论 → 停决策点回写。
+* **验收**：内容读路径全部走新缓存实现；旧 ContentCacheManager 中内容相关方法调用清零（评论部分残留可暂留）；`mvn compile` + JUnit 全绿 + 内容相关 pytest（/start /search /content/detail /feed /profile）回归通过。
+
+> **T2 执行回写（2026-09-12，G5/G7）**：① 新增 `com.itheima.content.service.ContentCache`（400 行），内容详情走 T1 CacheAside 三态/空标记/单飞/写失败 DEL，类型分区索引迁为 Redis LIST `content:index:{t}:{c}`（NEEDS 4.1 方案拍板，见 NEEDS 0.4），recommendList 死代码废弃不迁移；② 计数（点赞/评论数/评论区开关）变更 = 失效 content key 读自愈（DB 列源真理），内容新增写入移出 DB 事务（H3）；③ **验收"调用清零"实现口径**：内容读方法（getContentFromCache/getRecommendByFilter/toContentVO/toDetailVO 等）全清零；写方法按"遗产副作用"保留并标注 T3/T4 清理——`updateCacheAfterAdd` 保留为评论树空列表种子（因需 Connection 仍在事务内，仅内存副作用、对读路径无影响）、`removeContent`/`refreshContent` 保留用于删/下架清内存评论树与 unhide 恢复评论树；④ 测试：新增 ContentCacheTest 12 例，ContentService/Feed/Profile/Like/Comment 五测试改造随新调用点（JUnit 252 全绿、pytest all 124 passed）。
+
+### T3 评论缓存重制（方向 C）
+
+* **入口线索**：将 [ContentCacheManager.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ContentCacheManager.java) 评论部分（commentCache/评论树构建/collectCommentIds/addCommentToCache/removeCommentFromCache/updateCommentLikeCount 等）迁入评论缓存类；用 T1 基建实现**独立 TTL + 空标记 + 业务显式失效**（4.5：内容删除级联删评论 key）；切换评论读/写路径：[CommentService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/comment/service/CommentService.java)（addComment/删除）、[ContentService.getCommentsForContent](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ContentService.java#L111-L130)。
+* **红线边界**：不改评论业务逻辑（楼中楼归一化/软删规则/开关门禁）；评论 miss 语义按三态实现（hit-empty 返回空，miss 查 DB 回填，**不得把 miss 当"没有评论"**）；不碰点赞缓存（T4）。**若发现不动上述红线就阻碍重制 → 先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
+* **强制探索步骤**：(1) `rg 'getCommentTree|addCommentToCache|removeCommentFromCache|updateCommentLikeCount|loadCommentTree|buildCommentTree' src/` 列出全部调用方；(2) 确认"读评论前先验证 content 存在"的落点（4.5）；(3) 确认删除内容时评论 key 级联失效的调用点（ContentService.deleteContent / removeContent）。
+* **验收**：评论读/写路径走新缓存；三态正确（无评论=hit-empty 空标记，有评论=hit-data，未加载=miss 回填）；删除内容级联失效验证；`mvn compile` + JUnit 全绿 + 评论相关 pytest（/comment/show /content/detail 评论区）回归通过。
+
+> **T3 执行回写（2026-09-12，G5/G7）**：① 新增 `com.itheima.content.service.CommentCache`（173 行），评论树走 T1 CacheAside 三态/空标记 60s/**独立 TTL**（新增配置 `cache.comment.ttlMinutes=10`）/单飞/写失败 DEL，key 用既有 `CacheKeys.contentComments`；② **评论增/删/点赞 = 失效评论树 key 读自愈**（不做旧内存树原地增删，消除 H1 并发竞态；buildCommentTree 归一化逻辑原样迁入，loader 无评论返回 null → markEmpty 写空标记 → hit-empty）；评论点赞经 `CommentDao.getContentIdByCommentId`（新增轻查询）定位所属内容后失效（4.1.2）；③ 切读写路径：ContentService.getCommentsForContent → commentCache（并新增 **dto==null 短路**=读评论前先确认 content 存在，防隐藏内容评论回填泄漏，4.5）；CommentService addComment/deleteComment、LikeService 评论点赞 → 失效式；④ 级联失效：deleteContent/hideContent 追加 `commentCache.invalidateComments`；unhide 无需额外动作；⑤ ContentCacheManager 删除评论字段与全部评论方法（getCommentTree/collectCommentIds/loadCommentTree/buildCommentTree/addCommentToCache/removeCommentFromCache/updateCommentLikeCount/updateCacheAfterAdd 等），init 不再全量加载评论（缓解 H7 启动 N+1）；content 内存残留（contentCache/索引/推荐列表/定时刷新）与 removeContent/refreshContent（旧点赞 key 清理）按计划保留至 T4/T6；CommentService/LikeService 构造移除 ContentCacheManager 依赖；⑥ 测试：新增 CommentCacheTest 11 例 + ContentServiceTest 补 dto==null 短路用例，ContentCacheManagerLifecycleTest 评论相关 3 例迁出（9→6），tv.py test junit 261 例全绿 + pytest all 124 passed。
+
+### T4 点赞缓存重制（方向 C）
+
+* **入口线索**：重写 [LikeCacheService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/like/service/LikeCacheService.java) 为**计数/成员分离**（4.6：`content:likeCount:{id}` int 高频读 + `content:likeSet:{id}` set 低频成员查询）+ 单飞（4.9）+ 写失败 DEL（4.2）；**清除 `__placeholder__` hack（H11）**；切换读写路径：[LikeService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/like/service/LikeService.java)、[ContentStatusFiller.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ContentStatusFiller.java)（批量 isLiked）、ContentCacheManager.updateContentLikeCount（若 T2 已迁，改指向新点赞缓存）。
+* **红线边界**：不改点赞/取消/重复校验业务逻辑；Redis 写失败不得让点赞接口 500（4.2，H5 修复）；不改评论点赞的计数归属（评论点赞计数与内容计数分开）。**若发现不动上述红线就阻碍重制 → 先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
+* **强制探索步骤**：(1) `rg 'LikeCacheService|likeContent|isContentLiked|getContentLikeCount|batchIsContentLiked|syncContentLikers|updateContentLikeCount' src/` 列出全部调用方；(2) 确认点赞数在 ContentCacheDTO/ContentVO 中的读取点（缓存里存的是计数还是集合）；(3) 确认 deleteContentLike 的级联删除调用点（内容删除时清点赞 key）。
+* **验收**：点赞读/写路径走新缓存（计数/成员分离）；`__placeholder__` 清除且无残留；Redis 挂时点赞接口不 500（降级验证）；`mvn compile` + JUnit 全绿 + 点赞相关 pytest（/like/* 内容/评论点赞、内容详情 isLiked）回归通过。
+
+> **T4 执行回写（2026-09-12，G5/G7）**：① 重写 `com.itheima.like.service.LikeCacheService`（558 行）为**计数/成员分离**：`content:likeCount:{id}`（String int，走 T1 CacheAside，loader=新增 DAO `countByContentId/countByCommentId` COUNT 查询，避免为计数加载全量成员）+ `content:likeSet:{id}`（原生 Set，RedisAccess+SingleFlight 三态读：空标记→false / set 存在→SISMEMBER / miss→单飞回填 SADD-union+EXPIRE，空集→`markEmpty` 空标记替代失效的 `__placeholder__`（H11））；评论同理（comment:likeCount/comment:likeSet）；② **单飞拉满（H6）**：回填点（单条+批量）均经统一 SingleFlight 包住 DB 装载，key=set 数据 key；③ **写路径=条件写 + 失败失效（4.2/4.6）**：like=清 `empty:` 标记 + 仅当 key 存在才 INCR/SADD（冷 key 不创建残缺缓存，防"半套成员/计数"被命中，交给读回填 DB 真理）、unlike=仅当存在才 DECR/SREM；Redis 异常→`cacheAside.invalidate(count,set)` 双失效 + 记日志，**点赞接口不 500（H5）**；④ 批量 = pipeline（exists empty + exists set + sismember 一趟）→ DB `findLikedContentIds` 兜底 + 逐个单飞回填；⑤ **LikeService 读方法（isContentLiked/getContentLikeCount/isCommentLiked/getCommentLikeCount/batch×2）改纯委托**，回填/降级逻辑内聚缓存类（与 T2 ContentCache/T3 CommentCache 同构），写方法与事务边界零改动；`syncContentLikers/syncCommentLikers` 删除（H11 载体清零）；⑥ ContentCacheManager 删死代码 `updateContentLikeCount`（无生产调用者），`evictContent→deleteContentLike` 保留（新实现=失效 count+set+empty 三 key）；新增配置 `cache.like.ttlMinutes=10`（AppConfig.getLikeTtlSeconds）；⑦ 测试：LikeCacheServiceTest 重写 20 例（三态/空标记/单飞回填空集与非空/写条件/写失败失效/降级/批量/delete），LikeServiceTest 读路径改委托断言（14→16），ContentCacheManagerLifecycleTest 删 1 例（6→5）；tv.py test junit 264 例全绿 + pytest all 124 passed；常青文档同步（CURRENT_ARCHITECTURE 6.2/9.2/10.1 + BUSINESS_FLOW 4.1.1）+ 任务清单 T4 勾选；subagent review 无必修项（建议项：防御性分支仅兜底 NPE 已加注释说明）。
+
+### T5 关注关系入缓存（方向 C）
+
+* **入口线索**：新增关注缓存类（NEEDS 4.10：`user:following:{userId}` / `user:follower:{userId}` 双 Set，MULTI 双写，失败双 DEL）；切换读写路径：[FollowDao.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/follow/dao/FollowDao.java) 的读取方（[FollowService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/follow/service/FollowService.java) 关注/取关、[ContentStatusFiller.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ContentStatusFiller.java) isFollowing 批量、[FeedService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/FeedService.java) 关注列表、[ProfileService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ProfileService.java) 粉丝/关注数暂不动 O-9）。
+* **红线边界**：不改关注/取关业务逻辑；只缓存"关系"本身，**不做 feed 聚合缓存**（D 方向边界）；关注数/粉丝数计数暂不入缓存（O-9 二期）；失败降级按"写失败双 DEL"（4.10）。**若发现不动上述红线就阻碍重制 → 先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
+* **强制探索步骤**：(1) `rg 'FollowDao|getFollowedIds|getAllFollowedUserIds|isFollowing|addFollow|deleteFollow|getFollowerUserIds' src/` 列出全部调用方；(2) 确认关注/取关的事务边界（缓存双写放在 DB 提交后）；(3) 确认 MULTI 事务在单连接上如何与现有事务模板配合（不跨连接）。
+* **验收**：关注关系读/写路径走新缓存（双 Set + MULTI + 失败双 DEL）；关注/取关后关系即时生效；`mvn compile` + JUnit 全绿 + 关注相关 pytest（/follow/*、内容卡片 isFollowed）回归通过。
+
+> **T5 执行回写（2026-09-12，G5/G7）**：① 新增 `com.itheima.follow.service.FollowCache`（484 行）：`user:following`/`user:follower` 双 Set；读路径四方法（isFollowing 单条三态 / batchIsFollowing 同一 set 一趟 pipeline + DB getFollowedIds 兜底 + best-effort 单飞回填 / getFollowingIds / getFollowerIds SMEMBERS·空标记·miss 回填），列表读统一升序（miss/降级与 SMEMBERS 命中路径一致）；写路径 cacheFollow/cacheUnfollow = **条件 MULTI 双写**（两 data key 均"已加载"（set 存在或空标记存在）→ MULTI 原子 SADD/SREM 双写 + EXPIRE + 解除空标记；任一侧冷 key 或空标记命中 → 整对双 DEL（含空标记）失效让读自愈，**不创建冷 key 残缺集**，与 T4 条件写先例同构）；Redis 异常 → 双 DEL，全程不抛出（4.10/4.2）；② 空标记回填带 **set 存在守卫**（`writeSet` 空分支先 `exists` 再 setex，防并发下覆盖刚 SADD 的新关注 → 新关系最长 60s 不可见，subagent review 必修②）；③ 新增配置 `cache.follow.ttlMinutes=10` + `AppConfig.getFollowTtlSeconds`；④ 切读写路径：FollowService 关注/取关 DB 事务提交后调 cacheFollow/cacheUnfollow，getFollowingList/getFollowerList 委托 getFollowingIds/getFollowerIds，列表 isFollowed 走 batchIsFollowing（**事务内 isFollowing 前置校验保留 DB 直读**，业务校验不动）；ContentStatusFiller fillFollowStatus（批量/单条）走 batchIsFollowing/isFollowing；FeedService.getFeed 关注列表走 getFollowingIds（事务外）；ProfileService isFollowed 走 isFollowing（事务外，followCount/followerCount 不动 O-9）；⑤ FollowDao 仅剩 FollowService 业务校验 + FollowCache loader 使用（rg 核验无残留）；⑥ 测试：新增 FollowCacheTest 26 例（三态/空标记守卫/批量/列表排序/条件 MULTI/失败双 DEL/降级/回填 best-effort），FollowServiceTest 缓存联动断言改造（15 例），FeedServiceTest/ProfileServiceTest 构造与读断言随调用点（ProfileServiceTest 12 例，删 follow SQL 残留 1 例）；tv.py test junit 293 例全绿 + pytest all 124 passed；⑦ 常青文档同步：CURRENT_ARCHITECTURE（follow 域表 / 六.6.2 启用列表 / 九.9.2 / 十.10.1/10.2）+ BUSINESS_FLOW（3.1 关注缓存段 + 4.3.1 步骤 7 缓存双写）；subagent review 无必修残留（必修①②已修，建议项 ③ 同对并发写序竞态=边缘定义记录不修）。
+
+### T6 收尾（方向 C）
+
+* **入口线索**：全仓库巡检 + 回归验证 + 文档同步。基于 T1~T5 完成态。
+* **红线边界**：不引入任何新功能改动；只做残留清理、验证与文档。**若发现必须改缺陷才能满足验收（如旧缓存实现残留必须补代码才能清零）→ 先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）**；发现"要改但未排期"的内容 → **登记入 `目标与任务/UNPLANNED_ISSUES.md`**，不在本周期硬做。
+* **强制探索步骤**：(1) `rg 'ContentCacheManager|LikeCacheService|contentCache|commentCache|recommendList|typeCategoryIndex|__placeholder__' src/` 确认无旧缓存实现残留；(2) 校验 @WebServlet URL / web.xml / IoC 扫描原样；(3) 确认 `startScheduler` 定时刷新去留最终决定（O-6 二期 or 一版保留，记录到 NEEDS）。
+* **验收**：无旧缓存实现残留；`pytest all` 全量回归全绿；CURRENT_ARCHITECTURE.md（六.Redis 设计）与 BUSINESS_FLOW.md（3.1 缓存机制）同步；覆盖率地图 rerun 无回归；NEEDS 中已拍板决策与实现一致。
+
+> **T6 执行回写（2026-09-12，G5/G7）**：① **残留确认**：旧残留=ContentCacheManager.java（内存 HashMap/索引/推荐列表/定时刷新，T2/T3 迁出后仍被 ContentService 以"遗产副作用"调用 removeContent/refreshContent）+ ContentCacheManagerLifecycleTest（5 例）+ 死配置 `AppConfig.getContentRefreshMinutes`/`cache.content.refreshMinutes`；ContentCache/CommentCache/重写后 LikeCacheService/FollowCache 均为新实现，`__placeholder__` 清零无残留；@WebServlet 14 URL / web.xml（4 filter）/ IoC 扫描（`ClassScanner.scan("com.itheima")` 自动）原样；② **改造**：删除 ContentCacheManager 类；ContentService 删除 3 处旧调用（deleteContent/hideContent 的 removeContent、unhideContent 的 refreshContent），其"旧格式点赞 key 清理"副作用迁入 `LikeService.deleteContentLike`（新增委托，DELETE/hide 后显式失效 count+set+empty 三 key，T4 设计保留、对外行为零变化）；删除 LifecycleTest；ContentServiceTest 断言随新路径（likeService.deleteContentLike 等）；删除死配置；③ **O-6 拍板=一版移除定时全量刷新**（随旧类删除），一致性由启动全量重建+索引懒重建+业务显式失效+Cache-Aside 读自愈承担，记录到 NEEDS；④ **验证**：`mvn clean test` 干净重建无残留字节码（默认 surefire 284 + pool-test 4 = 288 例全绿）+ `pytest all` 124 passed；⑤ **文档同步**：CURRENT_ARCHITECTURE（4.3 content 域去残留/6.2 定时刷新移除说明/9.2 删 LifecycleTest 行 合计 288/12 更新日志 2.9）+ BUSINESS_FLOW（3.1 关键语义/3.8/3.9/3.10 缓存同步点 + 问题4 P5 已消化注）+ NEEDS（O-6 已拍板、P5 已消化、U-07 观察结论、七决策记录、变更记录 0.5）+ 本清单 T6 勾选 0.6；⑥ 覆盖率地图 rerun 无回归。
+
+***
+
+## 四·二、二期任务详情（T7~T9，决策源 NEEDS 4.14）
+
+> **共通注（二期任务通用）**：
+> - 决策唯一源为 NEEDS 4.14；二期主题="测量→优化→再测量"闭环，**对外行为零变化**延续（推荐 shuffle 语义、URL、pytest 断言均不变）；
+> - 统计/加固只做加速与观测，**不得改变缓存语义**（三态判断顺序、空标记、写失败 DEL、降级路径一概不动语义）；
+> - 红线措辞约定与编号引用约定沿用（见上文"任务模板"节）。
+
+### T7 二期·观测埋点：CacheStats 统计组件（方向 C 二期）
+
+* **入口线索**：新增 `com.itheima.cache.CacheStats`（NEEDS 4.14）：① 六类事件计数（hitData / hitEmpty / miss / loadCount / degradeCount / writeFailCount），AtomicLong 无锁；② 按数据 key 前缀分域分桶，域解析收敛到 `CacheKeys.domainOf(String dataKey)`（key 生成与解析同源，注意 `content:{id}` 与 `content:comments:{id}` 前缀重叠的解析规则）；③ 惰性日志输出——每 N 次访问顺带输出各域摘要（不引入定时器、不新增端点，N 与日志格式执行时定稿）。挂点：[CacheAside.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/cache/CacheAside.java) 三态读（getInternal/read）/降级/写失败处自动打（覆盖内容/评论/点赞计数 JSON 路径）；[LikeCacheService.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/like/service/LikeCacheService.java) 与 [FollowCache.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/follow/service/FollowCache.java) 原生 Set 三态读分支（含批量 pipeline 路径）手动打点。
+* **红线边界**：统计不得影响主链路（打点自身异常吞掉记日志）；不引入定时器/admin 端点；不改任何缓存读写语义、TTL、key 命名；不动 SingleFlight（loadCount 在 CacheAside 的 loader 回调处打）。**若发现不动红线就阻碍埋点 → 先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
+* **强制探索步骤**：(1) `rg 'cacheAside\.|CacheKeys\.' src/main/java/com/itheima/like src/main/java/com/itheima/follow` 列出原生 Set 三态读全部分支（单条/批量/列表），形成打点位置清单；(2) 确认域解析规则覆盖全部 key 形态（含 `empty:` 前缀与 `content:index:`），歧义 → 回写 NEEDS 4.14 再动手；(3) 确认惰性输出阈值 N 与摘要格式（对齐 LogUtil 既有日志风格）。
+* **验收**：各域六类计数正确（新增 CacheStatsTest：域解析/三态计数/降级计数/写失败计数/惰性输出触发）；既有缓存读写行为零变化（tv.py test junit 全绿 + pytest all 全绿）；惰性日志实际输出一例（测试或本地启动验证）；常青文档同步（CURRENT_ARCHITECTURE 六.Redis 设计增观测小节）。
+
+> **T7 执行回写（2026-09-12，G5/G7）**：① 新增 `com.itheima.cache.CacheStats`（~130 行，@Component 无外部依赖）：六类事件枚举 `Event{HIT_DATA,HIT_EMPTY,MISS,LOAD,DEGRADE,WRITE_FAIL}`，固定 `AtomicLong[5][6]` 计数数组（无锁无扩容，热路径零分配）+ 惰性日志**每 N=1000 次记录输出一次各域摘要**（`DEFAULT_LOG_INTERVAL=1000`，包级构造 `CacheStats(int)` 供测试小 N 触发；INFO 单行 `CacheStats 摘要: total=.. content{hitData=.. …}`，不引入定时器/端点）；`record()` 整体 try-catch 吞掉打点异常保主链路；② 新增 `com.itheima.cache.CacheDomain` 枚举（CONTENT/COMMENT/LIKE/FOLLOW/OTHER）+ `CacheKeys.domainOf(String)` 域解析（key 生成与解析同源）：长前缀优先（content:index/content:like/content:comments 先于通用 content:），`empty:` 解包到底层数据 key 再归域，user:*→FOLLOW、未知/null→OTHER（content:index 归 CONTENT 域，执行定稿）；③ **CacheAside 自动挂点**（构造 +1 参 stats，@InjectConstructor 注入）：`read`/`getInternal` 三态打点、catch 打 DEGRADE、`invokeLoader` 入口打 LOAD（单飞 loader 与降级 loader 两路径统一覆盖）、`writeOrInvalidate`/`markEmpty`/`deleteQuietly` catch 打 WRITE_FAIL（显式失效失败也算写失败）；④ **LikeCacheService 手动打点**（+1 参）：isContentLiked/isCommentLiked 三态分支、批量管道按 id 逐条打、DB 兜底 singleFlight 回填打 LOAD、写方法（like/unlike×2 + 成员回填）catch 打 WRITE_FAIL（补全 like 域写失败口径）；⑤ **FollowCache 手动打点**（+1 参）：isFollowing/getSetMembers 三态分支、batchIsFollowing **按数据 key 一趟 pipeline 记一次**（与 like 批量"每 id 一 key 逐条记"规则一致：每 (数据 key, 决策) 记一次）、回填打 LOAD、写方法（cacheFollow/unfollow + writeSet 两分支）catch 打 WRITE_FAIL；⑥ **测试**：新增 CacheStatsTest 8 例（域解析全形态/前缀重叠优先级/计数分桶/惰性输出触发与服务格式/异常吞掉），CacheAsideTest +3 例接线（get 三态/LOAD/降级计数），LikeCacheServiceTest +1 例（空标记→LIKE HIT_EMPTY）、FollowCacheTest +1 例（miss+回填→FOLLOW MISS+LOAD）；3 处构造位点同步 +CacheStats；既有断言原样不动；⑦ 无缓存读写语义/Redis 命令/TTL/key 变更（行为零变化）；⑧ 文档同步：CURRENT_ARCHITECTURE（4.2 cache 包表 + 六.6.3 观测小节）+ NEEDS（4.14 执行定稿注记）；tv.py test junit 全绿 + pytest all 124 passed。
+
+### T8 二期·读路径加固：pipeline 化 + 批量读 + SCAN（方向 C 二期）
+
+* **入口线索**：① [CacheAside.getInternal](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/cache/CacheAside.java#L94-L118) 单 key 读 pipeline 化（EXISTS 空标记 + GET 合一趟往返，`read()` 同步改造）；② 新增批量读接口（pipeline/MGET 批量拉多条 + 批量空标记 EXISTS，三态语义与单 key 完全一致，miss 项逐个单飞回填）；③ [ContentCache.getRecommendByFilter](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ContentCache.java#L90-L113) 逐条 `getContent` 改批量读（12 条 ≈ 24+ 往返 → 一趟 pipeline + 少量 miss 回填）；④ `KEYS "content:index:*"` → SCAN（[removeContent](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/content/service/ContentCache.java#L139-L153) 与 rebuildIndexes 两处）。
+* **红线边界**：对外行为零变化（推荐 shuffle 语义与结果分布不变、`LRANGE 0 -1` 全量读保留、索引 LREM+LPUSH 行为不变）；批量三态判断顺序与单 key 一致（先空标记后数据 key）；不改 key 命名与 TTL 语义。**若发现不动红线就阻碍加固 → 先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
+* **强制探索步骤**：(1) `rg 'cacheAside\.get\(' src/` 列出全部可批量化调用点（/start、Profile 分页、Feed），评估哪些值得切批量（高频多 key 场景才切）；(2) 确认 Jedis Pipeline 批量 EXISTS+GET 的 Response 处理与异常语义（部分失败如何降级）；(3) 确认 SCAN 替换的行为等价性（KEYS 与 SCAN 结果集在并发写下的差异是否影响 LREM 范围）；(4) 若批量接口设计与既有单飞回填时序有语义差异 → 回写本文档定夺。
+* **验收**：/start 推荐路径 Redis 往返次数显著下降（T7 观测数据前后对比或单测断言往返数）；SCAN 替换后删除/重建索引行为不变（JUnit 覆盖）；批量读三态语义正确（单测：混合 hit/hit-empty/miss 场景）；tv.py test junit 全绿 + pytest all 全绿；常青文档同步。
+
+> **T8 执行回写（2026-09-12，G5/G7）**：① **单 key 读 pipeline 化**：[CacheAside.java](file:///d:/javaproject/VideoPlatform/TVhomework1/src/main/java/com/itheima/cache/CacheAside.java) `read`/`getInternal` 的 EXISTS 空标记 + GET 数据 key 合并为一趟 pipeline（内部 `probe(dataKey)` 复用），三态/空标记/单飞/降级/统计逐条不变；② **新增批量读接口** `CacheAside.getBatch(List<String>, Class<T>, Function<String,T>, long)` → `Map<String,T>`——一趟 pipeline 批量 EXISTS+GET，三态判断与单 key 完全一致（先空标记后数据 key），miss 项逐个单飞回填（LOAD+写回/空标记），统计按 (key, 决策) 打点（T7 口径）；**单个 key 脏 JSON 或整批 Redis 异常 → 该 key/全部 key DEGRADE + 直接 loader 不写回**（对齐单 key 降级语义，防拖垮整批）；空/Null 入参返空 map 零 Redis 调用；调用方保证 key 无重复；**不新增 TypeReference 变体**（CommentCache 单 key 无批量需求，YAGNI）；③ **内容批量接入** `ContentCache.getContentsBatch(List<Long>)`（id→DTO，null=hit-empty/DB 无数据透传）：`getRecommendByFilter`（/start 12 条 ≈24+ 往返 → 一趟 pipeline + 少量 miss 回填；整批不 chunk，结果按 shuffle 原序跳过 null 收至 limit，语义不变）+ **Feed/Profile 页循环一并切批量读**（强制探索 ① 评估结论：pageSize 级高频多 key，同型迁移，结果集/顺序/空跳不变）；④ **KEYS→SCAN**：`ContentCache.forEachIndexKey`（`scan(cursor, ScanParams.match("content:index:*").count(100))` 游标收敛于 "0"）替换 `KEYS "content:index:*"`（removeContent 的 LREM、rebuildIndexes 的 DEL；LREM/DEL 幂等，SCAN 重复 key 无害）；`ensureIndex` 单 key exists 探测不动，`LRANGE 0 -1` 全量读保留；⑤ **测试**：CacheAsideTest 改造 19 → 26 例（单 key 用例全部改 pipeline 桩 + 往返断言 `pipelined()` 恰 1 次/`jedis.get|exists` 零调用 + 批量 7 例：混合三态/全空标记跳过 loader/miss 空标记回填/整批降级/脏 JSON 单 key 降级/空入参/批量统计打点），ContentCacheTest 12 → 16 例（getContentsBatch 映射与空值透传/批量跳过 null 截断 limit/SCAN 多游标收敛 + keys 桩改 scan），FeedServiceTest/ProfileServiceTest mock 随 getContentsBatch 调用点（用例数不变）；`tv.py test junit` 312 例全绿（surefire 308 + pool 4）+ `pytest all` 124 passed；单 key 与批量均无 `jedis.exists/get` 直调（一趟往返已由单测断言）；⑥ **常青文档同步**：CURRENT_ARCHITECTURE（4.2 cache 包表 + 6.4 读路径加固小节 + 9.2 JUnit 表 + 12 更新日志 2.10）+ BUSINESS_FLOW（3.1 缓存机制补 T8 注记）+ NEEDS（状态行 + 4.14 T8 执行定稿 + 变更记录 0.8）；本清单 T8 勾选/变更记录 0.9。
+
+### T9 二期·O-8 TTL 精调：滑动续期 + 分域取值（方向 C 二期）
+
+* **入口线索**：① 读命中顺带续期——挂 T8 pipeline 化读路径（命中数据 key 时 pipeline 内追加 EXPIRE，续期值=原 TTL 抖动；**空标记不续期**为倾向方案，执行时拍板防"假空"窗口延长）；② 分域 TTL 取值——基于 T7 观测数据（各域命中率/穿透曲线）调整 `cache.content/comment/like/follow.ttlMinutes` 配置值；本地流量不足时用测试/压测流量造数后取参（执行时评估）。
+* **红线边界**：续期不得改变三态语义与降级路径（EXPIRE 失败不影响读返回）；不改 key 命名；分域取值只动配置与默认值；不做 TTL 永生（热点常驻由续期自然达成，不设永不过期 key）。**若发现不动红线就阻碍精调 → 先向用户申请并说明理由，批准后方可动手（G5/红线措辞约定）。**
+* **强制探索步骤**：(1) 拉取 T7 落地后累计的各域观测数据（或造数），形成调参依据记录；(2) 确认续期触发粒度（每次命中都续 vs 剩余 TTL 低于阈值才续——后者需 TTL 查询往返，权衡后拍板并回写）；(3) 空标记续期与否拍板（NEEDS 4.14 倾向不续期）；(4) 若观测数据不足以支撑取值 → 停决策点回写，不得拍脑袋定参。
+* **验收**：热点 key 命中率提升（T7 数据前后对比）；分域 TTL 配置生效（配置读取单测）；续期失败降级不影响读（单测）；tv.py test junit 全绿 + pytest all 全绿；常青文档同步（CURRENT_ARCHITECTURE 六 + 调参数据依据记录）。
+
+> **T9 执行回写（2026-09-13，G5/G7）**：① **滑动续期**：`CacheAside.getInternal` 走新增私有 `probeRenew(dataKey, ttl)`（exists(empty)+get+expire 一趟 pipeline，续期值=原 TTL ±10% 抖动），`getBatch` 命令收集循环逐 key 追加 expire；`LikeCacheService.scanLikeSet`/两个批量、`FollowCache.scanSet`/`getSetMembers`/`batchIsFollowing` 原生 Set 三态读命中同样续期（值=域 TTL 精确值）；**空标记（`empty:`）从不续期**（执行定稿，防"假空"窗口延长）；数据 key **无条件入列 EXPIRE**（hit-data 生效、hit-empty/miss 时 data key 不存在返回 0 无效果，EXPIRE 失败走既有降级，读不受影响）；`read()`（纯三态读、无生产调用方）与 `probePair`（写路径探测）不续期；② **续期粒度拍板=每次命中都续**（零额外往返，弃"TTL 阈值续期"——需多一趟查询违背 T8 一趟结构），NEEDS 4.14 已回写；③ **分域 TTL 取值**（用户拍板=轻量造数+不足保守回退）：新增 `temp_script/pressure_cache.py`（Python 压测脚本，注册临时用户+八类域读端点，预热+测量段 ≥3000 记录触发 CacheStats 摘要），改动前基线 vs 续期后双轮（total=21000）：comment 命中占比 38.4%→42.5%、like 59.0%→64.8%、content 恒 100% hitData、follow 以空关系为主（hitEmpty≈100%）；取值 content 10→**30min**、comment 保持 **10min**、like 10→**15min**、follow 10→**30min**（app.properties，只动配置；依据与"待真流量复调"注记已写入常青 6.5 与 NEEDS）；④ **测试**：CacheAsideTest 26→30（+4 续期：命中续期抖动/空标记不续/批量续期/续期失败降级不影响读）、LikeCacheServiceTest/FollowCacheTest 各 +1（hit-data 续期 set key、empty 不续，断言读 AppConfig getter 防调参断挂）、新增 config/AppConfigCacheTtlTest 5 例（四 getter 与 app.properties 绑定生效）；`tv.py test junit` 323 例全绿（surefire 319 + pool 4）+ pytest all 124 passed；⑤ **文档同步**：CURRENT_ARCHITECTURE（版本 2.11：新增 6.5 TTL 精调小节+6.2 key 表 TTL 值+4.2 CacheAside/测试行+9.2 JUnit 表合计 323+12 更新日志 2.11）+ BUSINESS_FLOW（3.1 T9 滑动续期注记）+ NEEDS（状态行/4.14 T9 执行定稿/O-8 置已完成/变更记录 0.10）+ 本清单 T9 勾选/执行回写/变更记录 0.10；⑥ **subagent review 结论（2026-09-13）**：**通过，无必修项**；建议项 3 条——① getBatch 续期用例未覆盖 miss key 场景（逻辑与 hit-empty 同保证，记录不修）、② Like/Follow 批量 pipeline 续期未直接断言（单 key hit-data 已覆盖，记录不修）、③ like 命中占比算术 931/1436≈64.8% 非 66%，**已修正**（app.properties/常青 6.5 与 12/NEEDS 4.14 与 0.10 同步为 59.0%→64.8%）。
+
+***
+
+## 五、变更记录
+
+| 日期         | 版本  | 内容                                                                                                   |
+| ---------- | --- | ---------------------------------------------------------------------------------------------------- |
+| 2026-09-12 | 0.1 | 新建本文档（骨架草稿）：结转周期约定 G1-G10 与任务模板四要素/红线措辞/编号引用约定（G3 补充"相关端点 pytest 回归"）；按 NEEDS 4.12 一版方案拆 **6 任务 = T1 基建 + T2 内容 + T3 评论 + T4 点赞 + T5 关注 + T6 收尾**；总览表含依赖与验收关键；任务详情为**四要素骨架**，执行方案由执行 Agent 探索细化；O-5~O-9 明确归二期不拆任务 |
+| 2026-09-12 | 0.2 | 落实 NEEDS 4.13 基建归属：T1 落点明确为新建 `com.itheima.cache` 基建包（原"归属执行时定"改为已拍板）；共通注补充 4.13 分工边界（基建=cache 包、业务缓存类=各自业务域） |
+| 2026-09-12 | 0.3 | **T3 评论缓存重制完成**：T3 状态置"已完成"，详情追加 T3 执行回写（失效式代替原地增删、独立 TTL 配置、dto==null 短路、级联失效、ContentCacheManager 清理口径） |
+| 2026-09-12 | 0.4 | **T4 点赞缓存重制完成**：T4 状态置"已完成"，详情追加 T4 执行回写（计数/成员分离、统一单飞拉满 H6、条件写+失败失效 H5、占位符清零 H11、LikeService 读路径委托、删 updateContentLikeCount 死代码、like TTL 配置） |
+| 2026-09-12 | 0.5 | **T5 关注关系入缓存完成**：T5 状态置"已完成"，详情追加 T5 执行回写（FollowCache 双 Set 三态读+条件 MULTI 双写+失败双 DEL、空标记 set 存在守卫、follow TTL 配置、读写路径全切、FollowDao 仅剩业务校验与 loader、JUnit 293 + pytest 124、常青同步、subagent review 必修已修） |
+| 2026-09-12 | 0.6 | **T6 收尾完成**：T6 状态置"已完成"，详情追加 T6 执行回写（旧 ContentCacheManager 整体移除、点赞失效副作用迁入 LikeService.deleteContentLike、死配置删除、ContentCacheManagerLifecycleTest 删除、O-6 定时刷新去留=一版移除、mvn clean test 288 例无残留 + pytest all 124、常青/NEEDS/覆盖率地图同步） |
+| 2026-09-12 | 0.7 | **二期规划立题**（一版 T1~T6 完成后续期讨论，决策源 NEEDS 4.14）：任务总览追加 T7 观测埋点 / T8 读路径加固 / T9 O-8 TTL 精调（骨架，草稿态）；新增"四·二、二期任务详情"（四要素 + 二期共通注：对外行为零变化、不改缓存语义）；顺序理由=测量→优化→再测量闭环；O-5/O-9 留池、O-7 已拍板维持直查 |
+| 2026-09-12 | 0.8 | **T7 观测埋点完成**：T7 状态置"已完成"，详情追加 T7 执行回写（CacheStats 六类事件/5 域分桶/惰性日志 N=1000、CacheKeys.domainOf 长前缀优先、CacheAside 自动挂点 + like/follow 手动打点、批量记录粒度规则、Like/Follow 写失败也计、JUnit 301 全绿 + pytest all 124、CURRENT_ARCHITECTURE 6.3 观测小节与 NEEDS 4.14 注释同步） |
+| 2026-09-12 | 0.9 | **T8 读路径加固完成**：T8 状态置"已完成"，详情追加 T8 执行回写（单 key 读 pipeline 化一趟往返、getBatch 批量读接口与 DEGRADE 口径、/start+Feed+Profile 批量接入、KEYS→SCAN forEachIndexKey、整批不 chunk 保障 shuffle 语义、CacheAsideTest 26/ContentCacheTest 16、JUnit surefire 308 + pool 4 = 312 全绿 + pytest all 124、CURRENT_ARCHITECTURE 6.4 小节、BUSINESS_FLOW 3.1 注记与 NEEDS 4.14 T8 执行定稿同步） |
+| 2026-09-13 | 0.10 | **T9 二期·O-8 TTL 精调完成**：T9 状态置"已完成"，详情追加 T9 执行回写（滑动续期=每次命中都续/空标记不续/续期值原 TTL 抖动、CacheAside probeRenew+getBatch 与 Like/Follow 原生 Set 挂点、分域取值=轻量造数+不足保守回退（temp_script/pressure_cache.py 双轮压测：content 恒 100%、comment 38.4%→42.5%、like 59.0%→64.8%）、四域 TTL content 30/comment 10/like 15/follow 30、CacheAsideTest 30/Like 22/Follow 28/AppConfigCacheTtlTest 5、JUnit surefire 319 + pool 4 = 323 全绿 + pytest all 124、CURRENT_ARCHITECTURE 6.5 小节与 NEEDS 4.14 T9 执行定稿同步；subagent review 通过无必修，建议项 ③ like 占比算术已修正、① ② 记录不修） |

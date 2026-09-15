@@ -4,7 +4,8 @@ import com.itheima.comment.dao.CommentDao;
 import com.itheima.like.dao.CommentLikeDao;
 import com.itheima.content.dao.ContentDao;
 import com.itheima.like.dao.ContentLikeDao;
-import com.itheima.content.service.ContentCacheManager;
+import com.itheima.content.service.CommentCache;
+import com.itheima.content.service.ContentCache;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
@@ -30,7 +31,8 @@ class LikeServiceTest {
     private ContentLikeDao contentLikeDao;
     private CommentLikeDao commentLikeDao;
     private LikeCacheService cache;
-    private ContentCacheManager contentCacheManager;
+    private ContentCache contentCache;
+    private CommentCache commentCache;
     private TransactionTemplate tt;
     private Connection conn;
     private LikeService service;
@@ -42,11 +44,12 @@ class LikeServiceTest {
         contentLikeDao = mock(ContentLikeDao.class);
         commentLikeDao = mock(CommentLikeDao.class);
         cache = mock(LikeCacheService.class);
-        contentCacheManager = mock(ContentCacheManager.class);
+        contentCache = mock(ContentCache.class);
+        commentCache = mock(CommentCache.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
         service = new LikeService(contentDao, commentDao, contentLikeDao, commentLikeDao,
-                cache, contentCacheManager, tt);
+                cache, contentCache, commentCache, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);
@@ -63,7 +66,7 @@ class LikeServiceTest {
         verify(contentLikeDao).addLike(conn, 7L, 1L);
         verify(contentDao).updateLikeCount(conn, 1L, 1);
         verify(cache).likeContent(7L, 1L);
-        verify(contentCacheManager).updateContentLikeCount(1L, 1);
+        verify(contentCache).notifyLikeCountChanged(1L);
     }
 
     @Test
@@ -108,7 +111,7 @@ class LikeServiceTest {
         verify(contentLikeDao).deleteLike(conn, 7L, 1L);
         verify(contentDao).updateLikeCount(conn, 1L, -1);
         verify(cache).unlikeContent(7L, 1L);
-        verify(contentCacheManager).updateContentLikeCount(1L, -1);
+        verify(contentCache).notifyLikeCountChanged(1L);
     }
 
     @Test
@@ -121,7 +124,7 @@ class LikeServiceTest {
         verify(commentLikeDao).addLike(conn, 7L, 9L);
         verify(commentDao).updateLikeCount(conn, 9L, 1);
         verify(cache).likeComment(7L, 9L);
-        verify(contentCacheManager).updateCommentLikeCount(9L, 1);
+        verify(commentCache).notifyCommentLikeChanged(9L);
     }
 
     @Test
@@ -133,28 +136,37 @@ class LikeServiceTest {
     }
 
     @Test
-    void isContentLikedCacheHitSkipsDb() {
+    void isContentLikedDelegatesToCache() {
         when(cache.isContentLiked(7L, 1L)).thenReturn(true);
 
         assertTrue(service.isContentLiked(7L, 1L));
+        verify(cache).isContentLiked(7L, 1L);
         verify(tt, never()).execute(any());
     }
 
     @Test
-    void getContentLikeCountCacheHitReturnsDirectly() {
+    void getContentLikeCountDelegatesToCache() {
         when(cache.getContentLikeCount(1L)).thenReturn(5);
 
         assertEquals(5, service.getContentLikeCount(1L));
+        verify(cache).getContentLikeCount(1L);
         verify(tt, never()).execute(any());
     }
 
     @Test
-    void getContentLikeCountCacheMissFillsFromDb() throws SQLException {
-        when(cache.getContentLikeCount(1L)).thenReturn(null);
-        when(contentLikeDao.findLikerIdsByContentId(conn, 1L)).thenReturn(Set.of(10L, 11L, 12L));
+    void isCommentLikedDelegatesToCache() {
+        when(cache.isCommentLiked(7L, 9L)).thenReturn(false);
 
-        assertEquals(3, service.getContentLikeCount(1L));
-        verify(cache).syncContentLikers(1L, Set.of(10L, 11L, 12L));
+        assertFalse(service.isCommentLiked(7L, 9L));
+        verify(cache).isCommentLiked(7L, 9L);
+    }
+
+    @Test
+    void getCommentLikeCountDelegatesToCache() {
+        when(cache.getCommentLikeCount(9L)).thenReturn(3);
+
+        assertEquals(3, service.getCommentLikeCount(9L));
+        verify(cache).getCommentLikeCount(9L);
     }
 
     @Test
@@ -166,7 +178,7 @@ class LikeServiceTest {
     }
 
     @Test
-    void batchIsContentLikedAllCachedSkipsDb() {
+    void batchIsContentLikedDelegatesToCache() {
         when(cache.batchIsContentLiked(7L, List.of(1L, 2L)))
                 .thenReturn(Map.of(1L, true, 2L, false));
 
@@ -178,15 +190,20 @@ class LikeServiceTest {
     }
 
     @Test
-    void batchIsContentLikedPartialMissQueriesAndBackfills() throws SQLException {
-        when(cache.batchIsContentLiked(7L, List.of(1L, 2L))).thenReturn(Map.of(1L, true));
-        when(contentLikeDao.findLikedContentIds(conn, 7L, List.of(2L))).thenReturn(Set.of(2L));
-        when(contentLikeDao.findLikerIdsByContentId(conn, 2L)).thenReturn(Set.of(2L, 3L));
+    void batchIsContentLikedNullInputReturnsEmpty() {
+        Map<Long, Boolean> result = service.batchIsContentLiked(7L, null);
 
-        Map<Long, Boolean> result = service.batchIsContentLiked(7L, List.of(1L, 2L));
+        assertTrue(result.isEmpty());
+        verify(cache, never()).batchIsContentLiked(anyLong(), anyList());
+    }
 
-        assertEquals(true, result.get(1L));
-        assertEquals(true, result.get(2L));
-        verify(cache).syncContentLikers(2L, Set.of(2L, 3L));
+    @Test
+    void batchIsCommentLikedDelegatesToCache() {
+        when(cache.batchIsCommentLiked(7L, List.of(9L))).thenReturn(Map.of(9L, true));
+
+        Map<Long, Boolean> result = service.batchIsCommentLiked(7L, List.of(9L));
+
+        assertEquals(true, result.get(9L));
+        verify(cache).batchIsCommentLiked(7L, List.of(9L));
     }
 }

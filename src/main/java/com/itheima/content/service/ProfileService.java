@@ -6,7 +6,7 @@ import com.itheima.content.model.vo.ProfileVO;
 
 import com.itheima.content.model.dto.PageResult;
 import com.itheima.content.dao.ContentDao;
-import com.itheima.follow.dao.FollowDao;
+import com.itheima.follow.service.FollowCache;
 import com.itheima.like.service.LikeService;
 import com.itheima.user.dao.UserDao;
 import com.itheima.exception.NotFoundException;
@@ -26,25 +26,29 @@ public class ProfileService {
 
     private final UserDao userDao;
     private final ContentDao contentDao;
-    private final FollowDao followDao;
-    private final ContentCacheManager contentCacheManager;
+    private final FollowCache followCache;
+    private final ContentCache contentCache;
     private final LikeService likeService;
     private final TransactionTemplate transactionTemplate;
     private static final Logger LOGGER = LogUtil.getLogger(ProfileService.class);
 
     @InjectConstructor
-    public ProfileService(UserDao userDao, ContentDao contentDao, FollowDao followDao,
-                          ContentCacheManager contentCacheManager, LikeService likeService,
+    public ProfileService(UserDao userDao, ContentDao contentDao, FollowCache followCache,
+                          ContentCache contentCache, LikeService likeService,
                           TransactionTemplate transactionTemplate) {
         this.userDao = userDao;
         this.contentDao = contentDao;
-        this.followDao = followDao;
-        this.contentCacheManager = contentCacheManager;
+        this.followCache = followCache;
+        this.contentCache = contentCache;
         this.likeService = likeService;
         this.transactionTemplate = transactionTemplate;
     }
 
     public ProfileVO getProfile(long profileUserId, Long currentUserId, int page, int pageSize) {
+        // isFollowed 走关注缓存（FollowCache 三态读 + miss 回填 + Redis 挂降级 DB），在事务外读取
+        Boolean isFollowed = (currentUserId != null && currentUserId != profileUserId)
+                ? followCache.isFollowing(currentUserId, profileUserId)
+                : null;
         return transactionTemplate.execute(conn -> {
             try {
                 User user = userDao.getUserForProfileById(conn, profileUserId);
@@ -59,16 +63,12 @@ public class ProfileService {
                 List<Long> pageIds = offset < total ? allIds.subList(offset, end) : Collections.emptyList();
 
                 List<ContentVO> contentVOList = new ArrayList<>();
+                // T8：页内批量读（一趟 pipeline，语义与逐条 getContent 一致），按原序跳过 null
+                Map<Long, ContentCacheDTO> byId = contentCache.getContentsBatch(pageIds);
                 for (Long contentId : pageIds) {
-                    ContentCacheDTO cached = contentCacheManager.getContentFromCache(contentId);
+                    ContentCacheDTO cached = byId.get(contentId);
                     if (cached == null) continue;
-                    contentVOList.add(contentCacheManager.toContentVO(cached));
-                }
-
-                Boolean isFollowed = null;
-                if (currentUserId != null && currentUserId != profileUserId) {
-                    Set<Long> followedSet = followDao.getFollowedIds(conn, currentUserId, List.of(profileUserId));
-                    isFollowed = followedSet.contains(profileUserId);
+                    contentVOList.add(contentCache.toContentVO(cached));
                 }
 
                 if (currentUserId != null && !contentVOList.isEmpty()) {

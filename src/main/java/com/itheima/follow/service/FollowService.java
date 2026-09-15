@@ -13,6 +13,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import com.itheima.util.LogUtil;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -24,15 +25,17 @@ public class FollowService {
 
     private final FollowDao followDao;
     private final UserDao userDao;
+    private final FollowCache followCache;
     private final TransactionTemplate transactionTemplate;
     private static final Logger LOGGER =
             LogUtil.getLogger(FollowService.class);
 
     @InjectConstructor
-    public FollowService(FollowDao followDao, UserDao userDao,
+    public FollowService(FollowDao followDao, UserDao userDao, FollowCache followCache,
                          TransactionTemplate transactionTemplate) {
         this.followDao = followDao;
         this.userDao = userDao;
+        this.followCache = followCache;
         this.transactionTemplate = transactionTemplate;
     }
 
@@ -56,12 +59,17 @@ public class FollowService {
                 throw new ServerException("关注失败");
             }
         });
+        // DB 提交后缓存双写（NEEDS 4.10：MULTI 原子，失败双 DEL 自愈，不影响主流程）
+        followCache.cacheFollow(userId, followedUserId);
     }
 
     public List<Map<String, Object>> getFollowingList(long userId, Long currentUserId) {
+        List<Long> ids = followCache.getFollowingIds(userId);
+        if (ids.isEmpty()) {
+            return java.util.Collections.emptyList();
+        }
         return transactionTemplate.execute(conn -> {
             try {
-                List<Long> ids = followDao.getAllFollowedUserIds(conn, userId);
                 return buildUserList(conn, ids, currentUserId);
             } catch (SQLException e) {
                 throw new ServerException("查询失败");
@@ -70,9 +78,12 @@ public class FollowService {
     }
 
     public List<Map<String, Object>> getFollowerList(long userId, Long currentUserId) {
+        List<Long> ids = followCache.getFollowerIds(userId);
+        if (ids.isEmpty()) {
+            return java.util.Collections.emptyList();
+        }
         return transactionTemplate.execute(conn -> {
             try {
-                List<Long> ids = followDao.getFollowerUserIds(conn, userId);
                 return buildUserList(conn, ids, currentUserId);
             } catch (SQLException e) {
                 throw new ServerException("查询失败");
@@ -83,13 +94,19 @@ public class FollowService {
     private List<Map<String, Object>> buildUserList(Connection conn, List<Long> ids, Long currentUserId) throws SQLException {
         if (ids.isEmpty()) return java.util.Collections.emptyList();
         List<User> users = userDao.findUsersByIds(conn, ids);
-        Set<Long> followedSet = (currentUserId != null)
-                ? followDao.getFollowedIds(conn, currentUserId, ids)
-                : java.util.Collections.emptySet();
+        Set<Long> followedSet = new HashSet<>();
+        if (currentUserId != null) {
+            Map<Long, Boolean> followedMap = followCache.batchIsFollowing(currentUserId, ids);
+            for (Map.Entry<Long, Boolean> entry : followedMap.entrySet()) {
+                if (Boolean.TRUE.equals(entry.getValue())) {
+                    followedSet.add(entry.getKey());
+                }
+            }
+        }
 
         List<Map<String, Object>> result = new java.util.ArrayList<>();
         for (User u : users) {
-            Map<String, Object> map = new java.util.HashMap<>();
+            Map<String, Object> map = new HashMap<>();
             map.put("userId", u.getId());
             map.put("username", u.getUserName());
             map.put("isFollowed", followedSet.contains(u.getId()));
@@ -119,5 +136,7 @@ public class FollowService {
                 throw new ServerException("取关失败");
             }
         });
+        // DB 提交后缓存双写（SREM，失败双 DEL 自愈，不影响主流程）
+        followCache.cacheUnfollow(userId, followedUserId);
     }
 }

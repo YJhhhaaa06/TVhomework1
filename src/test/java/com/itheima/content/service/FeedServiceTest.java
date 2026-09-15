@@ -1,7 +1,7 @@
 package com.itheima.content.service;
 
 import com.itheima.content.dao.ContentDao;
-import com.itheima.follow.dao.FollowDao;
+import com.itheima.follow.service.FollowCache;
 import com.itheima.like.service.LikeService;
 import com.itheima.exception.ServerException;
 import com.itheima.content.model.cache.ContentCacheDTO;
@@ -15,6 +15,7 @@ import org.mockito.ArgumentCaptor;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -24,9 +25,9 @@ import static org.mockito.Mockito.*;
 
 class FeedServiceTest {
 
-    private FollowDao followDao;
+    private FollowCache followCache;
     private ContentDao contentDao;
-    private ContentCacheManager cache;
+    private ContentCache contentCache;
     private LikeService likeService;
     private TransactionTemplate tt;
     private Connection conn;
@@ -34,17 +35,24 @@ class FeedServiceTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        followDao = mock(FollowDao.class);
+        followCache = mock(FollowCache.class);
         contentDao = mock(ContentDao.class);
-        cache = mock(ContentCacheManager.class);
+        contentCache = mock(ContentCache.class);
         likeService = mock(LikeService.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
-        service = new FeedService(followDao, contentDao, cache, likeService, tt);
+        service = new FeedService(followCache, contentDao, contentCache, likeService, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);
         });
+        // T8：feed 页内改批量读；默认空映射，用例内自行覆盖
+        when(contentCache.getContentsBatch(anyList())).thenReturn(Collections.emptyMap());
+    }
+
+    /** getContentsBatch 桩（id → DTO，null 值=缓存 miss 跳过）。 */
+    private void stubGetBatch(Map<Long, ContentCacheDTO> values) {
+        when(contentCache.getContentsBatch(anyList())).thenReturn(values);
     }
 
     private ContentCacheDTO dto(long id) {
@@ -65,7 +73,7 @@ class FeedServiceTest {
 
     @Test
     void getFeedNoFollowedUsersReturnsEmptyPage() throws SQLException {
-        when(followDao.getAllFollowedUserIds(conn, 7L)).thenReturn(Collections.emptyList());
+        when(followCache.getFollowingIds(7L)).thenReturn(Collections.emptyList());
 
         PageResult<ContentVO> result = service.getFeed(7L, 1, 10);
 
@@ -78,7 +86,7 @@ class FeedServiceTest {
 
     @Test
     void getFeedNoContentReturnsEmptyPage() throws SQLException {
-        when(followDao.getAllFollowedUserIds(conn, 7L)).thenReturn(List.of(9L));
+        when(followCache.getFollowingIds(7L)).thenReturn(List.of(9L));
         when(contentDao.countContentByUsers(conn, List.of(9L))).thenReturn(0);
 
         PageResult<ContentVO> result = service.getFeed(7L, 1, 10);
@@ -90,15 +98,14 @@ class FeedServiceTest {
 
     @Test
     void getFeedNormalFillsLikedStatus() throws SQLException {
-        when(followDao.getAllFollowedUserIds(conn, 7L)).thenReturn(List.of(7L));
+        when(followCache.getFollowingIds(7L)).thenReturn(List.of(7L));
         when(contentDao.countContentByUsers(conn, List.of(7L))).thenReturn(2);
         when(contentDao.findContentIdsByUsers(conn, List.of(7L), 0, 10)).thenReturn(List.of(1L, 2L));
         ContentCacheDTO dto1 = dto(1L);
         ContentCacheDTO dto2 = dto(2L);
-        when(cache.getContentFromCache(1L)).thenReturn(dto1);
-        when(cache.getContentFromCache(2L)).thenReturn(dto2);
-        when(cache.toContentVO(dto1)).thenReturn(vo(1L));
-        when(cache.toContentVO(dto2)).thenReturn(vo(2L));
+        stubGetBatch(Map.of(1L, dto1, 2L, dto2));
+        when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
+        when(contentCache.toContentVO(dto2)).thenReturn(vo(2L));
         when(likeService.batchIsContentLiked(7L, List.of(1L, 2L)))
                 .thenReturn(Map.of(1L, true, 2L, false));
 
@@ -114,13 +121,16 @@ class FeedServiceTest {
 
     @Test
     void getFeedSkipsCacheMissAndQueriesLikedForSurvivors() throws SQLException {
-        when(followDao.getAllFollowedUserIds(conn, 7L)).thenReturn(List.of(7L));
+        when(followCache.getFollowingIds(7L)).thenReturn(List.of(7L));
         when(contentDao.countContentByUsers(conn, List.of(7L))).thenReturn(2);
         when(contentDao.findContentIdsByUsers(conn, List.of(7L), 0, 10)).thenReturn(List.of(1L, 2L));
-        when(cache.getContentFromCache(1L)).thenReturn(null);
         ContentCacheDTO dto2 = dto(2L);
-        when(cache.getContentFromCache(2L)).thenReturn(dto2);
-        when(cache.toContentVO(dto2)).thenReturn(vo(2L));
+        // 1 为缓存 miss（null）；Map.of 不允许 null，用 HashMap
+        Map<Long, ContentCacheDTO> values = new HashMap<>();
+        values.put(1L, null);
+        values.put(2L, dto2);
+        stubGetBatch(values);
+        when(contentCache.toContentVO(dto2)).thenReturn(vo(2L));
         when(likeService.batchIsContentLiked(7L, List.of(2L))).thenReturn(Map.of(2L, true));
 
         PageResult<ContentVO> result = service.getFeed(7L, 1, 10);
@@ -132,12 +142,12 @@ class FeedServiceTest {
 
     @Test
     void getFeedNullLikedMapLeavesLikedFalse() throws SQLException {
-        when(followDao.getAllFollowedUserIds(conn, 7L)).thenReturn(List.of(7L));
+        when(followCache.getFollowingIds(7L)).thenReturn(List.of(7L));
         when(contentDao.countContentByUsers(conn, List.of(7L))).thenReturn(1);
         when(contentDao.findContentIdsByUsers(conn, List.of(7L), 0, 10)).thenReturn(List.of(1L));
         ContentCacheDTO dto1 = dto(1L);
-        when(cache.getContentFromCache(1L)).thenReturn(dto1);
-        when(cache.toContentVO(dto1)).thenReturn(vo(1L));
+        stubGetBatch(Map.of(1L, dto1));
+        when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
         when(likeService.batchIsContentLiked(7L, List.of(1L))).thenReturn(null);
 
         PageResult<ContentVO> result = service.getFeed(7L, 1, 10);
@@ -148,13 +158,13 @@ class FeedServiceTest {
 
     @Test
     void getFeedComputesPaginationOffset() throws SQLException {
-        when(followDao.getAllFollowedUserIds(conn, 7L)).thenReturn(List.of(7L));
+        when(followCache.getFollowingIds(7L)).thenReturn(List.of(7L));
         when(contentDao.countContentByUsers(conn, List.of(7L))).thenReturn(2);
         when(contentDao.findContentIdsByUsers(eq(conn), eq(List.of(7L)), eq(40), eq(20)))
                 .thenReturn(List.of(1L));
         ContentCacheDTO dto1 = dto(1L);
-        when(cache.getContentFromCache(1L)).thenReturn(dto1);
-        when(cache.toContentVO(dto1)).thenReturn(vo(1L));
+        stubGetBatch(Map.of(1L, dto1));
+        when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
 
         PageResult<ContentVO> result = service.getFeed(7L, 3, 20);
 
@@ -167,7 +177,7 @@ class FeedServiceTest {
 
     @Test
     void getFeedEmptyPageIdsSkipsLikedQuery() throws SQLException {
-        when(followDao.getAllFollowedUserIds(conn, 7L)).thenReturn(List.of(7L));
+        when(followCache.getFollowingIds(7L)).thenReturn(List.of(7L));
         when(contentDao.countContentByUsers(conn, List.of(7L))).thenReturn(2);
         when(contentDao.findContentIdsByUsers(conn, List.of(7L), 40, 10))
                 .thenReturn(Collections.emptyList());
@@ -181,7 +191,8 @@ class FeedServiceTest {
 
     @Test
     void getFeedSqlErrorThrowsServerException() throws SQLException {
-        when(followDao.getAllFollowedUserIds(conn, 7L)).thenThrow(new SQLException("db down"));
+        when(followCache.getFollowingIds(7L)).thenReturn(List.of(7L));
+        when(contentDao.countContentByUsers(conn, List.of(7L))).thenThrow(new SQLException("db down"));
 
         assertThrows(ServerException.class, () -> service.getFeed(7L, 1, 10));
     }

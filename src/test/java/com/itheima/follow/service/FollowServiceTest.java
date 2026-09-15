@@ -14,7 +14,6 @@ import java.sql.SQLException;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -24,6 +23,7 @@ class FollowServiceTest {
 
     private FollowDao followDao;
     private UserDao userDao;
+    private FollowCache followCache;
     private TransactionTemplate tt;
     private Connection conn;
     private FollowService service;
@@ -32,9 +32,10 @@ class FollowServiceTest {
     void setUp() throws Exception {
         followDao = mock(FollowDao.class);
         userDao = mock(UserDao.class);
+        followCache = mock(FollowCache.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
-        service = new FollowService(followDao, userDao, tt);
+        service = new FollowService(followDao, userDao, followCache, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);
@@ -45,12 +46,13 @@ class FollowServiceTest {
         return new User(id, name, 0, 0);
     }
 
-    // ===== follow =====
+    // ===== follow（业务校验 DB 直读，缓存写在 DB 提交后） =====
 
     @Test
     void followSelfThrowsConflict() {
         assertThrows(ConflictException.class, () -> service.follow(7L, 7L));
         verifyNoInteractions(followDao);
+        verifyNoInteractions(followCache);
         verify(tt, never()).execute(any());
     }
 
@@ -61,10 +63,11 @@ class FollowServiceTest {
         assertThrows(ConflictException.class, () -> service.follow(7L, 8L));
         verify(followDao, never()).addFollow(any(), anyLong(), anyLong());
         verify(userDao, never()).updateFollowCount(any(), anyLong(), anyInt());
+        verify(followCache, never()).cacheFollow(anyLong(), anyLong());
     }
 
     @Test
-    void followSuccessUpdatesBothCounts() throws SQLException {
+    void followSuccessUpdatesDbAndCacheAfterCommit() throws SQLException {
         when(followDao.isFollowing(conn, 7L, 8L)).thenReturn(false);
 
         service.follow(7L, 8L);
@@ -72,16 +75,18 @@ class FollowServiceTest {
         verify(followDao).addFollow(conn, 7L, 8L);
         verify(userDao).updateFollowCount(conn, 7L, 1);
         verify(userDao).updateFollowerCount(conn, 8L, 1);
+        verify(followCache).cacheFollow(7L, 8L);
     }
 
     @Test
-    void followAddSqlErrorThrowsServerException() throws SQLException {
+    void followAddSqlErrorThrowsServerExceptionAndSkipsCache() throws SQLException {
         when(followDao.isFollowing(conn, 7L, 8L)).thenReturn(false);
         when(followDao.addFollow(conn, 7L, 8L)).thenThrow(new SQLException("db down"));
 
         assertThrows(ServerException.class, () -> service.follow(7L, 8L));
         verify(userDao, never()).updateFollowCount(any(), anyLong(), anyInt());
         verify(userDao, never()).updateFollowerCount(any(), anyLong(), anyInt());
+        verify(followCache, never()).cacheFollow(anyLong(), anyLong());
     }
 
     // ===== unfollow =====
@@ -90,6 +95,7 @@ class FollowServiceTest {
     void unfollowSelfThrowsConflict() {
         assertThrows(ConflictException.class, () -> service.unfollow(7L, 7L));
         verifyNoInteractions(followDao);
+        verifyNoInteractions(followCache);
         verify(tt, never()).execute(any());
     }
 
@@ -100,10 +106,11 @@ class FollowServiceTest {
         assertThrows(ConflictException.class, () -> service.unfollow(7L, 8L));
         verify(followDao, never()).deleteFollow(any(), anyLong(), anyLong());
         verify(userDao, never()).updateFollowCount(any(), anyLong(), anyInt());
+        verify(followCache, never()).cacheUnfollow(anyLong(), anyLong());
     }
 
     @Test
-    void unfollowSuccessUpdatesBothCounts() throws SQLException {
+    void unfollowSuccessUpdatesDbAndCacheAfterCommit() throws SQLException {
         when(followDao.isFollowing(conn, 7L, 8L)).thenReturn(true);
 
         service.unfollow(7L, 8L);
@@ -111,38 +118,40 @@ class FollowServiceTest {
         verify(followDao).deleteFollow(conn, 7L, 8L);
         verify(userDao).updateFollowCount(conn, 7L, -1);
         verify(userDao).updateFollowerCount(conn, 8L, -1);
+        verify(followCache).cacheUnfollow(7L, 8L);
     }
 
     @Test
-    void unfollowDeleteSqlErrorThrowsServerException() throws SQLException {
+    void unfollowDeleteSqlErrorThrowsServerExceptionAndSkipsCache() throws SQLException {
         when(followDao.isFollowing(conn, 7L, 8L)).thenReturn(true);
         when(followDao.deleteFollow(conn, 7L, 8L)).thenThrow(new SQLException("db down"));
 
         assertThrows(ServerException.class, () -> service.unfollow(7L, 8L));
         verify(userDao, never()).updateFollowCount(any(), anyLong(), anyInt());
         verify(userDao, never()).updateFollowerCount(any(), anyLong(), anyInt());
+        verify(followCache, never()).cacheUnfollow(anyLong(), anyLong());
     }
 
-    // ===== getFollowingList =====
+    // ===== getFollowingList（列表走关注缓存） =====
 
     @Test
     void getFollowingListEmptyReturnsEmptyList() throws SQLException {
-        when(followDao.getAllFollowedUserIds(conn, 7L)).thenReturn(Collections.emptyList());
+        when(followCache.getFollowingIds(7L)).thenReturn(Collections.emptyList());
 
         List<Map<String, Object>> result = service.getFollowingList(7L, 7L);
 
         assertTrue(result.isEmpty());
         verify(userDao, never()).findUsersByIds(any(), anyList());
-        verify(followDao, never()).getFollowedIds(any(), anyLong(), anyList());
+        verify(followCache, never()).batchIsFollowing(anyLong(), anyList());
     }
 
     @Test
     void getFollowingListWithCurrentUserFillsFollowedFlag() throws SQLException {
-        when(followDao.getAllFollowedUserIds(conn, 7L)).thenReturn(List.of(8L, 9L));
+        when(followCache.getFollowingIds(7L)).thenReturn(List.of(8L, 9L));
         when(userDao.findUsersByIds(conn, List.of(8L, 9L)))
                 .thenReturn(List.of(user(8L, "bob"), user(9L, "carol")));
         // 当前用户仅关注了 9
-        when(followDao.getFollowedIds(conn, 7L, List.of(8L, 9L))).thenReturn(Set.of(9L));
+        when(followCache.batchIsFollowing(7L, List.of(8L, 9L))).thenReturn(Map.of(9L, true));
 
         List<Map<String, Object>> result = service.getFollowingList(7L, 7L);
 
@@ -158,9 +167,9 @@ class FollowServiceTest {
 
     @Test
     void getFollowingListMarksSelfWhenIdMatchesCurrentUser() throws SQLException {
-        when(followDao.getAllFollowedUserIds(conn, 7L)).thenReturn(List.of(7L));
+        when(followCache.getFollowingIds(7L)).thenReturn(List.of(7L));
         when(userDao.findUsersByIds(conn, List.of(7L))).thenReturn(List.of(user(7L, "alice")));
-        when(followDao.getFollowedIds(conn, 7L, List.of(7L))).thenReturn(Collections.emptySet());
+        when(followCache.batchIsFollowing(7L, List.of(7L))).thenReturn(Collections.emptyMap());
 
         List<Map<String, Object>> result = service.getFollowingList(7L, 7L);
 
@@ -171,7 +180,7 @@ class FollowServiceTest {
 
     @Test
     void getFollowingListWithoutCurrentUserSkipsFollowQuery() throws SQLException {
-        when(followDao.getAllFollowedUserIds(conn, 7L)).thenReturn(List.of(8L));
+        when(followCache.getFollowingIds(7L)).thenReturn(List.of(8L));
         when(userDao.findUsersByIds(conn, List.of(8L))).thenReturn(List.of(user(8L, "bob")));
 
         List<Map<String, Object>> result = service.getFollowingList(7L, null);
@@ -179,23 +188,24 @@ class FollowServiceTest {
         assertEquals(1, result.size());
         assertFalse((Boolean) result.get(0).get("isFollowed"));
         assertFalse((Boolean) result.get(0).get("isSelf"));
-        verify(followDao, never()).getFollowedIds(any(), anyLong(), anyList());
+        verify(followCache, never()).batchIsFollowing(anyLong(), anyList());
     }
 
     @Test
-    void getFollowingListSqlErrorThrowsServerException() throws SQLException {
-        when(followDao.getAllFollowedUserIds(conn, 7L)).thenThrow(new SQLException("db down"));
+    void getFollowingListUserQuerySqlErrorThrowsServerException() throws SQLException {
+        when(followCache.getFollowingIds(7L)).thenReturn(List.of(8L));
+        when(userDao.findUsersByIds(conn, List.of(8L))).thenThrow(new SQLException("db down"));
 
         assertThrows(ServerException.class, () -> service.getFollowingList(7L, 7L));
     }
 
-    // ===== getFollowerList =====
+    // ===== getFollowerList（列表走关注缓存） =====
 
     @Test
     void getFollowerListEmptyReturnsEmptyList() throws SQLException {
-        when(followDao.getFollowerUserIds(conn, 7L)).thenReturn(Collections.emptyList());
+        when(followCache.getFollowerIds(9L)).thenReturn(Collections.emptyList());
 
-        List<Map<String, Object>> result = service.getFollowerList(7L, 7L);
+        List<Map<String, Object>> result = service.getFollowerList(9L, 7L);
 
         assertTrue(result.isEmpty());
         verify(userDao, never()).findUsersByIds(any(), anyList());
@@ -203,9 +213,9 @@ class FollowServiceTest {
 
     @Test
     void getFollowerListNormalFillsStatus() throws SQLException {
-        when(followDao.getFollowerUserIds(conn, 9L)).thenReturn(List.of(8L));
+        when(followCache.getFollowerIds(9L)).thenReturn(List.of(8L));
         when(userDao.findUsersByIds(conn, List.of(8L))).thenReturn(List.of(user(8L, "bob")));
-        when(followDao.getFollowedIds(conn, 7L, List.of(8L))).thenReturn(Set.of(8L));
+        when(followCache.batchIsFollowing(7L, List.of(8L))).thenReturn(Map.of(8L, true));
 
         List<Map<String, Object>> result = service.getFollowerList(9L, 7L);
 

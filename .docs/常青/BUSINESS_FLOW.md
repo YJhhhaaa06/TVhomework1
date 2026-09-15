@@ -307,30 +307,94 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 
 ## 三、内容管理模块
 
-### 3.1 内容缓存机制
+### 3.1 内容与评论缓存机制（C 周期 T2/T3 重制为统一 Redis，2026-09-12）
+
+> **三期 T1（cache-01）熔断注记（2026-09-13）**：所有 Redis 访问经 `RedisAccess` 全局熔断器——Redis 不可用时连续失败 5 次即熔断开启，后续缓存请求**立即快速失败并降级走 DB**（不再逐请求等连接超时）；冷却 10s 后单探针探测，Redis 恢复自动回到正常缓存路径。三态/空标记/降级语义不变（详见 CURRENT_ARCHITECTURE 6.6）。
+>
+> **三期 T2（cache-02）降级不放量注记（2026-09-13）**：Redis 异常的降级读（单 key / 批量 / 脏 JSON，覆盖内容/评论/点赞/关注四域共 10 处分支）**统一接入单飞组件**——同一 key 的并发降级读只打一次 DB（与 miss 回填共用同一单飞），降级仅装载、**不写回**（D4 不变）；loader 失败以异常收场、不缓存失败结果，下一请求全新重试。降级 LOAD 计数随之从"每请求记一次"变为"实际去重后记一次（leader 记）"。详见 CURRENT_ARCHITECTURE 6.7。
+>
+> **三期 T3（cache-03）负缓存治理注记（2026-09-14）**：内容/评论 loader 的"确认无数据"与"加载失败"已可区分——`loadContentFromDb`/`loadCommentTree` 遇 SQLException 抛 `DatabaseException`（事务模板包装），**不再返回 null 伪装"无数据"**；CacheAside 在所有装载点捕获 DatabaseException 转 null：**不写 60s 空标记、不 DEL 既有数据 key**（DB 瞬时抖动不会把热门内容固化成假 404）。对外行为与现状一致（内容 404 / 评论空 / 批量逐 key 跳过），仅不固化瞬时故障；`addContent`/`refreshContent` 提交后缓存同步遇 DB 失败静默跳过（refresh 保留旧缓存读自愈）。详见 CURRENT_ARCHITECTURE 6.8。
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    ContentService 缓存结构                       │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌─────────────────┐    ┌─────────────────┐                    │
-│  │  recommendList   │    │  contentCache   │                    │
-│  │  (推荐列表)      │    │  (内容详情)     │                    │
-│  │  List<ContentVO> │    │  Map<id, DTO>   │                    │
-│  └─────────────────┘    └─────────────────┘                    │
-│                                                                 │
-│  ┌─────────────────┐    ┌─────────────────┐                    │
-│  │  commentCache    │    │ typeCategoryIndex│                   │
-│  │  (评论缓存)      │    │  (类型分区索引)  │                    │
-│  │  Map<id, List>   │    │  Map<key, List>  │                    │
-│  └─────────────────┘    └─────────────────┘                    │
-│                                                                 │
-│  定时刷新：每 10 分钟全量刷新                                    │
-│  TTL：单条内容 10 分钟过期                                       │
-│                                                                 │
+│  前台读路径（Start/Search/Detail/Feed/Profile）                  │
+│    ↓  ContentCache（com.itheima.content.service）               │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │ 内容详情：content:{id} → JSON（T1 CacheAside 三态）        │   │
+│  │   miss=查 DB 回填（单飞）；hit-empty=空标记 60s 防穿透；    │   │
+│  │   hit-data=直接返回；Redis 挂=降级走 DB                    │   │
+│  │ 类型分区索引：content:index:{type}:{category}（Redis LIST）│   │
+│  │   4 key/内容（含 type=-1 / category=-1 通配），新前序      │   │
+│  │ TTL：内容 10min（+±10% 抖动，4.12 一版）                  │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│  评论读路径（/comment/show、详情页评论区）                       │
+│    ↓  CommentCache（com.itheima.content.service，T3）          │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │ 评论树：content:comments:{id} → JSON（三态 Cache-Aside）   │   │
+│  │   hit-empty（空标记）=已确认无评论→直接空，不查 DB；        │   │
+│  │   miss=查 DB 回填整树（单飞；无评论→写空标记）；            │   │
+│  │   hit-data=直接返回；评论 miss ≠ 没有评论（4.3）           │   │
+│  │ 独立 TTL：cache.comment.ttlMinutes=10min（+抖动）          │   │
+│  │ 读评论前先确认内容存在（dto==null 直接空，4.5）            │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│  写路径（DB 事务提交后）：                                      │
+│    addVideo/addPost    → contentCache.addContent(id) 入缓存      │
+│    编辑媒体/文案、恢复   → contentCache.refreshContent(id)       │
+│    删除/下架            → contentCache.removeContent(id)（失效+索引剔除）│
+│    + commentCache.invalidateComments(id)（级联失效评论树 key）    │
+│    点赞/取消            → 失效 content:{id}（读自愈回填 DB 计数）  │
+│    评论增删             → 失效 content:{id}（回填 comment_count） │
+│                        + commentCache.invalidateComments(id)（回填评论树）│
+│    评论点赞/取消         → commentCache.notifyCommentLikeChanged(id)（定位所属内容后失效评论树）│
+│    评论区开关           → 失效 content:{id}（读自愈回填 comment_enabled）│
+│  ────────────────────────────────────────────────                  │
+│  关注读路径（/follow/following|followers、内容卡片/主页 isFollowed、│
+│  feed 关注列表）                                                  │
+│    ↓  FollowCache（com.itheima.follow.service，T5）               │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │ user:following:{userId} / user:follower:{userId} 双 Set    │   │
+│  │ 三态：empty 空标记（60s）=确认真无；set 存在=SISMEMBER/SMEMBERS│   │
+│  │  miss=单飞回填 DB 全量（非空 SADD+EXPIRE 10min；空集→空标记，│   │
+│  │  空标记写入带 set 存在守卫防并发覆盖新写）；Redis 挂=降级 DB  │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│  关注/取关写路径（FollowService DB 提交后）：                     │
+│    两 key 均"已加载"（set 或空标记存在）→ MULTI 原子 SADD/SREM 双写+续 TTL │
+│    （新关注时解除空标记）；任一侧冷 key 或空标记命中 → 双双 DEL 失效让读自愈 │
+│    ；Redis 异常 → 双 DEL（4.10 失败双 DEL），不抛出、不影响业务     │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+> **第四期 T3（cache-03）FollowCache 收口注记（2026-09-15）**：关注**读路径**（`isFollowing` 单成员三态 /
+> `batchIsFollowing` 单 set 批量 / `getFollowingIds`/`getFollowerIds` 全量列表）已全部改走基建组件 `cache/SetCache`
+> （U-09/N3 收敛落点，与 like 域 T2 同模式）；**写路径（MULTI 条件双写 + 失败双 DEL）仍由 `FollowCache` 保有**
+> （follow 特有双 key 原子语义，不在收口面）。行为零变化——key/三态/空标记 TTL/降级语义/打点口径不变；
+> 全量列表升序由 `FollowCache.sortIds` 唯一包装点统一（详情见 CURRENT_ARCHITECTURE 6.15）。
+
+> 关键语义（NEEDS 4.2~4.5/4.12）：内容与评论读/写**全部收敛 Redis**（旧内存 HashMap 版
+> ContentCacheManager 已随 T6 整体移除，职责由 ContentCache/CommentCache 承接）；
+> **任何缓存失败降级走 DB、不导致业务失败**；
+> 计数（like_count/comment_count/comment_enabled）与评论树内容以 DB 为源真理，变更即失效让读自愈；
+> 类型分区索引启动 init 全量重建 + 索引 key 缺失时单飞懒重建（防 Redis 重启后 /start 空推荐）。
+> 评论树不再原地增删（消除 H1 并发竞态）：评论增/删/点赞 = 失效 `content:comments:{id}` + 空标记，
+> 下次读 miss 单飞回填 DB 最新整树。
+>
+> **T5 启动加载治理注记（2026-09-14，三期 N5/R-01/R-04，R-01 拍板=全量+工程化优化）**：
+> `ContentCache.init()` 启动全量重建拆两段——DB 阶段在事务内**只读**（findAllContent + `findMediaByContentIds`
+> 批量媒体装载，DB N+1 消除），**Redis 写入移出 DB 事务**（事务提交后 `rebuildRedis`）；内容 key 批量写走
+> `CacheAside.writeBatch`（一趟 pipeline SETEX+DEL 空标记），索引重建 pipeline 化（一遍 SCAN 收集旧 key +
+> 一趟 pipeline DEL+全部 LREM/LPUSH）；启动 Redis 往返从 ≈12N（内容 2 + 索引 8 每内容）降到 ≈3 次、
+> DB 查询恒 2 次，均与内容量解耦。索引缺失懒重建（getRecommendByFilter 首访触发）同步收益 pipeline 化，
+> 对外读语义零变化。
+>
+> **T6 收尾注记（2026-09-14，三期 U-08 归一 + 全周期闭环）**：`content:index:{type}:{category}` 索引 key
+> **生成与解析同源**——生成唯一源 = `CacheKeys.contentIndex(type, categoryId)`（前缀常量
+> `CONTENT_INDEX_PREFIX`），`domainOf` 统计归域解析与索引 SCAN 匹配模式引用同一前缀；业务包不再自行拼接
+> key（原 `ContentCache.indexKey` 私有方法移除）。CacheStats 的 DEGRADE 口径确认仍准确：=本次读未命中缓存、
+> 走 DB 兜底次数（含 T1 熔断开启的快速失败，两者语义一致）。
+>
+> **T9 滑动续期注记（2026-09-13，NEEDS 4.14）**：所有缓存读路径**命中数据 key 顺带续期**——内容/评论/点赞计数（CacheAside get/getBatch，续期值=原 TTL ±10% 抖动，同 pipeline 追加 EXPIRE）与点赞成员/关注关系 Set（scanLikeSet/scanSet/getSetMembers/batchIsFollowing/batchIsContentLiked/batchIsCommentLiked，续期值=域 TTL 精确值）在命中时延长生命周期，热点常驻由续期自然达成、不设永不过期 key；**空标记（`empty:`）一律不续期**（防"假空"窗口延长，执行定稿）；续期失败（Redis 异常）走既有降级读，不影响业务。分域 TTL 已按双轮压测观测取值：content 30min / comment 10min / like 15min / follow 30min（详见 CURRENT_ARCHITECTURE 6.5 与 NEEDS 4.14 T9 执行定稿）。
+>
+> **T8 读路径加固（2026-09-12，治 H12/H13）**：内容读路径（单 key 与批量）均 pipeline 化——EXISTS 空标记 + GET 数据 key 一趟往返（`CacheAside.read`/`getInternal`/`getBatch`）；推荐（/start）、Feed、Profile 页内改 `ContentCache.getContentsBatch` 批量读（结果集/顺序/空跳语义不变）；索引遍历由 `KEYS "content:index:*"` 改为 **SCAN**（`forEachIndexKey`，removeContent LREM 与重建 DEL 两处，LREM/DEL 幂等、SCAN 重复 key 无害）。
 
 ### 3.2 发布视频流程
 
@@ -605,7 +669,7 @@ ContentDetailVO 包含：
 
 1. 弹层修改标题/简介 → `POST /content/update?contentId=&title=&description=`。
 2. `ContentService.updateContentInfo`：校验内容存在（404）→ 作者本人（403）→ title 非空且 ≤50、简介 ≤5000 → `ContentDao.updateContentInfo`。
-3. 全文索引由 MySQL 自动维护（DML 即时生效）；事务后 `ContentCacheManager.refreshContent` 同步缓存（详情/搜索用新值）。
+3. 全文索引由 MySQL 自动维护（DML 即时生效）；事务后 `ContentCache.refreshContent` 回填内容缓存与索引（详情/搜索用新值）。
 
 #### 换源 / 替换媒体
 
@@ -638,8 +702,10 @@ ContentDetailVO 包含：
         4. commentDao.softDeleteByContentId：该内容全部评论软删（含主楼与楼内回复）
         5. contentLikeDao.deleteByContentId：点赞记录物理删除
         6. contentMediaDao.deleteByContentId：媒体记录物理删除
-    → 事务提交后 ContentCacheManager.removeContent 整体剔除缓存
-      （索引/内容/评论/时间戳/推荐列表/Redis 内容点赞）
+    → 事务提交后缓存同步（4.5 显式失效）:
+      ContentCache.removeContent（失效 content:{id} + 索引剔除，读自愈 404）
+      + CommentCache.invalidateComments（级联失效 content:comments:{id} + 空标记）
+      + LikeService.deleteContentLike（失效 content:likeCount 计数 key；T6 迁入；**T4 反转后成员 key 为用户维度，删除不清理**——残留成员指向已删除内容，id 不复用/UI 无查询路径，永不外显）
     → Controller 逐个 FileUploadService.deleteFileByUrl 删物理文件（尽力而为）
 ```
 
@@ -659,12 +725,12 @@ ContentDetailVO 包含：
 
 1. `ContentService.hideContent`：`getContentStatus` 校验内容存在（404）→ 未被作者删除（409「内容已删除，无法下架」）→ 未处于下架态（409「内容已下架」）→ `updateContentDeletedState(conn, id, 2)`。
 2. 仅改 `content.is_deleted=2` 一个字段；**不动**评论/点赞/媒体记录/物理文件（隐藏≠删除）。
-3. 事务提交后 `ContentCacheManager.removeContent` 剔除缓存（索引/内容/评论/时间戳/推荐列表/Redis 内容点赞），前台即时不可见。
+3. 事务提交后缓存同步：ContentCache.removeContent（失效 content:{id} + 索引剔除）+ CommentCache.invalidateComments（级联失效评论树）+ LikeService.deleteContentLike（失效点赞计数 key；**T4 反转后成员 key 为用户维度不清理**，隐藏时点赞记录保留 DB，残留成员=DB 真理，恢复后读自愈对齐），前台即时不可见。
 
 **恢复**：`POST /api/admin/content/unhide?contentId=X`
 
 1. `ContentService.unhideContent`：校验存在（404）→ 未被删除（409）→ 当前处于下架态（409「内容未下架」）→ `updateContentDeletedState(conn, id, 0)`。
-2. 事务提交后 `ContentCacheManager.refreshContent` 回填缓存与索引，前台立即重新可见。
+2. 事务提交后 `ContentCache.refreshContent` 回填内容缓存与索引，前台立即重新可见；评论树无需额外动作（hide 已失效评论 key，读时 miss 回填 DB 现存评论）；点赞 key 无需处理（hide 已失效计数 key，读时 miss 回填 DB 现存计数；**用户维度成员 key 残留=DB 真理（软删保留点赞记录）**，恢复后一致）。
 
 **效果**：下架后内容在首页 `/start`（索引剔除）、搜索（`is_deleted=0` 过滤）、关注流 `/feed`、用户主页 `/profile`、作者本人「我的投稿」均不可见；详情 `/search/IdSearch` 返回 404。恢复后重新可见，且评论/点赞数/媒体数据完好。
 
@@ -703,10 +769,10 @@ ContentDetailVO 包含：
        │   └──────────┘  └──────────┘  └──────────┘  └──────────┘  └──────────┘
        │                                                            │
        │                                                            ▼
-       │                                                     ┌──────────┐
-       │                                                     │ 更新内存 │
-       │                                                     │ 缓存计数 │
-       │                                                     └──────────┘
+       │                                                     ┌──────────────┐
+       │                                                     │ 失效内容 key │
+       │                                                     │ (读自愈回填) │
+       │                                                     └──────────────┘
        │
        └───────────────────── 返回 "点赞成功" ─────────────────┘
 ```
@@ -721,8 +787,10 @@ ContentDetailVO 包含：
 | 4 | 插入 content_like 表 | SQLException 回滚 |
 | 5 | 更新 content 表 like_count +1 | SQLException 回滚 |
 | 6 | 提交事务 | - |
-| 7 | 更新 Redis 缓存 | 失败只记录日志 |
-| 8 | 更新内存缓存 | 失败只记录日志 |
+| 7 | 点赞缓存写：计数/成员分离条件写（`content:likeCount:{id}` 存在才 INCR + `user:likeSet:{userId}` 存在才 SADD contentId + 清空 `empty:user:likeSet:{userId}` 标记；T4 重制，**第四期 T4 成员反转用户维度**） | 写失败→失效 count key 让读自愈（4.2），不阻塞主流程 |
+| 8 | 失效内容 key `content:{id}`（`contentCache.notifyLikeCountChanged`，DB like_count 列为源真理，读自愈回填） | 失败只记录日志 |
+
+> 说明（T4）：内存计数残留（旧 updateContentLikeCount 死代码）已删除；count/用户维度成员 key 均带 TTL（cache.like.ttlMinutes=15）自愈，Redis 挂时读写路径降级走 DB，点赞接口不会 500（H5）。
 
 #### 取消点赞流程
 
@@ -736,8 +804,8 @@ POST /like/content/remove?contentId=123
 4. 删除 content_like 记录
 5. 更新 content 表 like_count -1
 6. 提交事务
-7. 更新 Redis 缓存
-8. 更新内存缓存
+7. 更新 Redis 缓存（条件 DECR/SREM，同 T4 计数/成员分离；**T4 反转后 SREM 作用于 user:likeSet:{userId}**）
+8. 失效内容 key 读自愈回填 DB 最新计数
 ```
 
 ---
@@ -752,8 +820,8 @@ POST /like/comment/add?commentId=456
 2. 检查是否已点赞
 3. 插入 comment_like 记录
 4. 更新 comment 表 like_count +1
-5. 更新 Redis 缓存
-6. 更新内存缓存
+5. 更新 Redis 点赞缓存（LikeCacheService，T4 重制）
+6. 失效评论所属内容评论树 key（commentCache.notifyCommentLikeChanged，读自愈回填最新 likeCount）
 ```
 
 ---
@@ -791,10 +859,10 @@ POST /like/comment/add?commentId=456
 | 4 | 检查内容是否存在 | 不存在返回 NotFoundException |
 | 5 | 如果是回复，查询被回复评论：不存在/不在该内容下 → Conflict；若被回复评论本身是回复，则上溯挂到其主楼 id，并记录 reply_to_user_id=被回复评论作者 id（楼中楼 @ 引用） | 不正确返回 ConflictException |
 | 6 | 插入 comment 表（楼中楼：回复一律 parent_id=主楼 id） | SQLException 回滚 |
-| 7 | 更新 content 表 comment_count +1 | SQLException 回滚 |
+| 7 | 更新 content 表 comment_count +1（并失效内容 key `content:{id}` 读自愈回填 comment_count） | SQLException 回滚 |
 | 8 | 提交事务 | - |
 | 9 | 查询新评论详情 | - |
-| 10 | 即时更新评论缓存 | 失败只记录日志 |
+| 10 | 失效评论树 key（commentCache.invalidateComments，读自愈回填整树） | 失败只记录日志，不阻塞主流程 |
 
 #### 接口定义
 
@@ -825,10 +893,11 @@ Content-Type: application/json
 GET /comment/show?contentId=123&token=xxx（可选）
 
 步骤：
-1. 从缓存获取评论树（楼中楼两级：主楼 + 楼内回复平铺挂主楼）
-2. 如果已登录，批量查询点赞状态
-3. 转换为 CommentVO 树
-4. 返回评论列表
+1. 先确认内容存在且评论区开启（contentCache.getContent：内容不存在/隐藏/删除或作者关闭 → 直接返回空）
+2. 从评论缓存获取评论树（CommentCache 三态：hit-empty=无评论直接空；miss=查 DB 回填整树+单飞；hit-data=直接返回；楼中楼两级：主楼 + 楼内回复平铺挂主楼）
+3. 如果已登录，批量查询点赞状态
+4. 转换为 CommentVO 树
+5. 返回评论列表
 
 CommentVO 结构：
 {
@@ -870,7 +939,7 @@ CommentVO 结构：
 | 4 | 删**主楼**（parent_id IS NULL）：整栋软删 `WHERE comment_id=? OR parent_id=?`；deletedCount = 1+楼内回复数 | - |
 | 5 | 删**回复**：仅软删自己 `WHERE comment_id=?`；deletedCount = 1 | - |
 | 6 | content 表 comment_count -= deletedCount | SQLException 回滚 |
-| 7 | 提交事务后同步内存缓存：contentCache.commentCount 递减 + removeCommentFromCache | 失败只记录日志 |
+| 7 | 提交事务后同步缓存：失效内容 key `content:{id}`（回填 comment_count）+ 失效评论树 key（commentCache.invalidateComments，回填整树） | 失败只记录日志 |
 
 > **管理员删除**：`POST /api/admin/comment/delete?commentId=X`（AuthFilter 校验 role==1）。逻辑同步骤 4-7，跳过步骤 3 的所有权校验。
 >
@@ -952,6 +1021,7 @@ CommentVO 结构：
 | 4 | 更新关注者 follow_count +1 | - |
 | 5 | 更新被关注者 follower_count +1 | - |
 | 6 | 提交事务 | - |
+| 7 （T5） | 提交后缓存双写 FollowCache.cacheFollow：两 key 已加载 → MULTI SADD 双写；冷 key/空标记 → 双 DEL 失效 | 缓存失败降级（双 DEL），不影响业务 |
 
 #### 接口定义
 
@@ -1287,6 +1357,11 @@ ContentService.updateContentLikeCount(contentId, 1);
 users.follow_count / users.follower_count，显式 `--fix` 单事务重算漂移行（改的只是冗余计数列，
 不触碰业务数据，逻辑与 CountRepairTool 一致）。应用层"事务内 ±1 + 事务外缓存 + 定时刷新兜底"
 的业务实现本次未改（P5 缓存一致性仍按既有定时刷新兜底，缓存改造属后续周期）。
+
+**状态（2026-09-12 P5 已消化）**: 本周期 C 缓存改造消化 P5——点赞/评论计数写路径改为"DB 提交后
+有条件写 + 写失败=DEL 失效"（NEEDS 4.2/4.6），读走三态 Cache-Aside 自愈（miss 单飞回填 DB 源真理）；
+时间戳侧"定时刷新兜底"已失效且随旧 ContentCacheManager 整体移除（O-6，T6）。计数仍以 DB 列为源
+真理，check_integrity --fix 作为最终兜底保留。
 
 ---
 
