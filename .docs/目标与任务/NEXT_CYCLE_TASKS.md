@@ -77,7 +77,7 @@
 
 | 编号 | 标题 | 对应候选 | 依赖 | 验收关键（动态） | 期望 commit 主题 | 状态 |
 | -- | -- | ---- | -- | -------- | ------------ | -- |
-| T1 | 基建：Set 缓存组件收敛 | U-09、N3 | — | 新组件覆盖原生 Set 三态读/回填/批量/降级装载，单测齐全；**此时尚无业务接入，全量行为零变化** | `refactor(cache-01)` | 草稿 |
+| T1 | 基建：Set 缓存组件收敛 | U-09、N3 | — | 新组件覆盖原生 Set 三态读/回填/批量/降级装载，单测齐全；**此时尚无业务接入，全量行为零变化** | `refactor(cache-01)` | 已完成 |
 | T2 | LikeCacheService 收口 + 孪生合并 | U-09、N3 | T1 | content/comment 成对方法合并、扫描/回填/降级走基建；行为与统计打点口径零变化；JUnit + 相关 pytest 绿 | `refactor(cache-02)` | 草稿 |
 | T3 | FollowCache 收口 | U-09、N3 | T1 | 接入基建；MULTI 双写等 follow 特有逻辑语义保持；**`pytest all` 全量绿**（收口后第一个全量回归点） | `refactor(cache-03)` | 草稿 |
 | T4 | 点赞成员装载反转 | R-08 | T2（硬） | `content:likeSet` → `user:likeSet`；**方案开工前须用户拍板**（G7）；对外行为零变化；装载量前后对比 | `refactor(cache-04)` | 草稿 |
@@ -105,7 +105,7 @@
 * **红线边界**：不改 `CacheAside` 既有对外签名（他处仍在用，新组件平行存在或按窗口探索定形态）；不改 key 命名/三态语义/空标记 TTL/降级语义；不做"顺手全量收口各域"（T2/T3 的事）。
 * **强制探索步骤**：动刀前先 (0) 复核 N3 证据仍成立（G11） (1) 逐方法比对 5 份实现的差异点（成员类型 String/Long、TTL 来源、打点 key、排序语义）确认泛型化参数化可行 (2) 定组件边界与 API 面（单成员/批量/全量/回填/降级装载各暴露什么）(3) loader 样板（transactionTemplate + SQLException→ServerException 包装）是否随组件收敛——若清单未覆盖 → 回写本文档再动手。
 * **验收**：新组件单测覆盖三态/回填/降级/批量（含空标记与续期语义）；**业务代码零改动**（此时尚无接入，全量 JUnit + pytest 基线不变）。
-* **执行回写（<日期>，<commit scope> 已落地）**：`<任务完成后追加>`。
+* **执行回写（2026-09-15，`refactor(cache-01)` 已落地）**：N3 证据复核**成立**（FollowCache/LikeCacheService 逐字重复面 2.1 表，G11 第 0 步过）；新增 `cache/SetCache`（@Component，330 行，六 API 面：`isMember`/`getMembers`/`batchIsMember`（单 set 多成员·Follow 形态）/`batchKeysIsMember`（多 set 单成员·Like 形态）/`writeSet`/`loadViaSingleFlight`）+ `SetCacheTest`（30 例）。设计决策：成员类型固定 long（两域均 Long，泛型化属过度设计）；TTL 调用方传参、探针续期/回填精确 TTL 无抖动；组件不排序（follow 域排序留 T3 包装，三路径 hit-data/miss/降级须同一包装点排序防热冷读波动）；批量回填写 best-effort、DB 答案（dbAnswer 不得返回 null）失败上抛（**差异记录 L2**：当前 LikeCacheService 批量回填失败上抛，T2 收口后变 best-effort，T2 回写对照）；loader 样板（transactionTemplate+DAO 包装）不随组件收敛；空分支复用 `cacheAside.markEmpty`（exists 守卫同源）。验证：mvn compile 过；全量 JUnit **395 例全绿**（基线 365，三期 T6 收尾口径 + SetCacheTest 30；6.12 记录的 362 为三期 T5 末口径，T6 已增至 365）；pytest all **124 passed** 无回归（基线不变）；业务代码零改动（仅新增文件 + 文档）；常青文档同步见 6.13；subagent review 通过（无🔴，🟡 5 条全部落实：数字口径修正/4.2 测试计数更新/dbAnswer 契约与 getMembers 排序交接提示入 javadoc/并发用例维持既有范式）。
 
 ### T2 LikeCacheService 收口 + 孪生合并
 

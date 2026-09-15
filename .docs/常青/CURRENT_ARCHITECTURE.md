@@ -206,8 +206,9 @@ com.itheima/
 | CacheStatus | 15 | 三态枚举：MISS / HIT_EMPTY / HIT_DATA |
 | CacheResult | 39 | 三态读取结果载体（status + value，HIT_EMPTY 时 value=null） |
 | CacheAside | 399 | 统一 Cache-Aside 封装：`read` 三态读 / `get` 带单飞回填 / `writeOrInvalidate`（写失败=DEL 自愈，写数据同时清空标记）/ `markEmpty` / `invalidate`，TTL ±10% 简单抖动，缓存失败一律降级不抛业务异常；T7 起三态读/降级/LOAD/写失败处自动打点 CacheStats；**T8 起读路径 pipeline 化**（单 key 与批量均 EXISTS 空标记+GET 一趟往返）并新增 **`getBatch` 批量读接口**（三态语义与单 key 一致、miss 逐个单飞回填、解析失败/整批降级逐 key 直接 loader 不写回）；**T9 起读命中滑动续期**（`get`/`getInternal` 与 `getBatch` 命中数据 key 时同 pipeline 追加 EXPIRE，续期值=原 TTL ±10% 抖动，空标记从不续期；`read` 纯三态读不续期）；**三期 T2 起降级亦经单飞**（getInternal catch / getBatch 整批 catch / getBatch 脏 JSON catch 三处降级改 `singleFlight.get(key, loader)`：同 key 并发只打一次 DB、仅装载不写回、失败条目移除可重试）；**三期 T3 起"loader 失败不得上报为空"契约**（治 N2）：所有装载点捕获 `DatabaseException` 转 null——不写空标记、不 DEL 数据 key（miss 回填内联 try/catch 直接 return null 跳过 markEmpty；getInternal 降级 / getBatch 整批降级 / getBatch 脏 JSON 单 key 降级共用 `loadDegraded` helper） |
+| SetCache | 330 | 原生 Set 缓存基建（**第四期 T1 cache-01 新增，U-09/N3 收敛落点**）：单成员三态读 `isMember` / 全量读 `getMembers`（不排序）/ 批量判定（`batchIsMember` 单 set 多成员·Follow 形态、`batchKeysIsMember` 多 set 单成员·Like 形态）/ 回填 `writeSet`（空→复用 `cacheAside.markEmpty`）/ 降级装载 `loadViaSingleFlight`；三态/空标记/降级语义与域缓存现状逐条一致（探针续期精确 TTL 无抖动、空标记不续、批量 DB 答案失败上抛而回填写 best-effort）；**尚未接入业务（T2/T3 收口 LikeCacheService/FollowCache）**，见 6.13 |
 
-> 测试：`src/test/java/com/itheima/cache/` 7 类 79 例（mockStatic MyRedisPool + mock Jedis，不碰真实 Redis，含 CacheStatsTest 域解析/计数/惰性输出 8 例；CacheAsideTest 38 例含单 key pipeline 往返断言与批量三态/降级/脏 JSON 用例 + **T9 滑动续期 4 例**：命中续期抖动/空标记不续/批量续期/续期失败降级 + **三期 T2 新增 3 例降级单飞**：降级并发同 key 只装载一次/降级 loader 失败不共享且可重试/批量降级逐 key 去重——并发用例用 mock RedisAccess 恒抛 CacheException（MockedStatic 线程局部不可跨线程）；**三期 T3 新增 5 例负缓存治理**：miss/降级/批量 miss 逐 key/批量整批降级/批量脏 JSON 单 key 降级 遇 DatabaseException 均转 null 且不写空标记不 DEL；**三期 T1 新增 RedisCircuitBreakerTest 8 例**（状态机全迁移含并发唯一探针）+ **RedisAccessTest 扩至 9 例**（熔断开启快速失败不触达连接池/连续失败达阈值拒绝/成功重置不误开/冷却期满探针恢复全链路/回调 CacheException 计失败口径）），见九.9.2。
+> 测试：`src/test/java/com/itheima/cache/` **8 类 117 例**（mockStatic MyRedisPool + mock Jedis，不碰真实 Redis，含 CacheStatsTest 域解析/计数/惰性输出 8 例；CacheAsideTest 43 例含单 key pipeline 往返断言与批量三态/降级/脏 JSON 用例 + **T9 滑动续期 4 例**：命中续期抖动/空标记不续/批量续期/续期失败降级 + **三期 T2 新增 3 例降级单飞**：降级并发同 key 只装载一次/降级 loader 失败不共享且可重试/批量降级逐 key 去重——并发用例用 mock RedisAccess 恒抛 CacheException（MockedStatic 线程局部不可跨线程）；**三期 T3 新增 5 例负缓存治理**：miss/降级/批量 miss 逐 key/批量整批降级/批量脏 JSON 单 key 降级 遇 DatabaseException 均转 null 且不写空标记不 DEL；**三期 T1 新增 RedisCircuitBreakerTest 8 例**（状态机全迁移含并发唯一探针）+ **RedisAccessTest 扩至 9 例**（熔断开启快速失败不触达连接池/连续失败达阈值拒绝/成功重置不误开/冷却期满探针恢复全链路/回调 CacheException 计失败口径）；**第四期 T1 新增 SetCacheTest 30 例**（三态/回填/降级/批量/空标记/续期/统计/并发单飞）），见九.9.2。
 
 ### 4.3 业务域包（每域 controller/service/dao/model 分层）
 
@@ -373,7 +374,7 @@ com.itheima/
 - **六类事件**：hitData / hitEmpty / miss / loadCount / degradeCount / writeFailCount（`CacheStats.Event`：HIT_DATA/HIT_EMPTY/MISS/LOAD/DEGRADE/WRITE_FAIL）。
 - **分域分桶**：`CacheKeys.domainOf(String dataKey)` 唯一解析源（key 生成与解析同源）——**长前缀优先**（content:index / content:like / content:comments 先于通用 content:）；`empty:` 空标记先解包到底层数据 key 再归域；映射：content:index→CONTENT、content:like*/comment:like*→LIKE、content:comments//comment:*→COMMENT、content:{id}→CONTENT、user:*→FOLLOW、未知/null→OTHER。
 - **惰性日志输出**：每 **N=1000** 次记录输出一次各域摘要（INFO 单行 `CacheStats 摘要: total=.. content{hitData=.. …}`）；**不引入定时器、不新增 admin 端点**（与 O-6 移除定时刷新的决策一致：统计只读不重建）。
-- **挂点**：CacheAside 自动打点（read/getInternal 三态读 + catch 降级 + `invokeLoader` 入口 LOAD + writeOrInvalidate/markEmpty/deleteQuietly 写失败）；LikeCacheService / FollowCache 原生 Set 三态读分支手动打点（含批量 pipeline 路径，批量记录粒度=**每 (数据 key, 决策) 记一次**：like 批量 key 各异按 id、follow 批量单 key 按一趟）。
+- **挂点**：CacheAside 自动打点（read/getInternal 三态读 + catch 降级 + `invokeLoader` 入口 LOAD + writeOrInvalidate/markEmpty/deleteQuietly 写失败）；LikeCacheService / FollowCache 原生 Set 三态读分支手动打点（含批量 pipeline 路径，批量记录粒度=**每 (数据 key, 决策) 记一次**：like 批量 key 各异按 id、follow 批量单 key 按一趟）；**SetCache（第四期 T1）自动打点**——原生 Set 路径（isMember/getMembers/批量/回填失败/降级），批量粒度保持现状（follow 单 set 一趟一次、like 每 (key,决策) 一次）。
 - **红线段**：`record()` 自身异常吞掉记 WARNING，不影响主链路；统计不引入 MQ。
 - **用途**：分域命中率/穿透曲线为 O-8（T9）分域 TTL 调参与 T8 读路径加固前后对比提供数据依据。
 
@@ -477,6 +478,15 @@ com.itheima/
 - **索引 pipeline 化**：`rebuildIndexes` 由两次 executeVoid（SCAN-DEL + 逐条 lremAndLpush）并为单条 executeVoid——SCAN 顺序收集旧 `content:index:*` key（游标需顺序读，无法入 pipeline）→ 一趟 pipeline `DEL 全部 + lremAndLpush 全部`。新增 `lremAndLpush(Pipeline, ...)` 重载；`ensureIndex` 懒重建 / `addToIndex` / `removeContent` 零改动。
 - **前后对比（验收口径）**：前 = DB N+1 + Redis ≈ **12N 往返**（writeContent 2 + 索引 8 每内容）；后 = DB 恒 **2** + Redis ≈ **3**（内容 pipeline 1 + 索引 SCAN 页 + 索引 pipeline 1），与 N 解耦。运行时前后对比（`INFO commandstats`）可选做；单测 `initRedisRoundTripsConstantForLargeContentCount`（executeVoid 恒 1/execute 恒 0）+ `initLoadsMediaInOneBatchQueryEliminatingNPlusOne` + `initMovesRedisWritesOutsideDbTransaction`（InOrder 事务先于写）为断言依据。
 - **验证**：JUnit **362 例全绿**（T4 末 356 +6：ContentCacheTest init 区重写 +5 含媒体损坏跳过/事务外写/批量装载/N+1 消除/往返恒定，CacheAsideTest writeBatch 2——原 04a 单测基数 356）无删除；pytest all **124 passed** 无回归；独立 subagent review 通过（无🔴；🟡 4 条全部落实：媒体损坏跳过补测、writeBatch sync 兜底 javadoc、往返断言注释修正、文档回写随 commit）。
+
+### 6.13 Set 基建组件 SetCache（第四期 T1 cache-01 新增，U-09/N3 收敛落点）
+
+> 目标：把原生 Set 缓存行为（三态读含单成员判定 / 全量读 / 回填含空标记 / 批量判定 / 降级单飞装载）从域类（LikeCacheService / FollowCache 跨类逐字重复）收敛为 cache 包内一处组件，治"改一处缺陷花五遍钱"（N3）。**行为零变化重构**——key 命名、三态语义、空标记 TTL、降级语义一概不变；本任务不接入任何业务（T2/T3 才收口），对外行为零变化。
+
+- **边界**：`CacheAside` 管 JSON String 的 Cache-Aside；`SetCache` 管原生 Set（SISMEMBER/SMEMBERS/SADD），两者平行存在、互不改对方签名。
+- **API 面**：`isMember(setKey, member, loader, ttl)` 单成员三态（empty→false / set 存在→SISMEMBER / miss→单飞回填后判成员 / 降级→单飞装载作答不写回）；`getMembers(setKey, loader, ttl)` 全量读（不排序，需确定性顺序的调用方自包装）；`batchIsMember(setKey, members, dbAnswer, fullLoader, ttl)` 单 set 多成员（Follow 形态：miss→DB 批量作答 + 单飞全量回填一次）；`batchKeysIsMember(setKeys, member, dbAnswer, keyLoader, ttl)` 多 set 单成员（Like 形态：miss→DB 批量作答 + 逐 key 单飞回填）；`writeSet` 回填（非空 SADD+EXPIRE 精确 TTL，空→复用 `cacheAside.markEmpty` 含 exists 守卫）；`loadViaSingleFlight` 降级装载（单飞 + LOAD 打点、不写回 D4）。
+- **语义要点**：探针续期精确 TTL 无抖动（空标记 key 从不续期）；批量 miss 的 DB 答案（dbAnswer）失败上抛（DB 即真理），回填写 best-effort（失败仅记日志、DB 答案照常返回，4.2 缓存失败不得导致业务失败——**差异记录**：当前 LikeCacheService 批量回填失败上抛，T2 收口后变 best-effort，属收敛方向，T2 执行回写对照）；统计打点粒度保持现状（follow 单 set 一趟一次 / like 每 (key,决策) 一次）。
+- **验证**：SetCacheTest 30 例全绿（三态/回填/降级/批量/空标记/续期/统计/并发单飞）；全量 JUnit **395 例**（基线 365 + 30）无回归；pytest all **124 passed** 基线不变。
 
 ---
 
