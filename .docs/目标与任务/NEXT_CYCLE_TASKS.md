@@ -83,7 +83,7 @@
 | T4 | 点赞成员装载反转 | R-08 | T2（硬） | `content:likeSet`/`comment:likeSet` → `user:likeSet`/`user:commentLikeSet`（内容+评论全反转，2026-09-15 拍板）；**方案开工前经用户拍板**（G7）；对外行为零变化；装载量前后对比已落执行回写 | `refactor(cache-04)` | 已完成 |
 | T5 | 推荐读路径优化 + 索引重建退避 | N1、N2、R-04、R-07、U-11 加重面 | —（独立，可并行窗口） | 惰性探测（探测量前后对比）；停机期间不再逐请求全表查询（可复现验证）；R-07 评估结论回写 NEEDS；**`pytest all` 全量绿** | `refactor(cache-05)` | 已完成 |
 | T6 | 关注/粉丝计数入缓存 | R-01 | T3（软） | Profile 计数命中缓存；follow/unfollow 后计数一致性方案拍板落地（G7）；SCARD 冷 set 返 0 的坑有结论 | `refactor(cache-06)` | 已完成 |
-| T7 | 小项打包：JSON 兼容 + 批量续期补测 | R-09、R-06 | —（独立） | Jackson 关 `FAIL_ON_UNKNOWN_PROPERTIES`（含多余字段兼容单测）；批量续期断言补齐；**G1 标注：小任务合并为一个 commit** | `refactor(cache-07)` | 草稿 |
+| T7 | 小项打包：JSON 兼容 + 批量续期补测 | R-09、R-06 | —（独立） | Jackson 关 `FAIL_ON_UNKNOWN_PROPERTIES`（含多余字段兼容单测）；批量续期断言补齐；**G1 标注：小任务合并为一个 commit** | `refactor(cache-07)` | 已完成 |
 | T8 | 收尾 | 全周期 | T1~T7 | T1~T7 无残留；`@WebServlet`/web.xml/IoC 原样；常青文档同步；覆盖率地图 rerun 无回归；**`pytest all` 全量绿** | `refactor(cache-08)` | 草稿 |
 
 > 状态取值：草稿 / 待执行 / 执行中 / 已完成 / 搁置。搁置的 T# 必须注明其"对应候选"编号去向（转 `UNPLANNED_ISSUES.md` / 结转下周期 NEEDS 二节），不得悬空（G11）。
@@ -153,7 +153,7 @@
 * **红线边界**：只关 `FAIL_ON_UNKNOWN_PROPERTIES`，**不做全量格式版本机制**（版本号/迁移逻辑不做，NEEDS 4.3）；R-06 只补测试不改行为。
 * **强制探索步骤**：动刀前先 (0) 复核 R-09/R-06 证据 (1) 关闭 feature 后的兼容性单测（含多余字段的 JSON 能反序列化、既有 DTO 序列化往返不变）(2) 确认 `SerializationFeature` 现有配置不受影响。
 * **验收**：新增兼容单测绿；批量续期断言补齐（getBatch miss key 场景 + Like/Follow 批量 pipeline）；全量 JUnit 无回归。**G1 标注：本任务为小任务合并，1 个 commit**。
-* **执行回写（<日期>，<commit scope> 已落地）**：`<任务完成后追加>`。
+* **执行回写（2026-09-16，`refactor(cache-07)` 已落地）**：R-09/R-06 证据复核均**成立**（G11 第 (0) 步过）：R-09 = `JacksonCodec` MAPPER（L20-22）未关 `FAIL_ON_UNKNOWN_PROPERTIES`——DTO 删/改名后旧缓存 JSON 含未知字段 → 反序列化失败 → DEGRADE 每读走 DB（TTL 内反复）；R-06 ① = `CacheAside.getBatch` 续期用例只覆盖 hit-data/hit-empty、无 miss key 场景；R-06 ② = `SetCache` 批量（batchIsMember/batchKeysIsMember）与 Like/Follow 域层批量用例均无 pipeline `expire` 直接断言（仅单 key hit-data 有，`isContentLikedHitDataRenews*`/`isFollowingHitDataRenews*`）。**落点（G1 小任务合并 1 commit）**：① 业务一行修——JacksonCodec MAPPER 追加 `.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)`（保留 `WRITE_DATES_AS_TIMESTAMPS` 原样，无版本号/迁移机制，红线遵守；`BaseServletUtil`/`BaseServlet` 控制器层 ObjectMapper 不碰）；② JacksonCodecTest +2 例——`jsonWithUnknownFieldsIgnoresExtraProperties`（多余字段忽略，feature 未关则红）/`dateSerializationStaysIsoNotTimestamp`（钉死 WRITE_DATES_AS_TIMESTAMPS 仍关闭）；③ CacheAsideTest +1 例——`getBatchMissKeyQueuesRenewalAndBackfillWritesTtl`（miss key 亦入列续期（无效果）+ 回填 writeOrInvalidate setex TTL + 清空标记，空标记不续）；④ SetCacheTest/LikeCacheServiceTest/FollowCacheTest 仅补断言行（无新增用例）——批量三态（hit-data/hit-empty/miss）全部直接断言 pipeline `expire`（SetCache 精确 TTL 无抖动、CacheAside 批量 ±10% 抖动 longThat(90..110)）+ 空标记不续。**行为说明（R-09 有意的定向变化）**：脏 JSON（含未知字段）由「反序列化失败→DEGRADE→DB loader」变「成功解析（忽略未知字段）→HIT_DATA」，正是 R-09 要消除的反复钻 DB；对外 API/业务语义零变化。验证：`tv.py test junit`（沙箱外）JUnit **419 例全绿**（surefire 415 + pool 4，T6 416 + 3）无回归；**pytest all 124 passed**（`tv.py test all`，沙箱外）；常青文档同步见 6.19/9.2/12；subagent review 通过（无🔴，🟡 2 条全部落实：batchKeysIsMember 混合态补 k1 hit-empty 续期断言 / JacksonCodecTest 末尾换行）。关联：本任务无 L2/L3 差异（R-06 只补测试不改行为；R-09 业务改动仅 JacksonCodec 一行 + javadoc）。
 
 ### T8 收尾
 
@@ -169,6 +169,7 @@
 
 | 日期 | 版本 | 内容                                                                                                                                                                       |
 | ---- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-09-16 | 0.8 | **T7 完成（`refactor(cache-07)`）**：任务总览 T7 状态 → 已完成；四、任务详情 T7 追加执行回写（R-09/R-06 证据复核成立 / JacksonCodec 关 `FAIL_ON_UNKNOWN_PROPERTIES` 一行修（保留 WRITE_DATES_AS_TIMESTAMPS，无版本机制）/ JacksonCodecTest +2（未知字段忽略 + 日期格式钉死）/ CacheAsideTest +1（getBatch miss key 续期与回填）/ SetCache/Like/Follow 批量三态续期断言行补齐 / 脏 JSON 路径有意定向变化说明；JUnit 419（surefire 415 + pool 4）+ pytest all 124 passed + subagent review 无🔴🟡2 全落实）；变更记录 0.8 行 |
 | 2026-09-16 | 0.7 | **T6 完成（`refactor(cache-06)`）**：任务总览 T6 状态 → 已完成；四、任务详情 T6 追加执行回写（R-01 证据复核成立 / 2026-09-16 用户三连拍板：独立计数 key+Cache-Aside、SCARD 否决、条件增量 Lua / G11 质疑 L3 上报·用户裁决照做 / 落点：CacheKeys 两工厂+UserDao 两单列查询+FollowCache 读写+ProfileService 事务外读 / L1 观察 4 条 / JUnit 416 + pytest 124 + verify 8/8 篡改探针证命中缓存 + subagent review 无🔴🟡5 全处置）；变更记录 0.7 行 |
 | 2026-09-16 | 0.6 | **T5 完成（`refactor(cache-05)`）**：任务总览 T5 状态 → 已完成；四、任务详情 T5 追加执行回写（N1/N2 证据复核成立 / 惰性探测落点与均匀性论证 / 退避参数与记录形态 / 探测量前后对比表 / 停机运行时验证 Δ Com_select=0 / R-07 评估结论 / L1 观察；JUnit 407 + pytest 124 + subagent review 无🔴）；变更记录 0.6 行 |
 | 2026-09-16 | 0.5 | **T4 完成（`refactor(cache-04)`）**：任务总览 T4 状态 → 已完成；四、任务详情 T4 追加执行回写（R-08 证据复核成立 / 用户 2026-09-15 拍板内容+评论全反转 / key 与 domainOf 落点 / 批量收敛单 set 多成员 / Lua 仅换 KEYS·ARGV / 失效仅计数 key / DAO 增删 / 装载量前后对比表 / 已知取舍；JUnit 403 + pytest 124 + subagent review 无🔴🟡4 全落实）；常青 CURRENT_ARCHITECTURE header 2.19（4.2 两行、6.2/6.3/6.16/9.2/12 同步）+ BUSINESS_FLOW 3.1/4.1.1/3.9/3.10 点赞与失效口径同步 |

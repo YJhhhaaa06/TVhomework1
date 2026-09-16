@@ -304,6 +304,9 @@ class FollowCacheTest {
         assertEquals(false, result.get(8L));
         assertEquals(false, result.get(9L));
         verify(tt, never()).execute(any());
+        // R-06 ②（第四期 T7）：批量 pipeline 续期直接断言——hit-empty 亦入列续期（set 不存在返回 0 无效果）、空标记不续
+        verify(p).expire(followingKey(USER), AppConfig.getFollowTtlSeconds());
+        verify(p, never()).expire(startsWith("empty:"), anyLong());
     }
 
     @Test
@@ -324,6 +327,9 @@ class FollowCacheTest {
         assertEquals(true, result.get(8L));
         assertEquals(false, result.get(9L));
         verify(tt, never()).execute(any());
+        // R-06 ②（第四期 T7）：批量 hit-data 续期直接断言——对 set 入列域 TTL、空标记不续
+        verify(p).expire(followingKey(USER), AppConfig.getFollowTtlSeconds());
+        verify(p, never()).expire(startsWith("empty:"), anyLong());
     }
 
     @Test
@@ -346,6 +352,9 @@ class FollowCacheTest {
         assertEquals(false, result.get(8L));
         assertEquals(true, result.get(9L));
         verify(jedis).sadd(eq(followingKey(USER)), any(String[].class));
+        // R-06 ②（第四期 T7）：探针续期入列（miss 时 set 不存在返回 0 无效果；回填 TTL 由 writeSet 负责）
+        verify(p).expire(followingKey(USER), AppConfig.getFollowTtlSeconds());
+        verify(p, never()).expire(startsWith("empty:"), anyLong());
     }
 
     @Test

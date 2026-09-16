@@ -396,6 +396,9 @@ class SetCacheTest {
 
             assertTrue(result.get(1L));
             assertFalse(result.get(2L));
+            // 续期：hit-data 批量一趟 pipeline 对 set 入列精确 TTL；空标记不续
+            verify(p).expire("key", 100L);
+            verify(p, never()).expire(startsWith("empty:"), anyLong());
         }
     }
 
@@ -425,7 +428,9 @@ class SetCacheTest {
             assertFalse(result.get(1L));
             assertTrue(result.get(2L));
             verify(jedis).sadd("key", "1", "2", "3"); // 同一 set 只回填一次（全量）
-            verify(jedis).expire("key", 100L);
+            verify(jedis).expire("key", 100L); // 回填精确 TTL
+            verify(p).expire("key", 100L); // 探针续期入列（miss 时 set 不存在返回 0 无效果）
+            verify(p, never()).expire(startsWith("empty:"), anyLong());
         }
     }
 
@@ -548,6 +553,11 @@ class SetCacheTest {
             assertTrue(result.get("k3")); // dbAnswer 作答 + 逐 key 回填
             verify(jedis).sadd("k3", "42");
             verify(jedis).expire("k3", 100L);
+            // pipeline 续期：k1(hit-empty)/k2(hit-data)/k3(miss) 均对各自 set 入列精确 TTL；空标记不续
+            verify(p).expire("k1", 100L);
+            verify(p).expire("k2", 100L);
+            verify(p).expire("k3", 100L);
+            verify(p, never()).expire(startsWith("empty:"), anyLong());
         }
     }
 

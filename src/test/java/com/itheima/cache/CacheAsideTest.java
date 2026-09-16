@@ -585,6 +585,33 @@ class CacheAsideTest {
     }
 
     @Test
+    void getBatchMissKeyQueuesRenewalAndBackfillWritesTtl() {
+        // R-06 ①（第四期 T7）：批量续期补齐 miss key 场景——pipeline 对 miss key 亦无条件入列续期
+        // （data key 不存在 → EXPIRE 返回 0 无效果，语义无害），miss 回填经 writeOrInvalidate 写真实 TTL
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            Pipeline p = mock(Pipeline.class);
+            when(jedis.pipelined()).thenReturn(p);
+            Response<Boolean> notEmpty = boolResponse(false);
+            Response<String> noJson = strResponse(null);
+            when(p.exists("empty:k1")).thenReturn(notEmpty);
+            when(p.get("k1")).thenReturn(noJson);
+            SampleDto dto = new SampleDto(1L, "loaded");
+
+            SampleDto value = cache.getBatch(List.of("k1"), SampleDto.class, k -> dto, 100).get("k1");
+
+            assertEquals(1L, value.getId());
+            // pipeline 探针续期入列（±10% 抖动：100s -> [90,110]）；空标记从不续期
+            verify(p).expire(eq("k1"), longThat(t -> t >= 90 && t <= 110));
+            verify(p, never()).expire(startsWith("empty:"), anyLong());
+            // miss 回填：writeOrInvalidate 写数据 key（带抖动 TTL）+ 清空标记
+            verify(jedis).setex(eq("k1"), longThat(t -> t >= 90 && t <= 110),
+                    eq(new JacksonCodec().toJson(dto)));
+            verify(jedis).del("empty:k1");
+        }
+    }
+
+    @Test
     void getRenewalFailureDegradesToLoaderWithoutThrowing() {
         try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
             Jedis jedis = mockJedis(ms);

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.itheima.exception.CacheException;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -76,5 +77,30 @@ class JacksonCodecTest {
         assertThrows(CacheException.class,
                 () -> codec.fromJson("[\"1\"]", new TypeReference<List<SampleDto>>() {
                 }));
+    }
+
+    // ==================== 第四期 T7（R-09）：关闭 FAIL_ON_UNKNOWN_PROPERTIES 后的兼容语义 ====================
+
+    @Test
+    void jsonWithUnknownFieldsIgnoresExtraProperties() {
+        // 模拟 DTO 字段删/改名后旧缓存条目：含多余/旧字段的 JSON 仍可反序列化，多余字段忽略（R-09）
+        String legacyJson = "{\"id\":1,\"name\":\"alice\",\"oldField\":\"obsolete\",\"renamedField\":42}";
+
+        SampleDto back = codec.fromJson(legacyJson, SampleDto.class);
+
+        assertNotNull(back);
+        assertEquals(1L, back.getId());
+        assertEquals("alice", back.getName());
+    }
+
+    @Test
+    void dateSerializationStaysIsoNotTimestamp() {
+        // 确认 SerializationFeature 现有配置不受影响：WRITE_DATES_AS_TIMESTAMPS 仍关闭（ISO-8601 而非时间戳）
+        LocalDateTime value = LocalDateTime.of(2024, 1, 1, 10, 0);
+
+        String json = codec.toJson(value);
+
+        assertEquals("\"2024-01-01T10:00:00\"", json);
+        assertEquals(value, codec.fromJson(json, LocalDateTime.class));
     }
 }
