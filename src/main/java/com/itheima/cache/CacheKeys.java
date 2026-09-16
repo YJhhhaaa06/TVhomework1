@@ -90,6 +90,16 @@ public final class CacheKeys {
         return "user:follower:" + userId;
     }
 
+    /** 我的关注数：{@code user:followCount:{userId}}（String int，第四期 T6 计数入缓存 R-01，与 {@link #contentLikeCount(long)} 同构）。 */
+    public static String userFollowCount(long userId) {
+        return "user:followCount:" + userId;
+    }
+
+    /** 我的粉丝数：{@code user:followerCount:{userId}}（String int，第四期 T6 计数入缓存 R-01）。 */
+    public static String userFollowerCount(long userId) {
+        return "user:followerCount:" + userId;
+    }
+
     /**
      * 数据 key → 统计域解析（T7 新增，key 生成与解析同源，唯一源收敛于本方法）。
      *

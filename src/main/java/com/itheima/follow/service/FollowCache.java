@@ -11,6 +11,7 @@ import com.itheima.exception.ServerException;
 import com.itheima.follow.dao.FollowDao;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;
+import com.itheima.user.dao.UserDao;
 import com.itheima.util.LogUtil;
 import com.itheima.util.TransactionTemplate;
 import redis.clients.jedis.Jedis;
@@ -48,12 +49,15 @@ import java.util.logging.Logger;
  * <p>key 规范（T1 定稿，见 {@link CacheKeys}）：
  * <ul>
  *   <li>{@code user:following:{userId}}（Set&lt;followedUserId）——我关注了谁；</li>
- *   <li>{@code user:follower:{userId}}（Set&lt;userId）——谁关注了我。</li>
+ *   <li>{@code user:follower:{userId}}（Set&lt;userId）——谁关注了我；</li>
+ *   <li>{@code user:followCount:{userId}} / {@code user:followerCount:{userId}}（String int，
+ *       第四期 T6 计数入缓存 R-01：成员/计数分离，与 {@code content:likeCount} 同构，
+ *       0 是合法数据，CLI 读走 CacheAside）。</li>
  * </ul>
  *
  * <p>三态读（4.3/4.4）：空标记 {@code empty:user:following:{id}}（写于"确认无关注/无粉丝"）→
  * false/空列表；set 存在 → SISMEMBER/SMEMBERS；miss → 单飞回填（DB 全量 → SADD+EXPIRE，
- * 空集 → 空标记）。关注数/粉丝数计数不入缓存（O-9 二期）。
+ * 空集 → 空标记）。关注数/粉丝数计数入缓存（第四期 T6 起，R-01；此前不入缓存 O-9 二期）。
  *
  * <p>写路径（4.10）：关注/取关在 DB 提交后调用。条件双写——两条 data key 均"已加载
  * （set 存在或空标记存在）"时用 Redis MULTI 原子 SADD/SREM 双写并续 TTL；任一侧为冷 key
@@ -65,7 +69,18 @@ public class FollowCache {
 
     private static final Logger LOGGER = LogUtil.getLogger(FollowCache.class);
 
+    /**
+     * 计数条件增量（第四期 T6 cache-06，R-01）：count key 存在才 INCRBY（delta=±1）。
+     * KEYS: [followCountKey, followerCountKey]；ARGV: [signedDelta]。
+     * 镜像 LikeCacheService 条件写先例（4.6）：DB 提交后调用，冷 key（未加载）no-op，
+     * 由读回填装载 DB 真理——避免失效-重载竞态（DEL 后再并发读可能写回旧值，TTL 内 stale）。
+     */
+    static final String FOLLOW_COUNT_ADJUST_SCRIPT =
+            "if redis.call('EXISTS', KEYS[1]) == 1 then redis.call('INCRBY', KEYS[1], ARGV[1]) end "
+            + "if redis.call('EXISTS', KEYS[2]) == 1 then redis.call('INCRBY', KEYS[2], ARGV[1]) end";
+
     private final FollowDao followDao;
+    private final UserDao userDao;
     private final TransactionTemplate transactionTemplate;
     private final RedisAccess redis;
     private final SetCache setCache;
@@ -73,10 +88,11 @@ public class FollowCache {
     private final CacheStats stats;
 
     @InjectConstructor
-    public FollowCache(FollowDao followDao, TransactionTemplate transactionTemplate,
+    public FollowCache(FollowDao followDao, UserDao userDao, TransactionTemplate transactionTemplate,
                        RedisAccess redis, SetCache setCache, CacheAside cacheAside,
                        CacheStats stats) {
         this.followDao = followDao;
+        this.userDao = userDao;
         this.transactionTemplate = transactionTemplate;
         this.redis = redis;
         this.setCache = setCache;
@@ -138,6 +154,60 @@ public class FollowCache {
                 () -> loadFollowerIds(userId), ttlSeconds()));
     }
 
+    // ==================== 读-关注/粉丝计数（CacheAside：hit-data / miss 单飞回填 / Redis 异常降级 loader） ====================
+
+    /**
+     * 查询用户关注数（第四期 T6 计数入缓存 R-01：成员/计数分离，走独立 count key，不装载成员）。
+     * 0 是合法 hit-data；Redis 异常由 CacheAside 降级走 DB；DB 为最终真理（Profile 读路径由此命中缓存）。
+     */
+    public int getFollowCount(long userId) {
+        return getCount(CacheKeys.userFollowCount(userId), userId, "关注数", "查询关注数失败",
+                (conn, id) -> userDao.getFollowCountById(conn, id));
+    }
+
+    /**
+     * 查询用户粉丝数（同 {@link #getFollowCount(long)}，key 换 {@code user:followerCount:{userId}}）。
+     */
+    public int getFollowerCount(long userId) {
+        return getCount(CacheKeys.userFollowerCount(userId), userId, "粉丝数", "查询粉丝数失败",
+                (conn, id) -> userDao.getFollowerCountById(conn, id));
+    }
+
+    /** 计数通用读（CacheAside）：防御分支仅兜底 hit-empty 时 get 返回 null 的 NPE 可能（镜像 LikeCacheService.getLikeCount）。 */
+    private int getCount(String countKey, long userId, String label, String errMsg, DaoQuery<Integer> query) {
+        Integer cached = cacheAside.get(countKey, Integer.class,
+                () -> loadCount(userId, label, errMsg, query), ttlSeconds());
+        if (cached != null) {
+            return cached;
+        }
+        stats.record(CacheStats.Event.LOAD, countKey); // 兜底 DB 装载与 CacheAside 口径对齐
+        try {
+            return loadCount(userId, label, errMsg, query);
+        } catch (RuntimeException re) {
+            throw re;
+        } catch (Exception e) {
+            throw new ServerException("服务器异常，" + errMsg, e);
+        }
+    }
+
+    /** 计数 loader 样板（label 仅用于日志；errMsg 为用户可见异常文案，与 like 域口径一致）。 */
+    private int loadCount(long userId, String label, String errMsg, DaoQuery<Integer> query) {
+        try {
+            return transactionTemplate.execute(conn -> {
+                try {
+                    return query.apply(conn, userId);
+                } catch (SQLException e) {
+                    LOGGER.log(Level.SEVERE, label + " DB 查询失败, userId=" + userId, e);
+                    throw new ServerException("服务器异常，" + errMsg);
+                }
+            });
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ServerException("服务器异常，" + errMsg, e);
+        }
+    }
+
     // ==================== 写路径（关注/取关，DB 提交后调用 4.10，双 key 原子语义保持） ====================
 
     /**
@@ -175,6 +245,8 @@ public class FollowCache {
             stats.record(CacheStats.Event.WRITE_FAIL, followingKey);
             cacheAside.invalidate(followingKey, followerKey);
         }
+        // 计数条件增量（T6，R-01）：DB 已提交、关注数各自 +1；冷 key no-op 由读回填；失败只失效计数 key
+        adjustCountsQuietly(userId, followedUserId, 1);
     }
 
     /**
@@ -205,6 +277,30 @@ public class FollowCache {
                     + ", followedUserId=" + followedUserId, e);
             stats.record(CacheStats.Event.WRITE_FAIL, followingKey);
             cacheAside.invalidate(followingKey, followerKey);
+        }
+        // 计数条件增量（T6，R-01）：DB 已提交、关注数各自 -1；冷 key no-op 由读回填；失败只失效计数 key
+        adjustCountsQuietly(userId, followedUserId, -1);
+    }
+
+    // ==================== 内部：计数条件增量（T6，R-01，独立于成员双写块，失败隔离） ====================
+
+    /**
+     * 计数条件增量：DB 提交后对 {@code user:followCount:{userId}} /
+     * {@code user:followerCount:{followedUserId}} 做 EVAL"exists 才 INCRBY delta"。
+     * 任一侧失败 → 失效两个计数 key 让读自愈（4.2 缓存失败不导致业务失败），不抛出。
+     */
+    private void adjustCountsQuietly(long userId, long followedUserId, int delta) {
+        String followCountKey = CacheKeys.userFollowCount(userId);
+        String followerCountKey = CacheKeys.userFollowerCount(followedUserId);
+        try {
+            redis.executeVoid(j -> j.eval(FOLLOW_COUNT_ADJUST_SCRIPT,
+                    List.of(followCountKey, followerCountKey),
+                    List.of(String.valueOf(delta))));
+        } catch (CacheException e) {
+            LOGGER.log(Level.WARNING, "关注/粉丝计数缓存增量失败，失效计数 key 让读自愈, userId=" + userId
+                    + ", followedUserId=" + followedUserId, e);
+            stats.record(CacheStats.Event.WRITE_FAIL, followCountKey);
+            cacheAside.invalidate(followCountKey, followerCountKey);
         }
     }
 

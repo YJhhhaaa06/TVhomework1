@@ -356,11 +356,16 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 │  │ 三态：empty 空标记（60s）=确认真无；set 存在=SISMEMBER/SMEMBERS│   │
 │  │  miss=单飞回填 DB 全量（非空 SADD+EXPIRE 10min；空集→空标记，│   │
 │  │  空标记写入带 set 存在守卫防并发覆盖新写）；Redis 挂=降级 DB  │   │
+│  │ user:followCount:{userId} / user:followerCount:{userId}     │   │
+│  │  （String int，T6 计数入缓存 R-01：Cache-Aside、0 合法、     │   │
+│  │   miss/降级走 DB 单列计数 loader，与 content:likeCount 同构）│   │
 │  └──────────────────────────────────────────────────────────┘   │
 │  关注/取关写路径（FollowService DB 提交后）：                     │
 │    两 key 均"已加载"（set 或空标记存在）→ MULTI 原子 SADD/SREM 双写+续 TTL │
 │    （新关注时解除空标记）；任一侧冷 key 或空标记命中 → 双双 DEL 失效让读自愈 │
 │    ；Redis 异常 → 双 DEL（4.10 失败双 DEL），不抛出、不影响业务     │
+│    + 计数条件增量（T6）：EVAL"计数 key 存在才 INCRBY±1"，冷 key   │
+│    no-op 由读回填，失败只失效两计数 key（读自愈），不抛出          │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -369,6 +374,13 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 > （U-09/N3 收敛落点，与 like 域 T2 同模式）；**写路径（MULTI 条件双写 + 失败双 DEL）仍由 `FollowCache` 保有**
 > （follow 特有双 key 原子语义，不在收口面）。行为零变化——key/三态/空标记 TTL/降级语义/打点口径不变；
 > 全量列表升序由 `FollowCache.sortIds` 唯一包装点统一（详情见 CURRENT_ARCHITECTURE 6.15）。
+>
+> **第四期 T6（cache-06）计数入缓存注记（2026-09-16）**：关注/粉丝**计数**入独立 key（`user:followCount:{userId}` /
+> `user:followerCount:{userId}`，String int，与 `content:likeCount` 同构）——Profile 主页读路径在事务外经
+> `FollowCache.getFollowCount/getFollowerCount` 走缓存（miss 回填 DB 单列计数、0 合法、DB 仍为最终真理），
+> 不再消费 user 行内计数字段；关注/取关 DB 提交后追加**条件增量 INCRBY±1**（`followCountKey`/`followerCountKey`
+> exists 才写，冷 key no-op 由读回填；失败只失效两计数 key 读自愈）。SCARD 现算成员 set 方案因冷 set 返 0 坑
+> 被否决（详情见 CURRENT_ARCHITECTURE 6.18）。对外行为零变化（计数数值/API 不变）。
 
 > 关键语义（NEEDS 4.2~4.5/4.12）：内容与评论读/写**全部收敛 Redis**（旧内存 HashMap 版
 > ContentCacheManager 已随 T6 整体移除，职责由 ContentCache/CommentCache 承接）；

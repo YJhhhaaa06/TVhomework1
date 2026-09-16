@@ -52,6 +52,9 @@ class ProfileServiceTest {
         });
         // T8：profile 页内改批量读；默认空映射，用例内自行覆盖
         when(contentCache.getContentsBatch(anyList())).thenReturn(Collections.emptyMap());
+        // 第四期 T6（R-01）：计数走独立计数 key（FollowCache 读路径），默认 10/20 与 user() 行内一致
+        when(followCache.getFollowerCount(7L)).thenReturn(10);
+        when(followCache.getFollowCount(7L)).thenReturn(20);
     }
 
     /** getContentsBatch 桩（id → DTO，null 值=缓存 miss 跳过）。 */
@@ -104,6 +107,9 @@ class ProfileServiceTest {
         assertEquals(0, profile.getContentPage().getTotal());
         verify(followCache, never()).isFollowing(anyLong(), anyLong());
         verify(likeService, never()).batchIsContentLiked(anyLong(), anyList());
+        // 第四期 T6（R-01）：计数读路径走 FollowCache 计数 key（不再是 user 行内字段）
+        verify(followCache).getFollowerCount(7L);
+        verify(followCache).getFollowCount(7L);
     }
 
     @Test

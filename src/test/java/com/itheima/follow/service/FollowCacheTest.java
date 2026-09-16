@@ -11,6 +11,7 @@ import com.itheima.config.AppConfig;
 import com.itheima.exception.CacheException;
 import com.itheima.exception.ServerException;
 import com.itheima.follow.dao.FollowDao;
+import com.itheima.user.dao.UserDao;
 import com.itheima.util.TransactionTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -52,6 +53,7 @@ class FollowCacheTest {
     private static final long FOLLOWED = 8L;
 
     private FollowDao followDao;
+    private UserDao userDao;
     private TransactionTemplate tt;
     private Connection conn;
     private RedisAccess redis;
@@ -64,6 +66,7 @@ class FollowCacheTest {
     @SuppressWarnings("unchecked")
     void setUp() throws Exception {
         followDao = mock(FollowDao.class);
+        userDao = mock(UserDao.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
         redis = mock(RedisAccess.class);
@@ -73,7 +76,8 @@ class FollowCacheTest {
         // 第四期 T3：读路径收口 SetCache（复用同一 mock redis / 真实 SingleFlight / 同一 stats，
         // 保证既有三态/回填/降级并发与统计断言不因组件平移而破）
         SetCache setCache = new SetCache(redis, cacheAside, new SingleFlight(), stats);
-        cache = new FollowCache(followDao, tt, redis, setCache, cacheAside, stats);
+        // 第四期 T6（R-01）：计数读写入缓存，构造补 UserDao
+        cache = new FollowCache(followDao, userDao, tt, redis, setCache, cacheAside, stats);
 
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
@@ -447,6 +451,52 @@ class FollowCacheTest {
         verify(followDao).getFollowerUserIds(conn, USER);
     }
 
+    // ==================== 读-关注/粉丝计数（T6 R-01：CacheAside 独立计数 key） ====================
+
+    @Test
+    void getFollowCountHitDataReturnsCachedWithoutDb() {
+        String key = CacheKeys.userFollowCount(USER);
+        when(cacheAside.get(eq(key), eq(Integer.class), any(), anyLong())).thenReturn(42);
+
+        assertEquals(42, cache.getFollowCount(USER));
+        verify(tt, never()).execute(any());
+    }
+
+    @Test
+    void getFollowCountMissLoadsFromDbAndReturnsValue() throws SQLException {
+        // cacheAside mock 返 null（命中空标记防御分支）→ LOAD 兜底重载 DB 单列计数
+        when(userDao.getFollowCountById(conn, USER)).thenReturn(10);
+
+        assertEquals(10, cache.getFollowCount(USER));
+        verify(userDao).getFollowCountById(conn, USER);
+        assertEquals(1, stats.count(CacheDomain.FOLLOW, CacheStats.Event.LOAD));
+    }
+
+    @Test
+    void getFollowerCountZeroIsValidData() throws SQLException {
+        // 0 是合法计数（DB loader 恒非 null）；miss 装载返回 0 照常返回
+        when(userDao.getFollowerCountById(conn, USER)).thenReturn(0);
+
+        assertEquals(0, cache.getFollowerCount(USER));
+        verify(userDao).getFollowerCountById(conn, USER);
+    }
+
+    @Test
+    void getFollowCountLoaderSqlErrorThrowsServerException() throws SQLException {
+        when(userDao.getFollowCountById(conn, USER)).thenThrow(new SQLException("db down"));
+
+        assertThrows(ServerException.class, () -> cache.getFollowCount(USER));
+    }
+
+    @Test
+    void getFollowerCountCacheAsideHitDataSkipsDb() throws SQLException {
+        String key = CacheKeys.userFollowerCount(USER);
+        when(cacheAside.get(eq(key), eq(Integer.class), any(), anyLong())).thenReturn(7);
+
+        assertEquals(7, cache.getFollowerCount(USER));
+        verify(userDao, never()).getFollowerCountById(any(), anyLong());
+    }
+
     // ==================== 写路径 cacheFollow（条件双写 + MULTI + 失败双 DEL） ====================
 
     @Test
@@ -580,5 +630,56 @@ class FollowCacheTest {
         cache.cacheUnfollow(USER, FOLLOWED);
 
         verify(cacheAside).invalidate(followingKey(USER), followerKey(FOLLOWED));
+    }
+
+    // ==================== 写路径 计数条件增量（T6 R-01：exists 才 INCRBY，独立失败隔离） ====================
+
+    /** 成员双 Set 均就绪的 pipeline/multi 桩（写路径共用于计数调整用例）。 */
+    private void stubMemberPairReady() {
+        Response<Boolean> existsFg = booleanResponse(true);
+        Response<Boolean> emptyFg = booleanResponse(false);
+        Response<Boolean> existsFr = booleanResponse(true);
+        Response<Boolean> emptyFr = booleanResponse(false);
+        Pipeline p = mock(Pipeline.class);
+        when(jedis.pipelined()).thenReturn(p);
+        when(p.exists(followingKey(USER))).thenReturn(existsFg);
+        when(p.exists(CacheKeys.empty(followingKey(USER)))).thenReturn(emptyFg);
+        when(p.exists(followerKey(FOLLOWED))).thenReturn(existsFr);
+        when(p.exists(CacheKeys.empty(followerKey(FOLLOWED)))).thenReturn(emptyFr);
+        when(jedis.multi()).thenReturn(mock(Transaction.class));
+    }
+
+    @Test
+    void cacheFollowAdjustsCountsByPlusOne() {
+        stubMemberPairReady();
+
+        cache.cacheFollow(USER, FOLLOWED);
+
+        verify(jedis).eval(FollowCache.FOLLOW_COUNT_ADJUST_SCRIPT,
+                List.of(CacheKeys.userFollowCount(USER), CacheKeys.userFollowerCount(FOLLOWED)),
+                List.of("1"));
+    }
+
+    @Test
+    void cacheUnfollowAdjustsCountsByMinusOne() {
+        stubMemberPairReady();
+
+        cache.cacheUnfollow(USER, FOLLOWED);
+
+        verify(jedis).eval(FollowCache.FOLLOW_COUNT_ADJUST_SCRIPT,
+                List.of(CacheKeys.userFollowCount(USER), CacheKeys.userFollowerCount(FOLLOWED)),
+                List.of("-1"));
+    }
+
+    @Test
+    void cacheFollowCountAdjustFailureInvalidatesCountKeysWithoutThrowing() {
+        stubMemberPairReady();
+        // 仅计数 EVAL 失败（成员 MULTI 块正常执行）→ 失效两计数 key 读自愈，不抛出
+        doThrow(new CacheException("redis down")).when(jedis).eval(anyString(), anyList(), anyList());
+
+        assertDoesNotThrow(() -> cache.cacheFollow(USER, FOLLOWED));
+
+        verify(cacheAside).invalidate(CacheKeys.userFollowCount(USER),
+                CacheKeys.userFollowerCount(FOLLOWED));
     }
 }

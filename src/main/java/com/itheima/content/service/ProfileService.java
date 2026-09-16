@@ -49,6 +49,9 @@ public class ProfileService {
         Boolean isFollowed = (currentUserId != null && currentUserId != profileUserId)
                 ? followCache.isFollowing(currentUserId, profileUserId)
                 : null;
+        // 关注数/粉丝数计数走独立计数 key（第四期 T6 R-01：Cache-Aside，DB 为最终真理），在事务外读取
+        int followerCount = followCache.getFollowerCount(profileUserId);
+        int followCount = followCache.getFollowCount(profileUserId);
         return transactionTemplate.execute(conn -> {
             try {
                 User user = userDao.getUserForProfileById(conn, profileUserId);
@@ -87,7 +90,7 @@ public class ProfileService {
 
                 PageResult<ContentVO> pageResult = new PageResult<>(contentVOList, total, page, pageSize);
                 return new ProfileVO(user.getId(), user.getUserName(),
-                        user.getFollowerCount(), user.getFollowCount(), isFollowed, pageResult);
+                        followerCount, followCount, isFollowed, pageResult);
             } catch (SQLException e) {
                 LOGGER.log(Level.SEVERE, "获取用户主页失败, profileUserId=" + profileUserId, e);
                 throw new ServerException("获取用户主页失败");

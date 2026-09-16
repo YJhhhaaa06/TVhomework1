@@ -64,6 +64,16 @@ class CacheKeysTest {
     }
 
     @Test
+    void userFollowCountKeysUseUserIdAndMapToFollowDomain() {
+        // T6（R-01）计数入缓存：独立计数 key 与成员 set 同构于 user: 前缀，domainOf 归 FOLLOW（无需扩展）
+        assertEquals("user:followCount:7", CacheKeys.userFollowCount(7L));
+        assertEquals("user:followerCount:7", CacheKeys.userFollowerCount(7L));
+        assertEquals(CacheDomain.FOLLOW, CacheKeys.domainOf(CacheKeys.userFollowCount(7L)));
+        assertEquals(CacheDomain.FOLLOW, CacheKeys.domainOf(CacheKeys.userFollowerCount(7L)));
+        assertEquals(CacheDomain.FOLLOW, CacheKeys.domainOf("empty:" + CacheKeys.userFollowCount(7L)));
+    }
+
+    @Test
     void contentIndexKeyUsesTypeAndCategory() {
         assertEquals("content:index:1:2", CacheKeys.contentIndex(1, 2));
         assertEquals("content:index:2:-1", CacheKeys.contentIndex(2, -1));

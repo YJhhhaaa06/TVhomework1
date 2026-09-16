@@ -86,6 +86,37 @@ public class UserDao {
         }
     }
 
+    //第四期 T6（cache-06，R-01 计数入缓存）：单列计数查询，供 FollowCache 计数 loader 用
+    //查询关注数
+    public int getFollowCountById(Connection conn, long userId) throws SQLException {
+        String sql = "select follow_count from users where id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, userId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1);
+                } else {
+                    return 0; // 用户不存在按 0 处理（与计数语义一致）
+                }
+            }
+        }
+    }
+
+    //查询粉丝数
+    public int getFollowerCountById(Connection conn, long userId) throws SQLException {
+        String sql = "select follower_count from users where id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, userId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1);
+                } else {
+                    return 0; // 用户不存在按 0 处理（与计数语义一致）
+                }
+            }
+        }
+    }
+
 
 
 

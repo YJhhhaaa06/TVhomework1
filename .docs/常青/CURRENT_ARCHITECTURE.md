@@ -1,6 +1,6 @@
 # 当前系统架构地图
 
-> 版本：2.20
+> 版本：2.21
 > 最后更新：2026-09-16
 > 维护说明：每次架构改动后必须更新本文档
 
@@ -359,8 +359,10 @@ com.itheima/
 | user:commentLikeSet:{userId} | Set\<commentId\> | 我点赞过的评论（T4 反转：由 `comment:likeSet:{commentId}` 反转为用户维度） |
 | user:following:{userId} | Set\<followedUserId\> | 我关注了谁（4.10，MULTI 双写，失败双 DEL；T5 启用） |
 | user:follower:{userId} | Set\<userId\> | 谁关注了我（4.10，MULTI 双写，失败双 DEL；T5 启用） |
+| user:followCount:{userId} | String(int) | 我的关注数（**第四期 T6（cache-06）计数入缓存 R-01**：独立计数 key、Cache-Aside，0 合法；follow/unfollow 后对已装载 key 条件 INCRBY、冷 key no-op 由读回填；与 content:likeCount 同构） |
+| user:followerCount:{userId} | String(int) | 我的粉丝数（T6，逻辑同 user:followCount，key 换 follower 维度） |
 
-> 旧 key 演进：原 `content:like:{id}` / `comment:like:{id}`（单 Set 兼容 SCARD 计数）已随 T4 停用，由本表计数/成员分离 key 取代（旧 key 仅退款前历史遗留在 Redis，TTL 过期自然回收）；**第四期 T4（cache-04）成员装载反转：`content:likeSet:{id}` / `comment:likeSet:{id}`（内容/评论维度成员）随反转停用，由 `user:likeSet:{userId}` / `user:commentLikeSet:{userId}`（用户维度成员）取代——不双写，like TTL（15min）过期自然回收**；本表为新缓存层规范，按任务逐行启用（当前已启用：content / content:index / content:comments / content:likeCount / comment:likeCount / user:likeSet / user:commentLikeSet / user:following / user:follower；空标记随行）。
+> 旧 key 演进：原 `content:like:{id}` / `comment:like:{id}`（单 Set 兼容 SCARD 计数）已随 T4 停用，由本表计数/成员分离 key 取代（旧 key 仅退款前历史遗留在 Redis，TTL 过期自然回收）；**第四期 T4（cache-04）成员装载反转：`content:likeSet:{id}` / `comment:likeSet:{id}`（内容/评论维度成员）随反转停用，由 `user:likeSet:{userId}` / `user:commentLikeSet:{userId}`（用户维度成员）取代——不双写，like TTL（15min）过期自然回收**；本表为新缓存层规范，按任务逐行启用（当前已启用：content / content:index / content:comments / content:likeCount / comment:likeCount / user:likeSet / user:commentLikeSet / user:following / user:follower / user:followCount / user:followerCount；空标记随行）。
 >
 > 定时全量刷新（旧 `ContentCacheManager.startScheduler` 10min `scheduleAtFixedRate`）已随旧类移除（O-6 拍板，T6）：内容/索引一致性由**启动全量重建 + 索引懒重建 + 业务显式失效（增删改/计数/门禁/隐藏恢复）+ Cache-Aside 读自愈（按 key TTL 过期回填）** 承担，不再有周期性全库重载（原 H2/H7 雪崩与 N+1 痛点）。
 >
@@ -527,6 +529,17 @@ com.itheima/
 - **L1 观察（登记不修，超范围）**：`loadAllWithoutMedia` DB 失败返回空列表 → `rebuildIndexes(空)` 在 Redis 正常时会 SCAN+DEL 全量索引（既有行为，DB 瞬断清索引；零行为变化红线，不随 T5 改动）；**反向边同登记**：空库（DB 无内容）时 `loadAllWithoutMedia` 返回空列表、重建"成功"（true）不记冷却 → 冷却对空库场景不生效，每请求仍全表查询（空表查询开销可忽略、非停机语义，留观察）。
 - **验证**：ContentCacheTest 改造 3 例（惰性探测逐 key）+ 新增 4 例（探测量=limit / 全 null 最坏全探测等价 / 失败后冷却内跳过重建 / 冷却过期重试）→ **JUnit 407 例全绿（surefire 403 + pool 4）**；**pytest all 124 passed 无回归**；**运行时黑洞验证（REDIS_HOST=203.0.113.1 注入启动，`temp_script/verify_cache05_rebuild_backoff.py`）**：预热 1 次 /start 后连续 20 次 /start 全部 code=200 且空推荐（U-11 语义不变），**Δ Com_select = 0**（无退避应 ≈20——每次重建 1 次 findAllContent 全表查询），日志实证 2 次"索引重建失败"（init 1 + 预热 1，预热即记冷却）；subagent review 通过（无🔴）。
 
+### 6.18 关注/粉丝计数入缓存（第四期 T6 cache-06，R-01，2026-09-16 用户拍板）
+
+> 目标：Profile 读路径的 followCount/followerCount 由「随 user 整行从 DB 读取」改为**独立计数 key 入缓存**（`user:followCount:{userId}` / `user:followerCount:{userId}`，String int，Cache-Aside，与 `content:likeCount` 同构），二次访问命中可观察。**对外行为零变化**（返回计数数值/API 不变）；DB 仍为最终真理。
+
+- **方案拍板（G7）**：**独立计数 key + Cache-Aside**（0 是合法数据、loader 恒非 null 不写空标记）。**SCARD 冷 set 返 0 的坑结论 = 否决 SCARD 现算成员 set**——① miss/冷 set 返 0 且不触发装载；② set TTL 过期后返 0；③ 计数与成员加载状态/TTL 耦合。成员（who）与计数（how many）分离（4.6 先例）。
+- **一致性方案拍板（G7）**：**条件增量 Lua**——DB 提交后 `FOLLOW_COUNT_ADJUST_SCRIPT`（`exists 才 INCRBY delta`，KEYS=[followCountKey, followerCountKey]、ARGV=[±1]）对已装载 key 增量，**冷 key no-op 由读回填**（不产生错误计数）；EVAL 失败 → 失效两计数 key 让读自愈、记 WRITE_FAIL、不抛出。替代失效 DEL（有失效-重载竞态：DEL 后并发读可能把旧值写回，TTL 内 stale）。成员 MULTI 双写与计数增量为**两次独立 Redis 调用、失败隔离**（成员写失败不影响计数增量，计数写失败只失效计数 key）。
+- **落点**：`FollowCache` 注入 `UserDao`（IoC 自动装配），新增读 `getFollowCount`/`getFollowerCount`（`cacheAside.get` + 单列计数 loader `getFollowCountById`/`getFollowerCountById`，镜像 `LikeCacheService.getLikeCount` 防御分支）；写 `adjustCountsQuietly`（`cacheFollow` → +1、`cacheUnfollow` → -1）；`ProfileService.getProfile` 事务外读两计数（不再消费行内 `user.getFollowerCount()/getFollowCount()`）；`CacheKeys` 新增两工厂，`domainOf` **无需扩展**（`user:` 前缀兜底归 FOLLOW，T8 巡检项随 T6 放行）。TTL 沿用 `cache.follow.ttlMinutes`（30min，滑动续期由 CacheAside 承担），app.properties 零改动。
+- **G11 质疑（L3 上报，用户裁决「照做」）**：`getProfile` 必须读 user 整行（username 等），计数缓存**不减少任何 DB 查询**，冷 key 首访反而多 1~2 次单列计数查询；用户接受该代价，唯一消费方仍按「读路径命中缓存」落地（验收锚=二次访问命中可观察）。
+- **L1 观察（登记不修）**：① 用户不存在（404）场景多打计数 loader 查询（原不查；404 为主返回，代价可忽略）；② DB 全挂时错误文案由"获取用户主页失败"变"服务器异常，查询关注数/粉丝数失败"（同 like 域先例，均 500 无 API 契约）；③ 并发"DB 提交后→INCRBY 前"读 miss 回填已含 +1 真值再 INCR → 瞬时多计（like 4.6 条件写先例内已知上限，TTL 自愈）；④ DECR 理论负值（仅缓存值已低于 DB 真值才可能，miss 即纠）。
+- **验证**：JUnit **416 例全绿**（surefire 412 + pool 4，T5 407 + 9：FollowCacheTest 29→37 计数读写 8 例、CacheKeysTest +1）；**pytest all 124 passed**；**运行时验证（`temp_script/verify_t6_count_cache.py`）8/8 通过**：冷 key 回填一致（Redis==API==DB）、follow 后 warm key 条件 INCRBY 同步 +1、**篡改探针（SET 计数 key=999 → GET /profile 返回 999 ≠ DB）证明读路径命中缓存（二次访问可观察）**、DEL 自愈、unfollow 复原、冷 key no-op 由读回填；subagent review 通过（无🔴，🟡5 条全部处置：先例内已知项 + L1 登记，无代码改动）。
+
 ---
 
 ## 七、API 接口清单
@@ -678,17 +691,17 @@ src/main/webapp/
 | content/service/ContentCacheTest | 23 | Redis 内容缓存：三态 loader 构建（含媒体 URL）/DB 无媒体损坏降级/索引读取与懒重建（**三期 T5 pipeline 化断言**）/**getContentsBatch 批量读映射与空值透传/推荐批量跳过 null 截断 limit/SCAN 遍历索引**/写路径失效契约/init 重建（**三期 T5：事务外写 InOrder/批量媒体装载 N+1 消除/往返恒定/媒体损坏跳过**）不 crash/失效方法/VO 复制 +**三期 T3 负缓存（loader SQLException 抛 DatabaseException、addContent DB 失败静默跳过）** |
 | content/service/CommentCacheTest | 11 | Redis 评论缓存：三态 loader（树构建/deep-chain 归一化/无评论 null/**三期 T3 起 SQLException 与意外异常抛 DatabaseException**）/invalidateComments 显式失效/评论点赞定位失效/collectCommentIds 展平 |
 | content/service/FeedServiceTest | 8 | 关注动态流 |
-| content/service/ProfileServiceTest | 12 | 用户主页 |
+| content/service/ProfileServiceTest | 12 | 用户主页 +**第四期 T6 计数读路径走 FollowCache 独立计数 key（构造后 stub 计数，verify 断言）** |
 | like/service/LikeServiceTest | 16 | 点赞/取消/读路径委托缓存类/空输入空 map |
 | like/service/LikeCacheServiceTest | 25 | Redis 点赞缓存：计数/成员分离三态+单飞回填+空标记+写失败失效+降级 +批量 pipeline+DB 兜底 +delete 失效 +T7 统计接线（LIKE 域 HIT_EMPTY 计数）+**T9 续期接线（hit-data 续期 set key、空标记不续）**+**三期 T2 降级单飞（Redis 异常全量装载作答不写回 + 并发同 key 只装载一次）**+**第四期 T2 收口 SetCache 后新增 2 例 L2 差异对照（批量回填 loader 失败 best-effort / 单成员 miss 装载失败仍上抛）** |
 | comment/service/CommentServiceTest | 16 | 评论归属/楼中楼归一化/软删除（自删+管理员删）/缓存更新 |
 | follow/service/FollowServiceTest | 15 | 关注/取关/列表（读路径委托 FollowCache；写路径 DB 提交后缓存双写） |
-| follow/service/FollowCacheTest | 29 | Redis 关注缓存：双 Set 三态+单飞回填+空标记（set 存在守卫防并发覆盖）/批量 pipeline+DB 兜底+best-effort 回填/列表 smembers 排序/条件 MULTI 双写+失败双 DEL+降级 +T7 统计接线（FOLLOW 域 MISS/LOAD 计数）+**T9 续期接线（hit-data 续期 set key、空标记不续）**+**三期 T2 降级单飞（Redis 异常全量装载作答不写回 + 并发同 key 只装载一次）**+**第四期 T3 收口 SetCache（用例桩透明平移，读路径走基建组件）** |
+| follow/service/FollowCacheTest | 37 | Redis 关注缓存：双 Set 三态+单飞回填+空标记（set 存在守卫防并发覆盖）/批量 pipeline+DB 兜底+best-effort 回填/列表 smembers 排序/条件 MULTI 双写+失败双 DEL+降级 +T7 统计接线（FOLLOW 域 MISS/LOAD 计数）+**T9 续期接线（hit-data 续期 set key、空标记不续）**+**三期 T2 降级单飞（Redis 异常全量装载作答不写回 + 并发同 key 只装载一次）**+**第四期 T3 收口 SetCache（用例桩透明平移，读路径走基建组件）**+**第四期 T6 计数读写（hit-data 免 DB/0 合法/miss 回填/loader 异常上抛/条件 INCRBY±1 EVAL 参数断言/EVAL 失败只失效计数 key）** |
 | coupon/service/CouponServiceTest | 11 | 抢券/幂等/库存 |
 | upload/service/FileUploadServiceTest | 9 | 上传校验/清理旧文件 |
 | admin/service/MediaAuditServiceTest | 14 | 媒体扫描/恢复 |
 | util/MyConnectionPoolTest | 4 | 满池超时/归还重取/失效移除/关闭后拒绝 |
-| cache/CacheKeysTest | 11 | 统一 key 生成格式、empty 前缀、空标记常量 + **三期 T6 U-08（contentIndex 生成格式/生成与 domainOf 解析同源/前缀常量供 SCAN 匹配）** |
+| cache/CacheKeysTest | 14 | 统一 key 生成格式、empty 前缀、空标记常量 + **三期 T6 U-08（contentIndex 生成格式/生成与 domainOf 解析同源/前缀常量供 SCAN 匹配）**+**第四期 T6 计数 key 格式与 domainOf 归 FOLLOW（user: 兜底，无需扩展）** |
 | cache/JacksonCodecTest | 4 | DTO 往返、null 处理、TypeReference 泛型、非法 JSON 抛 CacheException |
 | cache/RedisAccessTest | 9 | execute/executeVoid 取还连接、异常包装 CacheException（含连接获取失败）+ **三期 T1 熔断接线（熔断开启快速失败不触达连接池/连续失败达阈值拒绝/成功重置不误开/冷却期满探针恢复全链路/回调 CacheException 计失败口径）** |
 | cache/RedisCircuitBreakerTest | 8 | 熔断状态机（三期 T1）：默认 CLOSED 放行/连续失败达阈值 OPEN/成功重置计数/冷却期内拒绝/期满唯一探针（含并发抢闸恰一放行）/探针成功闭合/探针失败重开重置冷却 |
@@ -696,10 +709,10 @@ src/main/webapp/
 | cache/CacheAsideTest | 40 | 三态 read、Cache-Aside get 命中/回填/空标记、降级不写回、写失败 DEL、清空标记防假空、markEmpty/invalidate best-effort +T7 统计接线（hitData/MISS+LOAD/降级计数）+**T8 批量读（混合三态/全空标记跳过 loader/miss 空标记回填/整批降级/脏 JSON 单 key 降级/空入参/批量统计打点 + 单 key 一趟 pipeline 往返断言）** +**T9 滑动续期（命中续期抖动/空标记不续/批量续期/续期失败降级不影响读）**+**三期 T2 降级单飞（降级并发同 key loader 只执行一次且无写回/降级 loader 失败异常传播不缓存且下次重试/批量降级逐 key 去重）**+**三期 T3 负缓存（miss/降级/批量 miss 逐 key/批量整批降级/批量脏 JSON 单 key 降级 遇 DatabaseException 转 null 且不写空标记不 DEL）**+**三期 T5 writeBatch（一趟 pipeline 往返+per-key TTL 抖动+清空标记 / 失败逐 key self-heal）** |
 | cache/CacheStatsTest | 8 |（T7 新增）观测统计组件：domainOf 域解析全形态/前缀重叠优先级、六类计数分桶、惰性日志触发与摘要、打点异常吞掉 |
 | config/AppConfigCacheTtlTest | 5 |（T9 新增）分域 TTL 配置读取：content/comment/like/follow 四 getter 与 app.properties 绑定生效、非 0 互不串读 |
-| **合计** | **365** | - |
+| **合计** | **416** | - |
 
 > 注：`com.itheima.tools.CouponAdmin` 属 tools 测试脚本目录（非测试类，package 保留 `com.itheima.tools`，仅 import java.*，无主代码引用）；`util/MyConnectionPoolTest` 被测类未动（基建），测试文件留在 util 包不迁。
-> 用例数取自 `stage8-target/surefire-reports`（2026-09-14 实测，`mvn test` 全绿 365 例 = surefire 361 + 独立 fork pool-test 4；**三期 T6 新增 3 例**：CacheKeysTest contentIndex 生成格式/生成与解析同源/前缀常量）。
+> 用例数取自 `stage8-target/surefire-reports`（2026-09-16 实测，`mvn test` 全绿 **416 例 = surefire 412 + 独立 fork pool-test 4**；**第四期 T6 新增 9 例**——FollowCacheTest 29→37（计数读 5：hit-data 免 DB/miss 回填/0 合法/loader 异常/防 DB 免调；条件增量写 3：INCRBY±1 EVAL 参数/失败只失效计数 key）+ CacheKeysTest 13→14（userFollowCount/userFollowerCount 格式与 domainOf 归 FOLLOW））。
 
 > 构建输出：沙箱内 Maven 通过 `-Dstage8.buildDir` 指向 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（pom 默认 `./target`），原因是沙箱内 javac 无法把 worktree `target/classes` 作为 classpath（报"程序包不存在"）。
 > 离线仓库：新增测试依赖（junit/mockito/bytebuddy/surefire 等）的 `_remote.repositories` 已补 `>aliyun=` 来源行（只追加不删除），默认 aliyun 镜像下可离线解析。
@@ -773,6 +786,7 @@ src/main/webapp/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-09-16 | 2.21 | **第四期 T6 关注/粉丝计数入缓存（refactor(cache-06)，治 R-01，2026-09-16 用户拍板）**：Profile 读路径 followCount/followerCount 由「随 user 整行从 DB 读取」改为**独立计数 key 入缓存**（`user:followCount:{userId}`/`user:followerCount:{userId}`，String int，Cache-Aside，0 合法，与 `content:likeCount` 同构）；`CacheKeys` 新增两工厂，`domainOf` 无需扩展（`user:` 兜底归 FOLLOW，T8 巡检项随 T6 放行）；`FollowCache` 注入 `UserDao`，新增读 `getFollowCount/getFollowerCount`（cacheAside.get + 单列 loader）+ 写 **条件增量 Lua**（`FOLLOW_COUNT_ADJUST_SCRIPT`：`exists 才 INCRBY±1`，冷 key no-op 由读回填，失败只失效计数 key）；`ProfileService.getProfile` 事务外读两计数；**SCARD 冷 set 返 0 坑结论=否决**（③ 大坑见 6.18）；G11 质疑「计数缓存不减少 DB 查询（整行必读）」用户裁决照做留痕；L1 观察 4 条（404 多打 loader / 文案漂移 / INCR 瞬时多计 / DECR 理论负）登记不修；**JUnit 416 例全绿**（surefire 412 + pool 4，T5 407 + 9）+ **pytest all 124 passed** + **运行时验证 8/8 通过**（`temp_script/verify_t6_count_cache.py`：冷 key 回填一致 / 条件 INCRBY 同步 +1 / **篡改探针 999 证命中缓存** / DEL 自愈 / unfollow 复原 / 冷 key 读回填）+ subagent review 通过（无🔴，🟡5 条全部处置：先例内已知项 + L1 登记）；本文件 6.2/6.18/9.2/12 同步；TASKS T6 已完成 + 执行回写；NEEDS 4.0 T6 执行定稿 + R-01 已完成 |
 | 2026-09-16 | 2.19 | **第四期 T4 点赞成员装载反转（refactor(cache-04)，治 R-08，用户 2026-09-15 拍板=内容+评论全反转）**：点赞成员 key 由内容/评论维度（`content:likeSet:{id}`/`comment:likeSet:{id}`，Set<userId>，装载量=点赞者数随热度放大）反转为**用户维度**（`user:likeSet:{userId}` Set<contentId> / `user:commentLikeSet:{userId}` Set<commentId>，装载量=该用户点赞数，与 user:following 同构）；`CacheKeys` 新增两工厂/删除旧两工厂，`domainOf` 于 user:* →FOLLOW 之前插入 user:commentLike/user:like→LIKE（统计归位）；读路径全走 SetCache（`isMember` 判用户集合；批量收敛为**单 set 多成员**`batchIsMember`，命令数与装载量双降）；写 Lua 脚本常量零改动、仅 KEYS/ARGV 换维度（contentId/commentId）；`deleteContentLike/CommentLike` 改仅失效计数 key（成员残留不清理亦无害，语义见 6.16）；DAO 新增 `findLikedContentIdsByUser`/`findLikedCommentIdsByUser`、删除 `findLikerIdsBy*`；LikeCacheService 420→394 行；**JUnit 403 例全绿**（LikeCacheServiceTest 28→32、CacheKeysTest 11→13）+ **pytest all 124 passed 无回归** + subagent review 通过（无🔴，🟡4 条全部落实：deleteContentLike javadoc 事实修正/batchKeysIsMember 停用注记/评论批量对称补测/常青 key 表同步）；本文件 like 域行/4.2 两行/6.2/6.3/6.16/9.2/12 同步；TASKS T4 已完成 + 执行回写；NEEDS 4.0 T4 执行定稿 + R-08 已完成 |
 | 2026-09-15 | 2.18 | **第四期 T3 FollowCache 收口 SetCache（refactor(cache-03)，治 U-09/N3）**：读路径全部改走 6.13 的 `SetCache` 基建组件（`isFollowing`→`isMember`；`batchIsFollowing`→`batchIsMember` 单 set 多成员·Follow 形态；`getFollowingIds/getFollowerIds`→`getMembers`+`sortIds` 唯一包装点统一升序，落实 6.13 排序交接提示）；构造注入 `SingleFlight`→`SetCache`；删除类内与 SetCache 重复的 `scanSet`/`writeSet`/`loadViaSingleFlight`/`getSetMembers`/`toSortedLongs`（524→326 行）；关注/粉丝列表孪生 loader 收敛为 `DaoQuery<T>` 参数化 helper（日志与用户可见异常文案逐字不变），批量 answer `loadFollowedIdsByUser` 单处使用保留；**写路径（MULTI 双写 + 失败双 DEL）为 follow 特有双 key 原子语义，不在收口面**——`cacheFollow`/`cacheUnfollow`/`probePair`/`invalidateKeysQuietly` 逐字保持；行为零变化（key/三态/空标记 TTL/降级/打点口径/排序确定性），批量回填 FollowCache 现状已 best-effort、无 T2 那种 L2 差异（仅内部日志措辞统一记 L1）；**JUnit 397 例全绿**（FollowCacheTest 29 例平移适配）+ **pytest all 124 passed 无回归（本周期收口后第一个全量回归点）** + subagent review 通过（无🔴）；本文件 follow 域行/6.15/9.2/12 同步；TASKS T3 已完成 + 执行回写；NEEDS 4.0 T3 执行定稿 |
 | 2026-09-15 | 2.17 | **第四期 T2 LikeCacheService 收口 SetCache（refactor(cache-02)，治 U-09/N3）**：Set 成员读路径（单成员三态 / 批量多 set 单成员）全部改走 6.13 的 `SetCache` 基建组件；content/comment 孪生方法收敛为 id 维度参数化单实现（loaders 与批量 answer 统一为类内 `DaoQuery<T>`/`BatchQuery` 参数化 helper，用户可见异常文案逐字不变，`contentId=`/`commentId=` 日志标签统一为 `id=`）；删除类内与 SetCache 重复的 `scanLikeSet`/`writeXxxLikers`/`loadLikersViaSingleFlight`/`backfillBatch*`/`degradeBatch*`（628→420 行）；Lua 条件写 4 方法与计数 CacheAside、`deleteXxxLike`、`LikeService` 及业务调用方签名零改动；**L2 差异对照（T1 已登记）**：批量 miss 回填全量成员 loader 失败由"上抛 500"变 best-effort（SetCache 契约，4.2）；**JUnit 397 例全绿**（395+2：LikeCacheServiceTest 新增批量回填 best-effort / 单成员 miss 装载失败仍上抛）+ pytest all 124 passed 无回归；本文件 4.2 SetCache 行与 like 域行/6.14/9.2/12 同步；TASKS T2 已完成 + 执行回写；NEEDS 4.0 T2 执行定稿（注：header 版本号 T1 未按惯例 bump——2.16 后直接 2.17，T1 的 6.13 无对应 header/12 行，登记 L1 观察留 T8 统一对齐） |
