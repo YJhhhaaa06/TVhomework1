@@ -1,6 +1,6 @@
 # 当前系统架构地图
 
-> 版本：2.19
+> 版本：2.20
 > 最后更新：2026-09-16
 > 维护说明：每次架构改动后必须更新本文档
 
@@ -384,7 +384,7 @@ com.itheima/
 
 - **单 key 读 pipeline 化**：`CacheAside.read` / `getInternal` 由"EXISTS 空标记 + GET 数据 key 两趟往返"合并为**一趟 pipeline**（内部 `probe(dataKey)` 复用，三态/空标记/单飞/降级语义与统计逐条不变）。
 - **批量读接口**：`CacheAside.getBatch(List<String> dataKeys, Class<T>, Function<String,T>, long)` → `Map<String,T>`——一趟 pipeline 批量 EXISTS+GET，三态判断与单 key 完全一致（先空标记后数据 key），miss 项逐个单飞回填；**批量记录粒度=每 (数据 key, 决策) 记一次**（T7 口径延续）；单个 key 脏 JSON 或整批 Redis 异常 → 该 key/全部 key `DEGRADE` + 直接 loader 不写回（对齐单 key 降级语义）。调用方保证 key 无重复。
-- **内容批量接入**：`ContentCache.getContentsBatch(List<Long>)`（id → DTO 映射，null 值=hit-empty/DB 无数据透传）；`getRecommendByFilter`（/start 推荐 12 条 ≈ 24+ 往返 → 一趟 pipeline + 少量 miss 回填）、`FeedService.getFeed`、`ProfileService.getProfile` 页循环均改批量读。
+- **内容批量接入**：`ContentCache.getContentsBatch(List<Long>)`（id → DTO 映射，null 值=hit-empty/DB 无数据透传）；`FeedService.getFeed`、`ProfileService.getProfile` 页循环改批量读；`getRecommendByFilter` **第四期 T5 起改用惰性逐 key 探测**（见 6.17），不再走批量全量探测。
 - **索引 KEYS→SCAN**：`ContentCache.forEachIndexKey`（`scan(cursor, ScanParams.match("content:index:*").count(100))` 游标收敛于 "0"）替换 `KEYS "content:index:*"`（removeContent 的 LREM、rebuildIndexes 的 DEL 两处，治 H13 Redis 主线程 O(N) 阻塞；LREM/DEL 幂等，SCAN 重复 key 无害）。
 - **统计口径**：批量读打点与单 key 一致（T9 分域取参数据连续）；单 key 与批量均为 1 趟往返（CacheAsideTest 有 `pipelined()` 次数断言）。
 
@@ -513,6 +513,19 @@ com.itheima/
 - **写路径**（Lua 原子条件写，三期 T4/N7 语义）：脚本常量**零改动**，仅 KEYS/ARGV 换维度——`likeContent` KEYS=[user:likeSet:{userId}, content:likeCount:{contentId}, empty:user:likeSet:{userId}]、ARGV=[contentId]；`unlikeContent` 同减去空标记；评论侧对称。冷 key 不创建残缺集、写失败失效计数 key 让读自愈、不抛出。
 - **失效**（删除/下架级联）：`deleteContentLike`/`deleteCommentLike` 改为**仅失效计数 key**——成员 key 为用户维度，删除无法反查点赞者逐一 SREM；残留成员不清理亦无害（物理删除：DB 点赞行一并删除、内容 id 不复用、UI 无查询路径，永不外显；下架隐藏 3.10 软删：点赞记录保留 DB，恢复后读自愈对齐）。
 - **验证**：LikeCacheServiceTest 28→30（T4 翻译）+ 补评论侧批量 hit/miss 2 例 = 32；CacheKeysTest 11→13（userLikeSet 格式 + domainOf 归位）；全量 JUnit **403 例**全绿（surefire 399 + pool 4）；pytest all **124 passed 无回归**；subagent review 通过（无🔴；🟡 4 条全部落实：deleteContentLike javadoc 事实性修正/batchKeysIsMember 停用注记/评论批量对称补测/常青 key 表同步）。关联：`NEXT_CYCLE_NEEDS.md` 4.0 R-08 决策回写、`NEXT_CYCLE_TASKS.md` T4 执行回写。
+
+---
+
+### 6.17 推荐读路径惰性探测 + 索引重建失败退避（第四期 T5 cache-05，N1/N2/R-07）
+
+> 目标：① N2——推荐读对全量候选批量探测（候选 1 万 = 3 万命令 pipeline 只为取 12 条）收敛为按 shuffle 序**惰性探测、凑满 limit 即止**；② N1——`ensureIndex` 重建失败无退避，Redis 停机期间每个 `/start` 逐请求触发 `loadAllWithoutMedia`（DB 全表查询），收敛为**进程内冷却窗口内 1 次**；③ R-07——评估 LREM+LPUSH 语义下索引长尾漂移。**对外行为零变化**：推荐结果分布、`LRANGE 0 -1` 全量读（R-04 本体不做）、停机空推荐语义（U-11 本体不做）一概不变。
+
+- **N2 惰性探测（`ContentCache.getRecommendByFilter`）**：`getContentsBatch(distinctIds)`（全量候选一趟 pipeline 探测）→ **按 shuffle 序逐个 `getContent(contentId)`**，null 跳过、收集满 `limit` 即 break；**探测量（命令数口径）从 `候选数 × 3` 收敛到 `≤3 × (limit + 跳过量) ≈ 36~90 命令`**（每 key 仍 3 命令一趟 pipeline，本地 RTT 可忽略，未命中候选不再被预装载/续期）。**均匀性论证（执行回写记录）**：shuffle 仍在全量去重 id 列表上一次性执行，返回集 = "shuffle 序前 limit 个非 null"，与批量读后按同一 shuffle 序收集**逐位一致**——惰性探测只改"探测到第几个停止"，不改"取哪些"；null 跳过语义与现状等价，最坏全探测 = 现状退化场景。`getContentsBatch` 批量读仅剩 Feed/Profile 使用（6.4 同步）。
+- **N1 冷却退避（`ensureIndex` + `rebuildIndexes`）**：`rebuildIndexes` 返回 boolean（Redis 写失败 = false，原内部 catch 保留）；`ensureIndex` 重建失败记 `lastFailedRebuildAtMillis`（进程内 volatile 单时间戳——重建为全局单 key 单路径）、成功清 0；**冷却窗口（`cache.content.indexRebuildCooldownMillis=10000`，对齐熔断冷却先例）内跳过 exists 探测与重建**（零 Redis 零 DB）；冷却过期后下一请求自然重试完整链路，失败重记/成功清除（与熔断 HALF_OPEN 探针恢复语义同构，滞后 ≤ 冷却窗口）。失败口径：以 `rebuildIndexes` 返回 false 为准（Redis 写失败），`ensureIndex` catch 分支兜底；`exists` 检查失败本身不单独记冷却。配置接入：`AppConfig.getContentIndexRebuildCooldownMillis()`（app.properties `cache.content.indexRebuildCooldownMillis=10000`）。
+- **与既有机制关系**：单飞（防并发重叠）只管当前在飞的重建，**不防串行重复**——退避补上串行面；熔断（快速失败）与 INDEX_REBUILD_KEY 单飞保持零改动；`readIndex` 逐请求 LRANGE 保留（熔断 OPEN 时被快速失败挡下，维持"停机空推荐"既有语义）。
+- **R-07 评估结论（2026-09-16，回写 NEEDS 二表 R-07）**：`lrem(k,0,id)`（删全部出现）+ `lpush` 写即去重 → id 每 key 至多 1 条，索引大小 ≤ 该维度活跃内容数，**不随增删操作累积**；`removeContent` 对全部 4 个索引 key 幂等 LREM → 正常操作下被删 id 即时剔除 → **无系统性长尾漂移，无需定期重建**。残余窗口（已接受）：仅删除 LREM 失败（停机窗口）残留有界脏 id，读侧 null 跳过免疫、**T5 惰性探测后每条至多消耗 1 个探测位**；索引 key 缺失/启动触发全量重建时 SCAN+DEL 全量收敛。
+- **L1 观察（登记不修，超范围）**：`loadAllWithoutMedia` DB 失败返回空列表 → `rebuildIndexes(空)` 在 Redis 正常时会 SCAN+DEL 全量索引（既有行为，DB 瞬断清索引；零行为变化红线，不随 T5 改动）；**反向边同登记**：空库（DB 无内容）时 `loadAllWithoutMedia` 返回空列表、重建"成功"（true）不记冷却 → 冷却对空库场景不生效，每请求仍全表查询（空表查询开销可忽略、非停机语义，留观察）。
+- **验证**：ContentCacheTest 改造 3 例（惰性探测逐 key）+ 新增 4 例（探测量=limit / 全 null 最坏全探测等价 / 失败后冷却内跳过重建 / 冷却过期重试）→ **JUnit 407 例全绿（surefire 403 + pool 4）**；**pytest all 124 passed 无回归**；**运行时黑洞验证（REDIS_HOST=203.0.113.1 注入启动，`temp_script/verify_cache05_rebuild_backoff.py`）**：预热 1 次 /start 后连续 20 次 /start 全部 code=200 且空推荐（U-11 语义不变），**Δ Com_select = 0**（无退避应 ≈20——每次重建 1 次 findAllContent 全表查询），日志实证 2 次"索引重建失败"（init 1 + 预热 1，预热即记冷却）；subagent review 通过（无🔴）。
 
 ---
 

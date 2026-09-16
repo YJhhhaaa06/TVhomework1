@@ -164,6 +164,12 @@ public final class AppConfig {
         return getLong("cache.follow.ttlMinutes") * 60;
     }
 
+    // T5（cache-05）：索引懒重建失败冷却退避窗口（对齐熔断冷却先例 redis.breaker.cooldownMillis）
+
+    public static long getContentIndexRebuildCooldownMillis() {
+        return getLong("cache.content.indexRebuildCooldownMillis");
+    }
+
     // ===== 日志 =====
 
     public static String getLogFile() {

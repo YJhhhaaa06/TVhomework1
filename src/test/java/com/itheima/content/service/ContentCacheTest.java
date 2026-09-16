@@ -60,7 +60,8 @@ class ContentCacheTest {
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
         jedis = mock(Jedis.class);
-        cache = new ContentCache(contentDao, contentMediaDao, tt, cacheAside, redisAccess, singleFlight);
+        cache = new ContentCache(contentDao, contentMediaDao, tt, cacheAside, redisAccess, singleFlight,
+                60_000L); // T5 退避注入：默认实例大冷却（60s），单测试内多次调用落窗口；过期重试用例自建小冷却实例
 
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
@@ -195,7 +196,10 @@ class ContentCacheTest {
     void getRecommendByFilterReadsIndexAndMapsContent() throws SQLException {
         when(jedis.exists("content:index:1:2")).thenReturn(true);
         when(jedis.lrange("content:index:1:2", 0, -1)).thenReturn(List.of("1", "2"));
-        stubGetBatch(Map.of(1L, dto(1L, 1, 2), 2L, dto(2L, 1, 2)));
+        // T5 惰性探测：逐 id 走 getContent（真实 loader 查 DB），不再对全量候选批量探测
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L, 2, 2));
+        when(contentDao.findContent(conn, 2L)).thenReturn(dto(2L, 2, 2));
+        when(contentMediaDao.findMedia(eq(conn), anyLong())).thenReturn(Map.of());
 
         List<ContentVO> result = cache.getRecommendByFilter(1, 2, 12);
 
@@ -203,6 +207,8 @@ class ContentCacheTest {
         assertEquals(Set.of(1L, 2L), Set.of(result.get(0).getId(), result.get(1).getId()));
         // 索引已存在：不触发懒重建
         verify(singleFlight, never()).get(anyString(), any(Callable.class));
+        // 推荐不再走全量批量探测路径
+        verify(cacheAside, never()).getBatch(anyList(), any(Class.class), any(Function.class), anyLong());
     }
 
     @Test
@@ -214,9 +220,10 @@ class ContentCacheTest {
         when(singleFlight.get(eq("content:index:rebuild"), any(Callable.class)))
                 .thenAnswer(inv -> ((Callable<?>) inv.getArgument(1)).call());
         Pipeline p = stubPipeline();
-        // 重建后索引有 5
+        // T5 惰性探测：重建后索引有 5，逐 id getContent 查 DB 装载
         when(jedis.lrange("content:index:1:2", 0, -1)).thenReturn(List.of("5"));
-        stubGetBatch(Map.of(5L, dto(5L, 2, 1)));
+        when(contentDao.findContent(conn, 5L)).thenReturn(dto(5L, 2, 1));
+        when(contentMediaDao.findMedia(eq(conn), anyLong())).thenReturn(Map.of());
 
         List<ContentVO> result = cache.getRecommendByFilter(1, 2, 12);
 
@@ -263,20 +270,95 @@ class ContentCacheTest {
     }
 
     @Test
-    void getRecommendByFilterSkipsNullAndTruncatesToLimit() {
+    void getRecommendByFilterSkipsNullAndTruncatesToLimit() throws SQLException {
         when(jedis.exists("content:index:1:2")).thenReturn(true);
         when(jedis.lrange("content:index:1:2", 0, -1)).thenReturn(List.of("1", "2", "3"));
-        // 1、3 有数据，2 为空标记（null）：批量结果按 shuffle 原序跳过 null、凑满 limit 即断
-        Map<Long, ContentCacheDTO> values = new HashMap<>();
-        values.put(1L, dto(1L, 1, 2));
-        values.put(2L, null);
-        values.put(3L, dto(3L, 1, 2));
-        stubGetBatch(values);
+        // T5 惰性探测：2 = DB 无数据（null 消耗探测位）；1/3 有数据 → 首个探测到即凑满 limit=1
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L, 2, 2));
+        when(contentDao.findContent(conn, 2L)).thenReturn(null);
+        when(contentDao.findContent(conn, 3L)).thenReturn(dto(3L, 2, 2));
+        when(contentMediaDao.findMedia(eq(conn), anyLong())).thenReturn(Map.of());
 
         List<ContentVO> result = cache.getRecommendByFilter(1, 2, 1);
 
         assertEquals(1, result.size());
         assertTrue(result.get(0).getId() == 1L || result.get(0).getId() == 3L);
+    }
+
+    @Test
+    void getRecommendByFilterProbesOnlyUntilLimit() throws SQLException {
+        // T5/N2：候选 100 条全部有数据，limit=12 → 惰性探测恰好 12 次，探测量与候选总量解耦
+        when(jedis.exists("content:index:1:2")).thenReturn(true);
+        List<String> candidates = new ArrayList<>();
+        for (long i = 1; i <= 100; i++) {
+            candidates.add(String.valueOf(i));
+        }
+        when(jedis.lrange("content:index:1:2", 0, -1)).thenReturn(candidates);
+        when(contentDao.findContent(eq(conn), anyLong())).thenAnswer(inv -> dto((Long) inv.getArgument(1), 2, 2));
+        when(contentMediaDao.findMedia(eq(conn), anyLong())).thenReturn(Map.of());
+
+        List<ContentVO> result = cache.getRecommendByFilter(1, 2, 12);
+
+        assertEquals(12, result.size());
+        verify(cacheAside, times(12)).get(anyString(), any(Class.class), any(Callable.class), anyLong());
+    }
+
+    @Test
+    void getRecommendByFilterWorstCaseAllNullProbesAllCandidates() throws SQLException {
+        // T5/N2 退化场景：全部候选 DB 无数据（null 消耗探测位）→ 最坏全探测，与现状批量全量探测等价
+        when(jedis.exists("content:index:1:2")).thenReturn(true);
+        List<String> candidates = new ArrayList<>();
+        for (long i = 1; i <= 100; i++) {
+            candidates.add(String.valueOf(i));
+        }
+        when(jedis.lrange("content:index:1:2", 0, -1)).thenReturn(candidates);
+        when(contentDao.findContent(eq(conn), anyLong())).thenReturn(null);
+
+        List<ContentVO> result = cache.getRecommendByFilter(1, 2, 12);
+
+        assertTrue(result.isEmpty());
+        verify(cacheAside, times(100)).get(anyString(), any(Class.class), any(Callable.class), anyLong());
+    }
+
+    // ==================== ensureIndex 懒重建冷却退避（T5/N1）====================
+
+    @Test
+    void ensureIndexBacksOffAfterFailedRebuild() throws Exception {
+        // T5/N1：重建失败（Redis 写失败）→ 进程内冷却，后续请求不再逐请求触发 DB 全量重建
+        when(jedis.exists("content:index:1:2")).thenReturn(false);
+        when(jedis.lrange("content:index:1:2", 0, -1)).thenReturn(List.of());
+        when(contentDao.findAllContent(conn)).thenReturn(List.of(dto(5L, 2, 1)));
+        when(singleFlight.get(eq("content:index:rebuild"), any(Callable.class)))
+                .thenAnswer(inv -> ((Callable<?>) inv.getArgument(1)).call());
+        // rebuildIndexes 的 Redis 写必失败（停机）：executeVoid 抛 CacheException → 重建失败记冷却
+        // 注意：此处 doThrow 覆盖 setUp 的 executeVoid doAnswer 桩（重桩合法，未尾调用生效）；
+        // 用例内勿再依赖 executeVoid 正常工作（会静默吞错），如需走通须另改桩。
+        doThrow(new CacheException("redis down")).when(redisAccess).executeVoid(any(Consumer.class));
+
+        cache.getRecommendByFilter(1, 2, 12); // 第 1 次：exists 失败 → 重建失败 → 记冷却
+        cache.getRecommendByFilter(1, 2, 12); // 第 2 次：冷却窗口内 → 跳过探测与重建
+
+        // DB 全表装载只发生 1 次（从"每请求 1 次"收敛到"每冷却窗口 1 次"）
+        verify(contentDao, times(1)).findAllContent(any(Connection.class));
+    }
+
+    @Test
+    void ensureIndexRetriesRebuildAfterCooldownExpiry() throws Exception {
+        // T5/N1：冷却过期后下一请求自然重试完整链路（与熔断探针语义同构）
+        ContentCache shortCooling = new ContentCache(contentDao, contentMediaDao, tt, cacheAside,
+                redisAccess, singleFlight, 30L);
+        when(jedis.exists("content:index:1:2")).thenReturn(false);
+        when(jedis.lrange("content:index:1:2", 0, -1)).thenReturn(List.of());
+        when(contentDao.findAllContent(conn)).thenReturn(List.of(dto(5L, 2, 1)));
+        when(singleFlight.get(eq("content:index:rebuild"), any(Callable.class)))
+                .thenAnswer(inv -> ((Callable<?>) inv.getArgument(1)).call());
+        doThrow(new CacheException("redis down")).when(redisAccess).executeVoid(any(Consumer.class));
+
+        shortCooling.getRecommendByFilter(1, 2, 12);
+        Thread.sleep(60); // 越过 30ms 冷却窗口
+        shortCooling.getRecommendByFilter(1, 2, 12);
+
+        verify(contentDao, times(2)).findAllContent(any(Connection.class));
     }
 
     // ==================== 写路径 ====================

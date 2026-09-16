@@ -49,7 +49,8 @@ import redis.clients.jedis.resps.ScanResult;
  * <p>本类只负责内容；评论缓存见 {@link CommentCache}（T3 迁出）。任何缓存失败一律降级（4.2），
  * init 不 crash 应用（旧 ContentCacheManager 的 HashMap 实现已随 T6 移除）。
  * 索引懒重建：索引 key 缺失（Redis 重启/被清）时按需从 DB 重建，防 /start 空推荐；
- * 索引写入失败（三期 T4/N4）时 best-effort DEL 所属索引 key 让读路径触发懒重建自愈。
+ * 索引写入失败（三期 T4/N4）时 best-effort DEL 所属索引 key 让读路径触发懒重建自愈；
+ * 懒重建失败（T5/N1）进入进程内冷却退避，停机期间不再逐请求触发 DB 全量重建。
  */
 @Component
 public class ContentCache implements Initializable {
@@ -66,16 +67,31 @@ public class ContentCache implements Initializable {
     private final RedisAccess redisAccess;
     private final SingleFlight singleFlight;
 
+    /** 索引懒重建失败冷却退避窗口（毫秒，T5/N1）；0 表示关闭退避（测试注入大值即等效关闭）。 */
+    private final long indexRebuildCooldownMillis;
+
+    /** 上次索引懒重建失败时刻（毫秒）；0 = 从未失败/已恢复。进程内退避记录（T5/N1）。 */
+    private volatile long lastFailedRebuildAtMillis;
+
     @InjectConstructor
     public ContentCache(ContentDao contentDao, ContentMediaDao contentMediaDao,
                         TransactionTemplate transactionTemplate, CacheAside cacheAside,
                         RedisAccess redisAccess, SingleFlight singleFlight) {
+        this(contentDao, contentMediaDao, transactionTemplate, cacheAside, redisAccess, singleFlight,
+                AppConfig.getContentIndexRebuildCooldownMillis());
+    }
+
+    /** 包级可见：供测试注入小冷却值快速验证退避状态（对齐 RedisCircuitBreaker 双构造先例）。 */
+    ContentCache(ContentDao contentDao, ContentMediaDao contentMediaDao,
+                 TransactionTemplate transactionTemplate, CacheAside cacheAside,
+                 RedisAccess redisAccess, SingleFlight singleFlight, long indexRebuildCooldownMillis) {
         this.contentDao = contentDao;
         this.contentMediaDao = contentMediaDao;
         this.transactionTemplate = transactionTemplate;
         this.cacheAside = cacheAside;
         this.redisAccess = redisAccess;
         this.singleFlight = singleFlight;
+        this.indexRebuildCooldownMillis = indexRebuildCooldownMillis;
     }
 
     // ==================== 读路径 ====================
@@ -134,11 +150,14 @@ public class ContentCache implements Initializable {
 
         List<Long> distinctIds = new ArrayList<>(new LinkedHashSet<>(idList));
         Collections.shuffle(distinctIds);
-        // T8：批量一趟 pipeline 读全部候选（语义与逐条 getContent 一致），再按 shuffle 原序跳过 null 收到 limit
-        Map<Long, ContentCacheDTO> byId = getContentsBatch(distinctIds);
+        // T5（cache-05）：按 shuffle 序惰性探测——凑满 limit 即止，探测量与候选总量解耦
+        // （原 T8 批量对全部候选一趟 pipeline 探测，候选 1 万 = 3 万命令只为取 12 条）。
+        // 均匀性论证：shuffle 仍在全量去重 id 列表上一次性执行，返回集 = "shuffle 序前 limit 个非 null"，
+        // 与批量读全量后按同一 shuffle 序收集逐位一致；惰性探测只改"探测到第几个停止"，不改"取哪些"。
+        // null 跳过语义不变：hit-empty / DB 无数据消耗探测位，最坏全探测 = 现状退化场景等价。
         List<ContentVO> result = new ArrayList<>();
         for (Long contentId : distinctIds) {
-            ContentCacheDTO dto = byId.get(contentId);
+            ContentCacheDTO dto = getContent(contentId);
             if (dto == null) {
                 continue;
             }
@@ -402,8 +421,13 @@ public class ContentCache implements Initializable {
         return CacheKeys.contentIndex(t, c);
     }
 
-    /** 索引懒重建：目标索引 key 不存在时按需从 DB 重建（单飞防惊群；Redis 异常降级为空/不 crash）。 */
+    /** 索引懒重建：目标索引 key 不存在时按需从 DB 重建（单飞防惊群；Redis 异常降级为空/不 crash）。
+     * T5/N1 退避：重建失败后进入进程内冷却窗口，窗口内不再逐请求重试全量重建
+     * （单飞只防并发重叠、不防串行重复——停机期间每请求 1 次 DB 全表查询收敛为 每冷却窗口 1 次）。 */
     private void ensureIndex(String indexKey) {
+        if (inIndexRebuildCooldown()) {
+            return; // 冷却窗口内跳过探测与重建，readIndex 走既有降级空推荐（U-11 语义不变）
+        }
         try {
             Boolean exists = redisAccess.execute(j -> j.exists(indexKey));
             if (Boolean.TRUE.equals(exists)) {
@@ -415,12 +439,24 @@ public class ContentCache implements Initializable {
         try {
             singleFlight.get(INDEX_REBUILD_KEY, () -> {
                 List<ContentCacheDTO> all = loadAllWithoutMedia();
-                rebuildIndexes(all);
+                if (!rebuildIndexes(all)) {
+                    lastFailedRebuildAtMillis = System.currentTimeMillis();
+                } else {
+                    lastFailedRebuildAtMillis = 0; // 重建成功即恢复正常，冷却清除
+                }
                 return null;
             });
         } catch (RuntimeException e) {
+            lastFailedRebuildAtMillis = System.currentTimeMillis();
             LOGGER.log(Level.WARNING, "索引懒重建失败，本次推荐降级为空", e);
         }
+    }
+
+    /** 冷却窗口判定：存在失败记录且未过窗口 → true（跳过重建）。冷却过期后自然重试完整链路。 */
+    private boolean inIndexRebuildCooldown() {
+        long failedAt = lastFailedRebuildAtMillis;
+        return failedAt != 0
+                && System.currentTimeMillis() - failedAt < indexRebuildCooldownMillis;
     }
 
     private List<Long> readIndex(String indexKey) {
@@ -506,8 +542,10 @@ public class ContentCache implements Initializable {
     /**
      * 索引全量重建（三期 T5 pipeline 化）：先 SCAN 清掉历史 content:index:*（顺序读），
      * 再按 findAllContent 顺序（新前序）一趟 pipeline 重建全部索引。
+     *
+     * @return true = Redis 写入成功；false = 写失败（T5/N1 退避失败口径，init 调用点忽略返回值）
      */
-    private void rebuildIndexes(List<ContentCacheDTO> all) {
+    private boolean rebuildIndexes(List<ContentCacheDTO> all) {
         try {
             redisAccess.executeVoid(j -> {
                 // SCAN 段需逐页读游标，无法入 pipeline；先收集旧索引 key
@@ -522,8 +560,10 @@ public class ContentCache implements Initializable {
                 }
                 p.sync();
             });
+            return true;
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "索引重建失败（降级为空推荐）", e);
+            return false;
         }
     }
 

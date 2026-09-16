@@ -395,6 +395,11 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 > **T9 滑动续期注记（2026-09-13，NEEDS 4.14）**：所有缓存读路径**命中数据 key 顺带续期**——内容/评论/点赞计数（CacheAside get/getBatch，续期值=原 TTL ±10% 抖动，同 pipeline 追加 EXPIRE）与点赞成员/关注关系 Set（scanLikeSet/scanSet/getSetMembers/batchIsFollowing/batchIsContentLiked/batchIsCommentLiked，续期值=域 TTL 精确值）在命中时延长生命周期，热点常驻由续期自然达成、不设永不过期 key；**空标记（`empty:`）一律不续期**（防"假空"窗口延长，执行定稿）；续期失败（Redis 异常）走既有降级读，不影响业务。分域 TTL 已按双轮压测观测取值：content 30min / comment 10min / like 15min / follow 30min（详见 CURRENT_ARCHITECTURE 6.5 与 NEEDS 4.14 T9 执行定稿）。
 >
 > **T8 读路径加固（2026-09-12，治 H12/H13）**：内容读路径（单 key 与批量）均 pipeline 化——EXISTS 空标记 + GET 数据 key 一趟往返（`CacheAside.read`/`getInternal`/`getBatch`）；推荐（/start）、Feed、Profile 页内改 `ContentCache.getContentsBatch` 批量读（结果集/顺序/空跳语义不变）；索引遍历由 `KEYS "content:index:*"` 改为 **SCAN**（`forEachIndexKey`，removeContent LREM 与重建 DEL 两处，LREM/DEL 幂等、SCAN 重复 key 无害）。
+>
+> **第四期 T5（cache-05）推荐读路径优化 + 索引重建退避注记（2026-09-16，N1/N2/R-07）**：
+> ① **推荐读惰性探测（治 N2）**：`/start`（`ContentCache.getRecommendByFilter`）从"对全部候选一趟 pipeline 批量探测"改为**按 shuffle 序逐个惰性探测、凑满 limit 即止**（探测量从"候选数 × 3 命令"收敛到"~limit+跳过量"，与候选总量解耦）；shuffle 仍在全量去重 id 列表上一次性执行，返回集 = "shuffle 序前 limit 个非 null"，**推荐结果分布语义不变**（惰性探测只改"探测多少"不改"取哪些"）；`getContentsBatch` 批量读仅剩 Feed/Profile 使用。
+> ② **索引懒重建失败冷却退避（治 N1）**：`ensureIndex` 重建失败（Redis 写失败）进入进程内冷却窗口（`cache.content.indexRebuildCooldownMillis=10000`，对齐熔断冷却先例），窗口内跳过探测与重建——**Redis 停机期间 `/start` 从"逐请求触发 DB 全表查询"收敛到"每冷却窗口 1 次"**；冷却过期后下一请求自然重试，重建成功即恢复正常，**"停机空推荐"对外语义不变（U-11 本体不做）**。
+> ③ **R-07 索引长尾漂移评估结论**：LREM(count=0) 删全部出现 + LPUSH 写即去重、`removeContent` 对全部索引 key 幂等 LREM → **正常操作无系统性漂移、无需定期重建**；仅删除 LREM 失败（停机窗口）残留有界脏 id，惰性探测后每条至多消耗 1 个探测位，索引 key 缺失/启动全量重建即全量收敛。详情见 CURRENT_ARCHITECTURE 6.17。
 
 ### 3.2 发布视频流程
 
