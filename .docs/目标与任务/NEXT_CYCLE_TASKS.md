@@ -84,7 +84,7 @@
 | T5 | 推荐读路径优化 + 索引重建退避 | N1、N2、R-04、R-07、U-11 加重面 | —（独立，可并行窗口） | 惰性探测（探测量前后对比）；停机期间不再逐请求全表查询（可复现验证）；R-07 评估结论回写 NEEDS；**`pytest all` 全量绿** | `refactor(cache-05)` | 已完成 |
 | T6 | 关注/粉丝计数入缓存 | R-01 | T3（软） | Profile 计数命中缓存；follow/unfollow 后计数一致性方案拍板落地（G7）；SCARD 冷 set 返 0 的坑有结论 | `refactor(cache-06)` | 已完成 |
 | T7 | 小项打包：JSON 兼容 + 批量续期补测 | R-09、R-06 | —（独立） | Jackson 关 `FAIL_ON_UNKNOWN_PROPERTIES`（含多余字段兼容单测）；批量续期断言补齐；**G1 标注：小任务合并为一个 commit** | `refactor(cache-07)` | 已完成 |
-| T8 | 收尾 | 全周期 | T1~T7 | T1~T7 无残留；`@WebServlet`/web.xml/IoC 原样；常青文档同步；覆盖率地图 rerun 无回归；**`pytest all` 全量绿** | `refactor(cache-08)` | 草稿 |
+| T8 | 收尾 | 全周期 | T1~T7 | T1~T7 无残留；`@WebServlet`/web.xml/IoC 原样；常青文档同步；覆盖率地图 rerun 无回归；**`pytest all` 全量绿** | `refactor(cache-08)` | 已完成 |
 
 > 状态取值：草稿 / 待执行 / 执行中 / 已完成 / 搁置。搁置的 T# 必须注明其"对应候选"编号去向（转 `UNPLANNED_ISSUES.md` / 结转下周期 NEEDS 二节），不得悬空（G11）。
 
@@ -161,7 +161,7 @@
 * **红线边界**：不引入新功能改动；只做残留清理、验证与文档；发现"要改但未排期"的内容 → **登记 `UNPLANNED_ISSUES.md`**，不在本周期硬做。
 * **强制探索步骤**：动刀前先 (1) `rg` 确认 T1~T7 无残留（旧的重复实现、TODO/临时开关/临时日志）(2) 校验 `@WebServlet` URL / web.xml / IoC 扫描原样 (3) 确认 CacheStats 打点口径在收口/反转/新增 key 后仍准确（T2/T4/T6 都动过缓存路径——`domainOf` 的域归映射是否需要随新 key 扩展）。
 * **验收**：`pytest all` 全量回归全绿；常青文档同步（`CURRENT_ARCHITECTURE.md` 六.Redis 设计 + `BUSINESS_FLOW.md` 3.1 缓存机制）；NEEDS 中已拍板决策与实现一致；覆盖率地图 rerun 无回归。
-* **执行回写（<日期>，<commit scope> 已落地）**：`<任务完成后追加>`。
+* **执行回写（2026-09-16，`refactor(cache-08)` 已落地）**：**① 残留巡检**（rg 全仓库 Java + 代码复查）：T1~T7 无残留——旧重复实现（`scanSet`/`writeSet`/`loadViaSingleFlight`/`getSetMembers`/`toSortedLongs`/`scanLikeSet`/`writeXxxLikers`/`backfillBatch*`/`degradeBatch*`/`findLikerIdsBy*`）均已随 T2/T3/T4 删除，命中仅余 T1 基建组件 SetCache 自身方法与 javadoc 说明；**无 TODO/FIXME/临时开关/临时日志**（`System.out.println` 仅 CouponAdmin/LogUtil/CountRepairTool 既有工具类，非本期引入）；`batchKeysIsMember` **生产无调用、仅 SetCacheTest 测试保留**（T4 停用预留注记落实）。**② @WebServlet/web.xml/IoC**：14 个 `@WebServlet` URL、`web.xml`（4 filter）、IoC 扫描 `ClassScanner.scan("com.itheima")` 全部**原样**。**③ CacheStats 打点口径**：`domainOf` 对全 key 工厂分支逐一核对——T4 新 key `user:likeSet`/`user:commentLikeSet` 于 `user:*` 兜底前归 LIKE、T6 新 key `user:followCount`/`user:followerCount` 经 `user:*` 兜底归 FOLLOW、T4 反转后 `content:like*`/`comment:like*` 归 LIKE 不变，长前缀优先顺序（content:index → content:like → content:comments → comment:like → comment: → content: → user:commentLike → user:like → user:）核对无漂移；SetCache/CacheAside/LikeCacheService/FollowCache 挂点事件（三态/LOAD/DEGRADE/WRITE_FAIL）口径与 6.3 一致。**④ 回归**：`tv.py test junit`（沙箱外）JUnit **419 例全绿**（surefire 415 + pool 4，与 T7 基线一致无回归）；`tv.py test all`（沙箱外）**pytest all 124 passed**（本周期收尾全量回归点）；覆盖率地图 rerun **41 端点全有 pytest、无用例 0**（无回归，与三期 T6 记录一致）。**⑤ 文档**：常青 CURRENT_ARCHITECTURE 2.23（更新日志行；6.2 key 表 / 6.15~6.19 核对一致）+ BUSINESS_FLOW 3.1 注记核对一致（T3/T5/T6 均已各自同步）；NEEDS 4.0 追加 T8 收尾登记。**G11 质疑**：无 L2/L3（T2 遗留的"header 版本滞后 L1 观察"已随 T7/T8 版本链 2.19→2.23 自然对齐；`batchKeysIsMember` 停用预留维持 T4 拍板）。**验证与验收对照**：验收四项（残留/原样/文档/覆盖率 + pytest all 全绿）全部达成。
 
 ---
 
@@ -169,6 +169,7 @@
 
 | 日期 | 版本 | 内容                                                                                                                                                                       |
 | ---- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-09-16 | 0.9 | **T8 完成（`refactor(cache-08)`）**：任务总览 T8 状态 → 已完成；四、任务详情 T8 追加执行回写（残留巡检 T1~T7 无残留 / @WebServlet 14 URL+web.xml+IoC 原样 / CacheStats domainOf 全 key 分支核对无漂移 / JUnit 419 + pytest all 124 + 覆盖率地图 41 端点无回归 / 常青 2.23 + BUSINESS_FLOW 核对一致 / 无 L2/L3）；变更记录 0.9 行 |
 | 2026-09-16 | 0.8 | **T7 完成（`refactor(cache-07)`）**：任务总览 T7 状态 → 已完成；四、任务详情 T7 追加执行回写（R-09/R-06 证据复核成立 / JacksonCodec 关 `FAIL_ON_UNKNOWN_PROPERTIES` 一行修（保留 WRITE_DATES_AS_TIMESTAMPS，无版本机制）/ JacksonCodecTest +2（未知字段忽略 + 日期格式钉死）/ CacheAsideTest +1（getBatch miss key 续期与回填）/ SetCache/Like/Follow 批量三态续期断言行补齐 / 脏 JSON 路径有意定向变化说明；JUnit 419（surefire 415 + pool 4）+ pytest all 124 passed + subagent review 无🔴🟡2 全落实）；变更记录 0.8 行 |
 | 2026-09-16 | 0.7 | **T6 完成（`refactor(cache-06)`）**：任务总览 T6 状态 → 已完成；四、任务详情 T6 追加执行回写（R-01 证据复核成立 / 2026-09-16 用户三连拍板：独立计数 key+Cache-Aside、SCARD 否决、条件增量 Lua / G11 质疑 L3 上报·用户裁决照做 / 落点：CacheKeys 两工厂+UserDao 两单列查询+FollowCache 读写+ProfileService 事务外读 / L1 观察 4 条 / JUnit 416 + pytest 124 + verify 8/8 篡改探针证命中缓存 + subagent review 无🔴🟡5 全处置）；变更记录 0.7 行 |
 | 2026-09-16 | 0.6 | **T5 完成（`refactor(cache-05)`）**：任务总览 T5 状态 → 已完成；四、任务详情 T5 追加执行回写（N1/N2 证据复核成立 / 惰性探测落点与均匀性论证 / 退避参数与记录形态 / 探测量前后对比表 / 停机运行时验证 Δ Com_select=0 / R-07 评估结论 / L1 观察；JUnit 407 + pytest 124 + subagent review 无🔴）；变更记录 0.6 行 |
