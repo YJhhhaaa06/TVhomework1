@@ -1,6 +1,7 @@
 package com.itheima.user.service;
 
 import com.itheima.user.dao.UserDao;
+import com.itheima.content.service.ContentCache;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.DatabaseException;
 import com.itheima.exception.DuplicatePhoneException;
@@ -33,6 +34,7 @@ import static org.mockito.Mockito.*;
 class UserServiceTest {
 
     private UserDao userDao;
+    private ContentCache contentCache;
     private TransactionTemplate tt;
     private Connection conn;
     private UserService service;
@@ -40,9 +42,10 @@ class UserServiceTest {
     @BeforeEach
     void setUp() throws Exception {
         userDao = mock(UserDao.class);
+        contentCache = mock(ContentCache.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
-        service = new UserService(userDao, tt);
+        service = new UserService(userDao, tt, contentCache);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);
@@ -183,6 +186,8 @@ class UserServiceTest {
     @Test
     void changeUserNameInvalidRejectedBeforeDao() {
         assertThrows(ParamException.class, () -> service.changeUserName(7L, null));
+        assertThrows(ParamException.class, () -> service.changeUserName(7L, ""));
+        assertThrows(ParamException.class, () -> service.changeUserName(7L, "   "));
         assertThrows(ParamException.class, () -> service.changeUserName(7L, "a".repeat(50)));
         verifyNoInteractions(userDao);
     }
@@ -197,11 +202,24 @@ class UserServiceTest {
     @Test
     void changeUserNameSuccess() throws SQLException {
         when(userDao.isUserExist(conn, 7L)).thenReturn(true);
+        when(userDao.isUsernameUsed(conn, "newName")).thenReturn(false);
         when(userDao.updateUserName(conn, 7L, "newName")).thenReturn(1);
 
         service.changeUserName(7L, "newName");
 
         verify(userDao).updateUserName(conn, 7L, "newName");
+        verify(contentCache).invalidateAuthorContentKeys(7L);
+    }
+
+    @Test
+    void changeUserNameDuplicateNameThrows() throws SQLException {
+        when(userDao.isUserExist(conn, 7L)).thenReturn(true);
+        when(userDao.isUsernameUsed(conn, "newName")).thenReturn(true);
+
+        assertThrows(ConflictException.class, () -> service.changeUserName(7L, "newName"));
+
+        verify(userDao, never()).updateUserName(any(Connection.class), anyLong(), anyString());
+        verify(contentCache, never()).invalidateAuthorContentKeys(anyLong());
     }
 
     @Test

@@ -9,6 +9,7 @@ import com.itheima.user.model.command.ChangePasswordCommand;
 import com.itheima.user.model.command.LoginCommand;
 import com.itheima.user.model.command.RegisterCommand;
 import com.itheima.user.model.dto.ChangePasswordDTO;
+import com.itheima.user.model.dto.ChangeUserNameDTO;
 import com.itheima.user.model.dto.LoginDTO;
 import com.itheima.user.model.dto.RegisterDTO;
 import com.itheima.exception.ErrorCode;
@@ -45,6 +46,9 @@ public class LoginController extends BaseServlet {
             case ("/changePassword"):
                 changePassword(req, resp);
                 break;
+            case ("/changeUserName"):
+                changeUserName(req, resp);
+                break;
             default:
                 BaseServletUtil.writeError(resp,ErrorCode.SERVER_ERROR,"请求异常，请重试");
         }
@@ -75,6 +79,17 @@ public class LoginController extends BaseServlet {
         ChangePasswordDTO dto = RequestParser.parse(req, ChangePasswordDTO.class);
         ChangePasswordCommand command = CommandConverter.changePasswordToCommand(dto);
         userService.changePassword(userId, command);
+        BaseServletUtil.writeSuccess(resp, null);
+    }
+
+    protected void changeUserName(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        Long userId = (Long) req.getAttribute("userId");
+        if (userId == null) {
+            BaseServletUtil.writeError(resp, ErrorCode.UNAUTHORIZED, "请先登录");
+            return;
+        }
+        ChangeUserNameDTO dto = RequestParser.parse(req, ChangeUserNameDTO.class);
+        userService.changeUserName(userId, dto.getUserName());
         BaseServletUtil.writeSuccess(resp, null);
     }
 }

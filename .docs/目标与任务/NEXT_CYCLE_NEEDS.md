@@ -34,7 +34,7 @@
 
 | 编号 | 事项 | 类别 | 来源（归档周期） | 状态 | 说明 |
 | ---- | ---- | ---- | ---- | ---- | ---- |
-| R-01 | `authorName` 冗余不同步 | 需求（一致性） | `260917/R-03`（溯源 `260913/H9`） | 未处理 | 用户改名后内容缓存仍带旧名，需等 TTL/失效；当前无改名接口，属潜在项 |
+| R-01 | `authorName` 冗余不同步 | 需求（一致性） | `260917/R-03`（溯源 `260913/H9`） | **已落地（第五期 T1，2026-09-18）** | 用户改名后内容缓存仍带旧名；第五期 T1 方案 A 已落地（补 `/user/changeUserName` + 改名后级联失效 `ContentCache.invalidateAuthorContentKeys(userId)`，读自愈回填新名），执行细节见 4.0 |
 | R-02 | 索引全量读 + 拷贝 shuffle | 需求（性能） | `260917/R-04`（溯源 `260913/H10`） | 明确保留 | `LRANGE 0 -1` 全量读保留（推荐 shuffle 对外语义不变）；第四期 T5 已收缩"探测面"（按 shuffle 序惰性探测凑满即止），`getRecommendByFilter` 读面仍每次全量去重 + shuffle、只取 12 条，数据量大时 O(n) |
 
 > **已完成、不结转**（供对照）：第四期 T1~T8 全部——Set 缓存行为收敛进基建（U-09/N3 → T1~T3，含 LikeCacheService 收口孪生合并、FollowCache 收口、关注/粉丝计数 key 前置）/ 点赞成员装载反转 `content:likeSet`→`user:likeSet`（`260917/R-08` → T4）/ 推荐读路径惰性探测 + 索引重建失败冷却退避（N2/N1 → T5，**含 `260917/R-07` 评估：无需定期重建**）/ 关注粉丝计数入缓存（`260917/R-01` → T6，独立计数 key+SCARD 否决+条件增量 Lua）/ JSON 未知字段兼容 + 批量续期补测（`260917/R-09`/`260917/R-06` → T7）/ 收尾巡检与回归（T8）；旧 `260914/R-05`（缓存对象共享可变引用）已随 260915 归档复核确认关闭（CacheAside 三读路径均走 codec.fromJson 每次新对象）不结转；N9 观测增强（重置/端点/持久化）为已接受取舍（`260913/T7` 拍板），不结转。
@@ -63,6 +63,8 @@
 
 > 每落地一个任务的技术决策在此追加一段（G7：窗口内新决策先回写本节的"已定/待定"状态，不许自行拍板）：任务编号 + commit 前缀 + 拍板日期 + 拍板取向与理由 + 关键实现点 + 落点（类/模块）+ 验证摘要。
 > **质疑记录（G11）**：Why 层质疑（前提证伪 / 已满足 / 必要性存疑 / 内部矛盾）在此登记——L2 带疑继续、L3 暂停必须留痕（L1 仅记录落任务清单"执行回写"）；**裁决权在用户**，裁决结果即一条新决策，同节留痕。
+
+**T1 authorName 冗余同步（refactor(cache-01)，拍板 2026-09-18）**：**方案 A 拍板**——补 `/user/changeUserName` 接口 + 改名后级联失效内容缓存。**G11 质疑记录（L2 带疑继续，用户已裁决）**：NEEDS 原预期"无改名接口/UserDao 无改名方法"；实证 **Service 层已有 dormant `UserService.changeUserName`**（参数校验 + 事务 + `UserDao.updateUserName`，带 3 单测，无 Servlet 调用）——HTTP 层确无改名接口（结论部分属实），但"UserDao 无改名方法"子前提证伪；用户裁决按方案 A 落地，dormant 方法成为基础。关键实现点：`LoginController` 既有 `/user/*` switch 加 case + `AuthFilter` PROTECTED_EXACT 精确保护 + `ChangeUserNameDTO{userName}`；校验补 `isBlank`（对齐注册先例）+ `isUsernameUsed` 重复名 409 预校验；`UserService.changeUserName` DB 提交后调用新增 `ContentCache.invalidateAuthorContentKeys(userId)`（事务内 `findContentIdsByUser` → 事务外 `cacheAside.invalidate` 逐个失效内容 key+空标记，失败静默 TTL 自愈；`content:index:*` 含 id 不含 authorName 无需失效），读自愈重新 JOIN users 回填新名。落点：LoginController/UserService/ContentCache/UserDao（复用既有 updateUserName/findContentIdsByUser/isUsernameUsed）/AuthFilter。验证摘要：JUnit 423 全绿（surefire 419 + pool 4）+ pytest all 128 passed（`test_change_user_name.py` 6 用例覆盖 401/400/409/改名后详情+主页 authorName 变更/新名可登录）。
 
 ### 4.1 候选痛点（代码复查，2026-09-17；N1/N2 已随 R-03 拍板纳入，见 4.3）
 

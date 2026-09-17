@@ -272,19 +272,66 @@ Content-Type: application/json
 
 ---
 
-### 2.4 修改用户名流程
+### 2.4 修改用户名流程（第五期 T1 cache-01：新增接口 + 级联失效内容缓存）
 
 ```
-POST /user/changeUserName?token=xxx&newName=新名字
-
-步骤：
-1. 验证登录状态
-2. 校验新用户名长度 < 50
-3. 开启事务
-4. 检查用户存在
-5. 更新用户名
-6. 提交事务
+┌──────────┐  POST /user/changeUserName  ┌──────────────┐
+│  客户端   │ ──────────────────────────► │ LoginController │
+└──────────┘   {"userName": "新名字"}       └──────────────┘
+       ▲                                        │ (AuthFilter 精确保护)
+       │                                        ▼
+       │                                 ┌──────────────┐
+       │                                 │  UserService  │
+       │                                 │ changeUserName│
+       │                                 └──────────────┘
+       │                                        │
+       │        ┌───────────────┬───────────────┼──────────────┐
+       │        ▼               ▼               ▼              ▼
+       │   ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌──────────────┐
+       │   │ 校验用户名  │ │ 检查用户   │ │ 唯一性预校验│ │ UPDATE       │
+       │   │ 非空/非超长 │ │ 存在       │ │ (isUsername │ │ users.username│
+       │   │ (400)      │ │ (401)      │ │  Used→409) │ │ └──────┬──────┘
+       │   └────────────┘ └────────────┘ └────────────┘        ▼
+       │                                                  ┌──────────────┐
+       │                                                  │ 提交事务后    │
+       │                                                  │ contentCache. │
+       │                                                  │ invalidateAuth│
+       │                                                  │ orContentKeys │
+       │                                                  └──────────────┘
+       └──────────────────────── 返回成功（缓存读自愈回填新名）─┘
 ```
+
+#### 详细步骤
+
+| 步骤 | 操作 | 失败处理 |
+|------|------|----------|
+| 1 | AuthFilter 精确保护 `/user/changeUserName` + Controller 取 userId（request attribute） | 未登录返回 401 |
+| 2 | 解析 JSON 为 ChangeUserNameDTO | 返回 400 参数错误 |
+| 3 | Service 校验：`null / isBlank / length >= 50` | ParamException（400） |
+| 4 | 开启事务，检查用户存在 | 不存在抛 UserNotFoundException（401） |
+| 5 | 唯一性预校验 `isUsernameUsed`（对齐全册注册先例，避免撞 DB UNIQUE 变 500） | 已占用抛 ConflictException（409，含改名成自己当前名） |
+| 6 | `UPDATE users SET username=?` | 更新失败抛 DatabaseException（500） |
+| 7 | 提交事务后调用 `ContentCache.invalidateAuthorContentKeys(userId)`：事务内查该用户全部内容 id → 事务外逐个失效 `content:{id}` key + 空标记 | DB/Redis 失败仅记日志跳过，缓存 TTL 自愈，不影响改名成功 |
+
+#### 接口定义
+
+```
+POST /user/changeUserName
+Content-Type: application/json
+
+请求体：
+{
+    "userName": "新名字"
+}
+
+成功响应：
+{
+    "code": 200,
+    "data": null
+}
+```
+
+> 一致性说明：内容缓存的 `authorName` 是 `findContent` `JOIN users` 时的反规范化副本；改名后失效该作者全部内容 key，下次读 `loadContentFromDb` 重新 JOIN users 回填新名（推荐/Feed/Profile/详情/搜索全部经内容缓存消费，索引 `content:index:*` 只存 id 无需失效）。
 
 ### 2.5 修改手机号流程
 
@@ -1277,6 +1324,7 @@ GET /feed?page=1&pageSize=10&token=xxx
 | `/comment/delete` | 精确 | ✓ |
 | `/content/commentEnabled` | 精确 | ✓ |
 | `/user/changePassword` | 精确 | ✓ |
+| `/user/changeUserName` | 精确 | ✓ |
 | `/coupon/grab` | 精确 | ✓ |
 | `/coupon/my` | 精确 | ✓ |
 
@@ -1482,6 +1530,7 @@ return buildUserList(conn, ids, currentUserId);
 | 用户注册 | 注册新用户，返回 token |
 | 用户登录 | 使用手机号/ID 登录 |
 | 修改密码 | 修改后用新密码登录 |
+| 修改用户名 | 改名后内容详情/主页 authorName 变为新名（级联失效缓存） |
 | 发布视频 | 上传视频+封面，首页可见 |
 | 发布动态 | 上传图片帖，首页可见 |
 | 首页推荐 | 返回内容列表，有封面和计数 |
@@ -1519,7 +1568,7 @@ return buildUserList(conn, ids, currentUserId);
 | POST | /user/login | 登录 | ✗ |
 | POST | /user/register | 注册 | ✗ |
 | POST | /user/changePassword | 修改密码 | ✓ |
-| POST | /user/changeUserName | 修改用户名 | ✓ |
+| POST | /user/changeUserName | 修改用户名（级联失效内容缓存 authorName） | ✓ |
 | POST | /user/changePhone | 修改手机号 | ✓ |
 
 ### 10.2 内容相关

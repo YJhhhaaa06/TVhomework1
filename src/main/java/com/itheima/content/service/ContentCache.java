@@ -233,6 +233,33 @@ public class ContentCache implements Initializable {
         cacheAside.invalidate(CacheKeys.content(contentId));
     }
 
+    /** 用户改名后：失效该用户作为作者的全部内容 key，读自愈重新 JOIN users 回填新 authorName。
+     * 索引 content:index:* 仅存 id 不含 authorName，无需失效。DB 查询失败仅记日志跳过
+     * （保留缓存 TTL 自愈），不抛——缓存仅作加速器。 */
+    public void invalidateAuthorContentKeys(long userId) {
+        List<Long> contentIds;
+        try {
+            contentIds = transactionTemplate.execute(conn -> {
+                try {
+                    return contentDao.findContentIdsByUser(conn, userId);
+                } catch (SQLException e) {
+                    throw new DatabaseException("查询用户内容 id 失败", e);
+                }
+            });
+        } catch (DatabaseException e) {
+            LOGGER.log(Level.WARNING, "改名级联失效：查询内容 id 失败（保留缓存，TTL 自愈）, userId=" + userId, e);
+            return;
+        }
+        if (contentIds == null || contentIds.isEmpty()) {
+            return;
+        }
+        List<String> keys = new ArrayList<>(contentIds.size());
+        for (Long id : contentIds) {
+            keys.add(CacheKeys.content(id));
+        }
+        cacheAside.invalidate(keys.toArray(new String[0]));
+    }
+
     // ==================== VO 复制（自旧 ContentCacheManager 迁入，旧类已随 T6 移除） ====================
 
     public ContentVO toContentVO(ContentCacheDTO dto) {

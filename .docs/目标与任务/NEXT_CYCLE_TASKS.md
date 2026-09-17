@@ -1,7 +1,7 @@
 # 下一周期任务清单
 
 > 关联文档：目标与任务/NEXT_CYCLE_NEEDS.md（决策唯一源；此文件为执行细节）
-> 状态：**已拆任务（2026-09-17）**——R-03 拍板为「**缓存读路径治理**（authorName 冗余同步 + 批量装载合并 + 事务边界瘦身）」，本周期 **3 个任务 T1~T3**（草稿态）。四要素为骨架，**执行方案由执行窗口的 Agent 探索细化**（G5 允许回写）。
+> 状态：**已拆任务（2026-09-17）**——R-03 拍板为「**缓存读路径治理**（authorName 冗余同步 + 批量装载合并 + 事务边界瘦身）」，本周期 **3 个任务 T1~T3**（**T1 已完成 2026-09-18**，T2/T3 待执行，四要素为骨架，执行方案由执行窗口的 Agent 探索细化，G5 允许回写）。
 > 工作流：每个任务开独立窗口执行（一任务一窗口单独探索、修改、review）；"任务清单 + 需求与痛点"为窗口间唯一交接载体。
 > 来源：第五期 `NEXT_CYCLE_NEEDS.md`——二节 R-01（authorName 冗余同步，结转 `260917/R-03`）+ 4.1 代码复查 N1（批量读逐 key 装载 DB 放大）/ N2（Feed/Profile 事务内嵌套缓存装载）。
 > **本周期明确不做**：R-02 索引全量读本体、R-04 包层环、U-11 停机 DB 兜底推荐、U-12/U-13 懒加载分页范畴、feed 流改造——完整清单见 NEEDS 4.3。
@@ -68,7 +68,7 @@
 
 | 编号 | 标题 | 对应候选 | 依赖 | 验收关键（动态） | 期望 commit 主题 | 状态 |
 | -- | -- | ---- | -- | -------- | ------------ | -- |
-| T1 | authorName 冗余同步（改名后内容缓存同步机制） | R-01 | —（独立，可并行） | 方案经用户拍板（G7：无改名接口现状——补改名接口 or 仅机制预留）；改名后内容缓存 authorName 一致性可验证；对外行为零变化或按拍板口径 | `refactor(cache-01)` | 草稿 |
+| T1 | authorName 冗余同步（改名后内容缓存同步机制） | R-01 | —（独立，可并行） | **已完成（2026-09-18）**：方案 A 拍板（补 `/user/changeUserName` + 级联失效），改名后内容缓存 authorName 一致性运行时验证（详情+主页断言），对外行为零变化（仅新增接口） | `refactor(cache-01)` | 已完成 |
 | T2 | 批量缓存读装载合并（N1：批量 miss/降级逐 key 独立 DB 装载 → 批量装载） | N1 | T1 可并行 | 批量 miss 装载 DB 查询收敛（前后对比落执行回写）；冷数据页 DB 查询次数显著下降；三态/续期/降级语义不变；`pytest all` 全量绿 | `refactor(cache-02)` | 草稿 |
 | T3 | Feed/Profile 缓存读移出业务事务（N2：事务内嵌套缓存装载） | N2 | T2 可并行（若 T2 改了批量读签名则软依赖） | 缓存批量读不再落在 DB 事务回调内；冷缓存高峰无"事务持连接 + 装载再取连接"叠加；对外行为零变化 | `refactor(cache-03)` | 草稿 |
 
@@ -91,7 +91,7 @@
 * **红线边界**：不做"顺手"补一整套个人资料编辑（仅用户名）；不引入 MQ；不改内容缓存三态/降级/TTL 语义；若拍板"补改名接口"——不改 `@WebServlet` URL / web.xml / IoC 扫描（新接口按既有 Servlet 注册规范落位）。
 * **强制探索步骤**：动刀前先 (0) 复核 R-01 证据仍成立（全文检索 user 域/service 是否有 updateUsername/changeName/改名接口；确认 `UserDao` 无改名方法）(1) 盘点 authorName 的消费链（`ContentCacheDTO` → `toContentVO/toDetailVO` → 推荐/Feed/Profile/详情/搜索，确认全部来自内容缓存）(2) 探索两种候选方案的成本与一致性口径：A 补用户名修改接口（DB UPDATE + 级联失效该用户全部内容 key 或按 authorId 索引批量重载）；B 仅做缓存侧机制预留（不改名接口存在前无触达路径，可能结论=留池待改名需求）(3) **若协商后须动 DB/接口契约 → 落方案前回写 NEEDS 4.0 待用户拍板（G7），不得自行定调**——若清单未覆盖 → 回写本文档再动手。
 * **验收**：无论方案 A/B，拍板结果回写 NEEDS 4.0（G7 决策留痕）；若 A——改名接口 + 改名后内容缓存 authorName 一致性可验证（运行时：改名 → 内容详情/推荐/Feed 返回新名，篡改探针或直接断言）；若 B——结论=现状无触达路径、标注留池待改名需求，归档评估结论即可。JUnit + 相关端点 pytest 绿；无 DDL。
-* **执行回写（待执行）**：`<完成后追加>`。
+* **执行回写（已完成，2026-09-18）**：**方案 A 拍板（G7，用户 2026-09-18）**——补 `/user/changeUserName` + 级联失效。**G11 质疑（L2 带疑继续，用户已裁决）**：强制探索 (0) 复核发现 Service 层已有 dormant `UserService.changeUserName`（`UserDao.updateUserName` 已存在，NEEDS"UserDao 无改名方法"子前提证伪；HTTP 层无改名接口属实）——裁决按方案 A，dormant 方法成为基础。**落地**：`LoginController` `/user/*` switch 加 `changeUserName` case + `AuthFilter` PROTECTED_EXACT 加 `/user/changeUserName`（对齐 changePassword 鉴权口径）；新增 `ChangeUserNameDTO{userName}`；`UserService.changeUserName` 校验补 `isBlank`（对齐注册先例）+ 事务内 `isUsernameUsed` 重复名 409 预校验（杜绝撞 DB UNIQUE 变 500），DB 提交后调新增 `ContentCache.invalidateAuthorContentKeys(userId)`（事务内 `findContentIdsByUser` → 事务外 `cacheAside.invalidate` 逐个失效内容 key+空标记，DB/Redis 失败仅记日志、TTL 自愈，不影响改名语义）；`content:index:*` 仅存 id 不含 authorName，无需失效。**验证**：JUnit **423 全绿**（surefire 419 + pool 4，UserServiceTest 24 含新增 duplicate+invalid 补空串/空白串断言、ContentCacheTest 31 新增 invalidateAuthorContentKeys 三态）+ **pytest all 128 passed**（新增 `test_change_user_name.py` 6 用例：未登录 401 / 空与超长 400 / 重复名 409 / 改名后**详情+主页 authorName 变更为新名**（级联失效运行时断言）/ 新名可登录）。**关键修复**：初版 pytest 发现空串 `""` 通过旧校验（`len>=50` 才拒）→ 补 `isBlank` 后 128 全绿。常青文档（CURRENT_ARCHITECTURE 2.4 章节 AuthFilter 清单/模块表/7.1/6.20/更改日志 2.24、BUSINESS_FLOW 2.4/7.1/8/10）与 NEEDS 4.0/二 R-01 已同步；无 DDL；commit `refactor(cache-01)` 由用户侧提交。
 
 ---
 

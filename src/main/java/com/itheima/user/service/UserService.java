@@ -5,6 +5,7 @@ import com.itheima.user.model.command.LoginCommand;
 import com.itheima.user.model.command.LoginType;
 import com.itheima.user.model.command.RegisterCommand;
 import com.itheima.user.dao.UserDao;
+import com.itheima.content.service.ContentCache;
 import com.itheima.exception.BusinessException;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.DatabaseException;
@@ -31,13 +32,15 @@ public class UserService {
 
     private final UserDao userDao;
     private final TransactionTemplate transactionTemplate;
+    private final ContentCache contentCache;
     private static final Logger LOGGER =
             LogUtil.getLogger(UserService.class);
 
     @InjectConstructor
-    public UserService(UserDao userDao, TransactionTemplate transactionTemplate) {
+    public UserService(UserDao userDao, TransactionTemplate transactionTemplate, ContentCache contentCache) {
         this.userDao = userDao;
         this.transactionTemplate = transactionTemplate;
+        this.contentCache = contentCache;
     }
 
     public LoginVO login(LoginCommand loginCommand){
@@ -155,7 +158,7 @@ public class UserService {
     }
     
     public void changeUserName(long userId,String newName) {
-        if (newName == null || newName.length() >= 50) {
+        if (newName == null || newName.isBlank() || newName.length() >= 50) {
             throw new ParamException("用户名不合法");
         }
 
@@ -171,6 +174,8 @@ public class UserService {
                 throw new DatabaseException("修改用户名失败", e);
             }
         });
+        // DB 提交后级联失效该作者内容缓存 key；失败不抛（缓存仅作加速器，TTL 自愈）
+        contentCache.invalidateAuthorContentKeys(userId);
     }
     public void changePhone(long userId,String oldPhone,String newPhone) {
         transactionTemplate.execute(conn -> {
@@ -190,6 +195,10 @@ public class UserService {
     private void doChangeUserName(Connection conn, long userId, String newName) throws SQLException {
         if (!userDao.isUserExist(conn, userId)) {
             throw new UserNotFoundException();
+        }
+        // 唯一性预校验（对齐全册注册先例，避免撞 DB UNIQUE 约束变 500）
+        if (userDao.isUsernameUsed(conn, newName)) {
+            throw new ConflictException("用户名已被占用");
         }
         int rows = userDao.updateUserName(conn, userId, newName);
         if (rows == 0) {

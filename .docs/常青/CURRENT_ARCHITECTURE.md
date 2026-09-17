@@ -134,7 +134,7 @@ com.itheima/
 
 **AuthFilter 保护路径**：
 - 前缀：`/api/upload`、`/api/admin`、`/follow`、`/like`、`/feed`
-- 精确：`/comment/add`、`/comment/delete`、`/content/commentEnabled`、`/user/changePassword`、`/coupon/grab`、`/coupon/my`
+- 精确：`/comment/add`、`/comment/delete`、`/content/commentEnabled`、`/user/changePassword`、`/user/changeUserName`、`/coupon/grab`、`/coupon/my`
 - `/api/admin/*` 额外校验 `role == 1`，非管理员返回 403（每次请求查库）
 
 #### exception 包 — 异常体系
@@ -216,10 +216,10 @@ com.itheima/
 
 | 层 | 类（行数） | 职责 |
 |----|------|------|
-| controller | LoginController（80，/user/*） | 登录、注册、修改密码 |
-| service | UserService（241） | 用户认证 + 管理员判定 |
+| controller | LoginController（80，/user/*） | 登录、注册、修改密码/用户名 |
+| service | UserService（241） | 用户认证 + 管理员判定 + 改名后级联失效内容缓存（T1 cache-01 注入 ContentCache） |
 | dao | UserDao（225） | users 用户 CRUD + 角色查询 |
-| model | entity/User（89）、dto/LoginDTO（28）/RegisterDTO（41）/ChangePasswordDTO（35）、command/LoginCommand（63）/RegisterCommand（44）/ChangePasswordCommand（44）/LoginType（7）、vo/LoginVO（40） | 用户实体与请求/命令/响应对象 |
+| model | entity/User（89）、dto/LoginDTO（28）/RegisterDTO（41）/ChangePasswordDTO（35）/ChangeUserNameDTO（13）、command/LoginCommand（63）/RegisterCommand（44）/ChangePasswordCommand（44）/LoginType（7）、vo/LoginVO（40） | 用户实体与请求/命令/响应对象 |
 
 #### content 域 — `com.itheima.content`（含共享缓存组件）
 
@@ -549,6 +549,15 @@ com.itheima/
 - **测试**：JacksonCodecTest 4→6（`jsonWithUnknownFieldsIgnoresExtraProperties` / `dateSerializationStaysIsoNotTimestamp`）、CacheAsideTest +1（`getBatchMissKeyQueuesRenewalAndBackfillWritesTtl`）、SetCacheTest/LikeCacheServiceTest/FollowCacheTest 批量用例补断言行。
 - **验证**：JUnit **419 例全绿**（surefire 415 + pool 4，T6 416 + 3）无回归；pytest all **124 passed**；subagent review 通过（无🔴，🟡2 全落实：batchKeysIsMember 混合态补 k1 断言 / 文件末尾换行）。
 
+### 6.20 authorName 冗余同步（第五期 T1 cache-01，R-01，2026-09-18 用户拍板=方案 A 补接口 + 级联失效）
+
+> 目标：用户改名后，内容缓存仍带旧 `authorName` 的一致性问题。`authorName` 是 `findContent`/`findAllContent` `JOIN users` 时的反规范化副本，只存在于**内容缓存**（`content:{id}` DTO）——`content:index:*` 只存 id、评论/点赞缓存不含 authorName，故仅需失效内容数据 key，索引无需失效。
+
+- **探索发现（G11 L2 登记）**：NEEDS 原预期"无改名接口/UserDao 无改名方法"；实证 HTTP 层确无改名接口，但 Service 层已有实现完整且带单测的 dormant `UserService.changeUserName`（参数校验 + 事务 + `UserDao.updateUserName`）——经用户裁决按**方案 A** 落地，dormant 方法成为基础。
+- **新增接口**：`POST /user/changeUserName`（LoginController 既有 `/user/*` switch 内加 case + `AuthFilter` PROTECTED_EXACT 精确保护），入参 `ChangeUserNameDTO{userName}`；空/null/超长（≥50）→ 400（ParamException，`isBlank` 对齐注册先例）、重复名 → 409（`isUsernameUsed` 预校验，杜绝撞 DB UNIQUE 变 500）、未登录 → 401。
+- **级联失效**：`UserService.changeUserName` DB 事务提交后调用 `ContentCache.invalidateAuthorContentKeys(userId)`（写路径家族，事务外调用，H3 原则）——事务内 `contentDao.findContentIdsByUser` 查该作者全部内容 id → 事务外 `cacheAside.invalidate(keys...)` 逐个失效内容 key + 空标记；**读自愈**：下次读 `loadContentFromDb` 重新 JOIN users 拿新名。DB/Redis 失败仅记日志跳过（缓存仅作加速器，TTL 自愈），不影响改名成功语义。UserService 注入 ContentCache（user→content 跨域，对齐 like/comment→content 先例，无环）。
+- **验证**：JUnit **423 例全绿**（surefire 419 + pool 4，T8 419：UserServiceTest 23→24 含新增 duplicate 用例 + 原 invalid 用例补空串/空白串断言、ContentCacheTest 28→31 新增 invalidateAuthorContentKeys 三态）+ pytest all **128 passed**（新增 `test_change_user_name.py` 6 用例：未登录 401 / 空与超长 400 / 重复名 409 / **改名后详情+主页 authorName 变更为新名** / 新名可登录）；运行时断言覆盖"缓存旧名入缓存 → 详情读到旧名 → 改名 → 详情/主页读到新名"全链。
+
 ---
 
 ## 七、API 接口清单
@@ -560,6 +569,7 @@ com.itheima/
 | POST | /user/login | 登录 | ✗ |
 | POST | /user/register | 注册 | ✗ |
 | POST | /user/changePassword | 修改密码 | ✓ |
+| POST | /user/changeUserName | 修改用户名（改名后级联失效该作者内容缓存 authorName） | ✓ |
 
 ### 7.2 内容模块
 
@@ -795,6 +805,7 @@ src/main/webapp/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-09-18 | 2.24 | **第五期 T1 authorName 冗余同步（refactor(cache-01)，治 R-01，2026-09-18 用户拍板=方案 A 补接口 + 级联失效）**：新增 `POST /user/changeUserName`（LoginController `/user/*` switch + AuthFilter PROTECTED_EXACT 精确保护），入参 `ChangeUserNameDTO{userName}`；校验补 `isBlank` 对齐注册先例 + `isUsernameUsed` 重复名预校验（409，杜绝撞 DB UNIQUE 变 500）；`UserService.changeUserName` DB 提交后调用 **`ContentCache.invalidateAuthorContentKeys(userId)`**（事务内 `findContentIdsByUser` 查该作者内容 id → 事务外 `cacheAside.invalidate` 逐个失效内容 key+空标记，DB/Redis 失败静默跳过 TTL 自愈），读自愈重新 JOIN users 回填新名；`content:index:*` 不含 authorName 无需失效；UserService 注入 ContentCache（user→content 跨域，对齐 like/comment 先例无环）；本文件 2.4 章节（AuthFilter 精确清单/模块表/7.1/6.20）同步；TASKS T1 已完成 + 执行回写；NEEDS 4.0 T1 决策 + G11 质疑（HTTP 层无改名接口属实、Service 层 dormant changeUserName 与预期不符处）记录 |
 | 2026-09-16 | 2.23 | **第四期 T8 收尾（refactor(cache-08)）**：全仓库巡检——T1~T7 无残留（旧重复实现已随各任务删除、无 TODO/临时开关/临时日志；`batchKeysIsMember` 生产无调用仅测试保留=T4 停用预留注记落实）；`@WebServlet` 14 URL / web.xml / IoC 扫描（`scan("com.itheima")`）原样；CacheStats 打点口径确认——`domainOf` 覆盖本周期全部新 key（T4 user:like*/user:commentLike*→LIKE 于 user:* 兜底前、T6 user:followCount/user:followerCount 经 user:* 兜底归 FOLLOW，长前缀优先顺序核对无漂移）；**JUnit 419 例全绿（surefire 415 + pool 4）+ pytest all 124 passed + 覆盖率地图 rerun 无回归（41 端点全有 pytest）**；常青本文件 6.2/6.15~6.19 与 BUSINESS_FLOW 3.1 注记核对一致（T1~T7 已各自同步）；TASKS T8 已完成 + 执行回写；NEEDS 4.0 T8 收尾登记 |
 | 2026-09-16 | 2.22 | **第四期 T7 小项打包（refactor(cache-07)，治 R-09/R-06，G1 小任务合并 1 commit）**：① **R-09 JSON 兼容**——`JacksonCodec` MAPPER 追加 `.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)`（唯一业务改动 1 行 + javadoc），保留 `WRITE_DATES_AS_TIMESTAMPS` 原样、无格式版本机制；脏 JSON（含未知字段）由「反序列化失败→DEGRADE→DB loader」变「成功解析（多余字段忽略）→HIT_DATA」（R-09 有意的定向行为变化，对外 API/业务语义零变化）；**② R-06 批量续期补测（只补断言不改行为）**——CacheAsideTest 新增 getBatch miss key 续期用例（pipeline 无条件入列 expire 无效果 + 回填 writeOrInvalidate setex TTL + 清空标记）；SetCache 批量（batchIsMember/batchKeysIsMember 三态）与 Like/Follow 域层批量（batchIsContentLiked/IsCommentLiked/batchIsFollowing）补 pipeline `expire` 直接断言 + 空标记不续；新增兼容单测（JacksonCodecTest +2、CacheAsideTest +1）；**JUnit 419 例全绿**（surefire 415 + pool 4，T6 416 + 3）+ **pytest all 124 passed** + subagent review 通过（无🔴，🟡2 全落实：batchKeysIsMember 补 k1 断言 / 文件末尾换行）；本文件 4.2 JacksonCodec 行/cache 测试注记/6.19/9.2/12 同步；TASKS T7 已完成 + 执行回写；NEEDS 4.0 T7 执行定稿 + R-06/R-09 已完成 |
 | 2026-09-16 | 2.21 | **第四期 T6 关注/粉丝计数入缓存（refactor(cache-06)，治 R-01，2026-09-16 用户拍板）**：Profile 读路径 followCount/followerCount 由「随 user 整行从 DB 读取」改为**独立计数 key 入缓存**（`user:followCount:{userId}`/`user:followerCount:{userId}`，String int，Cache-Aside，0 合法，与 `content:likeCount` 同构）；`CacheKeys` 新增两工厂，`domainOf` 无需扩展（`user:` 兜底归 FOLLOW，T8 巡检项随 T6 放行）；`FollowCache` 注入 `UserDao`，新增读 `getFollowCount/getFollowerCount`（cacheAside.get + 单列 loader）+ 写 **条件增量 Lua**（`FOLLOW_COUNT_ADJUST_SCRIPT`：`exists 才 INCRBY±1`，冷 key no-op 由读回填，失败只失效计数 key）；`ProfileService.getProfile` 事务外读两计数；**SCARD 冷 set 返 0 坑结论=否决**（③ 大坑见 6.18）；G11 质疑「计数缓存不减少 DB 查询（整行必读）」用户裁决照做留痕；L1 观察 4 条（404 多打 loader / 文案漂移 / INCR 瞬时多计 / DECR 理论负）登记不修；**JUnit 416 例全绿**（surefire 412 + pool 4，T5 407 + 9）+ **pytest all 124 passed** + **运行时验证 8/8 通过**（`temp_script/verify_t6_count_cache.py`：冷 key 回填一致 / 条件 INCRBY 同步 +1 / **篡改探针 999 证命中缓存** / DEL 自愈 / unfollow 复原 / 冷 key 读回填）+ subagent review 通过（无🔴，🟡5 条全部处置：先例内已知项 + L1 登记）；本文件 6.2/6.18/9.2/12 同步；TASKS T6 已完成 + 执行回写；NEEDS 4.0 T6 执行定稿 + R-01 已完成 |

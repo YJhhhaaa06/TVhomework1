@@ -452,6 +452,36 @@ class ContentCacheTest {
         verify(cacheAside, times(3)).invalidate(CacheKeys.content(5L));
     }
 
+    // ==================== invalidateAuthorContentKeys（T1：用户改名后级联失效该作者内容 key） ====================
+
+    @Test
+    void invalidateAuthorContentKeysInvalidatesEachContentKey() throws SQLException {
+        when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(List.of(1L, 2L));
+
+        cache.invalidateAuthorContentKeys(7L);
+
+        verify(cacheAside).invalidate("content:1", "content:2");
+    }
+
+    @Test
+    void invalidateAuthorContentKeysNoContentSkipsInvalidation() throws SQLException {
+        when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(List.of());
+
+        cache.invalidateAuthorContentKeys(7L);
+
+        verify(cacheAside, never()).invalidate(any(String[].class));
+    }
+
+    @Test
+    void invalidateAuthorContentKeysDbErrorSkipsQuietly() throws SQLException {
+        when(contentDao.findContentIdsByUser(conn, 7L)).thenThrow(new SQLException("db down"));
+
+        assertDoesNotThrow(() -> cache.invalidateAuthorContentKeys(7L));
+
+        // 缓存仅作加速器：DB 查询失败 → 保留缓存 TTL 自愈，不抛、不失效
+        verify(cacheAside, never()).invalidate(any(String[].class));
+    }
+
     // ==================== init 全量重建（三期 T5：事务外写 + 批量装载 + pipeline） ====================
 
     @Test
