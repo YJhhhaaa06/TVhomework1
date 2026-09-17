@@ -27,19 +27,17 @@
 
 ## 目标与任务（目标与任务/）
 
-> **当前周期：第四期「缓存体系综合改造」（2026-09-15 立，同日拍板 R-10）**——主题 = 结构收敛（U-09 五份 Set 实现收口进基建）+ 装载反转（R-08 `user:likeSet`）+ 读路径优化（N1 重建退避 / N2 惰性探测）+ 计数入缓存（R-01）+ 小项打包（R-09/R-06）；已拆 **8 任务 T1~T8**（草稿，`refactor(cache-01)`~`(08)`；T4/T6 开工前须方案拍板）；**D 方向 feed 延后第五期**（用户 2026-09-15 定：第四期只做缓存体系）。上周期已归档，见下方"历史周期"。
+> **当前无在办周期（2026-09-17）**：第四期「缓存体系综合改造」T1~T8 已全部完成并于 2026-09-17 归档至 `archive/目标与任务/260917-cache-overhaul/`（`refactor(cache-01)`~`(08)`）。本目录现只保留**两份周期模板** + 常驻的 `UNPLANNED_ISSUES.md`；**第五期立项时按模板新建 `NEXT_CYCLE_NEEDS.md` / `NEXT_CYCLE_TASKS.md`**。
 >
-> 编号体系：`C-#` 通用约定 / `R-##` 结转事项（R-01~R-09 未完成需求，其中 R-01/R-06~R-09 已纳入本期；R-10~R-12 决策项，R-10 已拍板）/ `N#` 本周期候选痛点（N1~N3 已纳入）/ `T#` 任务。
+> 第五期结转来源（立项起手）：① 归档周期 NEEDS 二/三节未消化项（R-02 单飞分布式化 / R-03 `authorName` 冗余同步 / R-04 索引全量读本体 / R-05 TTL 真流量复调 / R-11 优惠券抢购限流 / R-12 content↔comment 包层环）+ 归档周期 4.3 反面清单（**D 方向 feed 流改造**等）；② `UNPLANNED_ISSUES.md` 留池项（U-11 停机 DB 兜底推荐等）。
 
 | 文件 | 内容 |
 |------|------|
 | 目标与任务/周期模板_NEEDS.md | **稳定模板**：下一周期需求与痛点文档的通用骨架（抽取自历次周期），含占位符与填写说明；新建周期时复制为 NEXT_CYCLE_NEEDS.md |
 | 目标与任务/周期模板_TASKS.md | **稳定模板**：下一周期任务清单文档的通用骨架（抽取自历次周期），含任务四要素模板与填写说明；新建周期时复制为 NEXT_CYCLE_TASKS.md |
-| 目标与任务/NEXT_CYCLE_NEEDS.md | 本周期需求与痛点（Why，决策唯一源）：通用约定 C-1~C-3 + ⑦ 条延续约定（含 G11 质疑协议）+ 结转事项 R-01~R-12（R-10 = 第四期方向已拍板）+ **4.1 候选痛点 N1~N3**（2026-09-15 代码复查：ensureIndex 降级隐藏放量 / 推荐全量候选探测 / 域缓存孪生复制，均带文件:行证据）+ **4.2 候选方向与拍板结论** + **4.3 本周期范围与"明确不做"反面清单** |
-| 目标与任务/NEXT_CYCLE_TASKS.md | 本周期任务（How）：**已拆 T1~T8**——周期约定 G1~G11（G1 已按 R-10 校准：前缀 `refactor(cache-0N)`、`pytest all` 在 T3/T5/T8 三点、无 DDL）+ 任务总览（含顺序理由与 NEEDS 编号映射，T4 反转硬依赖 T2、T5 可并行）+ 8 个任务的四要素骨架（T4/T6 含开工前方案拍板点） |
-| 目标与任务/UNPLANNED_ISSUES.md | 待决策池：登记"发现需要改、但暂未排进任务清单"的内容（文档滞后/代码债/观察），按登记规则新增（U-07 包层环仍待定，已同步结转第四期 R-12；U-09 已纳入第四期 T1~T3；U-11 的 N1 加重面已纳入 T5、停机 DB 兜底推荐留池） |
+| 目标与任务/UNPLANNED_ISSUES.md | 待决策池：登记"发现需要改、但暂未排进任务清单"的内容（文档滞后/代码债/观察），按登记规则新增；**当前有效留池项 = U-07（包层环，第四期 R-12 未消化）/ U-11（停机 DB 兜底推荐，对外行为变更未拍板）**，其余（U-05/U-08/U-09/U-10、U-11 的 N1 加重面）已消化留痕 |
 
-> 历史周期：`260908-test-hardening`（测试体系改造 T1-T5）已归档 `archive/目标与任务/260908-test-hardening/`；`260910-test-gap-fill`（补测试缺口 A 方向 T1~T8，test(12)~test(19)）已归档 `archive/目标与任务/260910-test-gap-fill/`；`260912-package-refactor`（B 方向 feature package 改造：8 域迁移 + 1 收尾 T1~T9，pkg-01~pkg-09，仅搬移不改名、行为零变化）已归档 `archive/目标与任务/260912-package-refactor/`；`260913-cache-architecture`（C 方向缓存改造：一版 T1~T6 + 二期 T7~T9，refactor(cache-01)~cache-09，统一 Redis + 三态 Cache-Aside + 空标记 + 可降级 + 统一单飞 + 点赞计数/成员分离 + 关注双 Set + 观测埋点 + 读路径加固 + TTL 精调，对外行为零变化）已归档 `archive/目标与任务/260913-cache-architecture/`；`260914-cache-hardening`（第三期缓存加固：T1~T6，fix(cache-01)~(06)（T4 拆 04a/04b/04c），超时显式化 + 全局熔断 + 降级接入单飞 + 负缓存契约 + 空标记 exists 守卫 + 索引写失败自愈 + 点赞条件写 Lua 原子化 + 启动加载事务外/pipeline 化 + 索引 key 生成/解析/匹配同源归一，对外行为零变化）已归档 `archive/目标与任务/260914-cache-hardening/`（勿读，追踪可追溯）。
+> 历史周期：`260908-test-hardening`（测试体系改造 T1-T5）已归档 `archive/目标与任务/260908-test-hardening/`；`260910-test-gap-fill`（补测试缺口 A 方向 T1~T8，test(12)~test(19)）已归档 `archive/目标与任务/260910-test-gap-fill/`；`260912-package-refactor`（B 方向 feature package 改造：8 域迁移 + 1 收尾 T1~T9，pkg-01~pkg-09，仅搬移不改名、行为零变化）已归档 `archive/目标与任务/260912-package-refactor/`；`260913-cache-architecture`（C 方向缓存改造：一版 T1~T6 + 二期 T7~T9，refactor(cache-01)~cache-09，统一 Redis + 三态 Cache-Aside + 空标记 + 可降级 + 统一单飞 + 点赞计数/成员分离 + 关注双 Set + 观测埋点 + 读路径加固 + TTL 精调，对外行为零变化）已归档 `archive/目标与任务/260913-cache-architecture/`；`260914-cache-hardening`（第三期缓存加固：T1~T6，fix(cache-01)~(06)（T4 拆 04a/04b/04c），超时显式化 + 全局熔断 + 降级接入单飞 + 负缓存契约 + 空标记 exists 守卫 + 索引写失败自愈 + 点赞条件写 Lua 原子化 + 启动加载事务外/pipeline 化 + 索引 key 生成/解析/匹配同源归一，对外行为零变化）已归档 `archive/目标与任务/260914-cache-hardening/`（勿读，追踪可追溯）；`260917-cache-overhaul`（第四期「缓存体系综合改造」：T1~T8，`refactor(cache-01)`~`(08)`，Set 缓存组件收敛进基建 + Like/Follow 域缓存收口与孪生合并 + 点赞成员装载反转（`content:likeSet`→`user:likeSet`）+ 推荐惰性探测与索引重建退避 + 关注/粉丝计数入缓存 + JSON 未知字段兼容与批量续期补测 + 收尾回归，收口/反转均对外行为零变化）已归档 `archive/目标与任务/260917-cache-overhaul/`（勿读，追踪可追溯）。
 
 > 术语：周期 > 任务。（历史文档中的"阶段"仅指 260830 周期内部顺序，已归档。）
 
