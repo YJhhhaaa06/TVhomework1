@@ -1,0 +1,159 @@
+# 下一周期任务清单
+
+> 状态：**杂务/准备周期（分支 `prep/next-phase`）**——不做正式功能方向，处理代码卫生与铺垫清理。方向（R-03）已于 2026-09-18 拍板拆任务：T1~T6 第一批（基座/卫生，优先执行）+ T7~T9 第二批（用户点名主菜）。
+> 来源：`目标与任务/NEXT_CYCLE_NEEDS.md`（决策唯一源）4.1 的 N1~N14 + 二/三节结转项；N10 转留池（`UNPLANNED_ISSUES.md` U-15）；U-14 本周期不做（与 T7/T8 撞同一批 `FollowService` 方法，落地后再评）。
+> 明确不做：R-02 索引全量读（明确保留）；R-04 包层环（继续待定）；U-11 停机 DB 兜底（留池）；正式功能方向（feed/日志体系/新功能另开分支）。
+> **变更纪律（2026-09-18 用户拍板）**：本档无"变更记录"节——变更以 git 提交历史为准（模板已同步移除，沿用旧版时把变更记录节删掉）。
+
+---
+
+## 一、周期约定（方向拍板后已校准）
+
+| 编号 | 约定 | 内容 |
+| ---- | ---- | ---- |
+| G1 | 一任务一窗口一 commit（默认期望） | 每个任务开独立窗口，默认期望 1 个 commit；因任务内部依赖需拆多 commit 或小任务合并时，**在该任务详情标注**；commit message 强制带任务编号，**本周期前缀 = `prep-0N`**（如 `chore(prep-01)`，N=任务号；T1 规范定稿后 T2~T9 按 T1 交付的 TYPE(SCOPE) 口径写，编号仍带 prep-0N）；引用任务一律用 `T1`~`T9`，不用 commit scope |
+| G2 | 开窗协议（输入） | 新窗口顺序读取：① `.docs/INDEX.md` → ② `目标与任务/NEXT_CYCLE_NEEDS.md`（**决策节必读**：C-#、R-##、4.3 本周期范围、4.1 的 N#）→ ③ 本任务清单（一/二节约定，含 G11 质疑协议 + 当前任务） → ④ 常青文档（`常青/CURRENT_ARCHITECTURE.md` + `常青/BUSINESS_FLOW.md` 相关章节）→ ⑤ 上一个任务 commit |
+| G3 | 收窗协议（输出） | ① 跑测试与反馈：每任务 = 编译 + 相关单测 + **相关端点 pytest 回归**；全量回归在影响面大的任务与收尾任务各跑一次；测试执行与回传依实际窗口环境安排，不指定角色 ② 勾选任务清单状态 → ③ 涉及架构/业务改动时同步常青文档 → ④ 提交 |
+| G4 | commit 语义闭环 | 代码改动 + 其对应常青文档更新 + 任务清单勾选进同一 commit；message 强制带任务编号（T1 后按新规范） |
+| G5 | 超范围暂停规则 | 执行中发现需求歧义、或任务实际远超预期（判定锚：触及清单未列模块 / 需新依赖 / 需改业务语义 / 改动面较预估倍增）→ 停在第一个决策点，回写任务清单（拆/改）并按 G11 分级登记，不得硬扛、不得擅自扩大范围 |
+| G6 | 评审与返工 | 评审以"任务验收标准 + 测试结果"为准；返工记录在任务清单；连续返工 ≥2 次 → 执行 Agent 停手并登记"建议返回周期设计重新评估"，由**用户**裁决是否重开周期设计 |
+| G7 | 决策唯一源 | `NEXT_CYCLE_NEEDS.md` 决策节为唯一决策源；窗口内发现新决策 → 回写该节并标记"已定/待定"，不许自行拍板 |
+| G8 | 分支与合并 | **开分支 / 合并回 integration / 合入 master 均由用户手动执行**；任务窗口只负责本任务的代码、测试与 commit（G1），不自行创建/切换分支、不合并 |
+| G9 | DDL 备份 | **本周期无 DDL**（分页不动表结构；follow 分页若升级 Redis 结构属缓存层不动 DB）。若出现例外 → 执行前先备份库结构与建表语句到 `.docs/DBbackups/`，并向用户报备 |
+| G10 | 脚本规范 | 脚本一律 Python；临时一次性脚本放 `temp_script/`，长期复用/自动化脚本放 `tools/`（工具统一入口 `tools/tv.py`） |
+| G11 | 质疑协议 | 执行 Agent 对 Why 层（NEEDS 真实性/必要性）与 How 层（任务/验收可操作性）**有质疑权、亦有报告义务**：四时点触发 + L1~L4 分级动作（完整协议见二节“质疑协议”）；**裁决权永远在用户**（G7 决策唯一源不破） |
+
+---
+
+## 二、任务清单理念与任务模板
+
+> **任务清单理念**：本清单只回答"**要做什么、不做什么**"，**不提前过度详细设计**——四要素是骨架，具体执行方案由执行窗口的 Agent 探索细化。
+> **红线边界的目的是"防跑偏"，不是把 Agent 限制死**：因此只列"明显越界"的项，不穷举做法；执行中若发现红线本身阻碍了正确做法，按下方"红线措辞约定"先申请再动手。
+> 反面清单同样是清单的一部分：**"明确不做"要写出来**，避免 Agent 顺手扩张。
+
+> **任务模板（每任务必含四要素）**：入口线索（从哪找）+ 红线边界（别碰什么）+ 强制探索步骤（动手前先确认什么）+ 验收（怎么算完成）。执行 Agent 允许动态调整，但**调整前先回写任务清单/需求文档（G5/G7），再动手**。
+
+> **红线措辞约定（延续）**：红线只列"明显越界"的项，作用是**防跑偏，不是把执行 Agent 限制死**——不穷举做法、不做"一刀切禁止"。
+> 若执行中发现**某条红线会阻碍正确做法**（过紧、过窄、或已不适用）：不允许硬扛，也不允许自行放开，**先向用户说明理由并申请调整**；获批准后按新口径动手，未获批准则维持原红线。
+
+> **编号引用约定（延续）**：禁裸编号引用已归档周期元素（引用一律写 `<周期>/<编号>`）；裸编号仅指本档内部定义的元素（`T#`）与 `NEXT_CYCLE_NEEDS.md` 内部元素（C-# / R-## / N#）。执行中发现引用歧义 → 回写清单用文字澄清，不得自行猜义。
+
+> **质疑协议（G11，2026-09-15 确立）**：执行 Agent 对 **Why 层**（NEEDS 真实性/必要性）与 **How 层**（任务可行性/验收可操作性）均有质疑权，亦有报告义务；**裁决权永远在用户**（G7 决策唯一源不破）。四个触发时点：① **开窗阅读**——文档内部矛盾；② **动手前**——强制探索步骤第 (0) 项复核证据不成立；③ **探索中**——代码事实与 NEEDS 描述矛盾 / 需求疑似已被覆盖 / 触发 G5 判定锚；④ **验收时**——验收标准全过但 4.1 对应痛点场景仍未消除。
+>
+> 分级动作：**L1 仅记录**（不影响本任务语义）写进执行回写；**L2 带疑继续**（影响后续任务/验收解读但不影响本任务）在 NEEDS 对应条目标"待裁决"照常执行；**L3 暂停**（前提证伪 / 需改语义扩范围）停在第一个决策点登记质疑待用户裁决；**L4 申请调整**（红线/约定阻碍正确做法）沿用"红线措辞约定"。
+>
+> **质疑记录格式**（Why 层落 `NEXT_CYCLE_NEEDS.md` 4.0；How 层与 L1 落本清单"执行回写"）：
+> **质疑 <N#/R-##/C-#>（<日期>，T# 窗口，L<级别>）**：触发：…；证据：…；主张：…；建议：…；当前动作：…；用户裁决：…。
+> **质疑成立后的去向**：对应 R/N 编号显式流转——转 `UNPLANNED_ISSUES.md` 留池 / 结转下周期 NEEDS 二节 / 在 git 提交信息记录废弃原因；任务清单中"搁置"状态的 T# 同理，对应编号不得悬空。**两条禁止**：不许为过验收绕过痛点本质（见任务模板"验收"）；不许以质疑为由擅自改语义/扩范围。
+
+```markdown
+### T# 任务标题
+
+* **入口线索**：…
+* **红线边界**：（只列"明显越界"的项，作用是防跑偏；若某条红线会阻碍正确做法 → 先说明理由申请调整，获批准后按新口径动手）
+* **强制探索步骤**：动刀前先 (0) 复核本任务对应 NEEDS 编号（N#/R-##）的证据仍成立（G11——不成立 → L3 暂停登记质疑） (1) 检索… (2) 确认… (3) 若清单未覆盖 → 回写本文档再动手
+* **验收**：…（验收通过 ≠ 目的达成：标准全过但痛点场景未消除 → 按 G11 登记质疑，不得直接标已完成）
+```
+
+---
+
+## 三、任务总览（本周期 9 任务）
+
+> **DDL 标注（G9 要求）**：本周期无 DDL。
+
+| 编号 | 标题 | 对应候选 | 依赖 | 验收关键（动态） | 期望 commit 主题 | 状态 |
+| -- | -- | ---- | -- | -------- | ------------ | -- |
+| T1 | commit message 规范定稿 | N13 | 无 | 规范文档落地 + 模板 G1/G4/C-3 与延续约定同步 | `docs(prep-01)` | 待执行 |
+| T2 | 常青文档瘦身（含头部版本对齐 N9） | N12 + N9 | T1（颗粒度口径） | 更新日志收敛（一条一行摘要或移除）、头部版本与内容一致、BUSINESS_FLOW 注记收敛；行数显著下降 | `docs(prep-02)` | 待执行 |
+| T3 | pom Kotlin 残留清理 | N1 | 无 | 移除 kotlin 三件套后 `mvn -o` 编译 + 全量 JUnit 仍绿 | `build(prep-03)` | 待执行 |
+| T4 | git 卫生：.idea 出库 + temp_script 例外出库 | N2 + N3 | 无 | `git ls-files` 无 `.idea/`、无 `temp_script/`；`.gitignore` 覆盖 | `chore(prep-04)` | 待执行 |
+| T5 | 随手清理：死注释删除 + 分页解析收敛 | N4 + N5 + N6 | 无 | RequestParser/web.xml 注释块删除；parsePage/parsePageSize 收敛公共并替换调用点；相关单测绿 | `refactor(prep-05)` | 待执行 |
+| T6 | 日志卫生：LogUtil 合规 + CountRepairTool 去留（R-05） | N7 + N8 | 无（R-05 开工前拍板） | LogUtil 内部改走 logger；CountRepairTool 按用户拍板删/迁 | `chore(prep-06)` | 待执行 |
+| T7 | 关注/粉丝列表分页 | N11a（U-12） | T5 | `/follow/following\|followers` 支持分页参数、默认兼容；缓存/DAO 分页载体定稿；前端 follow.js 分页 | `feat(prep-07)` | 待执行 |
+| T8 | 评论列表分页 | N11b（U-13） | T5 | `getCommentsForContent` 主楼分页 + 楼中楼整树；默认兼容；前端 detail.js 加载更多 | `feat(prep-08)` | 待执行 |
+| T9 | 测试目录本地化 | N14 | 无（探索先行） | 沙箱边界探明报告 → 目录/端口本地化方案定稿 → 实现后实测沙箱内可跑或明确判定不可行 | `chore(prep-09)` | 待执行 |
+
+> 状态取值：草稿 / 待执行 / 执行中 / 已完成 / 搁置。搁置的 T# 必须注明其"对应候选"编号去向（转 `UNPLANNED_ISSUES.md` / 结转下周期 NEEDS 二节），不得悬空（G11）。
+
+> **顺序理由**：**T1 最先**——commit 规范决定 T2~T9 每个 commit 的写法（前提 → 不先定则后续全部用旧格式）；**T2 紧跟 T1**——常青瘦身的颗粒度口径依赖 T1 定稿；T3/T4/T6 互相独立、无依赖，可与 T1/T2 任意穿插（优先级：T1>T2>T3>T4>T5>T6）；**T5（N6 分页解析收敛）必须先于 T7/T8**——T7/T8 的新分页接口直接复用公共方法，避免再复制第三份；T7/T8 依赖 T5，独立于其他；T9 探索先行、独立最后评估。T1~T6 为第一批（基座/卫生），T7~T9 为第二批（用户点名主菜）。
+
+> **回填要求**：任务执行后在本节与"四、任务详情"同步状态与"执行回写"；拆/改任务必须在"对应候选"列保留 NEEDS 编号，保持 Why→How 可追溯。
+
+---
+
+## 四、任务详情
+
+> **共通注（本周期通用）**：本周期为杂务/准备周期——**不引入任何新依赖**（T3 Kotlin 移除属"删"不属"加"；T7 若需 Redis 结构升级仍用 Jedis 既有命令）；技术红线沿用——禁 Spring/SpringBoot/MyBatis、不擅改 `@WebServlet` URL / web.xml 生效配置 / IoC 扫描、不为实现便利改业务逻辑语义；**变更纪律**——不维护文档级变更记录，变更以 git 提交历史为准；**脚本规范**——Python，临时脚本 `temp_script/`，长期工具 `tools/` + `tv.py` 收录；**改动业务代码同步维护单元测试与 pytest**（AGENTS 适配：T7/T8 属接口行为变化，必须同步测试）；**分页类接口默认兼容口径**——新增可选 `page/pageSize` 参数、缺省行为与现状一致（全量），避免破坏既有调用方（前端改造后新参数生效，属预期变化但缺省兼容）。
+> **红线口径（与二节"红线措辞约定"一致）**：下面各任务的"红线边界"只列"明显越界"的项，作用是**防跑偏**、不穷举做法；若某条红线会阻碍正确做法（过紧 / 过窄 / 已不适用）→ 说明理由**申请调整**，不许硬扛、也不许自行放开。
+
+### T1 commit message 规范定稿（N13）
+
+* **入口线索**：`git log` 历史 commit（`002cb75`/`5610a9d`/`42fcfb5` 等超长正文无分节样本）；模板 `周期模板_NEEDS.md`/`周期模板_TASKS.md` 中 G1/G4/C-3"message 强制带任务编号"现文。目标：**定一版本仓库 commit message 规范**（type 表 + `SCOPE` 约定 + header 长度限制 + 正文固定分节），并回写模板。
+* **红线边界**：不改历史 commit（不 rebase/rewrite）；规范不引入外部工具（不装 commitlint 等新依赖）；不定规"必须英文/必须中文"这类与现仓语言习惯冲突的硬性条文（可在规范里给出项目惯例建议）。
+* **强制探索步骤**：(0) 复核 N13 证据（历史 commit 臃肿、无分节）仍成立 (1) 统计现仓 commit 常用 type（refactor/fix/docs/chore/feat/test 等）与 scope（cache-0N/package 等），据此设计 type/SCOPE 只有已用或合理新增的集合 (2) 与"变更纪律（不设文档变更记录，git 历史即记录）"对齐：正文分节应承载原"变更记录/更新日志"的职责，确认分节（建议：问题 / 方案 / 验证 / 文档）足够回溯 (3) 确认模板回写点：`周期模板_TASKS.md` G1/G4 + `周期模板_NEEDS.md` C-3/一续约定，写入规范要点与"本周期按规范写"句子——若清单未覆盖 → 回写本文档再动手。
+* **验收**：规范文档落盘（建议 `.docs/说明书/COMMIT_CONVENTION.md` 或并入模板——执行窗口定，用户可改）；两份周期模板已同步（G1 的 type 表/SCOPE/分节引用规范，不再只写"强制带任务编号"）；`git log` 抽查 3 条后续 commit 符合规范（本任务自身 commit 即示范）。
+* **执行回写（<日期>，docs(prep-01) 已落地）**：待填。
+
+### T2 常青文档瘦身（N12 + N9）
+
+* **入口线索**：`常青/CURRENT_ARCHITECTURE.md`（887+ 行，"十二、更新日志"L844-883 单条 400+ 字）；`常青/BUSINESS_FLOW.md` 逐 commit 注记。目标：**将常青收敛为"地图/导航"颗粒度**——按 T1 定稿口径，更新日志每条压成一行摘要（或整体移除、指引 git 历史），头部版本与内容一致（N9：2.23/09-16 vs 更新日志 2.26/09-18），BUSINESS_FLOW 注记同样收敛。
+* **红线边界**：**不改文档内容的事实性描述**（结构/模块/API/流程 现行状态必须保留，只压缩"历史流水"）；不删任何"现行有效"的配置/接口/结构信息——误删即破坏唯一事实源；更新日志移除前确认 commit 历史可回溯（git 有记录即可放心）。
+* **强制探索步骤**：(0) 复核 N12/N9 证据（更新日志行数与头部滞后）仍成立 (1) 以 T1 交付的规范读一遍更新日志，判断哪些是"流水账"可压、哪些承载了正文未记录的关键决策（如 2.14 负缓存契约、2.17 header 未 bump 的 L1——这类决策信息若 commit 已有则压，若只有文档有则保留摘要进 4.0 或正文对应节）(2) 确认 PROJECT 内部是否已有规划把"决策明细"落点（NEEDS 4.0 已回写机制）——避免瘦身后关键决策无处溯源 (3) 统计瘦身前后行数差，明确收敛目标（如更新日志节 ≤ 30 行）——若清单未覆盖 → 回写本文档再动手。
+* **验收**：CURRENT_ARCHITECTURE 头部版本号与内容一致（bump 到 3.0 或对应版本）；"十二、更新日志"收敛为一行摘要式（或无，改引 git 历史）；正文现行事实未删（抽查模块表/API 清单/Redis key 表仍完整）；BUSINESS_FLOW 注记收敛；JUnit/pytest 无需跑（纯文档，但跑一次 `tv.py` 确认环境无碍）。
+* **执行回写（<日期>，docs(prep-02) 已落地）**：待填。
+
+### T3 pom Kotlin 残留清理（N1）
+
+* **入口线索**：`pom.xml` L19（`kotlin.version`）、L60-70（kotlin-stdlib-jdk8 / kotlin-test）、L132-160（kotlin-maven-plugin + maven-compiler-plugin 默认 execution 被置 phase=none 并显式重建）。目标：**移除 Kotlin 三件套并保持构建全绿**——无任何 .kt 源文件，Kotlin 参与构建无意义；移除后确认 Java 编译由 maven-compiler-plugin 显式 execution 承接。
+* **红线边界**：**不动编译产出结构**（构建后仍产 war、class 位置不变）；不改 Java 源码；**不新增/替换依赖**；若发现 maven-compiler-plugin 移除 Kotlin 后编译中断或产物异常 → 不是硬删，回写本任务按 G11 申请调整（可能需补 compiler args 或改回 maven 默认执行）。
+* **强制探索步骤**：(0) 复核 N1 证据（git 全历史无 .kt、磁盘无 .kt）成立 (1) 先 `mvn -o`（IDEA 内置 maven3 路径见项目记忆）跑一次 **clean + compile** 建立"移除前"基线通过与耗时 (2) 移除三件套后复跑 clean + compile + test（JUnit，surefire），对比基线；确认 jacoco 仍出报告 (3) 抽查 `target/classes` 字节码完整性 + `javap` 一个既有类确认产物正常——若清单未覆盖（如隐式依赖谁在用 kotlin）→ 回写本文档再动手。
+* **验收**：pom.xml 无 kotlin 关键字；`mvn -o clean test`（或 tv.py test junit）JUnit 全绿且与移除前数量一致；编译产物结构不变；commit 里带 pom 变更说明与回归结果。
+* **执行回写（<日期>，build(prep-03) 已落地）**：待填。
+
+### T4 git 卫生：.idea 出库 + temp_script 例外出库（N2 + N3）
+
+* **入口线索**：`git ls-files .idea/`（11 文件，含 dataSources.xml/db-forest-config.xml/kotlinc.xml/copilot 迁移文件/runConfigurations）；`git ls-files temp_script/`（仅 migrate_comments_to_two_level.py）；`.gitignore` L7-14（.idea 只逐文件忽略）与 L66（`/temp_script`）。目标：**`.idea/` 整目录出库 + ignore，temp_script 例外出库**，仓库恢复干净。
+* **红线边界**：`git rm --cached` 只出库**不删工作区文件**（勿用 `--cached` 以外参数误删）；不出库 `tools/env/*.conf.example` 这类"应入库模板"；不动其他业务文件。
+* **强制探索步骤**：(0) 复核 N2/N3 证据（追踪清单）成立 (1) 逐个看过 11 个 .idea 文件，向用户确认是否有意保留共享项（尤其 `runConfigurations/Tomcat_10_1_54.xml` 是共用启动配置——缺省建议全部出库，IDEA 会本地重建；若用户要保留该单文件则 .gitignore 排除它） (2) 确认 `.gitignore` 新增 `/.idea/`（整目录）规则写法与 G9/G10 无冲突 (3) `git rm --cached` 两处 + `git status` 复核，确认此 commit 只改 .gitignore 与删除索引条目——若清单未覆盖 → 回写本文档再动手。
+* **验收**：`git ls-files` 无 `.idea/`、无 `temp_script/`；`.gitignore` 含 `/.idea/`；工作区 .idea 文件仍在（本地可用）；无业务文件被误动。
+* **执行回写（<日期>，chore(prep-04) 已落地）**：待填。
+
+### T5 随手清理：死注释删除 + 分页解析收敛（N4 + N5 + N6）
+
+* **入口线索**：`RequestParser.java` L19-56（三段落灰 getBody）；`web.xml` L1-6（注释掉的旧 web-app 块）；`FeedController.java` L32-56 与 `ProfileController.java` L45-70（逐字符相同的 parsePage/parsePageSize）。目标：**删除两处死注释；分页解析收敛为公共方法**（建议 `BaseServletUtil` 新增静态 parsePage/parsePageSize，替换 Feed/Profile 两处私有实现）。
+* **红线边界**：web.xml **只删纯注释块，不动任何生效 mapper/servlet/filter 声明**；RequestParser 只删注释不改变现役 getBody/parse 逻辑；公共分页方法默认值/上限（page=1、pageSize 默认 10、上限 50）必须与原私有实现逐字符一致（防行为漂移）。
+* **强制探索步骤**：(0) 复核 N4/N5/N6 证据（注释块存在、两份实现相同）成立 (1) diff Feed/Profile 两份 parsePage/parsePageSize 确认完全一致（含异常分支），再设计公共签名（建议 `BaseServletUtil.parsePage(req)` / `parsePageSize(req)`） (2) 确认现役 getBody/parse 调用点不受注释删除影响（grep 引用） (3) 抽公共后跑 Feed/Profile 相关 JUnit + /feed /profile 端点 pytest，验证默认分页行为不变——若清单未覆盖 → 回写本文档再动手。
+* **验收**：三处注释块从代码/配置移除；Feed/Profile 两 Controller 不再有自己的 parsePage/parsePageSize（引用公共）；相关单测 + pytest（/feed、/profile、分页缺省/越界用例任抽 3 条）绿。
+* **执行回写（<日期>，refactor(prep-05) 已落地）**：待填。
+
+### T6 日志卫生：LogUtil 合规 + CountRepairTool 去留（N7 + N8，R-05 开工前拍板）
+
+* **入口线索**：`util/LogUtil.java` L25/L36/L38/L46（System.out/err 直打初始化信息）；`util/CountRepairTool.java` 全文（main CLI + System.out/err + printStackTrace，javadoc 自述已被 `tools/check_integrity.py --fix` 替代）。目标：**LogUtil 初始化与失败信息改走 java.util.logging 自身通道；CountRepairTool 按 R-05 用户拍板处置**（候选：删除 / 迁出主代码 / 保留）。
+* **红线边界**：LogUtil 只改"自身输出方式"，**不改日志级别体系与 API**（业务侧 Logger 获取方式不变）；若 R-05 拍板保留 CountRepairTool → 至少将其 System.out/err 与 printStackTrace 改为 logger（若保留）；删除时确认 `check_integrity.py --fix` 覆盖其计数 SQL 语义（对照 .docs/说明书/TEST_SEED 相关约定）；**R-05 未拍板前不自行选择**——先在 NEEDS 三节挂"待用户裁决"，T6 开工即问。
+* **强制探索步骤**：(0) 复核 N7 证据（LogUtil 直打）成立；R-05 向用户要拍板（建议默认=删除，理由：统一入口已在、javadoc 已写明替代、无测试引用——实体确认无引用后执行） (1) LogUtil：确认 java.util.logging 在"初始化日志系统"这一时点可用（失败路径用 `Logger.getGlobal()` 或 `System.err` 仅作极端兜底并注明） (2) CountRepairTool：grep 确认无生产引用（除 main 自身），对照 check_integrity.py 的修复 SQL 清单（content.like_count / comment.like_count / content.comment_count / users.follow_count / users.follower_count） (3) 改后跑 JUnit + pytest 冒烟（日志输出从 console 落到 system.log 处验证）——若清单未覆盖 → 回写本文档再动手。
+* **验收**：LogUtil 内不再出现 System.out/err（或仅保留有注释的极端兜底）；CountRepairTool 按拍板处置完毕（删除则代码库无该类；保留则无直打输出）；JUnit 全绿 + pytest 冒烟通过。
+* **执行回写（<日期>，chore(prep-06) 已落地）**：待填。
+
+### T7 关注/粉丝列表分页（N11a / U-12）
+
+* **入口线索**：`FollowController.java` L34-37（`/following`/`/followers` 无分页参数）；`FollowService.getFollowingList/getFollowerList`（经 `buildUserList`，注意此方法同时是 **U-14②号点**所在，本任务只做分页不动事务边界）；`SetCache.getMembers`（SMEMBERS 全量）；`FollowCache` 双 Set 存储。目标：**关注/粉丝列表支持分页**（新增可选 page/pageSize，缺省兼容现状全量）；前端 `static/js/views/follow.js` 改造为分页加载。
+* **红线边界**：**不改 `FollowService` 的事务边界语义（U-14 留池不并入本任务）**；不破坏缺省调用（不分页参数时必须与现状完全一致）；Set 结构升级（如 Set→ZSet）**仅 Redis 内部、对外接口/返回结构零变化**；不新增第三方依赖（Jedis 命令够用）。
+* **强制探索步骤**：(0) 复核 N11a 证据成立（如前） (1) **缓存分页载体拍板**（本任务核心技术决策，开工向用户对齐或探索后按 G7 回写待定）：候选 A=Set **补一个有序结构**（如 `ZADD member=followedUserId` 或 List 按关注序）用 ZRANGE/LRANGE 分页稳定；候选 B=缓存保持全量、**DB 分页读取**（LIMIT/OFFSET）+ 缓存仅作"列表判重/数量"等使用——评估两案对 hit 率/装载量/SMEMBERS 全量回传的影响 (2) 接口契约：page/pageSize 解析复用 T5 公共方法，默认值与 T5 一致；返回结构保持 List（分页切片后仍 List<…>）还是包 PageResult（**包 PageResult 属接口变化，向用户确认**——建议保持 List 以零破坏） (3) 前端 follow.js 分页加载改造 + matches 单测/pytest（新增分页参数用例、缺省兼容用例）——若清单未覆盖 → 回写本文档再动手。
+* **验收**：`/follow/following`、`/follow/followers` 带 page/pageSize 返回对应页且顺序稳定；不带参数返回与改造前一致（pytest 旧用例不破）；命中/降级路径分页都正确；前端 follow.js 加载更多可用；相关 JUnit + pytest 绿。
+* **执行回写（<日期>，feat(prep-07) 已落地）**：待填。
+
+### T8 评论列表分页（N11b / U-13）
+
+* **入口线索**：`CommentController.java`（`getCommentsForContent` 无分页整树渲染）；`CommentService`/`CommentCache.loadCommentTree`（整树缓存 + buildCommentTree 内存重排）。目标：**`getCommentsForContent` 主楼分页 + 楼中楼整树**（每页 N 条主评论，每条主评论携带其完整楼中楼）；前端 `detail.js` 评论区加载更多。
+* **红线边界**：**不动缓存装载结构**（整树缓存保留——评论树分页属展示层切片，不是缓存重构）；主楼分页不得撕裂楼中楼（楼中楼必须随主评论整体返回）；不改评论树构建语义（buildCommentTree 逻辑原样）；缺省不传分页参数时行为与现状一致（历史兼容）。
+* **强制探索步骤**：(0) 复核 N11b 证据成立 (1) **分页形态向用户拍板**（建议方案 A：主楼分页 + 楼中楼整树；替代 B：主楼+楼中楼都分页——A 改动最小、对用户更友好，探明 buildCommentTree 输出是否天然"主楼列表 + 每条子楼"结构便于切片） (2) 确认缓存命中时从整树切片、miss/降级时装载后直接切片不落缓存或按既有规则回填——保持读路径语义 (3) Controller/Service/前端（detail.js 评论加载更多）+ 单测/pytest（新分页用例、缺省兼容、楼中楼完整断言）——若清单未覆盖 → 回写本文档再动手。
+* **验收**：分页参数下返回"该页主评论+完整楼中楼"，页间主楼不重复不遗漏；缺省与现状一致；评论点赞/软删/开关门禁路径不受影响（pytest 回归含 comment 域既有用例）；相关 JUnit + pytest 绿。
+* **执行回写（<日期>，feat(prep-08) 已落地）**：待填。
+
+### T9 测试目录本地化（N14）
+
+* **入口线索**：`pom.xml` L20-22（stage8.buildDir 注释："沙箱内 javac 无法枚举 worktree 的 target/ 作 classpath，-Dstage8.buildDir 指向 D 盘可写目录"）；`src/main/webapp/META-INF/context.xml` L2-8（`D:/data/projects/VideoPlatform/stone` 硬编码）；`tools/run_tests.py` L68-70（SHUTDOWN_PORT/HTTP_PORT/BASE_URL 硬编码）；项目记忆："trae 沙箱拦截 run_tests*.py 的 process/port/network" 与 "沙箱拦截写 `D:\data\projects\VideoPlatform\stone\temp\`"。目标：**探明沙箱边界，把测试可写目录收进仓库可写区，评估沙箱内直接跑测试的可行性并落地可落地部分**。
+* **红线边界**：**不擅改 `@WebServlet` URL / web.xml / IoC 扫描 / 业务语义**（context.xml 的 docBase/upload 路径属部署配置，改路径需保证上传/访问功能不受破坏并回归）；不经用户同意不把 media 路径改成会撞 gitignore 或影响其他环境判断的怪路径（须可配置、可回退）；pom 改动须回归（同 T3）。
+* **强制探索步骤**：(0) 复核 N14 证据成立（buildDir 注释 / context.xml 绝对路径 / run_tests 硬编码端口） (1) **第一步先做边界实测**：在沙箱内最小化复现——能否 `mvn -o` 编译到项目内 target？能否启动一个嵌入式/独立 Tomcat 进程并 bind 端口？能否写项目内新目录？产出"沙箱内可做/不可做"清单（这是本任务核心探索，结论决定 T9 是否立项为"落地"还是"缓解"） (2) 基于 (1) 落到具体面：buildDir 是否可改回项目内（如 `target/` 或 `.stage8-target/` + gitignore）并让 run_tests 不再依赖外部目录；日志目录（LOG_PATH/`tomcat-test-18080/logs`）是否收进项目内 ignore 目录；media upload 路径（AppConfig.upload.path / context.xml）改为项目内 ignore 目录并回归上传/媒体巡检；端口与 BASE_URL 参数化进 test.conf (3) 每项改动都跑对应回归（构建 / 单测 / pytest 全套），最终产出"沙箱内跑测试可行性结论"（可跑 → 交代命令；不可跑 → 交代卡点与缓解边界）——若清单未覆盖 → 回写本文档再动手。
+* **验收**：产出边界探明报告（沙箱内可做/不可做清单，落 `.docs/temp/`）；可落地部分（buildDir / 日志 / media / 端口参数化）实现完成且构建 + 单测 + pytest 全绿；不可落地部分明确成文并登记留池去向（可转 `UNPLANNED_ISSUES.md` 或回 NEEDS 4.1 待定），**绝不硬扛"沙箱外才能跑"的现状为成功**。
+* **执行回写（<日期>，chore(prep-09) 已落地）**：待填。
