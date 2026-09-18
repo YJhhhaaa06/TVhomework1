@@ -1,7 +1,7 @@
 # 下一周期任务清单
 
 > 关联文档：目标与任务/NEXT_CYCLE_NEEDS.md（决策唯一源；此文件为执行细节）
-> 状态：**执行中（2026-09-18）**——R-03 拍板为「**缓存读路径治理**（authorName 冗余同步 + 批量装载合并 + 事务边界瘦身）」，本周期 **3 个任务 T1~T3**（**T1/T2 均已完成 2026-09-18**，T3 待执行；四要素为骨架，执行方案由执行窗口的 Agent 探索细化，G5 允许回写）。
+> 状态：**执行中（2026-09-18）**——R-03 拍板为「**缓存读路径治理**（authorName 冗余同步 + 批量装载合并 + 事务边界瘦身）」，本周期 **3 个任务 T1~T3**（**T1/T2/T3 均已执行完成 2026-09-18**，本周期 3 任务全部收口待提交；四要素为骨架，执行方案由执行窗口的 Agent 探索细化，G5 允许回写）。
 > 工作流：每个任务开独立窗口执行（一任务一窗口单独探索、修改、review）；"任务清单 + 需求与痛点"为窗口间唯一交接载体。
 > 来源：第五期 `NEXT_CYCLE_NEEDS.md`——二节 R-01（authorName 冗余同步，结转 `260917/R-03`）+ 4.1 代码复查 N1（批量读逐 key 装载 DB 放大）/ N2（Feed/Profile 事务内嵌套缓存装载）。
 > **本周期明确不做**：R-02 索引全量读本体、R-04 包层环、U-11 停机 DB 兜底推荐、U-12/U-13 懒加载分页范畴、feed 流改造——完整清单见 NEEDS 4.3。
@@ -70,7 +70,7 @@
 | -- | -- | ---- | -- | -------- | ------------ | -- |
 | T1 | authorName 冗余同步（改名后内容缓存同步机制） | R-01 | —（独立，可并行） | **已完成（2026-09-18）**：方案 A 拍板（补 `/user/changeUserName` + 级联失效），改名后内容缓存 authorName 一致性运行时验证（详情+主页断言），对外行为零变化（仅新增接口） | `refactor(cache-01)` | 已完成 |
 | T2 | 批量缓存读装载合并（N1：批量 miss/降级逐 key 独立 DB 装载 → 批量装载） | N1 | T1 可并行 | **已完成（2026-09-18）**：方案 A 落地（新增 `BatchLoader` + `getBatch` 5 参重载 + 请求内 `LoadMemo`；`ContentCache.loadContentsFromDb` 一趟事务两查 + 新增 `ContentDao.findContentsByIds`）；**实测冷数据页 P=5/P=10：12/22 → 4/4 常量趟数**；三态/续期/空标记/降级/单飞语义零变化；JUnit 432 全绿 + `pytest all` 128 passed（详情见执行回写） | `refactor(cache-02)` | 已完成 |
-| T3 | Feed/Profile 缓存读移出业务事务（N2：事务内嵌套缓存装载） | N2 | T2 可并行（若 T2 改了批量读签名则软依赖） | 缓存批量读不再落在 DB 事务回调内；冷缓存高峰无"事务持连接 + 装载再取连接"叠加；对外行为零变化 | `refactor(cache-03)` | 草稿 |
+| T3 | Feed/Profile 缓存读移出业务事务（N2：事务内嵌套缓存装载） | N2 | T2 可并行（若 T2 改了批量读签名则软依赖） | **已完成（2026-09-18）**：事务回调内**零缓存调用**（grep + JUnit 事务标志断言实证）；缓存批量读（`getContentsBatch` 含 miss 装载 + `batchIsContentLiked`）上提事务外，事务回调只返回 DB 结果（私有 record `ProfileDbData`/`FeedDbData`）；冷缓存高峰"事务持连接 + 装载再取连接"叠加消除；对外行为零变化（JUnit 434 全绿 + pytest 130 passed） | `refactor(cache-03)` | 已完成 |
 
 > 状态取值：草稿 / 待执行 / 执行中 / 已完成 / 搁置。搁置的 T# 必须注明其"对应候选"编号去向（转 `UNPLANNED_ISSUES.md` / 结转下周期 NEEDS 二节），不得悬空（G11）。
 
@@ -115,7 +115,11 @@
 * **红线边界**：不动 DB 查询逻辑（`findContentIdsByUser`/`countContentByUsers`/`findContentIdsByUsers` 仍在事务内）；不改缓存类签名（若 T2 改了签名则跟随适配，无则零改动）；不动 `content:index`/推荐路径（N1 已由 T2 治）；不改接口 URL/参数/返回结构（对外行为零变化）。
 * **强制探索步骤**：动刀前先 (0) 复核 N2 证据仍成立（确认 `getContentsBatch`/`batchIsContentLiked` 确实在事务回调内，且自研事务模板无传播语义）(1) 探索最小改动形态：把 `getContentsBatch`+`batchIsContentLiked` 从 `transactionTemplate.execute` 回调内**上提到事务外**（DB 结果先取出 → 事务外批量读缓存 + 批量点赞状态 → 组装 VO），确认数据依赖（isLiked 依赖 contentVOList 由缓存产生的 id 列表，注意懒扫描 vs 预取的分层）(2) 确认两个 Service 的事务块内不再有任何缓存调用（grep 复核）(3) 若 T2 已改批量读签名或 ContentCache 暴露批量装载新 API → 先对齐 T2 再动——若清单未覆盖 → 回写本文档再动手。
 * **验收**：`ProfileService.getProfile` / `FeedService.getFeed` 事务回调内**零缓存调用**（grep 实证）；冷缓存高峰不再出现"事务持连接 + miss 装载嵌套取连接"（代码路径证明即可，可选运行时观测）；三态/降级语义零变化；相关端点 pytest 绿。
-* **执行回写（待执行）**：`<完成后追加>`。
+* **执行回写（已完成，2026-09-18）**：**选型 = 方案 A（DB 查询与缓存读分离 + 事务回调结果载体）**——事务回调只做 DB 查询并以**私有 record** 回传（`ProfileService.ProfileDbData(user, pageIds, total)` / `FeedService.FeedDbData(pageIds, total)`），`contentCache.getContentsBatch`（含 miss 装载）与 `likeService.batchIsContentLiked` 移到 `transactionTemplate.execute(...)` **之后**（事务已提交、连接已归还）执行，随后组装 VO。**否决方案 B（事务内保留缓存读、只调事务粒度/连接）**：自研 `TransactionTemplate` 无传播语义、每次 execute 独立取连接，事务内做缓存读在冷缓存/降级时必然嵌套取连接，治不了"连接叠加"本体。
+  **强制探索结论**：① N2 证据复核成立（`ProfileService.getProfile` L70/L82、`FeedService.getFeed` L61/L73 原在事务回调内；`TransactionTemplate` 无传播语义、每次 execute 独立取连接；`db.pool.maxSize=20` + `timeoutMs=5000`）；② DB 查询逻辑原样留在事务内（`getUserForProfileById`/`findContentIdsByUser`/`countContentByUsers`/`findContentIdsByUsers`），页内切片语义不变；③ 数据依赖（`isLiked` 依赖缓存结果产生的 id 列表）在事务外按原序串行处理，顺序与改造前一致；④ **T2 无软依赖**（调用点签名仍为 `getContentsBatch(List<Long>)`，与 T2 回写结论一致）。
+  **落地**：ProfileService 事务外先读关注关系/关注计数缓存（T6 既有口径）→ 事务内取 DB 结果 → 事务外 `getContentsBatch` → 逐 id `toContentVO`（按原序跳过 null）→ `batchIsContentLiked` 填 `isLiked` → 组装 `ProfileVO`；FeedService 同构（`followedIds` 空与 `total==0` 两个早退分支保持**零缓存调用**）。异常语义不变（`NotFoundException`(404) 与 `SQLException → ServerException` 仍只在回调内产生并回滚）。**红线合规**：未改缓存类签名、未动 key/TTL/三态/降级/打点语义、未动推荐与索引路径、未改接口 URL/参数/返回结构、未新增依赖、未改业务语义。
+  **验证**：JUnit **434 全绿**（surefire 430 + pool 4 = T2 432 + 2；`ProfileServiceTest` 12→13、`FeedServiceTest` 8→9——DAO 查询在回调内作**探针自检**防断言空转，`getContentsBatch`/`batchIsContentLiked` 以 by-reference 事务标志断言 `false`；另补"用户不存在 / `total==0` 零缓存调用"断言）；pytest all **130 passed**（T2 128 + 2：新增 `test_feed.py`——无关注者空流 / 关注后被关注者内容可见且 `authorName`+`isLiked` 完整 + 取关复原；`/feed` 此前仅 401 边界、**零成功路径 E2E**）；`grep` 复核两方法事务回调体内零缓存调用（验收项实证）。
+  **G11 记录（L1 仅记录 1 条，无 L3/L4）**：按同一判据（"事务回调内调缓存"）全仓扫描，发现**同型未治点 2 处**，均**不在 T3 范围**（入口线索/红线只点 Feed/Profile，未擅自扩范围）：① `ContentService.search` 事务回调内逐 key `contentCache.getContent` + `contentStatusFiller.fillLikeAndFollowBatch`（点赞/关注缓存批量读）；② `FollowService.getFollowingList`/`getFollowerList` 经私有 `buildUserList` 在回调内调 `followCache.batchIsFollowing`。**去向（不悬空）**：登记 `UNPLANNED_ISSUES.md` **U-14**（留池待评审），`INDEX.md` 有效留池项同步。常青（CURRENT_ARCHITECTURE content 域模块表行数 FeedService/ProfileService 按 T3 实测总行数更新为 108/118、**新增 6.22**、9.1 表体按收集数补齐至 130、9.2 合计 434、12 更新日志 2.26；BUSINESS_FLOW 3.1 注记补事务边界口径）与 NEEDS 4.0 T3 决策 / 4.1 N2 已同步；无 DDL；commit `refactor(cache-03)` 由用户侧提交。**独立 subagent review**：无🔴；🟡 3 条全部处置——① 模块表行数口径按实测总行数修正（原填非空行值）；② `test_feed.py` 取关后断言由"列表为空"改为"不含被关注者内容"（去除对其它用例关注状态的隐性依赖）；③ 6.22 补明 Profile 侧无早退分支、空 `pageIds` 仍按原口径调空批量读（语义等价）。
 
 ---
 
@@ -123,5 +127,6 @@
 
 | 日期 | 版本 | 内容 |
 | ---- | ---- | ---- |
+| 2026-09-18 | 0.4 | **T3 完成回写（2026-09-18，本周期 3 任务全部收口）**：① 三节总览 T3 状态 → 已完成（验收关键落实证：事务回调零缓存调用 + JUnit 434 + pytest 130）+ 头部状态行改"T1/T2/T3 均已执行完成"；② T3 执行回写补齐（选型 A 与否决 B 的理由、强制探索 4 条结论、落地形态与私有 record 载体、异常语义保持、红线合规、JUnit/pytest/grep 验证、G11 L1 一条 → 同型未治点 2 处转留池 U-14）；③ 常青 CURRENT_ARCHITECTURE 同步（content 域模块表 FeedService/ProfileService 行数、**新增 6.22**、9.1 表体补齐至 130、9.2 合计 434、更新日志 2.26）；BUSINESS_FLOW 3.1 注记补事务边界口径；④ `UNPLANNED_ISSUES.md` 新增 U-14 + `INDEX.md` 有效留池项同步；无 DDL |
 | 2026-09-18 | 0.3 | **T2 完成回写（2026-09-18）**：① 三节总览 T2 状态 → 已完成（验收关键落实测值）+ 头部状态行改"执行中（T1/T2 已完成）"；② T2 执行回写补齐（选型 A 与否决 B 的理由、落地三层清单、Feed/Profile 签名不变 → **T3 无软依赖**、实测 12/22→4/4 前后对比、JUnit 432 + pytest 128、subagent review 无🔴、G11 L1 三条）；③ 常青 CURRENT_ARCHITECTURE 同步（4.2 CacheAside/ContentCache/ContentDao 三行、6.4 两处、**新增 6.21**、9.2 表按实测刷新至合计 432、更新日志 2.25）；**BUSINESS_FLOW 不改**（无业务流程变化）；无 DDL |
 | 2026-09-17 | 0.1 | 新建本文档（按 NEEDS R-03 拍板拆分）：T1（R-01 authorName 冗余同步，方案开工前拍板）/ T2（N1 批量缓存读装载合并）/ T3（N2 Feed/Profile 缓存读移出业务事务）——一至四节按模板就位，四要素为骨架待执行窗口细化 |

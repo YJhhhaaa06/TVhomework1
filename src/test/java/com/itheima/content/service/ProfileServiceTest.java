@@ -35,6 +35,8 @@ class ProfileServiceTest {
     private TransactionTemplate tt;
     private Connection conn;
     private ProfileService service;
+    /** 事务回调执行中标志（T3：断言缓存读发生在事务回调之外）。 */
+    private boolean[] inTransaction;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -45,10 +47,16 @@ class ProfileServiceTest {
         likeService = mock(LikeService.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
+        inTransaction = new boolean[1];
         service = new ProfileService(userDao, contentDao, followCache, contentCache, likeService, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
-            return action.execute(conn);
+            inTransaction[0] = true;
+            try {
+                return action.execute(conn);
+            } finally {
+                inTransaction[0] = false;
+            }
         });
         // T8：profile 页内改批量读；默认空映射，用例内自行覆盖
         when(contentCache.getContentsBatch(anyList())).thenReturn(Collections.emptyMap());
@@ -89,6 +97,9 @@ class ProfileServiceTest {
 
         assertThrows(NotFoundException.class, () -> service.getProfile(7L, 8L, 1, 10));
         verify(contentDao, never()).findContentIdsByUser(any(), anyLong());
+        // T3：事务回调内抛业务异常（404）时同样不触碰缓存
+        verify(contentCache, never()).getContentsBatch(anyList());
+        verify(likeService, never()).batchIsContentLiked(anyLong(), anyList());
     }
 
     @Test
@@ -256,5 +267,33 @@ class ProfileServiceTest {
         when(contentDao.findContentIdsByUser(conn, 7L)).thenThrow(new SQLException("db down"));
 
         assertThrows(ServerException.class, () -> service.getProfile(7L, 8L, 1, 10));
+    }
+
+    /**
+     * T3（cache-03，治 N2）：缓存批量读与点赞状态读必须发生在 DB 事务回调**之外**——
+     * DAO 查询在回调内（探针自检，防断言空转），缓存读在回调结束后才执行。
+     */
+    @Test
+    void getProfileReadsCachesOutsideDbTransaction() throws SQLException {
+        when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
+        when(contentDao.findContentIdsByUser(conn, 7L)).thenAnswer(inv -> {
+            assertTrue(inTransaction[0], "作者内容 id 查询应在事务回调内执行");
+            return java.util.List.of(1L);
+        });
+        ContentCacheDTO dto1 = dto(1L);
+        when(contentCache.getContentsBatch(anyList())).thenAnswer(inv -> {
+            assertFalse(inTransaction[0], "内容缓存批量读不应在事务回调内执行");
+            return Map.of(1L, dto1);
+        });
+        when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
+        when(likeService.batchIsContentLiked(8L, java.util.List.of(1L))).thenAnswer(inv -> {
+            assertFalse(inTransaction[0], "点赞状态缓存读不应在事务回调内执行");
+            return java.util.Map.of(1L, true);
+        });
+
+        ProfileVO profile = service.getProfile(7L, 8L, 1, 10);
+
+        assertEquals(1, profile.getContentPage().getList().size());
+        assertTrue(profile.getContentPage().getList().get(0).getIsLiked());
     }
 }

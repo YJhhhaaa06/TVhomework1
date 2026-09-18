@@ -428,6 +428,13 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 > 不再消费 user 行内计数字段；关注/取关 DB 提交后追加**条件增量 INCRBY±1**（`followCountKey`/`followerCountKey`
 > exists 才写，冷 key no-op 由读回填；失败只失效两计数 key 读自愈）。SCARD 现算成员 set 方案因冷 set 返 0 坑
 > 被否决（详情见 CURRENT_ARCHITECTURE 6.18）。对外行为零变化（计数数值/API 不变）。
+>
+> **第五期 T3（cache-03）事务边界口径统一注记（2026-09-18，治 N2）**：Feed/Profile 读路径的**缓存批量读**
+> （`ContentCache.getContentsBatch`（含 miss 装载）+ `LikeService.batchIsContentLiked`）由 DB 事务回调**内**
+> 上提到**事务外**——事务回调只做 DB 查询（关注者内容总数与页内 id、主页用户行与作者内容 id），提交归还连接后
+> 再读缓存、填点赞状态并组装 VO，与「关注/粉丝计数读在事务外」（第四期 T6）口径一致；消除"外层事务持连接 +
+> miss 装载经嵌套事务再取新连接"在 `db.pool.maxSize=20` 下的互相等连接（超时表现为该 key 内容间歇缺失）。
+> 分页/返回集/顺序/跳过 null 与 401/404 语义零变化（详情见 CURRENT_ARCHITECTURE 6.22）。
 
 > 关键语义（NEEDS 4.2~4.5/4.12）：内容与评论读/写**全部收敛 Redis**（旧内存 HashMap 版
 > ContentCacheManager 已随 T6 整体移除，职责由 ContentCache/CommentCache 承接）；

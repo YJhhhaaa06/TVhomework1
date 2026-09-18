@@ -32,6 +32,8 @@ class FeedServiceTest {
     private TransactionTemplate tt;
     private Connection conn;
     private FeedService service;
+    /** 事务回调执行中标志（T3：断言缓存读发生在事务回调之外）。 */
+    private boolean[] inTransaction;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -41,10 +43,16 @@ class FeedServiceTest {
         likeService = mock(LikeService.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
+        inTransaction = new boolean[1];
         service = new FeedService(followCache, contentDao, contentCache, likeService, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
-            return action.execute(conn);
+            inTransaction[0] = true;
+            try {
+                return action.execute(conn);
+            } finally {
+                inTransaction[0] = false;
+            }
         });
         // T8：feed 页内改批量读；默认空映射，用例内自行覆盖
         when(contentCache.getContentsBatch(anyList())).thenReturn(Collections.emptyMap());
@@ -94,6 +102,8 @@ class FeedServiceTest {
         assertTrue(result.getList().isEmpty());
         assertEquals(0, result.getTotal());
         verify(contentDao, never()).findContentIdsByUsers(any(), anyList(), anyInt(), anyInt());
+        // T3：total==0 早退，不触碰缓存（与改造前语义一致）
+        verify(contentCache, never()).getContentsBatch(anyList());
     }
 
     @Test
@@ -195,5 +205,37 @@ class FeedServiceTest {
         when(contentDao.countContentByUsers(conn, List.of(7L))).thenThrow(new SQLException("db down"));
 
         assertThrows(ServerException.class, () -> service.getFeed(7L, 1, 10));
+    }
+
+    /**
+     * T3（cache-03，治 N2）：缓存批量读与点赞状态读必须发生在 DB 事务回调**之外**——
+     * DAO 查询在回调内（探针自检，防断言空转），缓存读在回调结束后才执行。
+     */
+    @Test
+    void getFeedReadsCachesOutsideDbTransaction() throws SQLException {
+        when(followCache.getFollowingIds(7L)).thenReturn(List.of(9L));
+        when(contentDao.countContentByUsers(conn, List.of(9L))).thenAnswer(inv -> {
+            assertTrue(inTransaction[0], "关注者内容总数查询应在事务回调内执行");
+            return 1;
+        });
+        when(contentDao.findContentIdsByUsers(conn, List.of(9L), 0, 10)).thenAnswer(inv -> {
+            assertTrue(inTransaction[0], "页内内容 id 查询应在事务回调内执行");
+            return List.of(1L);
+        });
+        ContentCacheDTO dto1 = dto(1L);
+        when(contentCache.getContentsBatch(anyList())).thenAnswer(inv -> {
+            assertFalse(inTransaction[0], "内容缓存批量读不应在事务回调内执行");
+            return Map.of(1L, dto1);
+        });
+        when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
+        when(likeService.batchIsContentLiked(7L, List.of(1L))).thenAnswer(inv -> {
+            assertFalse(inTransaction[0], "点赞状态缓存读不应在事务回调内执行");
+            return Map.of(1L, true);
+        });
+
+        PageResult<ContentVO> result = service.getFeed(7L, 1, 10);
+
+        assertEquals(1, result.getList().size());
+        assertTrue(result.getList().get(0).getIsLiked());
     }
 }

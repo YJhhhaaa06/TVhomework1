@@ -226,7 +226,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | ContentController（182，/content/*）、StartController（49，/start）、SearchController（95，/search/*）、FeedController（57，/feed）、ProfileController（70，/profile） | 内容管理 + 首页推荐 + 搜索 + 关注流 + 用户主页 |
-| service | ContentService（445）、ContentCache（656，T2 新增：Redis 内容缓存=三态 Cache-Aside+索引；**三期 T3 起 loader 失败抛 DatabaseException，不污染空标记**；**第五期 T1 起 `invalidateAuthorContentKeys` 改名级联失效**；**第五期 T2 起 `getContentsBatch` miss/降级装载走 `loadContentsFromDb` 一趟事务两查（治 N1，见 6.21）**）、CommentCache（176，T3 新增：Redis 评论缓存=三态 Cache-Aside+独立 TTL+空标记+显式失效；**三期 T3 起 loader 失败抛 DatabaseException，不污染空标记**）、ContentStatusFiller（90）、FeedService（74）、ProfileService（86） | 内容业务 + Redis 内容缓存 + Redis 评论树缓存 + 状态填充 + 关注流 + 主页 |
+| service | ContentService（445）、ContentCache（656，T2 新增：Redis 内容缓存=三态 Cache-Aside+索引；**三期 T3 起 loader 失败抛 DatabaseException，不污染空标记**；**第五期 T1 起 `invalidateAuthorContentKeys` 改名级联失效**；**第五期 T2 起 `getContentsBatch` miss/降级装载走 `loadContentsFromDb` 一趟事务两查（治 N1，见 6.21）**）、CommentCache（176，T3 新增：Redis 评论缓存=三态 Cache-Aside+独立 TTL+空标记+显式失效；**三期 T3 起 loader 失败抛 DatabaseException，不污染空标记**）、ContentStatusFiller（90）、FeedService（108）、ProfileService（118） | 内容业务 + Redis 内容缓存 + Redis 评论树缓存 + 状态填充 + 关注流 + 主页（**第五期 T3 起 Feed/Profile 的缓存批量读移出 DB 事务，见 6.22；本行 FeedService/ProfileService 行数为 T3 实测文件总行数**） |
 | dao | ContentDao（384）、ContentMediaDao（168） | content/content_media 数据访问（ContentLikeDao 按 like 域归属）；**第五期 T2 新增 `findContentsByIds`（批量 IN 查询，供批量缓存装载，列与 `findContent` 同源）** |
 | model | entity/ContentMedia（63）、cache/ContentCacheDTO（136）/CommentCacheDTO（110）、vo/ContentVO（42）/ContentDetailVO（26）/CommentVO（22）/ProfileVO（43）、dto/PageResult（62）/SearchDTO（51）、command/CommandConverter（139）/ContentType（16） | 内容模型 + 共享缓存 DTO + 共享 VO/DTO/转换器 |
 
@@ -574,6 +574,19 @@ com.itheima/
 
 ---
 
+### 6.22 Feed/Profile 缓存读移出业务事务（第五期 T3 cache-03，治 N2）
+
+> 目标：Feed/Profile 的缓存批量读（`ContentCache.getContentsBatch` + `LikeService.batchIsContentLiked`，miss 时缓存层还要再开事务装载）原发生在 `transactionTemplate.execute` 回调**内**——自研事务模板无传播语义（每次 execute 独立取连接），于是外层事务持连接期间，miss 装载经嵌套 `transactionTemplate` 再取新连接，`db.pool.maxSize=20`（timeoutMs=5000）上限下高峰会互相等连接（超时 → 该 key 短暂缺失，不 500 但表现=内容间歇缺失），事务持有期还被 Redis 往返与 DB 装载拉长；与第四期 T6「计数读移出事务」的口径自相矛盾。本任务把缓存读**上提到事务外**，**对外行为零变化**（分页/返回集/顺序/跳过 null/异常语义/接口契约一概不变）。
+
+- **ProfileService.getProfile**：事务回调只做 DB 查询（`getUserForProfileById` + `findContentIdsByUser` 页内切片），结果经私有 record `ProfileDbData(user, pageIds, total)` 回传；事务提交归还连接后，在**事务外**执行 `getContentsBatch` → 逐 id `toContentVO`（按原序跳过 null）→ `batchIsContentLiked` 填 `isLiked` → 组装 `ProfileVO`。事务外仍先读关注关系/关注计数缓存（T6 既有口径）。
+- **FeedService.getFeed**：事务回调只做 `countContentByUsers` + `findContentIdsByUsers`，结果经私有 record `FeedDbData(pageIds, total)` 回传；事务外同上批量读缓存 + 点赞状态 + 组装 `PageResult`。
+- **两个早退分支保持不触碰缓存**：Feed 的 `followedIds` 空（无关注）与 `total==0`（无内容）与改造前一致直接返回空页，不调任何缓存方法（JUnit `verify(..., never())` 钉死）；Profile 无早退分支，`pageIds` 为空时仍按改造前口径调 `getContentsBatch(空表)`（`ContentCache.getContentsBatch` 对空入参直接返回空 Map、不触碰 Redis，语义等价，JUnit `getProfileOutOfRangePageReturnsEmptyPage` 覆盖）。
+- **异常语义不变**：`NotFoundException`（用户不存在，回调内抛出 → 回滚）与 `SQLException → ServerException` 仍只在事务回调内产生，对外状态码逐字不变。
+- **验收实证**：JUnit 新增"缓存读发生在事务回调之外"用例（ProfileServiceTest / FeedServiceTest 各 1：DAO 查询在回调内作探针自检，`getContentsBatch`/`batchIsContentLiked` 用 by-reference 事务标志断言 `false`）；`grep` 复核两方法事务回调体内零缓存调用；pytest 新增 `test_feed.py`（2 例：无关注者空流 / 关注后被关注者内容可见且 `authorName`、`isLiked` 完整、取关复原）——`/feed` 此前仅有 401 边界覆盖、零成功路径 E2E。
+- **G11 记录（L1 仅记录，无 L3/L4）**：按同一判据（"事务回调内调缓存"）全仓扫描，发现**同型未治点 2 处**（不在 T3 范围，已登记 `UNPLANNED_ISSUES.md` U-14）——① `ContentService.search` 事务回调内逐 key `contentCache.getContent` + `contentStatusFiller.fillLikeAndFollowBatch`（点赞/关注缓存批量读）；② `FollowService.getFollowingList/getFollowerList` 经 `buildUserList` 在事务回调内调 `followCache.batchIsFollowing`。两处与 N2 同根因，消化点待评审。
+
+---
+
 ## 七、API 接口清单
 
 ### 7.1 用户模块
@@ -706,12 +719,22 @@ src/main/webapp/
 
 | 文件 | 用例数 | 覆盖模块 |
 |------|--------|----------|
-| test_smoke.py / test_consistency.py / test_boundary.py | 35 | 冒烟/一致性/边界（既有） |
+| test_smoke.py / test_consistency.py / test_boundary.py | 36 | 冒烟/一致性/边界（既有） |
 | test_comment_delete.py | 6 | 评论软删除（阶段一新增：自删主楼/回复、403/404/401、管理员删） |
 | test_admin.py | 11（1 条件跳过） | 管理员权限 401/403/200、媒体扫描/恢复（阶段八） |
 | test_edit_work.py | 21 | 编辑作品：换源（含图文单张替换）/删图/改文案的 200/403/401/400/404 + 文件落盘/旧文件删除（阶段三） |
 | test_delete_content.py | 7 | 删除作品：作者删视频/图文后详情 404 + 主页不展示 + 物理文件删除；非作者/未登录/不存在/已删/缺参（阶段四） |
 | test_hide_content.py | 15 | 内容审核下架/恢复：管理员下架视频/图文后详情 404 + 主页不列出 + 恢复后数据完好；hide/unhide/list 的 401/403/404/409/400/list 结构（阶段五） |
+| test_comment_enabled.py | 5 | 作者开关评论区（阶段二 C2）：关闭后 /comment/show 空、/comment/add 409、详情 commentEnabled=false；重开恢复 |
+| test_comment_reply_floor.py | 3 | 楼中楼「回复楼内回复 + @ 引用」 |
+| test_change_password.py | 6 | 修改密码（方向 A 补缺口 T3）：401/400 + 旧密码校验 + 改后新密码可登录 |
+| test_change_user_name.py | 4 | 修改用户名（第五期 T1）：401/400（空与超长）/409（重复名）+ 改名后详情与主页 authorName 级联 |
+| test_follow_list.py | 7 | 关注/粉丝列表读接口（方向 A 补缺口 T1）：列表/空列表/401/缺参 400 |
+| test_coupon_my_and_comment_status.py | 7 | 我的优惠券 /coupon/my + 评论点赞状态（方向 A 补缺口 T2） |
+| **test_feed.py** | **2** | **（第五期 T3）关注动态流 `/feed` 成功路径：无关注者空流 / 关注后被关注者内容可见（authorName、isLiked）+ 取关复原** |
+| 合计 | 130 | 2026-09-18 T3 实测（`latest.json`：130 passed，0 failed/errors/skipped；用例数 = 各文件 `def test_` 收集数，无 parametrize） |
+
+> 表体刷新（2026-09-18，T3）：本表历史上只登记到阶段五文件，后续补测试缺口（方向 A）与第五期新增文件未登记（合计 128 与表体不符）。T3 随本任务按 pytest 收集数逐行补齐并给出合计；`test_smoke/consistency/boundary` 三文件合计由旧记 35 更正为 36（2026-09-01 基数后新增用例未同步）。
 
 > T2 媒体隔离（2026-09-06）：18080 测试实例媒体落盘（`UPLOAD_PATH` env 注入 `media-test`）与 `/upload` 挂载（run_tests 对部署的 ROOT.war 内 context.xml 做 zip 补丁改写 base）同指 `D:\data\projects\VideoPlatform\media-test`，`AppShutDownListener` 启动强校验保持两者一致；生产 8080 实例仍用 app.properties upload.path 不受影响。旧测试媒体在 fresh-start 时整目录**移动式回收**至 `test_trash`（只移不删，用户手动清理）后重建白名单目录 media-test（白名单硬编码于 run_tests.py，防误移动）。工具链媒体根按库判定（tools/media_paths.py）：测试库 → media-test，生产 → upload.path。
 
@@ -723,8 +746,8 @@ src/main/webapp/
 | content/service/ContentServiceTest | 48 | 搜索/详情/评论查询/发布/评论区开关/编辑作品（换源/删图/改文案）/删除作品/内容审核下架恢复 |
 | content/service/ContentCacheTest | 35 | Redis 内容缓存：三态 loader 构建（含媒体 URL）/DB 无媒体损坏降级/索引读取与懒重建（**三期 T5 pipeline 化断言**）/**getContentsBatch 批量读映射与空值透传/推荐批量跳过 null 截断 limit/SCAN 遍历索引**/写路径失效契约/init 重建（**三期 T5：事务外写 InOrder/批量媒体装载 N+1 消除/往返恒定/媒体损坏跳过**）不 crash/失效方法/VO 复制 +**三期 T3 负缓存（loader SQLException 抛 DatabaseException、addContent DB 失败静默跳过）**+**第五期 T1 改名级联失效三态**+**第五期 T2 批量装载（10 条一趟事务两查且逐 key 路径零调用/无行与媒体损坏按空/视频媒体损坏只影响该 id/SQL 异常抛 DatabaseException）** |
 | content/service/CommentCacheTest | 11 | Redis 评论缓存：三态 loader（树构建/deep-chain 归一化/无评论 null/**三期 T3 起 SQLException 与意外异常抛 DatabaseException**）/invalidateComments 显式失效/评论点赞定位失效/collectCommentIds 展平 |
-| content/service/FeedServiceTest | 8 | 关注动态流 |
-| content/service/ProfileServiceTest | 12 | 用户主页 +**第四期 T6 计数读路径走 FollowCache 独立计数 key（构造后 stub 计数，verify 断言）** |
+| content/service/FeedServiceTest | 9 | 关注动态流 +**第五期 T3：缓存批量读与点赞读在 DB 事务回调之外（DAO 回调内探针自检 + 缓存读断言 `inTransaction=false`）/ `total==0` 早退零缓存调用** |
+| content/service/ProfileServiceTest | 13 | 用户主页 +**第四期 T6 计数读路径走 FollowCache 独立计数 key（构造后 stub 计数，verify 断言）**+**第五期 T3：缓存读在 DB 事务回调之外 / 用户不存在时零缓存调用** |
 | content/model/command/CommandConverterTest | 7 | 内容命令转换（发布/编辑参数 → 命令对象） |
 | like/service/LikeServiceTest | 16 | 点赞/取消/读路径委托缓存类/空输入空 map |
 | like/service/LikeCacheServiceTest | 32 | Redis 点赞缓存：计数/成员分离三态+单飞回填+空标记+写失败失效+降级 +批量 pipeline+DB 兜底 +delete 失效 +T7 统计接线（LIKE 域 HIT_EMPTY 计数）+**T9 续期接线（hit-data 续期 set key、空标记不续）**+**三期 T2 降级单飞（Redis 异常全量装载作答不写回 + 并发同 key 只装载一次）**+**第四期 T2 收口 SetCache 后新增 2 例 L2 差异对照（批量回填 loader 失败 best-effort / 单成员 miss 装载失败仍上抛）**+**第四期 T4 成员装载反转后用例改造（用户维度 key + 单 set 多成员批量）** |
@@ -744,11 +767,11 @@ src/main/webapp/
 | cache/CacheAsideTest | 49 | 三态 read、Cache-Aside get 命中/回填/空标记、降级不写回、写失败 DEL、清空标记防假空、markEmpty/invalidate best-effort +T7 统计接线（hitData/MISS+LOAD/降级计数）+**T8 批量读（混合三态/全空标记跳过 loader/miss 空标记回填/整批降级/脏 JSON 单 key 降级/空入参/批量统计打点 + 单 key 一趟 pipeline 往返断言）** +**T9 滑动续期（命中续期抖动/空标记不续/批量续期/续期失败降级不影响读）**+**三期 T2 降级单飞（降级并发同 key loader 只执行一次且无写回/降级 loader 失败异常传播不缓存且下次重试/批量降级逐 key 去重）**+**三期 T3 负缓存（miss/降级/批量 miss 逐 key/批量整批降级/批量脏 JSON 单 key 降级 遇 DatabaseException 转 null 且不写空标记不 DEL）**+**三期 T5 writeBatch（一趟 pipeline 往返+per-key TTL 抖动+清空标记 / 失败逐 key self-heal）**+**第四期 T7（R-06）getBatch miss key 续期入列+回填 setex TTL+清空标记**+**第五期 T2 装载合并 5 例（miss 子集一趟批量装载+三态/回填/空标记/LOAD 逐 key 打点保持 / 批量失败不写空标记且不落逐 key / 整批降级一趟装载 / 脏 JSON 仍走逐 key / 漏 key 按加载失败不写假空）** |
 | cache/CacheStatsTest | 8 |（T7 新增）观测统计组件：domainOf 域解析全形态/前缀重叠优先级、六类计数分桶、惰性日志触发与摘要、打点异常吞掉 |
 | config/AppConfigCacheTtlTest | 5 |（T9 新增）分域 TTL 配置读取：content/comment/like/follow 四 getter 与 app.properties 绑定生效、非 0 互不串读 |
-| **合计** | **432** | - |
+| **合计** | **434** | - |
 
 > 注：`com.itheima.tools.CouponAdmin` 属 tools 测试脚本目录（非测试类，package 保留 `com.itheima.tools`，仅 import java.*，无主代码引用）；`util/MyConnectionPoolTest` 被测类未动（基建），测试文件留在 util 包不迁。
 > **第五期 T2 表体刷新（2026-09-18）**：本表历史上存在多处未随任务同步的行（漏 `SetCacheTest`/`CommandConverterTest` 两行、部分类计数滞后），T2 随本任务按当前 `surefire-reports` 实测逐行核对刷新，**合计 432 = surefire 428 + 独立 fork pool-test 4**；表体行值之和 = 432（自洽）。后续任务沿用"每任务 +N 例"标注口径即可。
-> 用例数取自 `stage8-target/surefire-reports`（2026-09-18 实测，`mvn test` 全绿 **432 例 = surefire 428 + 独立 fork pool-test 4**；**第五期 T1 新增 4 例**（按 T1 回写口径：UserServiceTest 23→24、ContentCacheTest 28→31）；**第五期 T2 新增 9 例**（实测差值：CacheAsideTest 49 - 5 = 44→49、ContentCacheTest 35 - 4 = 31→35））。
+> 用例数取自 `stage8-target/surefire-reports`（2026-09-18 **T3 末**实测，`mvn test` 全绿 **434 例 = surefire 430 + 独立 fork pool-test 4**；**第五期 T1 新增 4 例**（按 T1 回写口径：UserServiceTest 23→24、ContentCacheTest 28→31）；**第五期 T2 新增 9 例**（CacheAsideTest 44→49、ContentCacheTest 31→35）；**第五期 T3 新增 2 例**（ProfileServiceTest 12→13、FeedServiceTest 8→9，均为事务边界断言，无行为断言删改））。
 
 > 构建输出：沙箱内 Maven 通过 `-Dstage8.buildDir` 指向 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（pom 默认 `./target`），原因是沙箱内 javac 无法把 worktree `target/classes` 作为 classpath（报"程序包不存在"）。
 > 离线仓库：新增测试依赖（junit/mockito/bytebuddy/surefire 等）的 `_remote.repositories` 已补 `>aliyun=` 来源行（只追加不删除），默认 aliyun 镜像下可离线解析。
@@ -822,6 +845,7 @@ src/main/webapp/
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-09-18 | 2.26 | **第五期 T3 Feed/Profile 缓存读移出业务事务（refactor(cache-03)，治 N2）**：`ProfileService.getProfile` / `FeedService.getFeed` 的缓存批量读（`ContentCache.getContentsBatch`（含 miss 装载）+ `LikeService.batchIsContentLiked`）由 `transactionTemplate.execute` 回调**内**上提到**事务外**——事务回调只做 DB 查询（profile 用户行 + 作者内容 id 与页内切片 / 关注者内容总数 + 页内 id），经私有 record `ProfileDbData`（user/pageIds/total）、`FeedDbData`（pageIds/total）回传，**提交归还连接后**再读缓存、填点赞状态、组装 VO（消除"外层事务持连接 + miss 装载经嵌套事务再取新连接"的叠加，连接池 20 上限下不再互相等连接，对齐第四期 T6 计数读"事务外"口径）；两个早退分支（无关注 / total==0）与改造前一致保持**零缓存调用**；`NotFoundException`（404）/`SQLException→ServerException` 仍只在回调内产生，对外行为零变化；JUnit **434 全绿**（+2：ProfileServiceTest/FeedServiceTest 各 1 例"缓存读在事务回调之外"，DAO 回调内探针自检防断言空转）+ pytest all **130 passed**（+2：新增 `test_feed.py`——/feed 此前仅有 401 边界、零成功路径 E2E）+ G11 L1 登记同型未治点 2 处（`ContentService.search` 事务内逐 key `getContent` + `fillLikeAndFollowBatch`；`FollowService.getFollowingList/getFollowerList` 经 `buildUserList` 事务内 `batchIsFollowing`）→ 留池 `UNPLANNED_ISSUES.md` U-14；本文件 content 域模块表（FeedService / ProfileService 行数按 T3 实测文件总行数更新为 **108 / 118**）、**新增 6.22**、9.1（表体按收集数补齐至 130）、9.2（合计 434）、12 同步；BUSINESS_FLOW 3.1 注记补事务边界口径；TASKS T3 已完成 + 执行回写；NEEDS 4.0 T3 决策 |
 | 2026-09-18 | 2.25 | **第五期 T2 批量缓存读装载合并（refactor(cache-02)，治 N1）**：`CacheAside` 新增 `@FunctionalInterface BatchLoader<T>` 与 `getBatch` **5 参重载**（miss 子集/整批降级子集经请求内 `LoadMemo`（`LoadOutcome` LOADED/EMPTY/FAILED）**一趟批量装载**；4 参重载签名与行为不变=委托 null 逐 key 历史语义；逐 key 单飞去重、三态/续期/空标记/降级/LOAD 打点口径不变；`DatabaseException` 与**漏 key** 均按"加载失败"不写空标记/不写回，脏 JSON 仍走逐 key loader）；`ContentCache.getContentsBatch` 改走批量重载 + 新增 `loadContentsFromDb`（**一趟事务两查**：新增 `ContentDao.findContentsByIds`（列与 findContent 同源、`is_deleted=0`、`id IN`）+ 复用 `findMediaByContentIds` + `groupMediaByContent` 分组；逐 id 无行/媒体损坏/未知类型→null 只影响该 id，SQL 异常→整批 DatabaseException）；key 归位与生成同源 `CacheKeys.content`；**实测冷数据页（10 条图文，删内容 key+空标记，MySQL Com_select 差值）：T2 前 12（P=5）/22（P=10）→ T2 后 4/4 常量**（脚本 `temp_script/verify_t2_batch_load.py`）；JUnit **432 全绿**（+9）+ pytest all **128 passed** + 独立 subagent review 通过（无🔴，🟡3 条处置：批量事务原子性取舍登记、LOAD 并发轻微高估登记、漏 key 补测并改不写假空）；本文件 4.2 CacheAside/ContentCache/ContentDao 行 + 6.4 + **6.21** + 9.2（**表体按实测刷新，合计 432**）+ 12 同步；TASKS T2 已完成 + 执行回写；NEEDS 4.0 T2 决策记录 |
 | 2026-09-18 | 2.24 | **第五期 T1 authorName 冗余同步（refactor(cache-01)，治 R-01，2026-09-18 用户拍板=方案 A 补接口 + 级联失效）**：新增 `POST /user/changeUserName`（LoginController `/user/*` switch + AuthFilter PROTECTED_EXACT 精确保护），入参 `ChangeUserNameDTO{userName}`；校验补 `isBlank` 对齐注册先例 + `isUsernameUsed` 重复名预校验（409，杜绝撞 DB UNIQUE 变 500）；`UserService.changeUserName` DB 提交后调用 **`ContentCache.invalidateAuthorContentKeys(userId)`**（事务内 `findContentIdsByUser` 查该作者内容 id → 事务外 `cacheAside.invalidate` 逐个失效内容 key+空标记，DB/Redis 失败静默跳过 TTL 自愈），读自愈重新 JOIN users 回填新名；`content:index:*` 不含 authorName 无需失效；UserService 注入 ContentCache（user→content 跨域，对齐 like/comment 先例无环）；本文件 2.4 章节（AuthFilter 精确清单/模块表/7.1/6.20）同步；TASKS T1 已完成 + 执行回写；NEEDS 4.0 T1 决策 + G11 质疑（HTTP 层无改名接口属实、Service 层 dormant changeUserName 与预期不符处）记录 |
 | 2026-09-16 | 2.23 | **第四期 T8 收尾（refactor(cache-08)）**：全仓库巡检——T1~T7 无残留（旧重复实现已随各任务删除、无 TODO/临时开关/临时日志；`batchKeysIsMember` 生产无调用仅测试保留=T4 停用预留注记落实）；`@WebServlet` 14 URL / web.xml / IoC 扫描（`scan("com.itheima")`）原样；CacheStats 打点口径确认——`domainOf` 覆盖本周期全部新 key（T4 user:like*/user:commentLike*→LIKE 于 user:* 兜底前、T6 user:followCount/user:followerCount 经 user:* 兜底归 FOLLOW，长前缀优先顺序核对无漂移）；**JUnit 419 例全绿（surefire 415 + pool 4）+ pytest all 124 passed + 覆盖率地图 rerun 无回归（41 端点全有 pytest）**；常青本文件 6.2/6.15~6.19 与 BUSINESS_FLOW 3.1 注记核对一致（T1~T7 已各自同步）；TASKS T8 已完成 + 执行回写；NEEDS 4.0 T8 收尾登记 |
