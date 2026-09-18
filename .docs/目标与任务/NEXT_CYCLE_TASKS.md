@@ -65,7 +65,7 @@
 | -- | -- | ---- | -- | -------- | ------------ | -- |
 | T1 | commit message 规范定稿 | N13 | 无 | 规范文档落地 + 模板 G1/G4/C-3 与延续约定同步 | `docs(prep-01)` | **已完成** |
 | T2 | 常青文档瘦身（含头部版本对齐 N9） | N12 + N9 | T1（颗粒度口径） | 更新日志收敛（一条一行摘要或移除）、头部版本与内容一致、BUSINESS_FLOW 注记收敛；行数显著下降 | `docs(prep-02)` | **已完成** |
-| T3 | pom Kotlin 残留清理 | N1 | 无 | 移除 kotlin 三件套后 `mvn -o` 编译 + 全量 JUnit 仍绿 | `build(prep-03)` | 待执行 |
+| T3 | pom Kotlin 残留清理 | N1 | 无 | 移除 kotlin 三件套后 `mvn -o` 编译 + 全量 JUnit 仍绿 | `build(prep-03)` | **已完成** |
 | T4 | git 卫生：.idea 出库 + temp_script 例外出库 | N2 + N3 | 无 | `git ls-files` 无 `.idea/`、无 `temp_script/`；`.gitignore` 覆盖 | `chore(prep-04)` | 待执行 |
 | T5 | 随手清理：死注释删除 + 分页解析收敛 | N4 + N5 + N6 | 无 | RequestParser/web.xml 注释块删除；parsePage/parsePageSize 收敛公共并替换调用点；相关单测绿 | `refactor(prep-05)` | 待执行 |
 | T6 | 日志卫生：LogUtil 合规 + CountRepairTool 去留（R-05） | N7 + N8 | 无（R-05 开工前拍板） | LogUtil 内部改走 logger；CountRepairTool 按用户拍板删/迁 | `chore(prep-06)` | 待执行 |
@@ -108,7 +108,7 @@
 * **红线边界**：**不动编译产出结构**（构建后仍产 war、class 位置不变）；不改 Java 源码；**不新增/替换依赖**；若发现 maven-compiler-plugin 移除 Kotlin 后编译中断或产物异常 → 不是硬删，回写本任务按 G11 申请调整（可能需补 compiler args 或改回 maven 默认执行）。
 * **强制探索步骤**：(0) 复核 N1 证据（git 全历史无 .kt、磁盘无 .kt）成立 (1) 先 `mvn -o`（IDEA 内置 maven3 路径见项目记忆）跑一次 **clean + compile** 建立"移除前"基线通过与耗时 (2) 移除三件套后复跑 clean + compile + test（JUnit，surefire），对比基线；确认 jacoco 仍出报告 (3) 抽查 `target/classes` 字节码完整性 + `javap` 一个既有类确认产物正常——若清单未覆盖（如隐式依赖谁在用 kotlin）→ 回写本文档再动手。
 * **验收**：pom.xml 无 kotlin 关键字；`mvn -o clean test`（或 tv.py test junit）JUnit 全绿且与移除前数量一致；编译产物结构不变；commit 里带 pom 变更说明与回归结果。
-* **执行回写（<日期>，build(prep-03) 已落地）**：待填。
+* **执行回写（2026-09-19，build(prep-03) 已落地）**：强制探索结论：N1 证据复核成立（磁盘/`git log --all` 全历史零 .kt、`src/` 零 kotlin 引用、pom 三处残留实证）；基线 `mvn -o clean compile` 通过且实录 `kotlin:2.2.20:compile` 报 "No sources to compile"、128 个 Java 源由 `maven-compiler-plugin:3.13.0` 显式 execution 编译——D1（Java 编译由 compiler 显式 execution 承接）判断成立。实现：删除 `kotlin.version` 属性 + `kotlin-stdlib-jdk8`/`kotlin-test` 依赖 + `kotlin-maven-plugin` 插件块共 3 处；maven-compiler-plugin 显式 execution / surefire / jacoco / stage8.buildDir 均不动。验收对照：pom 无 kotlin 关键字 ✓；`mvn -o clean test` JUnit 430+4（MyConnectionPoolTest 独立执行）= **434 全绿**，与移除前一致 ✓；`target/site/jacoco/jacoco.xml` 仍出（130 classes 分析）✓；`target/classes` 141 个字节码完整、`javap` LogUtil 正常 ✓；`python tools\tv.py test all` 全量回归 pytest 130 passed、war 生成、`port_18080_open_after=false`、exit=0（`latest.json` 复核）✓。L1 观察（未处理，非本任务引入）：pom 原带 `maven-compiler-plugin` 无 version 的 WARNING 属既有，收口回归同通过，留待后续随手清理。
 
 ### T4 git 卫生：.idea 出库 + temp_script 例外出库（N2 + N3）
 
