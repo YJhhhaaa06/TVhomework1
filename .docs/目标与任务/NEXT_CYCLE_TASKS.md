@@ -66,7 +66,7 @@
 | T1 | commit message 规范定稿 | N13 | 无 | 规范文档落地 + 模板 G1/G4/C-3 与延续约定同步 | `docs(prep-01)` | **已完成** |
 | T2 | 常青文档瘦身（含头部版本对齐 N9） | N12 + N9 | T1（颗粒度口径） | 更新日志收敛（一条一行摘要或移除）、头部版本与内容一致、BUSINESS_FLOW 注记收敛；行数显著下降 | `docs(prep-02)` | **已完成** |
 | T3 | pom Kotlin 残留清理 | N1 | 无 | 移除 kotlin 三件套后 `mvn -o` 编译 + 全量 JUnit 仍绿 | `build(prep-03)` | **已完成** |
-| T4 | git 卫生：.idea 出库 + temp_script 例外出库 | N2 + N3 | 无 | `git ls-files` 无 `.idea/`、无 `temp_script/`；`.gitignore` 覆盖 | `chore(prep-04)` | 待执行 |
+| T4 | git 卫生：.idea 出库 + temp_script 例外出库 | N2 + N3 | 无 | `git ls-files` 无 `.idea/`、无 `temp_script/`；`.gitignore` 覆盖 | `chore(prep-04)` | **已完成** |
 | T5 | 随手清理：死注释删除 + 分页解析收敛 | N4 + N5 + N6 | 无 | RequestParser/web.xml 注释块删除；parsePage/parsePageSize 收敛公共并替换调用点；相关单测绿 | `refactor(prep-05)` | 待执行 |
 | T6 | 日志卫生：LogUtil 合规 + CountRepairTool 去留（R-05） | N7 + N8 | 无（R-05 开工前拍板） | LogUtil 内部改走 logger；CountRepairTool 按用户拍板删/迁 | `chore(prep-06)` | 待执行 |
 | T7 | 关注/粉丝列表分页 | N11a（U-12） | T5 | `/follow/following\|followers` 支持分页参数、默认兼容；缓存/DAO 分页载体定稿；前端 follow.js 分页 | `feat(prep-07)` | 待执行 |
@@ -116,7 +116,7 @@
 * **红线边界**：`git rm --cached` 只出库**不删工作区文件**（勿用 `--cached` 以外参数误删）；不出库 `tools/env/*.conf.example` 这类"应入库模板"；不动其他业务文件。
 * **强制探索步骤**：(0) 复核 N2/N3 证据（追踪清单）成立 (1) 逐个看过 11 个 .idea 文件，向用户确认是否有意保留共享项（尤其 `runConfigurations/Tomcat_10_1_54.xml` 是共用启动配置——缺省建议全部出库，IDEA 会本地重建；若用户要保留该单文件则 .gitignore 排除它） (2) 确认 `.gitignore` 新增 `/.idea/`（整目录）规则写法与 G9/G10 无冲突 (3) `git rm --cached` 两处 + `git status` 复核，确认此 commit 只改 .gitignore 与删除索引条目——若清单未覆盖 → 回写本文档再动手。
 * **验收**：`git ls-files` 无 `.idea/`、无 `temp_script/`；`.gitignore` 含 `/.idea/`；工作区 .idea 文件仍在（本地可用）；无业务文件被误动。
-* **执行回写（<日期>，chore(prep-04) 已落地）**：待填。
+* **执行回写（2026-09-19，chore(prep-04) 已落地）**：强制探索结论：N2/N3 证据复核成立（`git ls-files .idea/` 恰 11 文件、`temp_script/` 恰 1 文件）；逐个看过 11 个 .idea 文件，共享价值点仅 `runConfigurations/Tomcat_10_1_54.xml`（内置 Tomcat 8080 启动配置，含本机 BASE_DIRECTORY_NAME/DEBUG_PORT），`dataSources.xml` 含本机 DB(3306)/Redis(6379) 连接串——**用户拍板全部出库**（缺省建议，Tomcat 配置在各自 IDEA 本地重建）。实现：`.gitignore` 新增 `/.idea/`（整目录，与既有 `.idea/*` 逐文件规则并存无害）；`git rm --cached -r` 出库 .idea/ 11 文件 + `temp_script/migrate_comments_to_two_level.py`（`/temp_script` L66 规则已覆盖，出库后入 ignore）；仅动 .gitignore 与索引条目，零业务文件。验收对照：`git ls-files` 无 `.idea/`、无 `temp_script/` ✓；`.gitignore` 含 `/.idea/` ✓；工作区 `.idea/` 文件仍在（Test-Path 实证）✓；`git status` 复核仅 .gitignore 修改 + 12 条索引删除 ✓。L1 质疑：无。
 
 ### T5 随手清理：死注释删除 + 分页解析收敛（N4 + N5 + N6）
 
