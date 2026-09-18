@@ -22,36 +22,10 @@ public class FeedController extends BaseServlet {
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
         Long currentUserId = (Long) req.getAttribute("userId");
-        int page = parsePage(req);
-        int pageSize = parsePageSize(req);
+        int page = BaseServletUtil.parsePage(req);
+        int pageSize = BaseServletUtil.parsePageSize(req);
 
         PageResult<ContentVO> result = feedService.getFeed(currentUserId, page, pageSize);
         BaseServletUtil.writeSuccess(resp, result);
-    }
-
-    private int parsePage(HttpServletRequest req) {
-        String param = req.getParameter("page");
-        if (param == null || param.isBlank()) {
-            return 1;
-        }
-        try {
-            int p = Integer.parseInt(param);
-            return p > 0 ? p : 1;
-        } catch (NumberFormatException e) {
-            return 1;
-        }
-    }
-
-    private int parsePageSize(HttpServletRequest req) {
-        String param = req.getParameter("pageSize");
-        if (param == null || param.isBlank()) {
-            return 10;
-        }
-        try {
-            int s = Integer.parseInt(param);
-            return s > 0 ? Math.min(s, 50) : 10;
-        } catch (NumberFormatException e) {
-            return 10;
-        }
     }
 }

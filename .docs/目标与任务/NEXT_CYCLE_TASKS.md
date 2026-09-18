@@ -67,7 +67,7 @@
 | T2 | 常青文档瘦身（含头部版本对齐 N9） | N12 + N9 | T1（颗粒度口径） | 更新日志收敛（一条一行摘要或移除）、头部版本与内容一致、BUSINESS_FLOW 注记收敛；行数显著下降 | `docs(prep-02)` | **已完成** |
 | T3 | pom Kotlin 残留清理 | N1 | 无 | 移除 kotlin 三件套后 `mvn -o` 编译 + 全量 JUnit 仍绿 | `build(prep-03)` | **已完成** |
 | T4 | git 卫生：.idea 出库 + temp_script 例外出库 | N2 + N3 | 无 | `git ls-files` 无 `.idea/`、无 `temp_script/`；`.gitignore` 覆盖 | `chore(prep-04)` | **已完成** |
-| T5 | 随手清理：死注释删除 + 分页解析收敛 | N4 + N5 + N6 | 无 | RequestParser/web.xml 注释块删除；parsePage/parsePageSize 收敛公共并替换调用点；相关单测绿 | `refactor(prep-05)` | 待执行 |
+| T5 | 随手清理：死注释删除 + 分页解析收敛 | N4 + N5 + N6 | 无 | RequestParser/web.xml 注释块删除；parsePage/parsePageSize 收敛公共并替换调用点；相关单测绿 | `refactor(prep-05)` | **已完成** |
 | T6 | 日志卫生：LogUtil 合规 + CountRepairTool 去留（R-05） | N7 + N8 | 无（R-05 开工前拍板） | LogUtil 内部改走 logger；CountRepairTool 按用户拍板删/迁 | `chore(prep-06)` | 待执行 |
 | T7 | 关注/粉丝列表分页 | N11a（U-12） | T5 | `/follow/following\|followers` 支持分页参数、默认兼容；缓存/DAO 分页载体定稿；前端 follow.js 分页 | `feat(prep-07)` | 待执行 |
 | T8 | 评论列表分页 | N11b（U-13） | T5 | `getCommentsForContent` 主楼分页 + 楼中楼整树；默认兼容；前端 detail.js 加载更多 | `feat(prep-08)` | 待执行 |
@@ -124,7 +124,7 @@
 * **红线边界**：web.xml **只删纯注释块，不动任何生效 mapper/servlet/filter 声明**；RequestParser 只删注释不改变现役 getBody/parse 逻辑；公共分页方法默认值/上限（page=1、pageSize 默认 10、上限 50）必须与原私有实现逐字符一致（防行为漂移）。
 * **强制探索步骤**：(0) 复核 N4/N5/N6 证据（注释块存在、两份实现相同）成立 (1) diff Feed/Profile 两份 parsePage/parsePageSize 确认完全一致（含异常分支），再设计公共签名（建议 `BaseServletUtil.parsePage(req)` / `parsePageSize(req)`） (2) 确认现役 getBody/parse 调用点不受注释删除影响（grep 引用） (3) 抽公共后跑 Feed/Profile 相关 JUnit + /feed /profile 端点 pytest，验证默认分页行为不变——若清单未覆盖 → 回写本文档再动手。
 * **验收**：三处注释块从代码/配置移除；Feed/Profile 两 Controller 不再有自己的 parsePage/parsePageSize（引用公共）；相关单测 + pytest（/feed、/profile、分页缺省/越界用例任抽 3 条）绿。
-* **执行回写（<日期>，refactor(prep-05) 已落地）**：待填。
+* **执行回写（2026-09-19，refactor(prep-05) 已落地）**：强制探索结论：N4/N5/N6 证据复核成立（RequestParser L19-56 三段落灰 getBody 实存、web.xml L1-6 旧 web-app 注释块实存、Feed/Profile 两份 parsePage/parsePageSize 逐字符一致）；现役 `RequestParser.parse` 6 处调用点（coupon/comment/search/login）经 grep 确认不触达注释块，删除无损；全仓 grep 确认分页解析仅此两份、无第三份拷贝。实现：① 删除 RequestParser 三段落灰 getBody + 随之失效的 `java.io.BufferedReader` import（现役 getBody/parse 零改动）；② 删除 web.xml L1-6 注释块（生效 mapper/filter 声明零触碰）；③ `BaseServletUtil` 新增公共静态 `parsePage`/`parsePageSize`（默认 page=1、pageSize=10、上限 50，与原私有实现逐字符一致），Feed/Profile 两 Controller 删除私有实现、改调 `BaseServletUtil.parsePage/parsePageSize`。验收对照：三处注释块全部移除 ✓；两 Controller 无私有分页方法（grep 仅剩 4 处公共调用）✓；`mvn -o clean test` JUnit 430+4=**434 全绿** ✓；`python tools\tv.py test all` 全量 pytest **130 passed**（含 /feed、/profile、鉴权 401 与越界用例）、war 生成、`port_18080_open_after=false`、exit=0（`latest.json` 复核）✓。L1 质疑：无。
 
 ### T6 日志卫生：LogUtil 合规 + CountRepairTool 去留（N7 + N8，R-05 开工前拍板）
 
