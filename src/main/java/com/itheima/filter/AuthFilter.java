@@ -34,6 +34,7 @@ public class AuthFilter implements Filter {
             "/content/mediaDelete",  // 作者删除单条媒体
             "/content/delete",  // 作者删除整个作品
             "/user/changePassword",  // 修改密码
+            "/user/changeUserName",  // 修改用户名
             "/coupon/grab",      // 优惠券抢购
             "/coupon/my"        // 我的优惠券
     );

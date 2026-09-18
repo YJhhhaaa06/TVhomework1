@@ -1,7 +1,7 @@
 package com.itheima.content.service;
 
 import com.itheima.content.dao.ContentDao;
-import com.itheima.follow.dao.FollowDao;
+import com.itheima.follow.service.FollowCache;
 import com.itheima.like.service.LikeService;
 import com.itheima.user.dao.UserDao;
 import com.itheima.exception.NotFoundException;
@@ -18,6 +18,8 @@ import org.junit.jupiter.api.Test;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -27,27 +29,45 @@ class ProfileServiceTest {
 
     private UserDao userDao;
     private ContentDao contentDao;
-    private FollowDao followDao;
-    private ContentCacheManager cache;
+    private FollowCache followCache;
+    private ContentCache contentCache;
     private LikeService likeService;
     private TransactionTemplate tt;
     private Connection conn;
     private ProfileService service;
+    /** 事务回调执行中标志（T3：断言缓存读发生在事务回调之外）。 */
+    private boolean[] inTransaction;
 
     @BeforeEach
     void setUp() throws Exception {
         userDao = mock(UserDao.class);
         contentDao = mock(ContentDao.class);
-        followDao = mock(FollowDao.class);
-        cache = mock(ContentCacheManager.class);
+        followCache = mock(FollowCache.class);
+        contentCache = mock(ContentCache.class);
         likeService = mock(LikeService.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
-        service = new ProfileService(userDao, contentDao, followDao, cache, likeService, tt);
+        inTransaction = new boolean[1];
+        service = new ProfileService(userDao, contentDao, followCache, contentCache, likeService, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
-            return action.execute(conn);
+            inTransaction[0] = true;
+            try {
+                return action.execute(conn);
+            } finally {
+                inTransaction[0] = false;
+            }
         });
+        // T8：profile 页内改批量读；默认空映射，用例内自行覆盖
+        when(contentCache.getContentsBatch(anyList())).thenReturn(Collections.emptyMap());
+        // 第四期 T6（R-01）：计数走独立计数 key（FollowCache 读路径），默认 10/20 与 user() 行内一致
+        when(followCache.getFollowerCount(7L)).thenReturn(10);
+        when(followCache.getFollowCount(7L)).thenReturn(20);
+    }
+
+    /** getContentsBatch 桩（id → DTO，null 值=缓存 miss 跳过）。 */
+    private void stubGetBatch(Map<Long, ContentCacheDTO> values) {
+        when(contentCache.getContentsBatch(anyList())).thenReturn(values);
     }
 
     private User user() {
@@ -77,6 +97,9 @@ class ProfileServiceTest {
 
         assertThrows(NotFoundException.class, () -> service.getProfile(7L, 8L, 1, 10));
         verify(contentDao, never()).findContentIdsByUser(any(), anyLong());
+        // T3：事务回调内抛业务异常（404）时同样不触碰缓存
+        verify(contentCache, never()).getContentsBatch(anyList());
+        verify(likeService, never()).batchIsContentLiked(anyLong(), anyList());
     }
 
     @Test
@@ -93,8 +116,11 @@ class ProfileServiceTest {
         assertNull(profile.getIsFollowed());
         assertTrue(profile.getContentPage().getList().isEmpty());
         assertEquals(0, profile.getContentPage().getTotal());
-        verify(followDao, never()).getFollowedIds(any(), anyLong(), anyList());
+        verify(followCache, never()).isFollowing(anyLong(), anyLong());
         verify(likeService, never()).batchIsContentLiked(anyLong(), anyList());
+        // 第四期 T6（R-01）：计数读路径走 FollowCache 计数 key（不再是 user 行内字段）
+        verify(followCache).getFollowerCount(7L);
+        verify(followCache).getFollowCount(7L);
     }
 
     @Test
@@ -103,11 +129,10 @@ class ProfileServiceTest {
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L, 2L));
         ContentCacheDTO dto1 = dto(1L);
         ContentCacheDTO dto2 = dto(2L);
-        when(cache.getContentFromCache(1L)).thenReturn(dto1);
-        when(cache.getContentFromCache(2L)).thenReturn(dto2);
-        when(cache.toContentVO(dto1)).thenReturn(vo(1L));
-        when(cache.toContentVO(dto2)).thenReturn(vo(2L));
-        when(followDao.getFollowedIds(conn, 8L, java.util.List.of(7L))).thenReturn(java.util.Set.of(7L));
+        stubGetBatch(Map.of(1L, dto1, 2L, dto2));
+        when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
+        when(contentCache.toContentVO(dto2)).thenReturn(vo(2L));
+        when(followCache.isFollowing(8L, 7L)).thenReturn(true);
         when(likeService.batchIsContentLiked(8L, java.util.List.of(1L, 2L)))
                 .thenReturn(java.util.Map.of(1L, true, 2L, false));
 
@@ -127,10 +152,13 @@ class ProfileServiceTest {
     void getProfileSkipsCacheMissAndQueriesLikedForSurvivors() throws SQLException {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L, 2L));
-        when(cache.getContentFromCache(1L)).thenReturn(null);
         ContentCacheDTO dto2 = dto(2L);
-        when(cache.getContentFromCache(2L)).thenReturn(dto2);
-        when(cache.toContentVO(dto2)).thenReturn(vo(2L));
+        // 1 为缓存 miss（null）；Map.of 不允许 null，用 HashMap
+        Map<Long, ContentCacheDTO> values = new HashMap<>();
+        values.put(1L, null);
+        values.put(2L, dto2);
+        stubGetBatch(values);
+        when(contentCache.toContentVO(dto2)).thenReturn(vo(2L));
         when(likeService.batchIsContentLiked(8L, java.util.List.of(2L)))
                 .thenReturn(java.util.Map.of(2L, true));
 
@@ -146,8 +174,8 @@ class ProfileServiceTest {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L));
         ContentCacheDTO dto1 = dto(1L);
-        when(cache.getContentFromCache(1L)).thenReturn(dto1);
-        when(cache.toContentVO(dto1)).thenReturn(vo(1L));
+        stubGetBatch(Map.of(1L, dto1));
+        when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
         when(likeService.batchIsContentLiked(7L, java.util.List.of(1L)))
                 .thenReturn(java.util.Map.of(1L, true));
 
@@ -155,7 +183,7 @@ class ProfileServiceTest {
 
         assertNull(profile.getIsFollowed());
         assertTrue(profile.getContentPage().getList().get(0).getIsLiked());
-        verify(followDao, never()).getFollowedIds(any(), anyLong(), anyList());
+        verify(followCache, never()).isFollowing(anyLong(), anyLong());
     }
 
     @Test
@@ -163,14 +191,14 @@ class ProfileServiceTest {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L));
         ContentCacheDTO dto1 = dto(1L);
-        when(cache.getContentFromCache(1L)).thenReturn(dto1);
-        when(cache.toContentVO(dto1)).thenReturn(vo(1L));
+        stubGetBatch(Map.of(1L, dto1));
+        when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
 
         ProfileVO profile = service.getProfile(7L, null, 1, 10);
 
         assertNull(profile.getIsFollowed());
         assertFalse(profile.getContentPage().getList().get(0).getIsLiked());
-        verify(followDao, never()).getFollowedIds(any(), anyLong(), anyList());
+        verify(followCache, never()).isFollowing(anyLong(), anyLong());
         verify(likeService, never()).batchIsContentLiked(anyLong(), anyList());
     }
 
@@ -179,8 +207,8 @@ class ProfileServiceTest {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L));
         ContentCacheDTO dto1 = dto(1L);
-        when(cache.getContentFromCache(1L)).thenReturn(dto1);
-        when(cache.toContentVO(dto1)).thenReturn(vo(1L));
+        stubGetBatch(Map.of(1L, dto1));
+        when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
         when(likeService.batchIsContentLiked(8L, java.util.List.of(1L))).thenReturn(null);
 
         ProfileVO profile = service.getProfile(7L, 8L, 1, 10);
@@ -197,7 +225,7 @@ class ProfileServiceTest {
 
         assertTrue(profile.getContentPage().getList().isEmpty());
         assertEquals(1, profile.getContentPage().getTotal());
-        verify(cache, never()).getContentFromCache(anyLong());
+        verify(contentCache, never()).getContent(anyLong());
     }
 
     @Test
@@ -205,8 +233,8 @@ class ProfileServiceTest {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L, 2L, 3L));
         ContentCacheDTO dto3 = dto(3L);
-        when(cache.getContentFromCache(3L)).thenReturn(dto3);
-        when(cache.toContentVO(dto3)).thenReturn(vo(3L));
+        stubGetBatch(Map.of(3L, dto3));
+        when(contentCache.toContentVO(dto3)).thenReturn(vo(3L));
 
         ProfileVO profile = service.getProfile(7L, 8L, 2, 2);
 
@@ -219,8 +247,7 @@ class ProfileServiceTest {
     void getProfileNotFollowedSetsFalse() throws SQLException {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
         when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(Collections.emptyList());
-        when(followDao.getFollowedIds(conn, 8L, java.util.List.of(7L)))
-                .thenReturn(java.util.Collections.emptySet());
+        when(followCache.isFollowing(8L, 7L)).thenReturn(false);
 
         ProfileVO profile = service.getProfile(7L, 8L, 1, 10);
 
@@ -242,13 +269,31 @@ class ProfileServiceTest {
         assertThrows(ServerException.class, () -> service.getProfile(7L, 8L, 1, 10));
     }
 
+    /**
+     * T3（cache-03，治 N2）：缓存批量读与点赞状态读必须发生在 DB 事务回调**之外**——
+     * DAO 查询在回调内（探针自检，防断言空转），缓存读在回调结束后才执行。
+     */
     @Test
-    void getProfileFollowQuerySqlErrorThrowsServerException() throws SQLException {
+    void getProfileReadsCachesOutsideDbTransaction() throws SQLException {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
-        when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(Collections.emptyList());
-        when(followDao.getFollowedIds(conn, 8L, java.util.List.of(7L)))
-                .thenThrow(new SQLException("db down"));
+        when(contentDao.findContentIdsByUser(conn, 7L)).thenAnswer(inv -> {
+            assertTrue(inTransaction[0], "作者内容 id 查询应在事务回调内执行");
+            return java.util.List.of(1L);
+        });
+        ContentCacheDTO dto1 = dto(1L);
+        when(contentCache.getContentsBatch(anyList())).thenAnswer(inv -> {
+            assertFalse(inTransaction[0], "内容缓存批量读不应在事务回调内执行");
+            return Map.of(1L, dto1);
+        });
+        when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
+        when(likeService.batchIsContentLiked(8L, java.util.List.of(1L))).thenAnswer(inv -> {
+            assertFalse(inTransaction[0], "点赞状态缓存读不应在事务回调内执行");
+            return java.util.Map.of(1L, true);
+        });
 
-        assertThrows(ServerException.class, () -> service.getProfile(7L, 8L, 1, 10));
+        ProfileVO profile = service.getProfile(7L, 8L, 1, 10);
+
+        assertEquals(1, profile.getContentPage().getList().size());
+        assertTrue(profile.getContentPage().getList().get(0).getIsLiked());
     }
 }

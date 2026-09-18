@@ -104,6 +104,28 @@ public final class AppConfig {
         return getInt("redis.minIdle");
     }
 
+    // T1（cache-01）：显式超时 + 熔断参数（治 U-10 未配置超时 / N1 逐请求等连接超时）
+
+    public static int getRedisConnectTimeoutMs() {
+        return getInt("redis.connectTimeoutMs");
+    }
+
+    public static int getRedisSoTimeoutMs() {
+        return getInt("redis.soTimeoutMs");
+    }
+
+    public static long getRedisPoolMaxWaitMs() {
+        return getLong("redis.pool.maxWaitMs");
+    }
+
+    public static int getRedisBreakerFailureThreshold() {
+        return getInt("redis.breaker.failureThreshold");
+    }
+
+    public static long getRedisBreakerCooldownMillis() {
+        return getLong("redis.breaker.cooldownMillis");
+    }
+
     // ===== JWT =====
 
     public static String getJwtSecret() {
@@ -130,8 +152,22 @@ public final class AppConfig {
         return getLong("cache.content.ttlMinutes") * 60 * 1000;
     }
 
-    public static long getContentRefreshMinutes() {
-        return getLong("cache.content.refreshMinutes");
+    public static long getCommentTtlSeconds() {
+        return getLong("cache.comment.ttlMinutes") * 60;
+    }
+
+    public static long getLikeTtlSeconds() {
+        return getLong("cache.like.ttlMinutes") * 60;
+    }
+
+    public static long getFollowTtlSeconds() {
+        return getLong("cache.follow.ttlMinutes") * 60;
+    }
+
+    // T5（cache-05）：索引懒重建失败冷却退避窗口（对齐熔断冷却先例 redis.breaker.cooldownMillis）
+
+    public static long getContentIndexRebuildCooldownMillis() {
+        return getLong("cache.content.indexRebuildCooldownMillis");
     }
 
     // ===== 日志 =====

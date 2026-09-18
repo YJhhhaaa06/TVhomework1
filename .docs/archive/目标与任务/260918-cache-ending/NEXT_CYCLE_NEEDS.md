@@ -1,0 +1,135 @@
+# 下一周期需求与痛点
+
+> 用途：回答"下一周期为什么做这些"——本周期要解决的痛点、候选任务的优先级映射、以及开工前必须拍板的技术决策。
+> 状态：**方向已拍板（2026-09-17，R-03）**——本周期 = **缓存读路径治理**（authorName 冗余同步 + 批量装载合并 + 事务边界瘦身）；落地范围见 **4.3**（含"明确不做"清单）。**进度：T1/T2/T3 全部落地（2026-09-18）**，决策与验证摘要见 4.0；结转事项统一编号为 `R-01`~`R-04`（R-03 已拍板）；4.1 代码复查候选痛点 N1/N2 已随方向拍板**全部纳入并落地**，纳入项见 4.3。
+> 配套：How（拆任务）见 `目标与任务/NEXT_CYCLE_TASKS.md`（**已拆 T1~T3**；四要素为骨架，执行方案由执行窗口探索细化）。
+> 注意：二/三为**结转总账**，不等于本周期范围；本周期做什么、不做什么，以 **4.3** 为准。
+> 来源：260917-cache-overhaul 周期（第四期「缓存体系综合改造」T1~T8 全部完成，`refactor(cache-01)`~`refactor(cache-08)`）归档后（2026-09-17）：结转的未完成需求与未拍板决策（二/三表）+ `UNPLANNED_ISSUES.md` 留池项（U-07 对应 R-04；U-11 留池不编号）+ **2026-09-17 缓存体系代码复查新发现（4.1 的 N1/N2）**。
+> 术语约定：**周期 > 任务**。本文档只回答 Why（需求与决策），How（拆任务）在任务清单文档。
+
+***
+
+## 一、结转：仍有效的通用约定（来自已归档周期，随周期继续生效）
+
+| 编号 | 约定 | 说明 |
+| ---- | ---- | ---- |
+| C-1 | 双文档结构 | 本文档（需求与痛点，决策唯一源）+ 任务清单（执行细节） |
+| C-2 | 一任务一窗口一 commit | 默认期望，允许例外需标注；commit message 强制带任务编号 |
+| C-3 | commit 语义闭环 | 代码 + 常青文档更新 + 任务清单勾选进**同一 commit** |
+
+> 另有若干"延续性约定"不单独编号，随周期生效（原文见 `archive/目标与任务/260917-cache-overhaul/NEXT_CYCLE_NEEDS.md` 一节）：
+> ① **红线措辞约定**：红线只列"明显越界"的项，作用是**防跑偏、不把执行 Agent 限制死**（不穷举做法、不做一刀切禁止）；若某条红线会阻碍正确做法（过紧 / 过窄 / 已不适用）——不允许硬扛、也不允许自行放开，**先说明理由申请调整**，获批准后按新口径动手，未获批准则维持原红线（完整表述见 `NEXT_CYCLE_TASKS.md` 二节）；
+> ② **编号引用约定**：禁裸编号引用已归档周期元素，引用一律写成 `<周期>/<编号>`（如 `260917/R-02`）；裸编号仅指本文档内部定义的元素；
+> ③ **技术红线**：禁 Spring/SpringBoot/MyBatis；不擅改 `@WebServlet` URL / web.xml / IoC 扫描；不为实现便利改业务逻辑语义；
+> ④ **不引入 MQ**：异步（若需）用进程内线程池（`ExecutorService`），不引入 RabbitMQ/Kafka/RocketMQ；
+> ⑤ **脚本规范**：脚本一律 Python；临时一次性脚本放 `temp_script/`，长期复用/自动化放 `tools/`；
+> ⑥ **DDL 备份**：出现表结构改动，执行前先备份库结构与建表语句到 `.docs/DBbackups/`；
+> ⑦ **质疑协议（G11）**：执行 Agent 对 Why 层（需求真实性/必要性）与 How 层（任务/验收可操作性）有质疑权、亦有报告义务——四时点触发（开窗阅读 / 动手前复核 / 探索中 / 验收时）× L1~L4 分级动作，质疑记录回写 4.0，**裁决权永远在用户**（完整协议与记录格式见 `NEXT_CYCLE_TASKS.md` 二节）。
+
+***
+
+## 二、结转：未完成的需求（260917-cache-overhaul 归档时未关闭）
+
+> **编号体系（本档内部）**：`C-#` 通用约定；**`R-##` 待评审事项**（本节与三节连续编号，评审时按 R 编号点单）；`N#` 本周期新探查候选痛点（4.1）；`T#` 任务（见任务清单文档）。引用**已归档周期**的元素仍写 `<周期>/<编号>`（见一②）；每行"来源"列保留原编号以便追溯，正文不使用带周期前缀的旧编号。
+
+| 编号 | 事项 | 类别 | 来源（归档周期） | 状态 | 说明 |
+| ---- | ---- | ---- | ---- | ---- | ---- |
+| R-01 | `authorName` 冗余不同步 | 需求（一致性） | `260917/R-03`（溯源 `260913/H9`） | **已落地（第五期 T1，2026-09-18）** | 用户改名后内容缓存仍带旧名；第五期 T1 方案 A 已落地（补 `/user/changeUserName` + 改名后级联失效 `ContentCache.invalidateAuthorContentKeys(userId)`，读自愈回填新名），执行细节见 4.0 |
+| R-02 | 索引全量读 + 拷贝 shuffle | 需求（性能） | `260917/R-04`（溯源 `260913/H10`） | 明确保留 | `LRANGE 0 -1` 全量读保留（推荐 shuffle 对外语义不变）；第四期 T5 已收缩"探测面"（按 shuffle 序惰性探测凑满即止），`getRecommendByFilter` 读面仍每次全量去重 + shuffle、只取 12 条，数据量大时 O(n) |
+
+> **已完成、不结转**（供对照）：第四期 T1~T8 全部——Set 缓存行为收敛进基建（U-09/N3 → T1~T3，含 LikeCacheService 收口孪生合并、FollowCache 收口、关注/粉丝计数 key 前置）/ 点赞成员装载反转 `content:likeSet`→`user:likeSet`（`260917/R-08` → T4）/ 推荐读路径惰性探测 + 索引重建失败冷却退避（N2/N1 → T5，**含 `260917/R-07` 评估：无需定期重建**）/ 关注粉丝计数入缓存（`260917/R-01` → T6，独立计数 key+SCARD 否决+条件增量 Lua）/ JSON 未知字段兼容 + 批量续期补测（`260917/R-09`/`260917/R-06` → T7）/ 收尾巡检与回归（T8）；旧 `260914/R-05`（缓存对象共享可变引用）已随 260915 归档复核确认关闭（CacheAside 三读路径均走 codec.fromJson 每次新对象）不结转；N9 观测增强（重置/端点/持久化）为已接受取舍（`260913/T7` 拍板），不结转。
+
+***
+
+## 三、结转：未拍板的决策（进任务清单前须拍板）
+
+> 编号接续二（`R-##` 连续）；本表是"必须拍板才能开工"的决策项，二表是"待消化的事实项"。
+
+| 编号 | 待拍板事项 | 来源（归档周期） | 当前状态 | 说明 |
+| ---- | ---- | ---- | ---- | ---- |
+| R-03 | **第五期方向**（本周期主线做什么） | 本档新增 | **已拍板（2026-09-17）**：缓存读路径治理——R-01 authorName 冗余同步 + 4.1 N1 批量装载合并 + N2 事务边界瘦身 | 落地范围见 **4.3**；已拆任务见 `NEXT_CYCLE_TASKS.md` 的 T1~T3；R-02/R-04、U-11 ~ U-13、feed 流不随本周期 |
+| R-04 | content ↔ comment 包层循环依赖 | `260917/R-12`（即 `UNPLANNED_ISSUES.md` 的 U-07） | 待定（四期复查：**仍在**） | content 域共享组件（ContentCacheDTO 等）被 comment 域引用，content 又引用 comment 的 `CommentService`；**非 IoC/Bean 环**，仅包架构不纯净、Java 允许；三期 T3 已移除 `CommentService→ContentCacheManager` 依赖，四期 T1~T8 未涉包层结构，包层环未解除 |
+
+> 已拍板、仅留"未来再评估"口子的（不计入未拍板）：`260913/O-7` 搜索维持 FULLTEXT 直查——"若未来要动，另行登记评估"。
+> `UNPLANNED_ISSUES.md` 留池不编号项：U-11（Redis 停机 `/start` 返回空推荐 → 是否 DB 兜底推荐，**对外行为变更**，四期 4.3 明确不做、其 N1 加重面已随四期 T5 落地）——是否纳入本期，评审时与本表一并过。
+
+***
+
+## 四、本周期痛点与目标方案
+
+> 结构：**4.1 痛点清单**（代码复查发现）→ **4.2 候选方向与拍板结论** → **4.3 本周期范围与反面清单**；**4.0 已回写技术决策与质疑记录**（执行中拍板/质疑追加）。**待方向拍板（R-03）后填写。**
+
+### 4.0 已回写技术决策与质疑记录（执行中拍板/质疑，按任务追加）
+
+> 每落地一个任务的技术决策在此追加一段（G7：窗口内新决策先回写本节的"已定/待定"状态，不许自行拍板）：任务编号 + commit 前缀 + 拍板日期 + 拍板取向与理由 + 关键实现点 + 落点（类/模块）+ 验证摘要。
+> **质疑记录（G11）**：Why 层质疑（前提证伪 / 已满足 / 必要性存疑 / 内部矛盾）在此登记——L2 带疑继续、L3 暂停必须留痕（L1 仅记录落任务清单"执行回写"）；**裁决权在用户**，裁决结果即一条新决策，同节留痕。
+
+**T1 authorName 冗余同步（refactor(cache-01)，拍板 2026-09-18）**：**方案 A 拍板**——补 `/user/changeUserName` 接口 + 改名后级联失效内容缓存。**G11 质疑记录（L2 带疑继续，用户已裁决）**：NEEDS 原预期"无改名接口/UserDao 无改名方法"；实证 **Service 层已有 dormant `UserService.changeUserName`**（参数校验 + 事务 + `UserDao.updateUserName`，带 3 单测，无 Servlet 调用）——HTTP 层确无改名接口（结论部分属实），但"UserDao 无改名方法"子前提证伪；用户裁决按方案 A 落地，dormant 方法成为基础。关键实现点：`LoginController` 既有 `/user/*` switch 加 case + `AuthFilter` PROTECTED_EXACT 精确保护 + `ChangeUserNameDTO{userName}`；校验补 `isBlank`（对齐注册先例）+ `isUsernameUsed` 重复名 409 预校验；`UserService.changeUserName` DB 提交后调用新增 `ContentCache.invalidateAuthorContentKeys(userId)`（事务内 `findContentIdsByUser` → 事务外 `cacheAside.invalidate` 逐个失效内容 key+空标记，失败静默 TTL 自愈；`content:index:*` 含 id 不含 authorName 无需失效），读自愈重新 JOIN users 回填新名。落点：LoginController/UserService/ContentCache/UserDao（复用既有 updateUserName/findContentIdsByUser/isUsernameUsed）/AuthFilter。验证摘要：JUnit 423 全绿（surefire 419 + pool 4）+ pytest all 128 passed（`test_change_user_name.py` 6 用例覆盖 401/400/409/改名后详情+主页 authorName 变更/新名可登录）。
+
+**T2 批量缓存读装载合并（refactor(cache-02)，拍板 2026-09-18）**：**选型 = 方案 A（`CacheAside` 新增 `BatchLoader` + `getBatch` 5 参重载 + 请求内 `LoadMemo` 装载备忘）**——miss 子集与整批降级子集各共享一次批量 loader 调用，逐 key 单飞去重/三态/续期/空标记/降级/打点口径一律不变（4 参重载签名与行为不变=委托 null 逐 key 历史语义）；**否决方案 B**（保持逐 key loader、改 ContentCache 内部用批量 DAO + 内存缓存）：loader 被逐 key 调用时无法得知"本次批量读的全部 miss 集合"，只能每 key 一趟批量 DAO（仍 N 趟），且需在域类引入跨 key 请求态，污染域类。关键实现点：`ContentCache.getContentsBatch` 改走批量重载 + `loadContentsFromDb` **一趟事务两查**（新增 `ContentDao.findContentsByIds`（列与 `findContent` 同源）+ 复用 `findMediaByContentIds` + `groupMediaByContent` 分组；逐 id 无行/媒体损坏/未知类型→null 只影响该 id；SQL 异常→整批 `DatabaseException`）；批量 loader **漏 key 按契约违规=加载失败**（不写假空，对齐 markEmpty 守卫口径）；批量 loader 失败/漏 key 均不写空标记、不写回（三期 T3 负缓存契约的批量等价形态）。落点：CacheAside(新 BatchLoader/LoadMemo/LoadOutcome)/ContentCache(getContentsBatch/loadContentsFromDb)/ContentDao(findContentsByIds)。**G11 质疑记录（L1 仅记录 3 条，无 L3/L4；详情见任务清单 T2 执行回写）**：① 批量装载由"逐 key 独立事务"变"整批单事务"→ 失败面由"部分成功"变"整批按加载失败"，属更严格一致性（已登记常青 6.21 已知取舍）；② LOAD 打点在并发请求 miss 集合相交时同 key 可能被两批各记一次（统计轻微高估，登记不修）；③ 常青 9.2 JUnit 表历史漂移随本任务按实测刷新。**T3 依赖结论：FeedService/ProfileService 调用点签名完全不变 → T3 无软依赖**。验证摘要：**运行时实测冷数据页（10 条图文，MySQL Com_select 差值）12/22（P=5/P=10，T2 前）→ 4/4（常量，T2 后）** + JUnit 432 全绿（surefire 428 + pool 4）+ pytest all 128 passed + 独立 subagent review 通过（无🔴）。
+
+**T3 Feed/Profile 缓存读移出业务事务（refactor(cache-03)，拍板 2026-09-18）**：**选型 = 方案 A（DB 查询与缓存读分离 + 事务回调结果载体）**——事务回调只做 DB 查询并以私有 record 回传（`ProfileDbData(user, pageIds, total)` / `FeedDbData(pageIds, total)`），`ContentCache.getContentsBatch`（含 miss 装载）与 `LikeService.batchIsContentLiked` 移到事务提交/连接归还**之后**执行；**否决方案 B**（事务内保留缓存读、只调事务粒度/连接）——自研 `TransactionTemplate` 无传播语义、每次 execute 独立取连接，事务内调缓存在冷缓存/降级时必然嵌套取连接，治不了"连接叠加"本体。关键实现点：两方法事务回调体内**只含 DAO 调用**；两个早退分支（`followedIds` 空 / `total==0`）保持**零缓存调用**；`NotFoundException`(404) 与 `SQLException→ServerException` 仍在回调内产生（对外状态码逐字不变）；未改缓存类签名 / key / TTL / 三态 / 降级 / 打点 / 接口契约。落点：ProfileService / FeedService（+私有 record）。**G11 质疑记录（L1 仅记录 1 条，无 L3/L4）**：按同一判据（"事务回调内调缓存"）全仓扫描发现**同型未治点 2 处**——① `ContentService.search` 回调内逐 key `contentCache.getContent` + `contentStatusFiller.fillLikeAndFollowBatch`；② `FollowService.getFollowingList/getFollowerList` 经 `buildUserList` 回调内 `followCache.batchIsFollowing`。两处**不在 T3 范围**（入口线索/红线只点 Feed/Profile，未擅自扩范围），去向 = `UNPLANNED_ISSUES.md` **U-14** 留池待评审（`N2 ↔ U-14` 已在 4.1 标注）。验证摘要：JUnit **434 全绿**（+2：事务边界断言，DAO 回调内探针自检 + 缓存读断言 `inTransaction=false`）+ pytest all **130 passed**（+2：新增 `test_feed.py`，`/feed` 成功路径首次 E2E）+ `grep` 实证两方法事务回调内零缓存调用 + 独立 subagent review 通过（无🔴；🟡 3 条全部处置：模块表行数改按实测总行数、`test_feed.py` 取关后断言去隐性依赖、6.22 补明 Profile 侧空批量读口径）。
+
+### 4.1 候选痛点（代码复查，2026-09-17；N1/N2 已随 R-03 拍板纳入，见 4.3）
+
+> 编号 `N1`~`N#` 为**本档内部编号**。每条给出"如果不改，什么时候会出什么问题"的具体场景。
+> **证据须可复核定位**（G11 配套）：文件:行号 / 复现命令 / 日志片段，不接受纯文字断言——执行窗口动手前按 G11 第 (0) 项探索步骤复核证据，不成立 → L3 暂停并登记质疑。
+> N1/N2 经 R-03 评审**纳入本周期**（见 4.3 T2/T3；**N1 已随 T2 落地 2026-09-18**——逐 key 装载收敛为批量装载，实测冷页 12/22→4/4；**N2 已随 T3 落地 2026-09-18**——Feed/Profile 缓存批量读移出 DB 事务，事务回调内零缓存调用）；N3/N4 已转留池（见下备注）。执行中证伪的 N# 按 G11 登记质疑，裁决后按同口径流转，并在六节变更记录留痕。
+> 与已登记代码债的关系：如有，注明 `N# ↔ U-#`（同根因或后果）。**N2 ↔ U-14**（T3 落地时按同一判据全仓扫描，发现同型未治点 2 处——`ContentService.search` 与 `FollowService.getFollowingList/getFollowerList` 事务回调内调缓存读，已登记留池，见 4.0 T3 记录）。任一项经评审纳入后升格为正式编号（并入 `R-##` 或任务 `T#`）。
+
+| 编号 | 问题 | 证据（可复核定位） | 不改会怎样（具体场景） |
+| ---- | ---- | ---- | ---- |
+| N1 | **批量缓存读 miss / 降级时逐 key 独立 DB 装载**（批量读的 DB 放大面）：`CacheAside.getBatch` 对 miss key 逐个 `singleFlight.get` 装载、对整批异常逐 key `loadDegraded`，而内容 loader `loadContentFromDb` 每次 = `findContent` + `findMedia` **两次事务查询**——批量接口只有在全命中才省 N+1，冷 key（刚重启/低命中）时逐条 2 次 DB 反而放大 | `CacheAside.getBatch` L242-260（miss 循环逐 key loader）、L232-241（整批降级逐 key loader）；`ContentCache.getContentsBatch` L125-126（loader = `loadContentFromDb`）；`ContentCache.loadContentFromDb` L345-354（`findContent`+`findMedia` 两趟事务查询）；`FeedService.getFeed` L61 / `ProfileService.getProfile` L70 页循环批量读 | Feed/Profile 冷数据页 10 条 → 逐条 2 次 DB + 逐条回填（≈20 次 DB/请求）；Redis 停机时整批降级逐 key 打 DB（无退避，仅同 key 单飞去重）——**与 `/start` 索引重建 N1 加重面同型，但 T5 只治了索引没治批量降级放量面**，高峰并发下 DB 压力随冷数据/停机线性放大 |
+| N2 | **Feed/Profile 在 DB 事务回调内执行缓存批量读与内嵌装载**（事务边界口径不一）：关注线 `ProfileService.getProfile` 事务外读计数（T6 明确移出事务），但同一个方法在 `transactionTemplate.execute` **内部**调 `contentCache.getContentsBatch` / `likeService.batchIsContentLiked`（`FeedService.getFeed` 同理）——miss 装载经嵌套 `transactionTemplate` 取**新连接**（自研模板无传播语义、独立提交），事务持有期包含 Redis 往返与 DB 装载 | `ProfileService.getProfile` L55-98（L70 `getContentsBatch`、L82 `batchIsContentLiked` 在事务内）；`FeedService.getFeed` L49-87（L61、L73 在事务内）；`FollowCache.getCount` L177-191（计数读在事务外）；`db.pool.maxSize=20`（app.properties:7） | **已落地（第五期 T3，2026-09-18）**：事务回调只承载 DB 查询（私有 record 回传），缓存批量读与点赞状态读上提事务外；`grep` + JUnit 事务标志断言实证"回调内零缓存调用"，对外行为零变化；同型未治点 2 处（`ContentService.search` / `FollowService` 关注粉丝列表）登记 U-14 留池，详见 4.0 T3 记录。原风险场景（供对照）：冷缓存高峰每请求外层事务持连接 1 + miss 装载逐 key 再取新连接 → 连接池 20 上限下 loader 等连接（timeoutMs=5000）超时 → 该 key 短暂降级缺失（不 500 自愈，但表现=内容间歇缺失）；事务持有期被缓存装载拉长；与"计数读移出事务"口径自相矛盾 |
+
+> 原 N3（follow 域大集全量装载）/ N4（评论树全量装载重排）经评审（2026-09-17）确认属**懒加载/分页范畴**（改动面触及接口契约 + DAO 分页 + 展示决策，远超缓存体系），已转入 `UNPLANNED_ISSUES.md` 留池（U-12 / U-13），不随本档缓存方向评审。
+
+### 4.2 候选方向（R-03 已拍板，2026-09-17）
+
+| 候选 | 内容 | 依据 | 结论 |
+| ---- | ---- | ---- | ---- |
+| **缓存读路径治理** | authorName 冗余同步（R-01）+ 批量装载合并（N1）+ 事务边界瘦身（N2） | 2026-09-17 代码复查（N1/N2）+ 结转项评审（R-01）；用户 2026-09-17 定调：第五期聚焦缓存读路径，能拆的任务均排进本周期 | ✅ **本周期采纳** |
+| R-02 索引全量读本体 / R-04 包层环 / U-11 停机 DB 兜底 / U-12·U-13 懒加载分页 | 非本周期主题或已留池 | — | ⏸ 维持结转/留池，不随本周期 |
+| feed 流改造 | 关注流聚合改造 | 用户已按"暂不考虑"删除（2026-09-17） | ⏸ 已删除，不随本周期 |
+
+### 4.3 本周期范围（R-03 拍板结果，2026-09-17）
+
+**主题**：缓存读路径治理——"authorName 一致性 + 批量装载收敛 + 事务边界瘦身"。
+
+| 纳入 | 对应编号 | 落到任务 | 一句话 |
+| ---- | ---- | ---- | ---- |
+| authorName 冗余同步机制 | R-01（原 `260917/R-03`） | T1 | 用户改名→内容缓存 authorName 一致性方案（当前无改名接口，方案开工前拍板：补接口 or 机制预留） |
+| 批量缓存读装载合并 | N1 | T2 | 批量 miss/降级逐 key 两次 DB 查询 → 批量装载一趟收敛（冷数据页 DB 查询常量趟数） |
+| Feed/Profile 缓存读移出业务事务 | N2 | T3 | 缓存批量读从 DB 事务回调内上提事务外（对齐计数读"事务外"口径，消除连接叠加） |
+
+**本周期明确不做（反面清单，与"纳入"同等重要）**：
+
+| 不做 | 原因 / 去向 |
+| ---- | ---- |
+| R-02 索引全量读 + 拷贝 shuffle 本体 | 明确保留（`260917/R-04`）；推荐随机语义依赖，已收探测面（四期 T5） |
+| R-04 content↔comment 包层环 | 维持待定/留池（`UNPLANNED_ISSUES.md` U-07，已结转 R-04） |
+| U-11 "/start 停机 DB 兜底推荐" | 对外行为变更未拍板，维持留池 |
+| U-12 follow 大集全量装载 / U-13 评论树全量装载 | 懒加载/分页范畴（接口契约 + DAO 分页 + 展示决策），已转留池，待量级触发或专项周期 |
+| feed 流改造 | 用户 2026-09-17 已按"暂不考虑"删除（原第五期主线候选） |
+| 单飞分布式化 / TTL 真流量复调 / 优惠券限流 | 用户 2026-09-17 已删除/留池不随本周期 |
+
+***
+
+## 五、本周期范围与边界（指针节，范围一律以 4.3 为准）
+
+> 本节**不单独维护范围清单**，避免与 4.3 口径分叉：本周期做什么、不做什么（含反面清单），一律以 **4.3 为唯一落点**（2026-09-17 已随 R-03 拍板填写）。本节只保留 4.3 不覆盖的两类边界：
+
+- **留池未排**：见二/三——是否纳入本周期，评审时决定（U-11/U-12/U-13/R-02/R-04 均不随本周期，见 4.3 反面清单）。
+- **禁止（沿用技术红线）**：Spring/SpringBoot/MyBatis；擅改 `@WebServlet` URL、web.xml、IoC 扫描；为实现便利改业务逻辑语义。
+
+***
+
+## 六、变更记录
+
+| 日期 | 版本 | 内容 |
+| ---- | ---- | ---- |
+| 2026-09-17 | 0.5 | **R-03 方向拍板回写（2026-09-17）**：① 状态行改为"方向已拍板"；② 4.2 填入拍板结论（缓存读路径治理采纳：R-01 + N1 + N2；R-02/R-04/U-11/U-12/U-13/feed 不随本周期）；③ 4.3 填入范围（纳入 3 项 → T1~T3 映射 + "明确不做"反面清单 6 类）④ 4.1 标题更新（N1/N2 已纳入，N3/N4 转留池备注保留）；⑤ 三表 R-03 状态列 →「已拍板（2026-09-17）」；⑥ 配套 `NEXT_CYCLE_TASKS.md` 已按模板新建并拆 T1~T3 |
+| 2026-09-17 | 0.4 | **4.1 减项（用户评审拍板）**：N3（follow 大集全量装载）/ N4（评论树全量装载）确认属懒加载/分页范畴（改动面触及接口契约 + DAO 分页 + 展示决策，远超缓存体系），转 `UNPLANNED_ISSUES.md` 留池（U-12 / U-13），从 4.1 移除并留去向备注；4.1 现余 N1（批量读逐 key 装载 DB 放大）/ N2（事务内嵌套缓存装载）两候选待方向评审 |
+| 2026-09-17 | 0.3 | **缓存体系代码复查（2026-09-17）**：4.1 登记 4 项候选痛点（待评审纳入，尚未拍板）——N1 批量读 miss/降级逐 key 独立 DB 装载（`CacheAside.getBatch` + `loadContentFromDb` 两次查询，批量 N+1 仅全命中才省）/ N2 Feed/Profile 事务内嵌套缓存装载（计数移出事务 vs 内容读留在事务内，口径不一 + 连接放大）/ N3 follow 域大集全量 `SMEMBERS` 装载无上限（like 已反转 R-08、follow 侧未做，待真流量）/ N4 评论树全量装载重排 + 点赞失效轻查 DB（观察项） |
+| 2026-09-17 | 0.2 | **按用户决定删除暂不考虑项并重编号**：二节删 R-01（D 方向 feed 流改造，第五期主线候选）/ R-02（单飞分布式化）/ R-05（TTL 真流量复调），三节删 R-07（优惠券限流）；剩余项重编号为 R-01 `authorName` 冗余同步（原 R-03）/ R-02 索引全量读本体（原 R-04）/ R-03 第五期方向（原 R-06）/ R-04 包层环（原 R-08），全文档交叉引用与"已完成、不结转"注释中归档周期引用一并核对回写 |
+| 2026-09-17 | 0.1 | 新建本文档（结转稿）：接 260917-cache-overhaul 归档周期（第四期「缓存体系综合改造」T1~T8 全部完成，`refactor(cache-01)`~`refactor(cache-08)`），结转 ① 通用约定（C-1~C-3 + ⑦ 条延续约定）、② 未完成需求 5 项（R-01 D 方向 feed 流改造（四期 4.3 反面清单，**第五期主线候选**）/ R-02 单飞分布式化（继续延后）/ R-03 `authorName` 冗余同步（未处理）/ R-04 索引全量读本体（明确保留，T5 已收探测面）/ R-05 follow/like 分域 TTL 真流量复调（待真流量））、③ 未拍板决策 3 项（R-06 第五期方向（本档新增，待拍板）/ R-07 优惠券限流（`260917/R-11`，默认不做）/ R-08 content↔comment 包层环（`260917/R-12` = U-07，待定））；三节备注 U-11 留池不编号（对外行为变更未拍板）；四节留空待方向拍板（R-06）；四期 T1~T8 全部完成、R-06~R-09（四期编号）与旧 R-05、N9 已完成/已接受，不结转 |

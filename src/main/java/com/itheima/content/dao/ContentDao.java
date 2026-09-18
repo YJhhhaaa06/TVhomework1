@@ -7,6 +7,7 @@ import com.itheima.admin.model.vo.AdminContentVO;
 
 import java.sql.*;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 
@@ -74,6 +75,56 @@ public class ContentDao {
                 }
             }
         }
+    }
+
+    /**
+     * 按 id 集合批量查询内容（第五期 T2 装载合并）：列与 {@link #findContent} 完全一致
+     * （JOIN users 取 authorName），仅多一层 {@code id IN (...)} 过滤，供批量缓存读的
+     * miss/降级装载一趟收敛（替代逐条 findContent 的 N 次往返）。
+     *
+     * <p>无匹配行不出现在结果里（调用方按"缺失 = 确认无数据"处理）；空/ null 入参返回空列表
+     * （不发 SQL）。查询顺序不保证，调用方按 id 归位。
+     */
+    public List<ContentCacheDTO> findContentsByIds(Connection conn, Collection<Long> contentIds) throws SQLException {
+        if (contentIds == null || contentIds.isEmpty()) {
+            return Collections.emptyList();
+        }
+        StringBuilder sql = new StringBuilder("""
+                SELECT
+                   c.id,
+                   c.title,
+                   c.description,
+                   c.type,
+                   c.category_id,
+                   c.comment_count,
+                   c.like_count,
+                   c.comment_enabled,
+                   c.create_time,
+                   u.username,
+                   u.id AS user_id
+               FROM content c
+               JOIN users u ON c.user_id = u.id
+               WHERE c.is_deleted = 0 AND c.id IN (""");
+        for (int i = 0; i < contentIds.size(); i++) {
+            if (i > 0) {
+                sql.append(", ");
+            }
+            sql.append("?");
+        }
+        sql.append(")");
+        List<ContentCacheDTO> list = new ArrayList<>();
+        try (PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+            int idx = 1;
+            for (Long contentId : contentIds) {
+                pstmt.setLong(idx++, contentId);
+            }
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    list.add(ResultMap.buildContentCacheDTO(rs));
+                }
+            }
+        }
+        return list;
     }
 
     public List<ContentCacheDTO> findAllContent(Connection conn) throws SQLException {

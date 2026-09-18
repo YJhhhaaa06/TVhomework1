@@ -100,20 +100,37 @@ public class ContentLikeDao {
     }
 
     /**
-     * 查询某个内容的所有点赞者（content 为中心，用于缓存回填）
-     * @return 所有点赞了该内容的 userId 集合
+     * 查询某个用户点赞过的全部内容（用户为中心，T4 装载反转为 user:likeSet 的 miss 回填/降级 loader）。
+     * @return 该用户点赞过的 contentId 集合
      */
-    public Set<Long> findLikerIdsByContentId(Connection conn, long contentId) throws SQLException {
-        String sql = "SELECT user_id FROM content_like WHERE content_id = ?";
+    public Set<Long> findLikedContentIdsByUser(Connection conn, long userId) throws SQLException {
+        String sql = "SELECT content_id FROM content_like WHERE user_id = ?";
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setLong(1, contentId);
+            pstmt.setLong(1, userId);
             Set<Long> result = new HashSet<>();
             try (ResultSet rs = pstmt.executeQuery()) {
                 while (rs.next()) {
-                    result.add(rs.getLong("user_id"));
+                    result.add(rs.getLong("content_id"));
                 }
             }
             return result;
+        }
+    }
+
+    /**
+     * 查询某个内容的点赞总数（计数/成员分离专用：只取 COUNT，不加载全量成员）。
+     * @return 该内容点赞数
+     */
+    public int countByContentId(Connection conn, long contentId) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM content_like WHERE content_id = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, contentId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1);
+                }
+                return 0;
+            }
         }
     }
 

@@ -10,7 +10,7 @@
 .docs/
 ├── INDEX.md          ← 本文件（唯一入口）
 ├── 常青/             ← 启动必读，随代码更新
-├── 目标与任务/        ← 当前目标与任务（暂空，未来放这里）
+├── 目标与任务/        ← 当前周期目标与任务（周期文档在此新建；UNPLANNED_ISSUES.md 常驻）
 ├── 说明书/           ← 按需读的参考手册
 ├── archive/          ← 历史存档（勿读，追踪可追溯，结构与顶层一致）
 └── temp/             ← 临时文档（勿读，可随时删除，永不追踪）
@@ -27,13 +27,17 @@
 
 ## 目标与任务（目标与任务/）
 
+> **第五期在办（2026-09-17 立项）**：第四期「缓存体系综合改造」T1~T8 已全部完成并于 2026-09-17 归档至 `archive/目标与任务/260917-cache-overhaul/`（`refactor(cache-01)`~`(08)`）。第五期方向已拍板 R-03 = **缓存读路径治理**（R-01 authorName 冗余同步 + N1 批量装载合并 + N2 事务边界瘦身），`NEXT_CYCLE_NEEDS.md`/`NEXT_CYCLE_TASKS.md` 均已就位（已拆 T1~T3，`refactor(cache-01)`~`(03)`；**T1/T2/T3 均已完成 2026-09-18**——T1 补 `/user/changeUserName` + 改名级联失效；T2 批量装载合并，冷页 DB 趟数实测 12/22→4/4 常量；T3 Feed/Profile 缓存批量读移出 DB 事务（事务回调内零缓存调用，对齐计数读"事务外"口径；同型未治点 2 处转留池 U-14）。T1/T2 已提交，T3 commit `refactor(cache-03)` 待用户侧提交）。
+>
+> 第五期结转来源（已回写进 `NEXT_CYCLE_NEEDS.md` 二/三节，2026-09-17 按用户决定已删除暂不考虑项）：① 归档周期 NEEDS 二/三节未消化项——`authorName` 冗余同步（纳入 T1）/ R-02 索引全量读本体 / R-04 content↔comment 包层环（不随本周期；单飞分布式化 / TTL 真流量复调 / 优惠券抢购限流 / D 方向 feed 流改造 已按用户决定舍弃）；② 2026-09-17 代码复查候选痛点 N1/N2（纳入 T2/T3），N3/N4 转留池（U-12/U-13）。
+
 | 文件 | 内容 |
 |------|------|
-| 目标与任务/NEXT_CYCLE_NEEDS.md | 本周期需求与痛点（Why）：方向 B=feature package 包结构改造定稿；目标=按 8 业务域重组 controller/service/dao/model、基建不动；含类归属清单、技术注意点、任务拆分骨架（已获用户逐项拍板） |
-| 目标与任务/NEXT_CYCLE_TASKS.md | 本周期任务（How）：**周期约定 G1-G10** + **任务模板四要素** + 任务详情（草稿：B 拆 9 任务 = 8 域迁移 + 1 收尾，待评审定稿） |
-| 目标与任务/UNPLANNED_ISSUES.md | 待决策池：登记"发现需要改、但暂未排进任务清单"的内容（文档滞后/代码债/观察），已预填 7 条候选（U-01~U-07），按登记规则新增 |
+| 目标与任务/周期模板_NEEDS.md | **稳定模板**：下一周期需求与痛点文档的通用骨架（抽取自历次周期），含占位符与填写说明；新建周期时复制为 NEXT_CYCLE_NEEDS.md |
+| 目标与任务/周期模板_TASKS.md | **稳定模板**：下一周期任务清单文档的通用骨架（抽取自历次周期），含任务四要素模板与填写说明；新建周期时复制为 NEXT_CYCLE_TASKS.md |
+| 目标与任务/UNPLANNED_ISSUES.md | 待决策池：登记"发现需要改、但暂未排进任务清单"的内容（文档滞后/代码债/观察），按登记规则新增；**当前有效留池项 = U-07（包层环，已结转第五期 NEEDS R-04）/ U-11（停机 DB 兜底推荐，对外行为变更未拍板）/ U-12（follow 大集全量装载，懒加载分页范畴）/ U-13（评论树全量装载重排，懒加载分页范畴）/ U-14（同型 N2 未治点：`ContentService.search` 与 `FollowService.getFollowingList/getFollowerList` 事务回调内调缓存读，第五期 T3 探索发现）**，其余（U-05/U-08/U-09/U-10、U-11 的 N1 加重面）已随各周期落地，2026-09-17 清理移出本档 |
 
-> 历史周期：`260908-test-hardening`（测试体系改造 T1-T5）已归档 `archive/目标与任务/260908-test-hardening/`；`260910-test-gap-fill`（补测试缺口 A 方向 T1~T8，test(12)~test(19)）已归档 `archive/目标与任务/260910-test-gap-fill/`（勿读，追踪可追溯）。
+> 历史周期：`260908-test-hardening`（测试体系改造 T1-T5）已归档 `archive/目标与任务/260908-test-hardening/`；`260910-test-gap-fill`（补测试缺口 A 方向 T1~T8，test(12)~test(19)）已归档 `archive/目标与任务/260910-test-gap-fill/`；`260912-package-refactor`（B 方向 feature package 改造：8 域迁移 + 1 收尾 T1~T9，pkg-01~pkg-09，仅搬移不改名、行为零变化）已归档 `archive/目标与任务/260912-package-refactor/`；`260913-cache-architecture`（C 方向缓存改造：一版 T1~T6 + 二期 T7~T9，refactor(cache-01)~cache-09，统一 Redis + 三态 Cache-Aside + 空标记 + 可降级 + 统一单飞 + 点赞计数/成员分离 + 关注双 Set + 观测埋点 + 读路径加固 + TTL 精调，对外行为零变化）已归档 `archive/目标与任务/260913-cache-architecture/`；`260914-cache-hardening`（第三期缓存加固：T1~T6，fix(cache-01)~(06)（T4 拆 04a/04b/04c），超时显式化 + 全局熔断 + 降级接入单飞 + 负缓存契约 + 空标记 exists 守卫 + 索引写失败自愈 + 点赞条件写 Lua 原子化 + 启动加载事务外/pipeline 化 + 索引 key 生成/解析/匹配同源归一，对外行为零变化）已归档 `archive/目标与任务/260914-cache-hardening/`（勿读，追踪可追溯）；`260917-cache-overhaul`（第四期「缓存体系综合改造」：T1~T8，`refactor(cache-01)`~`(08)`，Set 缓存组件收敛进基建 + Like/Follow 域缓存收口与孪生合并 + 点赞成员装载反转（`content:likeSet`→`user:likeSet`）+ 推荐惰性探测与索引重建退避 + 关注/粉丝计数入缓存 + JSON 未知字段兼容与批量续期补测 + 收尾回归，收口/反转均对外行为零变化）已归档 `archive/目标与任务/260917-cache-overhaul/`（勿读，追踪可追溯）。
 
 > 术语：周期 > 任务。（历史文档中的"阶段"仅指 260830 周期内部顺序，已归档。）
 

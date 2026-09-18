@@ -4,7 +4,8 @@ import com.itheima.comment.dao.CommentDao;
 import com.itheima.like.dao.CommentLikeDao;
 import com.itheima.content.dao.ContentDao;
 import com.itheima.like.dao.ContentLikeDao;
-import com.itheima.content.service.ContentCacheManager;
+import com.itheima.content.service.CommentCache;
+import com.itheima.content.service.ContentCache;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
@@ -26,7 +27,8 @@ public class LikeService {
     private final ContentLikeDao contentLikeDao;
     private final CommentLikeDao commentLikeDao;
     private final LikeCacheService cache;
-    private final ContentCacheManager contentCacheManager;
+    private final ContentCache contentCache;
+    private final CommentCache commentCache;
     private final TransactionTemplate transactionTemplate;
     private static final Logger LOGGER =
             LogUtil.getLogger(LikeService.class);
@@ -34,14 +36,16 @@ public class LikeService {
     @InjectConstructor
     public LikeService(ContentDao contentDao, CommentDao commentDao,
                        ContentLikeDao contentLikeDao, CommentLikeDao commentLikeDao,
-                       LikeCacheService cache, ContentCacheManager contentCacheManager,
+                       LikeCacheService cache, ContentCache contentCache,
+                       CommentCache commentCache,
                        TransactionTemplate transactionTemplate) {
         this.contentDao = contentDao;
         this.commentDao = commentDao;
         this.contentLikeDao = contentLikeDao;
         this.commentLikeDao = commentLikeDao;
         this.cache = cache;
-        this.contentCacheManager = contentCacheManager;
+        this.contentCache = contentCache;
+        this.commentCache = commentCache;
         this.transactionTemplate = transactionTemplate;
     }
 
@@ -67,7 +71,8 @@ public class LikeService {
 
         // 缓存更新放在事务提交后
         cache.likeContent(userId, contentId);
-        contentCacheManager.updateContentLikeCount(contentId, 1);
+        // 失效内容 key，读自愈回填 DB 最新 like_count（T2 4.5 显式失效）
+        contentCache.notifyLikeCountChanged(contentId);
     }
 
     public void removeLikeContent(long userId, long contentId) {
@@ -89,7 +94,18 @@ public class LikeService {
         });
 
         cache.unlikeContent(userId, contentId);
-        contentCacheManager.updateContentLikeCount(contentId, -1);
+        // 失效内容 key，读自愈回填 DB 最新 like_count（T2 4.5 显式失效）
+        contentCache.notifyLikeCountChanged(contentId);
+    }
+
+    // ==================== 删除/下架级联失效 ====================
+
+    /**
+     * 删除/下架内容后失效其点赞缓存（计数 + 成员 + 空标记），由 ContentService 在 DB 提交后调用。
+     * 原副作用在旧 ContentCacheManager.evictContent 内（T4 设计保留），T6 移除旧类时迁入本委托。
+     */
+    public void deleteContentLike(long contentId) {
+        cache.deleteContentLike(contentId);
     }
 
     // ==================== 评论点赞 ====================
@@ -113,7 +129,8 @@ public class LikeService {
         });
 
         cache.likeComment(userId, commentId);
-        contentCacheManager.updateCommentLikeCount(commentId, 1);
+        // 失效评论所属内容评论树 key，读自愈回填 DB 最新 like_count（T3 4.5 业务显式失效）
+        commentCache.notifyCommentLikeChanged(commentId);
     }
 
     public void removeLikeComment(long userId, long commentId) {
@@ -135,182 +152,64 @@ public class LikeService {
         });
 
         cache.unlikeComment(userId, commentId);
-        contentCacheManager.updateCommentLikeCount(commentId, -1);
+        // 失效评论所属内容评论树 key，读自愈回填 DB 最新 like_count（T3 4.5 业务显式失效）
+        commentCache.notifyCommentLikeChanged(commentId);
     }
 
-    // ==================== 内容点赞查询（单条，缓存优先） ====================
+    // ==================== 内容点赞查询（单条，T4 起纯委托 LikeCacheService） ====================
 
     /**
-     * 查询用户是否点赞了某个内容
-     * 缓存命中直接返回；缓存 miss 则从 DB 查该内容全部点赞者，回填 Redis 后返回
+     * 查询用户是否点赞了某个内容。
+     * T4 起缓存类内部完成"三态读 → miss 单飞回填 → Redis 异常降级 DB"（NEEDS 4.2/4.6/4.9），
+     * 本方法只做委托，不再自带 DB 回填（回填点单飞防击穿 H6）。
      */
     public boolean isContentLiked(long userId, long contentId) {
-        Boolean cached = cache.isContentLiked(userId, contentId);
-        if (cached != null) {
-            return cached;
-        }
-
-        return transactionTemplate.execute(conn -> {
-            try {
-                Set<Long> allLikers = contentLikeDao.findLikerIdsByContentId(conn, contentId);
-                cache.syncContentLikers(contentId, allLikers);
-                return allLikers.contains(userId);
-            } catch (SQLException e) {
-                LOGGER.log(Level.SEVERE, "查询内容点赞状态失败, userId=" + userId + ", contentId=" + contentId, e);
-                throw new ServerException("服务器异常，查询点赞状态失败");
-            }
-        });
+        return cache.isContentLiked(userId, contentId);
     }
 
     /**
-     * 查询内容的点赞数
-     * 缓存命中直接返回 SCARD 结果；缓存 miss 则 DB 查全部点赞者，回填后返回集合大小
+     * 查询内容的点赞数（计数/成员分离，只走 count key，0 为合法值）。
      */
     public int getContentLikeCount(long contentId) {
-        Integer cached = cache.getContentLikeCount(contentId);
-        if (cached != null) {
-            return cached;
-        }
-
-        return transactionTemplate.execute(conn -> {
-            try {
-                Set<Long> allLikers = contentLikeDao.findLikerIdsByContentId(conn, contentId);
-                cache.syncContentLikers(contentId, allLikers);
-                return allLikers.size();
-            } catch (SQLException e) {
-                LOGGER.log(Level.SEVERE, "查询内容点赞数失败, contentId=" + contentId, e);
-                throw new ServerException("服务器异常，查询点赞数失败");
-            }
-        });
+        return cache.getContentLikeCount(contentId);
     }
 
-    // ==================== 评论点赞查询（单条，缓存优先） ====================
+    // ==================== 评论点赞查询（单条，同 T4 委托） ====================
 
     /**
-     * 查询用户是否点赞了某条评论
+     * 查询用户是否点赞了某条评论。
      */
     public boolean isCommentLiked(long userId, long commentId) {
-        Boolean cached = cache.isCommentLiked(userId, commentId);
-        if (cached != null) {
-            return cached;
-        }
-
-        return transactionTemplate.execute(conn -> {
-            try {
-                Set<Long> allLikers = commentLikeDao.findLikerIdsByCommentId(conn, commentId);
-                cache.syncCommentLikers(commentId, allLikers);
-                return allLikers.contains(userId);
-            } catch (SQLException e) {
-                LOGGER.log(Level.SEVERE, "查询评论点赞状态失败, userId=" + userId + ", commentId=" + commentId, e);
-                throw new ServerException("服务器异常，查询点赞状态失败");
-            }
-        });
+        return cache.isCommentLiked(userId, commentId);
     }
 
     /**
-     * 查询评论的点赞数
+     * 查询评论的点赞数。
      */
     public int getCommentLikeCount(long commentId) {
-        Integer cached = cache.getCommentLikeCount(commentId);
-        if (cached != null) {
-            return cached;
-        }
-
-        return transactionTemplate.execute(conn -> {
-            try {
-                Set<Long> allLikers = commentLikeDao.findLikerIdsByCommentId(conn, commentId);
-                cache.syncCommentLikers(commentId, allLikers);
-                return allLikers.size();
-            } catch (SQLException e) {
-                LOGGER.log(Level.SEVERE, "查询评论点赞数失败, commentId=" + commentId, e);
-                throw new ServerException("服务器异常，查询点赞数失败");
-            }
-        });
+        return cache.getCommentLikeCount(commentId);
     }
 
-    // ==================== 批量查询点赞状态（Redis pipeline + DB 兜底） ====================
+    // ==================== 批量查询点赞状态（T4 起纯委托，DB 兜底在缓存内部） ====================
 
     /**
-     * 批量查询用户对多个内容的点赞状态
-     * 1. Redis pipeline 批量 EXISTS + SISMEMBER
-     * 2. 缓存未命中的 ID → DB 批量查 → 回填缓存
-     * @return 完整的 contentId → isLiked 映射
+     * 批量查询用户对多个内容的点赞状态。
+     * 缓存内部 pipeline 扫描 + DB 批量兜底 + 逐个单飞回填，返回完整映射。
      */
     public Map<Long, Boolean> batchIsContentLiked(long userId, List<Long> contentIds) {
         if (contentIds == null || contentIds.isEmpty()) {
             return Collections.emptyMap();
         }
-
-        // 1. Redis pipeline 批量查询
-        Map<Long, Boolean> result = new HashMap<>(cache.batchIsContentLiked(userId, contentIds));
-
-        // 2. 找出缓存未命中的 ID
-        List<Long> missed = new ArrayList<>();
-        for (Long cid : contentIds) {
-            if (!result.containsKey(cid)) {
-                missed.add(cid);
-            }
-        }
-        if (missed.isEmpty()) {
-            return result;
-        }
-
-        return transactionTemplate.execute(conn -> {
-            try {
-                // 先查用户对这批 content 的点赞情况
-                Set<Long> likedSet = contentLikeDao.findLikedContentIds(conn, userId, missed);
-                for (Long cid : missed) {
-                    result.put(cid, likedSet.contains(cid));
-                }
-                // 再逐个回填缓存（加载每个 content 的全部点赞者）
-                for (Long cid : missed) {
-                    Set<Long> allLikers = contentLikeDao.findLikerIdsByContentId(conn, cid);
-                    cache.syncContentLikers(cid, allLikers);
-                }
-                return result;
-            } catch (SQLException e) {
-                LOGGER.log(Level.SEVERE, "批量查询内容点赞状态失败, userId=" + userId, e);
-                throw new ServerException("服务器异常，批量查询点赞状态失败");
-            }
-        });
+        return cache.batchIsContentLiked(userId, contentIds);
     }
 
     /**
-     * 批量查询用户对多个评论的点赞状态
-     * 逻辑同 batchIsContentLiked
+     * 批量查询用户对多个评论的点赞状态（逻辑同内容批量）。
      */
     public Map<Long, Boolean> batchIsCommentLiked(long userId, List<Long> commentIds) {
         if (commentIds == null || commentIds.isEmpty()) {
             return Collections.emptyMap();
         }
-
-        Map<Long, Boolean> result = new HashMap<>(cache.batchIsCommentLiked(userId, commentIds));
-
-        List<Long> missed = new ArrayList<>();
-        for (Long cid : commentIds) {
-            if (!result.containsKey(cid)) {
-                missed.add(cid);
-            }
-        }
-        if (missed.isEmpty()) {
-            return result;
-        }
-
-        return transactionTemplate.execute(conn -> {
-            try {
-                Set<Long> likedSet = commentLikeDao.findLikedCommentIds(conn, userId, missed);
-                for (Long cid : missed) {
-                    result.put(cid, likedSet.contains(cid));
-                }
-                for (Long cid : missed) {
-                    Set<Long> allLikers = commentLikeDao.findLikerIdsByCommentId(conn, cid);
-                    cache.syncCommentLikers(cid, allLikers);
-                }
-                return result;
-            } catch (SQLException e) {
-                LOGGER.log(Level.SEVERE, "批量查询评论点赞状态失败, userId=" + userId, e);
-                throw new ServerException("服务器异常，批量查询点赞状态失败");
-            }
-        });
+        return cache.batchIsCommentLiked(userId, commentIds);
     }
 }
