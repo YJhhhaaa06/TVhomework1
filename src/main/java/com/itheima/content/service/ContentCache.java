@@ -108,8 +108,13 @@ public class ContentCache implements Initializable {
     }
 
     /**
-     * 批量读内容（T8 读路径加固）：一趟 pipeline 拉多条三态（语义与单 key 完全一致，
-     * miss 逐个单飞回填），供推荐/Feed/Profile 页循环复用，替代逐条 {@link #getContent} 的 2*N 往返。
+     * 批量读内容（T8 读路径加固；第五期 T2 装载合并）：一趟 pipeline 拉多条三态（语义与单 key
+     * 完全一致，miss 逐个单飞回填），供推荐/Feed/Profile 页循环复用，替代逐条 {@link #getContent} 的 2*N 往返。
+     *
+     * <p>T2/N1 装载合并：miss 子集与整批降级子集的 DB 装载改走 {@link #loadContentsFromDb}
+     * **一趟事务两查**（批量内容 + 批量媒体），不再逐 key 各查两次——冷数据页（如 10 条全 miss）
+     * DB 事务查询从 ≈2N 收敛为常量 2；三态/续期/空标记/降级/单飞/打点语义零变化，
+     * 单 key 脏 JSON 降级仍走逐 key loader {@link #loadContentFromDb}。
      *
      * <p>返回 {@code contentId → DTO} 全量 Map（null 值合法 = hit-empty / DB 无数据），
      * 调用方按键按原序收集并跳过 null。
@@ -123,7 +128,7 @@ public class ContentCache implements Initializable {
             keys.add(CacheKeys.content(id));
         }
         Map<String, ContentCacheDTO> byKey = cacheAside.getBatch(keys, ContentCacheDTO.class,
-                k -> loadContentFromDb(parseContentId(k)), ttlSeconds());
+                k -> loadContentFromDb(parseContentId(k)), this::loadContentsFromDb, ttlSeconds());
         Map<Long, ContentCacheDTO> byId = new HashMap<>(byKey.size());
         for (Map.Entry<String, ContentCacheDTO> entry : byKey.entrySet()) {
             byId.put(parseContentId(entry.getKey()), entry.getValue());
@@ -368,6 +373,9 @@ public class ContentCache implements Initializable {
      *       不写空标记、不 DEL 数据 key，本次读转 null（对外行为不变）；</li>
      *   <li>其余意外异常统一包成 {@link DatabaseException} 上抛（防静默污染空标记）。</li>
      * </ul>
+     *
+     * <p>批量装载的同契约实现见 {@link #loadContentsFromDb(List)}（T2 装载合并，热路径由它承担；
+     * 本方法保留给单 key 读与"单 key 脏 JSON 降级"路径）。
      */
     private ContentCacheDTO loadContentFromDb(long contentId) {
         try {
@@ -393,6 +401,66 @@ public class ContentCache implements Initializable {
         } catch (Exception e) {
             LOGGER.log(Level.WARNING, "内容装载异常（按加载失败处理，不写空标记）, contentId=" + contentId, e);
             throw new DatabaseException("内容装载失败", e);
+        }
+    }
+
+    /**
+     * DB 批量装载（第五期 T2 装载合并，治 N1）：一趟事务两次查询——`findContentsByIds`
+     * （批量内容）+ `findMediaByContentIds`（批量媒体，复用三期 T5 已存在方法），媒体按
+     * contentId 分组后逐条构建 DTO；替代原"每 key 两个事务查询"（10 条冷数据 20 趟 → 2 趟）。
+     *
+     * <p>loader 契约（三期 T3）在批量口径下的等价形态：
+     * <ul>
+     *   <li>**请求的每个 key 都给条目**：DB 无行 / 已删除 / 媒体损坏 / 未知类型 → {@code null}
+     *       （=确认无数据，允许写空标记）；</li>
+     *   <li>SQLException（事务模板包成 {@link DatabaseException}）/ 意外异常 → **整批抛**
+     *       {@link DatabaseException}（=加载失败，不写空标记、不写回）；</li>
+     * </ul>
+     * 单个 id 的媒体损坏 / 类型异常只影响该 id（对齐逐 key loader 的"单个内容跳过、不拖垮整批"）。
+     */
+    private Map<String, ContentCacheDTO> loadContentsFromDb(List<String> dataKeys) {
+        List<Long> contentIds = new ArrayList<>(dataKeys.size());
+        for (String dataKey : dataKeys) {
+            contentIds.add(parseContentId(dataKey));
+        }
+        try {
+            return transactionTemplate.execute(conn -> {
+                List<ContentCacheDTO> dtos = contentDao.findContentsByIds(conn, contentIds);
+                List<ContentMedia> mediaList = contentMediaDao.findMediaByContentIds(conn, contentIds);
+                Map<Long, Map<Integer, List<ContentMedia>>> mediaByContent = groupMediaByContent(mediaList);
+                Map<Long, ContentCacheDTO> byId = new HashMap<>(dtos.size());
+                for (ContentCacheDTO dto : dtos) {
+                    byId.put(dto.getId(), dto);
+                }
+                Map<String, ContentCacheDTO> byKey = new HashMap<>(dataKeys.size());
+                for (Long contentId : contentIds) {
+                    ContentCacheDTO dto = byId.get(contentId);
+                    if (dto == null) {
+                        byKey.put(CacheKeys.content(contentId), null); // 确认无数据（无行/已删除）
+                        continue;
+                    }
+                    try {
+                        buildContentMedia(dto, mediaByContent.getOrDefault(contentId, Collections.emptyMap()));
+                        byKey.put(CacheKeys.content(contentId), dto);
+                    } catch (NotFoundException e) {
+                        LOGGER.log(Level.WARNING, "批量内容装载跳过（媒体损坏）, contentId=" + contentId, e);
+                        byKey.put(CacheKeys.content(contentId), null);
+                    } catch (ServerException e) {
+                        // 未知内容类型 = 确认无法构建，按无数据（空标记）
+                        LOGGER.log(Level.WARNING, "批量内容装载跳过（类型异常）, contentId=" + contentId, e);
+                        byKey.put(CacheKeys.content(contentId), null);
+                    }
+                }
+                return byKey;
+            });
+        } catch (DatabaseException e) {
+            LOGGER.log(Level.SEVERE, "内容批量装载 DB 查询失败（加载失败，不写空标记）, keys="
+                    + dataKeys.size(), e);
+            throw e;
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "内容批量装载异常（按加载失败处理，不写空标记）, keys="
+                    + dataKeys.size(), e);
+            throw new DatabaseException("内容批量装载失败", e);
         }
     }
 

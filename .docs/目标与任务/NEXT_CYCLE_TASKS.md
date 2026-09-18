@@ -1,7 +1,7 @@
 # 下一周期任务清单
 
 > 关联文档：目标与任务/NEXT_CYCLE_NEEDS.md（决策唯一源；此文件为执行细节）
-> 状态：**已拆任务（2026-09-17）**——R-03 拍板为「**缓存读路径治理**（authorName 冗余同步 + 批量装载合并 + 事务边界瘦身）」，本周期 **3 个任务 T1~T3**（**T1 已完成 2026-09-18**，T2/T3 待执行，四要素为骨架，执行方案由执行窗口的 Agent 探索细化，G5 允许回写）。
+> 状态：**执行中（2026-09-18）**——R-03 拍板为「**缓存读路径治理**（authorName 冗余同步 + 批量装载合并 + 事务边界瘦身）」，本周期 **3 个任务 T1~T3**（**T1/T2 均已完成 2026-09-18**，T3 待执行；四要素为骨架，执行方案由执行窗口的 Agent 探索细化，G5 允许回写）。
 > 工作流：每个任务开独立窗口执行（一任务一窗口单独探索、修改、review）；"任务清单 + 需求与痛点"为窗口间唯一交接载体。
 > 来源：第五期 `NEXT_CYCLE_NEEDS.md`——二节 R-01（authorName 冗余同步，结转 `260917/R-03`）+ 4.1 代码复查 N1（批量读逐 key 装载 DB 放大）/ N2（Feed/Profile 事务内嵌套缓存装载）。
 > **本周期明确不做**：R-02 索引全量读本体、R-04 包层环、U-11 停机 DB 兜底推荐、U-12/U-13 懒加载分页范畴、feed 流改造——完整清单见 NEEDS 4.3。
@@ -69,7 +69,7 @@
 | 编号 | 标题 | 对应候选 | 依赖 | 验收关键（动态） | 期望 commit 主题 | 状态 |
 | -- | -- | ---- | -- | -------- | ------------ | -- |
 | T1 | authorName 冗余同步（改名后内容缓存同步机制） | R-01 | —（独立，可并行） | **已完成（2026-09-18）**：方案 A 拍板（补 `/user/changeUserName` + 级联失效），改名后内容缓存 authorName 一致性运行时验证（详情+主页断言），对外行为零变化（仅新增接口） | `refactor(cache-01)` | 已完成 |
-| T2 | 批量缓存读装载合并（N1：批量 miss/降级逐 key 独立 DB 装载 → 批量装载） | N1 | T1 可并行 | 批量 miss 装载 DB 查询收敛（前后对比落执行回写）；冷数据页 DB 查询次数显著下降；三态/续期/降级语义不变；`pytest all` 全量绿 | `refactor(cache-02)` | 草稿 |
+| T2 | 批量缓存读装载合并（N1：批量 miss/降级逐 key 独立 DB 装载 → 批量装载） | N1 | T1 可并行 | **已完成（2026-09-18）**：方案 A 落地（新增 `BatchLoader` + `getBatch` 5 参重载 + 请求内 `LoadMemo`；`ContentCache.loadContentsFromDb` 一趟事务两查 + 新增 `ContentDao.findContentsByIds`）；**实测冷数据页 P=5/P=10：12/22 → 4/4 常量趟数**；三态/续期/空标记/降级/单飞语义零变化；JUnit 432 全绿 + `pytest all` 128 passed（详情见执行回写） | `refactor(cache-02)` | 已完成 |
 | T3 | Feed/Profile 缓存读移出业务事务（N2：事务内嵌套缓存装载） | N2 | T2 可并行（若 T2 改了批量读签名则软依赖） | 缓存批量读不再落在 DB 事务回调内；冷缓存高峰无"事务持连接 + 装载再取连接"叠加；对外行为零变化 | `refactor(cache-03)` | 草稿 |
 
 > 状态取值：草稿 / 待执行 / 执行中 / 已完成 / 搁置。搁置的 T# 必须注明其"对应候选"编号去向（转 `UNPLANNED_ISSUES.md` / 结转下周期 NEEDS 二节），不得悬空（G11）。
@@ -101,7 +101,11 @@
 * **红线边界**：**不改 `CacheAside.getBatch` 对外签名与三态/续期/降级/打点语义**（批量粒度、miss 单飞去重保持不变，仅把"逐 key loader"换成"批量 loader 一次性拉取"）；不动 Like/Follow 域批量（其 loader 已是批量 answer，不是本痛点）；不改 key 命名/TTL；不做"顺手"把 SetCache 批量也改掉。
 * **强制探索步骤**：动刀前先 (0) 复核 N1 证据仍成立（重读 `getBatch` miss/降级两段与 `loadContentFromDb`，确认逐 key 两趟查询）(1) 确认 `ContentMediaDao.findMediaByContentIds`（三期 T5 已存在）可复用，无批量 content 查询则评估新增 `ContentDao.findContentsByIds` 的形态与返回（保持 loader 契约：DatabaseException 语义）(2) 探索批量装载挂点：getBatch 内 loader 批量化的最小侵入形态（如 miss 子集一次 loader 返回 Map）vs 保持逐 key 但 DB 层批量（每 key 仍是独立 loader 调用、改 ContentCache 内部用批量 DAO + 内存缓存）——**选型在窗口内探索并回写**（3) 确认 Feed/Profile 的 getContentsBatch 调用点无需改签名（T3 依赖判断）——若清单未覆盖 → 回写本文档再动手。
 * **验收**：冷数据页（如 10 条全 miss）DB 查询趟数前后对比落执行回写（目标：从 ≈20 次事务查询收敛到常量趟数）；三态/续期/空标记/降级/单飞语义零变化（相关单测断言不变或等价平移）；`pytest all` 全量绿（本周期基建改动面回归点）；JUnit 全绿无回归。
-* **执行回写（待执行）**：`<完成后追加>`。
+* **执行回写（已完成，2026-09-18）**：**选型 = 方案 A（新增批量 loader 重载 + 请求内装载备忘）**——`CacheAside` 新增 `@FunctionalInterface BatchLoader<T>` 与 `getBatch(List, Class, Function, BatchLoader, long)` 5 参重载；**既有 4 参重载签名与行为不变**（委托 `batchLoader=null` = 逐 key 历史语义，单 key 失败只影响该 key），miss 子集与整批降级子集各**共享一次** `batchLoader` 调用；各 key 仍各自经 `SingleFlight.get(key, …)` 调 `LoadMemo.resolve(key)`（首个 leader 触发批量装载、其余命中备忘）→ **逐 key 单飞去重保持**；`LoadOutcome` 三态 LOADED/EMPTY/FAILED 承载"确认有数据/确认无数据/加载失败（不写空标记、不 DEL、不写回）"；逐 key loader 仅保留给单 key 脏 JSON 降级路径。**否决方案 B**（保持逐 key loader、改 ContentCache 内部用批量 DAO + 内存缓存）：loader 被逐 key 调用时看不到"本次批量读的全部 miss 集合"，只能每 key 各做一趟批量 DAO（仍 N 趟），且需在域类引入跨 key 请求态（thread-local/RequestContext），污染域类并带来状态泄漏面。
+  **落地**：① `CacheAside`：批量重载 + `LoadMemo`/`LoadOutcome`（`loaded`/`done`/`failed` 由 `synchronized` 保护；批量 loader **漏 key 视为契约违规 → 按加载失败处理，不写假空**，对齐 markEmpty 守卫口径）；② `ContentCache.getContentsBatch` 改走批量重载，新增 `loadContentsFromDb`（**一趟事务两查**：新增 `ContentDao.findContentsByIds`（列与 `findContent` 同源：JOIN users + `is_deleted=0` + `id IN (…)`）+ 复用三期 T5 `findMediaByContentIds` + 内存 `groupMediaByContent` 分组）；逐 id 无行/媒体损坏/未知类型 → null（只影响该 id），SQLException/意外异常 → 整批 `DatabaseException`；key 归因与生成同源 `CacheKeys.content(id)`；③ **强制探索 (3) 结论：FeedService/ProfileService 调用点签名完全不变**（仍 `getContentsBatch(List<Long>)`）→ **T3 无软依赖**。
+  **实测前后对比（`temp_script/verify_t2_batch_load.py`；10 条图文冷页：预热主页 → DEL 内容 key+空标记 → 记录 MySQL `Com_select` → `GET /profile?userId=X&pageSize=P` → 再记录）**：**T2 前（旧 war）P=5 → 12 次、P=10 → 22 次**（=2P+2，逐条 2 查）、**T2 后（新 war）P=5 → 4、P=10 → 4**（常量 4 = 主页用户 1 + 作者内容 id 1 + 批量内容 1 + 批量媒体 1，与页大小解耦）；两种页大小响应均 200、条数正确、authorName/coverUrl 完好（对外行为零变化）。
+  **验证**：JUnit **432 全绿**（surefire 428 + pool 4 = T1 423 + 9；CacheAsideTest +5、ContentCacheTest +4）；pytest all **128 passed**（基建改动面全量回归）；独立 subagent review 通过（无🔴）。
+  **G11 记录（L1 仅记录 3 条，无 L3/L4）**：① **单事务原子性取舍**——批量装载由"逐 key 独立事务（中途失败可能部分成功、部分 key 已写回）"变为"整批单事务（失败=整批按加载失败：不写回、逐 key 返回 null）"，属更严格一致性而非语义漂移（对外仍为 null 跳过，无 500），已登记常青 6.21"已知取舍"；② **LOAD 打点**在"并发请求 miss 集合相交"时同一 key 可能被两批各记一次（口径仍为每待装 key 一次，属统计轻微高估，不影响正确性），登记不修；③ 常青 9.2 JUnit 表存在历史漂移（漏 `SetCacheTest`/`CommandConverterTest` 两行、部分类计数滞后），随本任务按实测逐行刷新（合计 432，行值自洽）。**红线合规**：未动 Like/Follow 域批量、未动 SetCache 批量、未改 key 命名/TTL、未改接口 URL/参数/返回结构、未新增依赖、未改业务语义；`getBatch` 4 参重载仅委托、行为可证不变。常青（CURRENT_ARCHITECTURE 4.2 三行/6.4/**6.21**/9.2/12）已同步；**BUSINESS_FLOW 未改**（本任务无业务流程变化）；无 DDL；commit `refactor(cache-02)` 由用户侧提交。
 
 ---
 
@@ -119,4 +123,5 @@
 
 | 日期 | 版本 | 内容 |
 | ---- | ---- | ---- |
+| 2026-09-18 | 0.3 | **T2 完成回写（2026-09-18）**：① 三节总览 T2 状态 → 已完成（验收关键落实测值）+ 头部状态行改"执行中（T1/T2 已完成）"；② T2 执行回写补齐（选型 A 与否决 B 的理由、落地三层清单、Feed/Profile 签名不变 → **T3 无软依赖**、实测 12/22→4/4 前后对比、JUnit 432 + pytest 128、subagent review 无🔴、G11 L1 三条）；③ 常青 CURRENT_ARCHITECTURE 同步（4.2 CacheAside/ContentCache/ContentDao 三行、6.4 两处、**新增 6.21**、9.2 表按实测刷新至合计 432、更新日志 2.25）；**BUSINESS_FLOW 不改**（无业务流程变化）；无 DDL |
 | 2026-09-17 | 0.1 | 新建本文档（按 NEEDS R-03 拍板拆分）：T1（R-01 authorName 冗余同步，方案开工前拍板）/ T2（N1 批量缓存读装载合并）/ T3（N2 Feed/Profile 缓存读移出业务事务）——一至四节按模板就位，四要素为骨架待执行窗口细化 |

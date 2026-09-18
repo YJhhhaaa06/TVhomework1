@@ -12,6 +12,7 @@ import redis.clients.jedis.Response;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -923,6 +924,181 @@ class CacheAsideTest {
             assertEquals(1, stats.count(CacheDomain.OTHER, CacheStats.Event.MISS));    // k2
             assertEquals(1, stats.count(CacheDomain.OTHER, CacheStats.Event.LOAD));    // k2 miss 回填
             assertEquals(3, stats.totalAccesses());
+        }
+    }
+
+    // ==================== 第五期 T2：批量装载合并（miss/降级子集一趟装载，治 N1） ====================
+
+    @Test
+    void getBatchWithBatchLoaderLoadsMissSetInOneCallAndKeepsThreeStates() {
+        CacheStats stats = new CacheStats();
+        CacheAside c = new CacheAside(new RedisAccess(), new JacksonCodec(), new SingleFlight(), stats);
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            Pipeline p = mock(Pipeline.class);
+            when(jedis.pipelined()).thenReturn(p);
+            Response<Boolean> notEmpty = boolResponse(false);
+            Response<Boolean> hitEmpty = boolResponse(true);
+            Response<String> json1 = strResponse(new JacksonCodec().toJson(new SampleDto(1L, "one")));
+            Response<String> noJson = strResponse(null);
+            when(p.exists("empty:k1")).thenReturn(notEmpty);
+            when(p.exists("empty:k2")).thenReturn(hitEmpty);
+            when(p.exists("empty:k3")).thenReturn(notEmpty);
+            when(p.exists("empty:k4")).thenReturn(notEmpty);
+            when(p.exists("empty:k5")).thenReturn(notEmpty);
+            when(p.get("k1")).thenReturn(json1);
+            when(p.get("k2")).thenReturn(noJson);
+            when(p.get("k3")).thenReturn(noJson);
+            when(p.get("k4")).thenReturn(noJson);
+            when(p.get("k5")).thenReturn(noJson);
+            when(jedis.exists("k5")).thenReturn(false); // markEmpty 存在守卫（数据 key 不存在 → 写）
+            List<List<String>> batchCalls = new ArrayList<>();
+
+            Map<String, SampleDto> result = c.getBatch(List.of("k1", "k2", "k3", "k4", "k5"),
+                    SampleDto.class,
+                    k -> {
+                        throw new AssertionError("miss 路径不应落到逐 key loader: " + k);
+                    },
+                    keys -> {
+                        batchCalls.add(new ArrayList<>(keys));
+                        Map<String, SampleDto> map = new HashMap<>();
+                        map.put("k3", new SampleDto(3L, "three"));
+                        map.put("k4", new SampleDto(4L, "four"));
+                        map.put("k5", null); // 确认无数据
+                        return map;
+                    }, 100);
+
+            assertEquals("one", result.get("k1").getName());  // hit-data 命中
+            assertNull(result.get("k2"));                     // hit-empty 不查 DB
+            assertEquals("three", result.get("k3").getName());
+            assertEquals("four", result.get("k4").getName());
+            assertNull(result.get("k5"));
+            // 一趟批量装载，且**只装 miss 子集**（命中项不进批量查询）
+            assertEquals(List.of(List.of("k3", "k4", "k5")), batchCalls);
+            // miss 回填语义不变：有数据写数据 key（+清空标记）、无数据写空标记
+            verify(jedis).setex(eq("k3"), anyLong(), anyString());
+            verify(jedis).setex(eq("k4"), anyLong(), anyString());
+            verify(jedis).setex("empty:k5", CacheKeys.EMPTY_MARKER_TTL_SECONDS,
+                    CacheKeys.EMPTY_MARKER_VALUE);
+            // LOAD 逐 key 打点（3 个 miss key 各一次，口径与逐 key 装载一致）
+            assertEquals(3, stats.count(CacheDomain.OTHER, CacheStats.Event.LOAD));
+            assertEquals(3, stats.count(CacheDomain.OTHER, CacheStats.Event.MISS));
+        }
+    }
+
+    @Test
+    void getBatchWithBatchLoaderFailureSkipsEmptyMarkerWithoutFallingBackToPerKeyLoader() {
+        CacheStats stats = new CacheStats();
+        CacheAside c = new CacheAside(new RedisAccess(), new JacksonCodec(), new SingleFlight(), stats);
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            Pipeline p = mock(Pipeline.class);
+            when(jedis.pipelined()).thenReturn(p);
+            Response<Boolean> notEmpty = boolResponse(false);
+            Response<String> noJson = strResponse(null);
+            when(p.exists(anyString())).thenReturn(notEmpty);
+            when(p.get(anyString())).thenReturn(noJson);
+
+            Map<String, SampleDto> result = c.getBatch(List.of("k1", "k2"), SampleDto.class,
+                    k -> {
+                        throw new AssertionError("整批装载失败不应退化为逐 key 重试: " + k);
+                    },
+                    keys -> {
+                        throw new DatabaseException("db down");
+                    }, 100);
+
+            assertNull(result.get("k1"));
+            assertNull(result.get("k2"));
+            // 加载失败 ≠ 确认无数据：不写空标记、不 DEL、不写回（三期 T3 契约在批量口径下保持）
+            verify(jedis, never()).setex(anyString(), anyLong(), anyString());
+            verify(jedis, never()).del(anyString());
+            // LOAD 仍逐 key 计入（语义="DB 装载尝试次数"，失败亦计入）
+            assertEquals(2, stats.count(CacheDomain.OTHER, CacheStats.Event.LOAD));
+        }
+    }
+
+    @Test
+    void getBatchWithBatchLoaderDegradeLoadsAllKeysInOneCallWithoutWriteBack() {
+        CacheAside degradedCache = newDegradedCache();
+        List<List<String>> batchCalls = new ArrayList<>();
+
+        Map<String, SampleDto> result = degradedCache.getBatch(List.of("k1", "k2"), SampleDto.class,
+                k -> {
+                    throw new AssertionError("整批降级不应落到逐 key loader: " + k);
+                },
+                keys -> {
+                    batchCalls.add(new ArrayList<>(keys));
+                    Map<String, SampleDto> map = new HashMap<>();
+                    for (String k : keys) {
+                        map.put(k, new SampleDto(7L, "db-" + k));
+                    }
+                    return map;
+                }, 100);
+
+        assertEquals("db-k1", result.get("k1").getName());
+        assertEquals("db-k2", result.get("k2").getName());
+        // N1 降级放量面：整批降级一趟装载全部 key（原为逐 key 各一趟）
+        assertEquals(List.of(List.of("k1", "k2")), batchCalls);
+    }
+
+    @Test
+    void getBatchWithBatchLoaderMissingKeyIsTreatedAsLoadFailureWithoutEmptyMarker() {
+        // 契约违规（批量 loader 漏 key）→ 按"加载失败"处理：不写假空标记（宁可多一次 DB 查询），
+        // 对齐 markEmpty 守卫口径"宁可少写空标记，绝不误写"
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            Pipeline p = mock(Pipeline.class);
+            when(jedis.pipelined()).thenReturn(p);
+            Response<Boolean> notEmpty = boolResponse(false);
+            Response<String> noJson = strResponse(null);
+            when(p.exists(anyString())).thenReturn(notEmpty);
+            when(p.get(anyString())).thenReturn(noJson);
+            when(jedis.exists("k1")).thenReturn(false);
+
+            Map<String, SampleDto> result = cache.getBatch(List.of("k1", "k2"), SampleDto.class,
+                    k -> {
+                        throw new AssertionError("不应落到逐 key loader: " + k);
+                    },
+                    keys -> {
+                        Map<String, SampleDto> map = new HashMap<>();
+                        map.put("k1", new SampleDto(1L, "one")); // k2 故意漏给
+                        return map;
+                    }, 100);
+
+            assertEquals("one", result.get("k1").getName());
+            assertNull(result.get("k2"));
+            verify(jedis).setex(eq("k1"), anyLong(), anyString());            // 有值照常回填
+            verify(jedis, never()).setex(eq("empty:k2"), anyLong(), anyString()); // 漏 key 不写假空
+        }
+    }
+
+    @Test
+    void getBatchWithBatchLoaderDirtyJsonStillUsesPerKeyLoader() {
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Jedis jedis = mockJedis(ms);
+            Pipeline p = mock(Pipeline.class);
+            when(jedis.pipelined()).thenReturn(p);
+            Response<Boolean> notEmpty = boolResponse(false);
+            Response<String> badJson = strResponse("{not-json");
+            Response<String> noJson = strResponse(null);
+            when(p.exists(anyString())).thenReturn(notEmpty);
+            when(p.get("k1")).thenReturn(badJson);   // 脏 JSON → 单 key 降级
+            when(p.get("k2")).thenReturn(noJson);    // miss
+            when(jedis.exists("k2")).thenReturn(false);
+            List<List<String>> batchCalls = new ArrayList<>();
+
+            Map<String, SampleDto> result = cache.getBatch(List.of("k1", "k2"), SampleDto.class,
+                    k -> new SampleDto(8L, "per-key-" + k),
+                    keys -> {
+                        batchCalls.add(new ArrayList<>(keys));
+                        Map<String, SampleDto> map = new HashMap<>();
+                        map.put("k2", new SampleDto(9L, "batch-k2"));
+                        return map;
+                    }, 100);
+
+            assertEquals("per-key-k1", result.get("k1").getName()); // 脏 key 单独降级取数
+            assertEquals("batch-k2", result.get("k2").getName());   // miss 走批量装载
+            assertEquals(List.of(List.of("k2")), batchCalls);       // 脏 key 不混入批量装载
         }
     }
 

@@ -98,14 +98,16 @@ class ContentCacheTest {
     }
 
     /** getBatch 桩（T8：getRecommendByFilter/getContentsBatch 改走批量读，cacheAside 为 mock）。
-     * 模拟真实 getBatch 语义：请求的全部 key 都返回（未提供值 → null，等价 hit-empty/加载为空）。 */
+     * 模拟真实 getBatch 语义：请求的全部 key 都返回（未提供值 → null，等价 hit-empty/加载为空）。
+     * 第五期 T2 起 getContentsBatch 改走 5 参重载（批量 loader），故桩打在 5 参版本上。 */
     @SuppressWarnings("unchecked")
     private void stubGetBatch(Map<Long, ContentCacheDTO> values) {
         Map<String, ContentCacheDTO> byKey = new HashMap<>();
         for (Map.Entry<Long, ContentCacheDTO> e : values.entrySet()) {
             byKey.put(CacheKeys.content(e.getKey()), e.getValue());
         }
-        when(cacheAside.getBatch(anyList(), eq(ContentCacheDTO.class), any(Function.class), anyLong()))
+        when(cacheAside.getBatch(anyList(), eq(ContentCacheDTO.class), any(Function.class),
+                any(CacheAside.BatchLoader.class), anyLong()))
                 .thenAnswer(inv -> {
                     List<String> keys = inv.getArgument(0);
                     Map<String, ContentCacheDTO> full = new HashMap<>();
@@ -113,6 +115,19 @@ class ContentCacheTest {
                         full.put(k, byKey.get(k));
                     }
                     return full;
+                });
+    }
+
+    /** getBatch 桩（T2 装载合并）：把 5 参重载的**批量 loader** 真实执行，
+     * 用于验证 ContentCache 批量装载（findContentsByIds + findMediaByContentIds）契约。 */
+    @SuppressWarnings("unchecked")
+    private void stubGetBatchExecutingBatchLoader() {
+        when(cacheAside.getBatch(anyList(), eq(ContentCacheDTO.class), any(Function.class),
+                any(CacheAside.BatchLoader.class), anyLong()))
+                .thenAnswer(inv -> {
+                    List<String> keys = inv.getArgument(0);
+                    CacheAside.BatchLoader<ContentCacheDTO> batchLoader = inv.getArgument(3);
+                    return batchLoader.load(keys);
                 });
     }
 
@@ -208,7 +223,8 @@ class ContentCacheTest {
         // 索引已存在：不触发懒重建
         verify(singleFlight, never()).get(anyString(), any(Callable.class));
         // 推荐不再走全量批量探测路径
-        verify(cacheAside, never()).getBatch(anyList(), any(Class.class), any(Function.class), anyLong());
+        verify(cacheAside, never()).getBatch(anyList(), any(Class.class), any(Function.class),
+                any(CacheAside.BatchLoader.class), anyLong());
     }
 
     @Test
@@ -266,7 +282,78 @@ class ContentCacheTest {
     void getContentsBatchEmptyInputReturnsEmptyMapWithoutRedis() {
         assertTrue(cache.getContentsBatch(Collections.emptyList()).isEmpty());
         assertTrue(cache.getContentsBatch(null).isEmpty());
-        verify(cacheAside, never()).getBatch(anyList(), any(Class.class), any(Function.class), anyLong());
+        verify(cacheAside, never()).getBatch(anyList(), any(Class.class), any(Function.class),
+                any(CacheAside.BatchLoader.class), anyLong());
+    }
+
+    // ==================== getContentsBatch 装载合并（T2/N1） ====================
+
+    @Test
+    void getContentsBatchBatchLoaderLoadsAllIdsInOneTransaction() throws SQLException {
+        // 冷数据页 10 条全 miss：批量 loader 一趟事务两查（内容 IN + 媒体 IN），
+        // 逐 key 的 findContent/findMedia 一次都不调（N1：2N 趟 → 2 趟）
+        List<Long> ids = new ArrayList<>();
+        List<ContentCacheDTO> dtos = new ArrayList<>();
+        for (long i = 1; i <= 10; i++) {
+            ids.add(i);
+            dtos.add(dto(i, 2, 1));
+        }
+        when(contentDao.findContentsByIds(eq(conn), anyCollection())).thenReturn(dtos);
+        when(contentMediaDao.findMediaByContentIds(eq(conn), anyCollection())).thenReturn(
+                List.of(new ContentMedia(11L, 1L, "/cover/1.png", 3, 1)));
+        stubGetBatchExecutingBatchLoader();
+
+        Map<Long, ContentCacheDTO> result = cache.getContentsBatch(ids);
+
+        assertEquals(10, result.size());
+        assertEquals(1L, result.get(1L).getId());
+        assertTrue(result.get(1L).getCoverUrl().endsWith("/cover/1.png"));
+        // 常量趟数：批量内容 1 次 + 批量媒体 1 次，事务 1 个；逐 key 装载路径零调用
+        verify(contentDao, times(1)).findContentsByIds(eq(conn), anyCollection());
+        verify(contentMediaDao, times(1)).findMediaByContentIds(eq(conn), anyCollection());
+        verify(tt, times(1)).execute(any(TransactionTemplate.TransactionAction.class));
+        verify(contentDao, never()).findContent(any(Connection.class), anyLong());
+        verify(contentMediaDao, never()).findMedia(any(Connection.class), anyLong());
+    }
+
+    @Test
+    void getContentsBatchBatchLoaderTreatsMissingRowAndBrokenMediaAsEmpty() throws SQLException {
+        // 语义对齐逐 key loader：无行 = 确认无数据（null）；媒体损坏 = 确认无数据（null），且不拖垮整批
+        when(contentDao.findContentsByIds(eq(conn), anyCollection())).thenReturn(List.of(dto(2L, 2, 1)));
+        when(contentMediaDao.findMediaByContentIds(eq(conn), anyCollection())).thenReturn(List.of());
+        stubGetBatchExecutingBatchLoader();
+
+        Map<Long, ContentCacheDTO> result = cache.getContentsBatch(List.of(1L, 2L));
+
+        assertEquals(2, result.size());
+        assertNull(result.get(1L));            // 无行 → 确认无数据
+        assertNotNull(result.get(2L));         // 有行、type=2 无图片媒体 → 仍可构建（图片可为空）
+        assertNull(result.get(2L).getCoverUrl());
+    }
+
+    @Test
+    void getContentsBatchBatchLoaderSkipsVideoWithBrokenMediaOnly() throws SQLException {
+        // type=1 无视频媒体 → 该 id 转 null（对齐逐 key loader 的 NotFound 跳过），同批其它 id 不受影响
+        when(contentDao.findContentsByIds(eq(conn), anyCollection())).thenReturn(
+                List.of(dto(7L, 1, 2), dto(8L, 2, 2)));
+        when(contentMediaDao.findMediaByContentIds(eq(conn), anyCollection())).thenReturn(
+                videoMediaList(8L));
+        stubGetBatchExecutingBatchLoader();
+
+        Map<Long, ContentCacheDTO> result = cache.getContentsBatch(List.of(7L, 8L));
+
+        assertNull(result.get(7L));            // 媒体损坏 → 确认无数据
+        assertEquals(8L, result.get(8L).getId());
+    }
+
+    @Test
+    void getContentsBatchBatchLoaderSqlErrorThrowsDatabaseException() throws SQLException {
+        // 加载失败 ≠ 确认无数据：SQLException → DatabaseException（CacheAside 据此不写空标记/不写回）
+        when(contentDao.findContentsByIds(eq(conn), anyCollection()))
+                .thenThrow(new SQLException("db down"));
+        stubGetBatchExecutingBatchLoader();
+
+        assertThrows(DatabaseException.class, () -> cache.getContentsBatch(List.of(1L, 2L)));
     }
 
     @Test

@@ -66,11 +66,13 @@
 
 **T1 authorName 冗余同步（refactor(cache-01)，拍板 2026-09-18）**：**方案 A 拍板**——补 `/user/changeUserName` 接口 + 改名后级联失效内容缓存。**G11 质疑记录（L2 带疑继续，用户已裁决）**：NEEDS 原预期"无改名接口/UserDao 无改名方法"；实证 **Service 层已有 dormant `UserService.changeUserName`**（参数校验 + 事务 + `UserDao.updateUserName`，带 3 单测，无 Servlet 调用）——HTTP 层确无改名接口（结论部分属实），但"UserDao 无改名方法"子前提证伪；用户裁决按方案 A 落地，dormant 方法成为基础。关键实现点：`LoginController` 既有 `/user/*` switch 加 case + `AuthFilter` PROTECTED_EXACT 精确保护 + `ChangeUserNameDTO{userName}`；校验补 `isBlank`（对齐注册先例）+ `isUsernameUsed` 重复名 409 预校验；`UserService.changeUserName` DB 提交后调用新增 `ContentCache.invalidateAuthorContentKeys(userId)`（事务内 `findContentIdsByUser` → 事务外 `cacheAside.invalidate` 逐个失效内容 key+空标记，失败静默 TTL 自愈；`content:index:*` 含 id 不含 authorName 无需失效），读自愈重新 JOIN users 回填新名。落点：LoginController/UserService/ContentCache/UserDao（复用既有 updateUserName/findContentIdsByUser/isUsernameUsed）/AuthFilter。验证摘要：JUnit 423 全绿（surefire 419 + pool 4）+ pytest all 128 passed（`test_change_user_name.py` 6 用例覆盖 401/400/409/改名后详情+主页 authorName 变更/新名可登录）。
 
+**T2 批量缓存读装载合并（refactor(cache-02)，拍板 2026-09-18）**：**选型 = 方案 A（`CacheAside` 新增 `BatchLoader` + `getBatch` 5 参重载 + 请求内 `LoadMemo` 装载备忘）**——miss 子集与整批降级子集各共享一次批量 loader 调用，逐 key 单飞去重/三态/续期/空标记/降级/打点口径一律不变（4 参重载签名与行为不变=委托 null 逐 key 历史语义）；**否决方案 B**（保持逐 key loader、改 ContentCache 内部用批量 DAO + 内存缓存）：loader 被逐 key 调用时无法得知"本次批量读的全部 miss 集合"，只能每 key 一趟批量 DAO（仍 N 趟），且需在域类引入跨 key 请求态，污染域类。关键实现点：`ContentCache.getContentsBatch` 改走批量重载 + `loadContentsFromDb` **一趟事务两查**（新增 `ContentDao.findContentsByIds`（列与 `findContent` 同源）+ 复用 `findMediaByContentIds` + `groupMediaByContent` 分组；逐 id 无行/媒体损坏/未知类型→null 只影响该 id；SQL 异常→整批 `DatabaseException`）；批量 loader **漏 key 按契约违规=加载失败**（不写假空，对齐 markEmpty 守卫口径）；批量 loader 失败/漏 key 均不写空标记、不写回（三期 T3 负缓存契约的批量等价形态）。落点：CacheAside(新 BatchLoader/LoadMemo/LoadOutcome)/ContentCache(getContentsBatch/loadContentsFromDb)/ContentDao(findContentsByIds)。**G11 质疑记录（L1 仅记录 3 条，无 L3/L4；详情见任务清单 T2 执行回写）**：① 批量装载由"逐 key 独立事务"变"整批单事务"→ 失败面由"部分成功"变"整批按加载失败"，属更严格一致性（已登记常青 6.21 已知取舍）；② LOAD 打点在并发请求 miss 集合相交时同 key 可能被两批各记一次（统计轻微高估，登记不修）；③ 常青 9.2 JUnit 表历史漂移随本任务按实测刷新。**T3 依赖结论：FeedService/ProfileService 调用点签名完全不变 → T3 无软依赖**。验证摘要：**运行时实测冷数据页（10 条图文，MySQL Com_select 差值）12/22（P=5/P=10，T2 前）→ 4/4（常量，T2 后）** + JUnit 432 全绿（surefire 428 + pool 4）+ pytest all 128 passed + 独立 subagent review 通过（无🔴）。
+
 ### 4.1 候选痛点（代码复查，2026-09-17；N1/N2 已随 R-03 拍板纳入，见 4.3）
 
 > 编号 `N1`~`N#` 为**本档内部编号**。每条给出"如果不改，什么时候会出什么问题"的具体场景。
 > **证据须可复核定位**（G11 配套）：文件:行号 / 复现命令 / 日志片段，不接受纯文字断言——执行窗口动手前按 G11 第 (0) 项探索步骤复核证据，不成立 → L3 暂停并登记质疑。
-> N1/N2 经 R-03 评审**纳入本周期**（见 4.3 T2/T3）；N3/N4 已转留池（见下备注）。执行中证伪的 N# 按 G11 登记质疑，裁决后按同口径流转，并在六节变更记录留痕。
+> N1/N2 经 R-03 评审**纳入本周期**（见 4.3 T2/T3；**N1 已随 T2 落地 2026-09-18**——逐 key 装载收敛为批量装载，实测冷页 12/22→4/4；N2 待 T3）；N3/N4 已转留池（见下备注）。执行中证伪的 N# 按 G11 登记质疑，裁决后按同口径流转，并在六节变更记录留痕。
 > 与已登记代码债的关系：如有，注明 `N# ↔ U-#`（同根因或后果）。任一项经评审纳入后升格为正式编号（并入 `R-##` 或任务 `T#`）。
 
 | 编号 | 问题 | 证据（可复核定位） | 不改会怎样（具体场景） |

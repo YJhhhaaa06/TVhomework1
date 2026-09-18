@@ -51,6 +51,12 @@ import java.util.Random;
  * {@link #getBatch} 在命中数据 key 时同 pipeline 追加 {@code EXPIRE}（续期值=原 TTL ±10% 抖动），
  * 热点 key 常驻由续期自然达成、不设永不过期 key；**空标记（{@code empty:}）一律不续期**
  * （防"假空"窗口延长，NEEDS 4.14）；{@link #read} 为纯三态读不续期。
+ *
+ * <p>装载合并（第五期 T2 N1）：{@link #getBatch(List, Class, Function, long)} 的 miss 子集与
+ * 整批降级子集原为**逐 key** 调 loader（每 key 一次 DB 往返），现可经
+ * {@link #getBatch(List, Class, Function, BatchLoader, long)} 传入 {@link BatchLoader}
+ * **一次装载全部待装 key**（冷数据页 DB 趟数从 2N 收敛为常量）；三态/续期/空标记/降级/单飞/打点
+ * 语义零变化，逐 key 单飞去重仍生效（见 {@link LoadMemo}）。
  */
 @Component
 public class CacheAside {
@@ -185,6 +191,30 @@ public class CacheAside {
      */
     public <T> Map<String, T> getBatch(List<String> dataKeys, Class<T> type,
                                        Function<String, T> loader, long ttlSeconds) {
+        return getBatch(dataKeys, type, loader, null, ttlSeconds);
+    }
+
+    /**
+     * 批量 Cache-Aside 读（第五期 T2 装载合并，治 N1）：三态/续期/空标记/降级/单飞/打点语义与
+     * {@link #getBatch(List, Class, Function, long)} **完全一致**，仅装载粒度不同——
+     * miss 子集与整批降级子集的 DB 装载由 {@code batchLoader} **一次**完成（常量趟数），
+     * 不再逐 key 各查一次 DB。
+     *
+     * <p>逐 key {@code loader} 仍保留：仅用于**单 key 脏 JSON 降级**路径（该 key 单独降级、
+     * 不拖垮整批，且只需为这一个 key 取数）；{@code batchLoader == null} 时全部装载走逐 key
+     * （等价于历史语义：单 key 加载失败只影响该 key）。
+     *
+     * <p>逐 key 单飞去重不变（见 {@link LoadMemo}）：同一 key 的并发读仍只触发一次装载。
+     * LOAD 打点口径不变（每个待装载 key 各记一次，"DB 装载尝试次数"）；
+     * 批量装载抛 {@link DatabaseException}（加载失败）→ 该批全部 key 视同"加载失败"：
+     * miss 路径**不写空标记、不 DEL**，降级路径**不写回**，逐 key 返回 null（三期 T3 负缓存契约）。
+     *
+     * @param loader      key → 数据加载器（单 key 脏 JSON 降级路径）
+     * @param batchLoader 批量加载器（miss / 整批降级路径；null = 退化为逐 key 装载）
+     */
+    public <T> Map<String, T> getBatch(List<String> dataKeys, Class<T> type,
+                                       Function<String, T> loader, BatchLoader<T> batchLoader,
+                                       long ttlSeconds) {
         if (dataKeys == null || dataKeys.isEmpty()) {
             return Collections.emptyMap();
         }
@@ -231,35 +261,56 @@ public class CacheAside {
             });
         } catch (CacheException e) {
             LOGGER.log(Level.WARNING, "批量缓存读降级走 DB, keys=" + dataKeys.size(), e);
+            // 整批降级（T2：一趟批量装载覆盖全部 key），逐 key 单飞去重与"仅装载不写回"口径不变
+            LoadMemo<T> memo = new LoadMemo<>(dataKeys, loader, batchLoader, stats);
             for (String key : dataKeys) {
                 stats.record(CacheStats.Event.DEGRADE, key);
                 // 三期 T2：降级逐 key 经单飞——同 key 并发批量读只打一次 DB（仅装载，不写回）；
                 // 三期 T3：DB 加载失败转 null（逐 key 优雅降级，不拖垮整批）
-                result.put(key, singleFlight.get(key,
-                        () -> loadDegraded(key, () -> loader.apply(key))));
+                result.put(key, singleFlight.get(key, () -> {
+                    LoadOutcome<T> outcome = memo.resolve(key);
+                    return outcome.isFailed() ? null : outcome.value();
+                }));
             }
         }
         if (!missed.isEmpty()) {
+            // miss 子集共享一次批量装载（T2：本批只装载本批 miss 的 key，不重复查已命中项）
+            LoadMemo<T> memo = new LoadMemo<>(missed, loader, batchLoader, stats);
             for (String key : missed) {
                 result.put(key, singleFlight.get(key, () -> {
-                    T value;
-                    try {
-                        value = invokeLoader(key, () -> loader.apply(key));
-                    } catch (DatabaseException e) {
+                    LoadOutcome<T> outcome = memo.resolve(key);
+                    if (outcome.isFailed()) {
                         // 三期 T3：加载失败 ≠ 确认无数据——不写空标记、不 DEL（读路径不固化瞬时故障）
-                        LOGGER.log(Level.WARNING, "批量缓存加载失败（不写空标记、不 DEL 数据 key）, key=" + key, e);
                         return null;
                     }
-                    if (value != null) {
-                        writeOrInvalidate(key, value, ttlSeconds);
+                    if (outcome.value() != null) {
+                        writeOrInvalidate(key, outcome.value(), ttlSeconds);
                     } else {
                         markEmpty(key);
                     }
-                    return value;
+                    return outcome.value();
                 }));
             }
         }
         return result;
+    }
+
+    /**
+     * 批量装载器契约（第五期 T2 装载合并）：一次装载多个数据 key 的值，替代逐 key 调 loader。
+     *
+     * <p>实现约定（对齐三期 T3 负缓存契约）：
+     * <ul>
+     *   <li>**必须为每个请求 key 给出条目**——无数据用 {@code null}（=确认无数据，允许写空标记）；
+     *       漏 key 视为契约违规，按"加载失败"处理（不写假空标记，下次读重新装载）；</li>
+     *   <li>整批加载失败（如 SQLException 经事务模板包成 {@link DatabaseException}）直接抛出，
+     *       由 {@link #getBatch(List, Class, Function, BatchLoader, long)} 按"加载失败"处理
+     *       （不写空标记、不写回）；</li>
+     *   <li>抛非 {@code DatabaseException} 的运行时异常 → 沿单飞原样上抛（不吞，语义同逐 key loader）。</li>
+     * </ul>
+     */
+    @FunctionalInterface
+    public interface BatchLoader<T> {
+        Map<String, T> load(List<String> dataKeys);
     }
 
     // ==================== 写路径（写失败=DEL 降级，4.2） ====================
@@ -404,6 +455,130 @@ public class CacheAside {
         } catch (DatabaseException e) {
             LOGGER.log(Level.WARNING, "降级装载失败（不写回）, key=" + dataKey, e);
             return null;
+        }
+    }
+
+    /**
+     * 装载备忘（第五期 T2 装载合并，治 N1）：把**一次批量读内的全部待装载 key** 收敛为
+     * **一次**批量装载（DB 趟数从 2N 收敛为常量），结果由本次批量读内的各 key 共享。
+     *
+     * <p>单飞去重不受影响：各 key 仍各自经 {@code SingleFlight.get(key, ...)} 调
+     * {@link #resolve(String)}——首个成为 leader 的 key 触发批量装载，其余 key（含并发等待者）
+     * 直接命中备忘，同 key 并发读仍只触发一次装载。
+     *
+     * <p>{@code batchLoader == null} 时退化为**逐 key 装载**（等价于历史语义：单 key 加载失败
+     * 只影响该 key，不拖垮整批）。
+     *
+     * <p>LOAD 打点口径与逐 key 装载一致：装载尝试发生时，本批覆盖的每个 key 各记一次
+     * （语义= "DB 装载尝试次数"，失败也计入）。
+     */
+    private static final class LoadMemo<T> {
+
+        private final List<String> keys;
+        private final Function<String, T> loader;
+        private final BatchLoader<T> batchLoader;
+        private final CacheStats stats;
+        private final Object lock = new Object();
+
+        /** 批量装载结果（含 null 值 = 确认无数据）；null = 尚未装载。 */
+        private Map<String, T> loaded;
+
+        /** 批量装载已执行（无论成败）；保证"一次批量读内只装载一趟"。 */
+        private boolean done;
+
+        /** 批量装载失败（DatabaseException）——失败态对该批全部 key 生效。 */
+        private boolean failed;
+
+        LoadMemo(List<String> keys, Function<String, T> loader, BatchLoader<T> batchLoader, CacheStats stats) {
+            this.keys = keys;
+            this.loader = loader;
+            this.batchLoader = batchLoader;
+            this.stats = stats;
+        }
+
+        /** 装载单 key，返回 LOADED / EMPTY / FAILED 三态之一。 */
+        LoadOutcome<T> resolve(String key) {
+            if (batchLoader == null) {
+                // 逐 key 语义（历史路径）：LOAD 按 key 记，失败只影响该 key
+                stats.record(CacheStats.Event.LOAD, key);
+                try {
+                    T value = loader.apply(key);
+                    return value == null ? LoadOutcome.empty() : LoadOutcome.of(value);
+                } catch (DatabaseException e) {
+                    LOGGER.log(Level.WARNING, "批量缓存加载失败（不写空标记、不 DEL 数据 key）, key=" + key, e);
+                    return LoadOutcome.fail();
+                }
+            }
+            loadOnceIfNeeded();
+            Map<String, T> snapshot = loaded;
+            if (failed || snapshot == null) {
+                return LoadOutcome.fail();
+            }
+            if (!snapshot.containsKey(key)) {
+                // 契约违规（批量 loader 漏 key）：按"加载失败"处理——宁可多一次 DB 查询，绝不写假空
+                // （对齐 markEmpty 守卫口径"宁可少写空标记，绝不误写"，防漏 key 静默固化成 60s 假空）
+                LOGGER.log(Level.WARNING, "批量装载未覆盖该 key（按加载失败处理，不写空标记）, key=" + key);
+                return LoadOutcome.fail();
+            }
+            T value = snapshot.get(key);
+            return value == null ? LoadOutcome.empty() : LoadOutcome.of(value);
+        }
+
+        /** 批量装载一趟（幂等；LOAD 先记后装，失败亦计入）。 */
+        private void loadOnceIfNeeded() {
+            synchronized (lock) {
+                if (done) {
+                    return;
+                }
+                done = true;
+                for (String key : keys) {
+                    stats.record(CacheStats.Event.LOAD, key);
+                }
+                try {
+                    Map<String, T> map = batchLoader.load(keys);
+                    loaded = (map == null) ? Collections.emptyMap() : map;
+                } catch (DatabaseException e) {
+                    failed = true;
+                    LOGGER.log(Level.WARNING, "批量缓存加载失败（不写空标记、不写回）, keys=" + keys.size(), e);
+                }
+            }
+        }
+    }
+
+    /** 装载结果三态（T2）：LOADED（确认有数据）/ EMPTY（确认无数据，可写空标记）/ FAILED（加载失败）。 */
+    private static final class LoadOutcome<T> {
+
+        private static final LoadOutcome<?> EMPTY = new LoadOutcome<>(null, false);
+        private static final LoadOutcome<?> FAILED = new LoadOutcome<>(null, true);
+
+        private final T value;
+        private final boolean failed;
+
+        private LoadOutcome(T value, boolean failed) {
+            this.value = value;
+            this.failed = failed;
+        }
+
+        static <T> LoadOutcome<T> of(T value) {
+            return new LoadOutcome<>(value, false);
+        }
+
+        @SuppressWarnings("unchecked")
+        static <T> LoadOutcome<T> empty() {
+            return (LoadOutcome<T>) EMPTY;
+        }
+
+        @SuppressWarnings("unchecked")
+        static <T> LoadOutcome<T> fail() {
+            return (LoadOutcome<T>) FAILED;
+        }
+
+        T value() {
+            return value;
+        }
+
+        boolean isFailed() {
+            return failed;
         }
     }
 

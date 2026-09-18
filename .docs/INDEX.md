@@ -27,7 +27,7 @@
 
 ## 目标与任务（目标与任务/）
 
-> **第五期在办（2026-09-17 立项）**：第四期「缓存体系综合改造」T1~T8 已全部完成并于 2026-09-17 归档至 `archive/目标与任务/260917-cache-overhaul/`（`refactor(cache-01)`~`(08)`）。第五期方向已拍板 R-03 = **缓存读路径治理**（R-01 authorName 冗余同步 + N1 批量装载合并 + N2 事务边界瘦身），`NEXT_CYCLE_NEEDS.md`/`NEXT_CYCLE_TASKS.md` 均已就位（已拆 T1~T3，`refactor(cache-01)`~`(03)`，草稿态）。
+> **第五期在办（2026-09-17 立项）**：第四期「缓存体系综合改造」T1~T8 已全部完成并于 2026-09-17 归档至 `archive/目标与任务/260917-cache-overhaul/`（`refactor(cache-01)`~`(08)`）。第五期方向已拍板 R-03 = **缓存读路径治理**（R-01 authorName 冗余同步 + N1 批量装载合并 + N2 事务边界瘦身），`NEXT_CYCLE_NEEDS.md`/`NEXT_CYCLE_TASKS.md` 均已就位（已拆 T1~T3，`refactor(cache-01)`~`(03)`；**T1/T2 已完成 2026-09-18**——T1 补 `/user/changeUserName` + 改名级联失效；T2 批量装载合并，冷页 DB 趟数实测 12/22→4/4 常量；T3 待执行）。
 >
 > 第五期结转来源（已回写进 `NEXT_CYCLE_NEEDS.md` 二/三节，2026-09-17 按用户决定已删除暂不考虑项）：① 归档周期 NEEDS 二/三节未消化项——`authorName` 冗余同步（纳入 T1）/ R-02 索引全量读本体 / R-04 content↔comment 包层环（不随本周期；单飞分布式化 / TTL 真流量复调 / 优惠券抢购限流 / D 方向 feed 流改造 已按用户决定舍弃）；② 2026-09-17 代码复查候选痛点 N1/N2（纳入 T2/T3），N3/N4 转留池（U-12/U-13）。
 
