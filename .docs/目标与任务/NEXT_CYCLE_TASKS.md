@@ -63,7 +63,7 @@
 
 | 编号 | 标题 | 对应候选 | 依赖 | 验收关键（动态） | 期望 commit 主题 | 状态 |
 | -- | -- | ---- | -- | -------- | ------------ | -- |
-| T1 | commit message 规范定稿 | N13 | 无 | 规范文档落地 + 模板 G1/G4/C-3 与延续约定同步 | `docs(prep-01)` | 待执行 |
+| T1 | commit message 规范定稿 | N13 | 无 | 规范文档落地 + 模板 G1/G4/C-3 与延续约定同步 | `docs(prep-01)` | **已完成** |
 | T2 | 常青文档瘦身（含头部版本对齐 N9） | N12 + N9 | T1（颗粒度口径） | 更新日志收敛（一条一行摘要或移除）、头部版本与内容一致、BUSINESS_FLOW 注记收敛；行数显著下降 | `docs(prep-02)` | 待执行 |
 | T3 | pom Kotlin 残留清理 | N1 | 无 | 移除 kotlin 三件套后 `mvn -o` 编译 + 全量 JUnit 仍绿 | `build(prep-03)` | 待执行 |
 | T4 | git 卫生：.idea 出库 + temp_script 例外出库 | N2 + N3 | 无 | `git ls-files` 无 `.idea/`、无 `temp_script/`；`.gitignore` 覆盖 | `chore(prep-04)` | 待执行 |
@@ -92,7 +92,7 @@
 * **红线边界**：不改历史 commit（不 rebase/rewrite）；规范不引入外部工具（不装 commitlint 等新依赖）；不定规"必须英文/必须中文"这类与现仓语言习惯冲突的硬性条文（可在规范里给出项目惯例建议）。
 * **强制探索步骤**：(0) 复核 N13 证据（历史 commit 臃肿、无分节）仍成立 (1) 统计现仓 commit 常用 type（refactor/fix/docs/chore/feat/test 等）与 scope（cache-0N/package 等），据此设计 type/SCOPE 只有已用或合理新增的集合 (2) 与"变更纪律（不设文档变更记录，git 历史即记录）"对齐：正文分节应承载原"变更记录/更新日志"的职责，确认分节（建议：问题 / 方案 / 验证 / 文档）足够回溯 (3) 确认模板回写点：`周期模板_TASKS.md` G1/G4 + `周期模板_NEEDS.md` C-3/一续约定，写入规范要点与"本周期按规范写"句子——若清单未覆盖 → 回写本文档再动手。
 * **验收**：规范文档落盘（建议 `.docs/说明书/COMMIT_CONVENTION.md` 或并入模板——执行窗口定，用户可改）；两份周期模板已同步（G1 的 type 表/SCOPE/分节引用规范，不再只写"强制带任务编号"）；`git log` 抽查 3 条后续 commit 符合规范（本任务自身 commit 即示范）。
-* **执行回写（<日期>，docs(prep-01) 已落地）**：待填。
+* **执行回写（2026-09-18，docs(prep-01) 已落地）**：强制探索结论：现仓常用 type = refactor/fix/docs/chore/feat/test/build，SCOPE 天然存在模块与周期令牌两类 → 规范 type 表按现仓已用 + 合理新增定 7 类；正文分节定为「问题/方案/验证/文档」四节，承载原"变更记录/更新日志"职责（与变更纪律闭环）。实现：规范落盘 `.docs/说明书/COMMIT_CONVENTION.md`（v1：结构/type 表/scope 规则/header≤40 字/正文分节/任务编号/2 示例——周期立项示范 + 常规 fix 示范）；模板只留引用——`周期模板_TASKS.md` G1/G4、`周期模板_NEEDS.md` C-2/C-3 均改指规范；INDEX 说明书表新增 COMMIT_CONVENTION 行。验收对照：规范落盘 ✓ / 模板同步 ✓ / 示范 commit `c1efa1b`（周期立项）与本次 T1 commit 均按规范书写 ✓。验证：纯文档批，无代码改动，无需跑测试。L1 质疑：无。
 
 ### T2 常青文档瘦身（N12 + N9）
 

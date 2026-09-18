@@ -46,6 +46,7 @@
 | 文档 | 何时读 |
 |------|--------|
 | 说明书/TEST_AUTOMATION.md | **跑测试唯一权威入口**（分层定位/脚本用法/排查，含快速上手） |
+| 说明书/COMMIT_CONVENTION.md | 写 commit message 时（type/scope/header/正文分节/任务编号规范；配合模板 C-3/G4） |
 | 说明书/TEST_SEED.md | 维护测试库种子 / 评估生产库是否可动 seed 行时（基线管理员、seed_baseline_* 内容与维护约定） |
 | 说明书/DATABASE.md | 涉及表结构/建表时（本机/敏感，勿删，不追踪） |
 | 说明书/AVAILABLE_TOOLS.md | 需要外部工具路径时（本机路径，勿删，不追踪） |
