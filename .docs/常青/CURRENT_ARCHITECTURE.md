@@ -1,6 +1,6 @@
 # 当前系统架构地图
 
-> 版本：3.2（2026-09-19 T7：关注/粉丝列表分页——成员 key Set→ZSet 有序化 + 基建新增 ZSetCache 按序窗口读 + `/follow/following|followers` 可选 page/pageSize（缺省仍全量）+ 前端 user.js 分页）
+> 版本：3.3（2026-09-19 T8：评论列表主楼分页——`/comment/show` 可选 `page`/`pageSize`（缺省仍全量数组），每页 N 条主楼且**楼中楼整树随行**；评论缓存整树结构不变、切片只在展示层 + 前端 detail.js 分块加载）
 > 最后更新：2026-09-19
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
@@ -223,7 +223,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | ContentController（182，/content/*）、StartController（49，/start）、SearchController（95，/search/*）、FeedController（57，/feed）、ProfileController（70，/profile） | 内容管理 + 首页推荐 + 搜索 + 关注流 + 用户主页 |
-| service | ContentService（445）、ContentCache（656：Redis 内容缓存=三态 Cache-Aside+索引；loader 失败抛 DatabaseException 不污染空标记；`invalidateAuthorContentKeys` 改名级联失效；`getContentsBatch` miss/降级装载走 `loadContentsFromDb` 一趟事务两查）、CommentCache（176：Redis 评论缓存=三态 Cache-Aside+独立 TTL+空标记+显式失效；loader 失败抛 DatabaseException）、ContentStatusFiller（90）、FeedService（108）、ProfileService（118） | 内容业务 + Redis 内容缓存 + Redis 评论树缓存 + 状态填充 + 关注流 + 主页（Feed/Profile 的缓存批量读在 DB 事务外执行） |
+| service | ContentService（501：**T8 起评论查询支持主楼分页**——主楼分页 + 楼中楼整树，切片在展示层、缓存整树不动；缺省重载仍全量）、ContentCache（656：Redis 内容缓存=三态 Cache-Aside+索引；loader 失败抛 DatabaseException 不污染空标记；`invalidateAuthorContentKeys` 改名级联失效；`getContentsBatch` miss/降级装载走 `loadContentsFromDb` 一趟事务两查）、CommentCache（176：Redis 评论缓存=三态 Cache-Aside+独立 TTL+空标记+显式失效；loader 失败抛 DatabaseException）、ContentStatusFiller（90）、FeedService（108）、ProfileService（118） | 内容业务 + Redis 内容缓存 + Redis 评论树缓存 + 状态填充 + 关注流 + 主页（Feed/Profile 的缓存批量读在 DB 事务外执行） |
 | dao | ContentDao（384）、ContentMediaDao（168） | content/content_media 数据访问（ContentLikeDao 按 like 域归属）；`findContentsByIds` 批量 IN 查询（供批量缓存装载，列与 findContent 同源） |
 | model | entity/ContentMedia（63）、cache/ContentCacheDTO（136）/CommentCacheDTO（110）、vo/ContentVO（42）/ContentDetailVO（26）/CommentVO（22）/ProfileVO（43）、dto/PageResult（62）/SearchDTO（51）、command/CommandConverter（139）/ContentType（16） | 内容模型 + 共享缓存 DTO + 共享 VO/DTO/转换器 |
 
@@ -256,7 +256,7 @@ com.itheima/
 
 | 层 | 类（行数） | 职责 |
 |----|------|------|
-| controller | CommentController（105，/comment/*） | 评论发表/查询/删除 |
+| controller | CommentController（124，/comment/*） | 评论发表/查询/删除（**T8：`/show` 支持可选 `page`/`pageSize`**——显式判"是否传分页参数"分支：缺省全量数组、传参走分页信封） |
 | service | CommentService（197） | 评论业务（楼中楼：发表归一化主楼 + 软删除：用户自删/管理员删） |
 | dao | CommentDao（179） | comment 评论 CRUD + 软删除（整楼/单条）+ 楼内回复计数 + 评论所属内容定位 |
 | model | dto/CommentDTO（44）、command/CommentCommand（50） | 评论请求/命令（CommentVO 归 content 域） |
@@ -482,6 +482,17 @@ com.itheima/
 - **前端**：`static/js/views/user.js` 的关注/粉丝 sheet 改为分页加载 + 「加载更多」（复用既有 `.load-more-btn` 样式；切换 following/followers 时重置页码与总页数）。
 - **包层边界**：分页信封落在 follow 域（**不 import content 域 `PageResult`**——content 已 import `follow.FollowCache`，反向引用会形成新的 follow↔content 包层环）；"PageResult 上移公共包供多域复用"登记留池（跨域重构不在本任务范围）。
 
+### 6.18 评论列表分页（T8）
+
+- **形态（D1=A）**：**主楼分页 + 楼中楼整树**——`content:comments:{id}` 仍存完整整树 JSON（**评论缓存装载结构不变**，`loadCommentTree`/`buildCommentTree` 一行未动），分页是**展示层切片**：按主楼（roots）取该页，每条主楼携带其完整 `children`（楼中楼不切、不撕裂）。
+- **切片点唯一**：`ContentService.sliceRoots(roots, page, pageSize)` —— 越界页返回空列表但信封仍带真实 `total`；当前切片源是整树缓存的主楼列表，将来若改为缓存窗口读，只需替换该方法的取数方式，调用方与对外契约不变。
+- **成本边界（已声明）**：命中路径仍**每次读并反序列化整树**（单个 JSON 值无法按窗口读），未治"单次成本与总量正相关"；T8 优化的是**响应体大小 / VO 转换量 / 点赞批量查询量**（DB 侧只针对该页评论 id）。彻底治本需缓存结构改造（主楼序列独立键或 DB 窗口读）→ 留池 **U-20**。
+- **接口口径（与 T7 同构）**：`GET /comment/show` 传 `page` 或 `pageSize` **任一** → `data = {list,total,page,pageSize,totalPages}`（复用 content 域 `PageResult`，同域无包层环）；**两者都不传 → `data` 仍为全量数组**（逐字节兼容，既有调用方与 pytest 用例零破坏；不可用"默认 page=1&pageSize=50"实现，上限 50 会截断全量）。分页参数解析复用 `BaseServletUtil.parsePage/parsePageSize`（默认 1 / 10、上限 50）。
+- **total 口径**：**主楼条数**（`roots.size()`），与"每页 N 条主楼"同源；与详情接口 `commentCount`（含楼中楼的总评论数）口径不同，前端头部计数仍取 `commentCount` 以保持展示语义不变。
+- **顺序**：主楼顺序 = `CommentDao.getComments` 的 `ORDER BY c.comment_id`（升序，既有），页间不重不漏**由构造保证**；楼中楼 `children` 同序随行。
+- **前置判断不变**：内容不存在 / `commentEnabled=false` → 分页下返回空页（`total=0`），与缺省路径同一判断。
+- **前端**：`static/js/views/detail.js` 以 `CHUNK_SIZE=50` 主楼为一块加载（首屏第 1 页 + 「加载更多」追加下一块）；发/删评论后回到第 1 页重新累积；头部计数改用详情接口 `commentCount`（分页后按"已加载条数"会随页数增长，与详情统计不一致）。
+
 ---
 
 ## 七、API 接口清单
@@ -523,7 +534,7 @@ com.itheima/
 | GET | /like/comment/status | 点赞状态 | ✓ |
 | GET | /like/comment/count | 点赞数 | ✓ |
 | POST | /comment/add | 发表评论 | ✓ |
-| GET | /comment/show | 查看评论 | ✗ |
+| GET | /comment/show | 查看评论（**T8 起可选 `page`/`pageSize`**：传任一参数返回 `{list,total,page,pageSize,totalPages}`，`total`=主楼条数；缺省仍全量数组） | ✗ |
 | POST | /comment/delete | 删除评论（软删除，仅自己） | ✓ |
 | POST | /content/commentEnabled | 作者开关自己作品的评论区（0=关/1=开） | ✓ |
 | POST | /follow/add | 关注 | ✓ |

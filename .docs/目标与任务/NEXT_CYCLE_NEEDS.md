@@ -85,6 +85,21 @@
 - **附带口径**：`total` 取同一 ZSet 的 `ZCARD`（与页内容同源，避免与独立计数 key `user:followCount` 的瞬时不一致）；缺省路径**不做切片**——兼容**不能**用"默认 `page=1&pageSize=50`"实现（上限 50 会截断全量），必须在 Controller 显式区分"是否传了分页参数"。
 - **留池**：`SMEMBERS` 时代的"热路径全量回传"已随 A1 消除；**miss / 降级路径仍为全量装载**（缓存装载的既有形态，与 R-01 索引全量读同型）→ 登记 `UNPLANNED_ISSUES.md`。
 
+**决策 T8-D / Q1~Q4（2026-09-19，T8 窗口，用户拍板）**：评论列表分页的技术决策。
+
+- **T8-D1 分页形态 = A「主楼分页 + 楼中楼整树」**：切片单位 = **主楼**，每条主楼携带其完整 `children`；切片点在展示层（`ContentService.sliceRoots`），**评论缓存整树结构不变**（`loadCommentTree`/`buildCommentTree` 零改动）。
+  - **否决 B**（主楼 + 楼中楼都分页）：违反 T8 红线"楼中楼必须随主评论整体返回"，且会让**请求次数变差**（楼中楼需再发请求）——与用户"减少请求次数"的后续目标正好相反。
+  - **否决 C**（缓存窗口读：主楼序列独立键 / DB `LIMIT` + `parent_id IN`）：唯一能治"单次成本与总量正相关"的路，但**违反 T8 红线"不动缓存装载结构"**，属缓存/读路径结构改造，应另立任务（形态备选见 `.docs/temp/T8_PLAN.md` §8.5）。
+  - **否决 D**（前端伪分片）：响应体仍全量，不治 N11b/U-13 痛点本身。
+- **后续目标对齐（用户 2026-09-19 追加目标："后端大分页 + 前端小分页加载，减少请求次数与用户侧延迟"）**：拆成三条能力 —— ① 大 chunk 拉取、② 锚点续拉、③ 单次成本与总量弱相关。**A 满足 ①②**（`page/pageSize` ≡ 偏移制，后续加 `cursor` 属纯加法），**仅 ③ 未治**（命中路径仍反序列化整树）；而"减少请求次数"由**前端 chunk 预加载**决定、与后端缓存结构无关，"减少延迟"由响应体大小与本地数据即时可用决定——A 均已达成。③ 在本项目量级不显著（1 条评论 ≈200B JSON → 1000 条约 200KB、5000 条约 1MB，ms 级反序列化 vs 一次网络往返），**单内容评论量上万**才值得为 ③ 立项。→ 结论：**A 是通向该目标的最短路径，且是加法路线**（接口契约在将来的窗口读任务里可原样保留）。
+- **T8-D2 响应信封 = 复用 content 域 `PageResult<CommentVO>`**：T8 落点就在 content 域（comment 域只提供 VO 转换），**同域复用、零新类、无包层环**；T7 之所以自建 `FollowPageResult` 是因 content↔follow 跨域（记 U-19）。U-19"信封上移公共包"**不在 T8 处理**。
+- **T8-D3 缺省兼容 = T7-B2 同款**：Controller 显式判"是否传分页参数"（`hasPagingParams`）——都不传 → `data` 仍为**全量数组**（与改造前逐字节一致）；传任一 → 分页信封。**不可**用"默认 page=1&pageSize=50"实现（上限 50 会截断全量）。
+- **Q1 主楼顺序**：保持 `comment_id` **升序**（= 现状，"最早在前"）；改"最新在前"属对外行为变化，本周期不做。
+- **Q2 `total` 语义**：= **主楼条数**（`roots.size()`），与"每页 N 条主楼"同源；与详情接口 `commentCount`（含楼中楼总数）口径不同，故 Q3 前端仍显示 `commentCount`。
+- **Q3 详情页头部计数**：前端 `detail.js` 的 `评论 (N)` 改用详情接口 `state.content.commentCount`（含楼中楼的总数），不再按"已加载条数"计算（分页后后者会随加载页数增长、与详情统计不一致）。
+- **Q4 留池**：命中路径**每次读并反序列化整树**（单个 JSON 值无法按窗口读）→ 登记 **U-20**（与 U-18「follow 装载全量」同型；彻底治本需缓存结构改造，须先放开 T8 红线"不动缓存装载结构"）。
+- **附带（后续任务的接口演进约定）**：T8 的 `page/pageSize` 契约在将来做窗口读时**原样保留**；若"大分页"需要单次 >50 主楼，加**评论域自己的上限常量**（不动公共 `parsePageSize` 语义）——与 T7 记录的同一处置思路。
+
 ### 4.1 候选杂务（周期探查的代码卫生/铺垫清理，**待评审纳入，尚未拍板**）
 
 > 编号 `N1`~`N#` 为**本档内部编号**。每条给出"如果不改，什么时候会出什么问题"的具体场景。
@@ -103,7 +118,7 @@
 | N8 | **运维 main 工具类残留主代码且不脱轨**：`CountRepairTool` 是带 `main` 的计数修复 CLI（计数 SQL 与 `tools/check_integrity.py` 语义一致），用 `System.out/err` + `e.printStackTrace()`，**javadoc 已声明"由 check_integrity.py 提供统一入口、本类保留供直连调试/交叉验证"** | `src/main/java/com/itheima/util/CountRepairTool.java` 全文（L18-60 main/repair）；javadoc L10-14 | 主代码里藏着与本项目运维规范重复的裸 CLI，且未过统一工具入口；每年维护读到会疑惑"为什么不直接用 check_integrity"；保留理由已被 javadoc 自述但无评审记录（去留见 R-05）→ **2026-09-19 R-05 拍板删除（已落地）**，能力由 `tools/check_integrity.py --fix` 承接 |
 | N9 | **`CURRENT_ARCHITECTURE.md` 头部版本元数据滞后**：头部写"版本：2.23 / 最后更新：2026-09-16"，但更新日志节已记录到 **2.26（2026-09-18）**，2.24~2.26 三条（T1~T3）未体现在头部——**历史复现**：260917 归档记录已留 L1"header 版本号 T1 未按惯例 bump"（`260918/R` 更新日志 2.17 条目） | `.docs/常青/CURRENT_ARCHITECTURE.md` L3-4（头部）vs L847-849（更新日志 2.24~2.26） | 读者按头部判断文档新鲜度会误判滞后三期；同一问题第二次出现说明"更新日志 bump ≠ 头部 bump"是系统性疏漏，可在杂务周期一次性对齐（顺带检查 BUSINESS_FLOW 版本头） |
 | N10 | **无统一请求/响应日志**：仅 `ExceptionFilter` 记录异常（WARNING/SEVERE + 堆栈）；`BaseServlet` 基类只做 `init` 注入与 `writeSuccess/writeError`，各 Controller `doGet/doPost` 无入参、无耗时记录——全仓 controller 层仅 `AppShutDownListener` 有 logger | `BaseServlet.java` 全文（无 logger）；`ExceptionFilter.java` L24-35（仅异常日志）；controller 包 grep `logger.info/warning/severe` 仅命中 `AppShutDownListener` | 现网/测试排查全靠异常日志与外部 access log，**无"谁在什么时刻调了哪个接口、耗时多少"的链路痕迹**；属日志体系改造的主干缺失——**2026-09-18 评审：转留池（U-15），摸底放日志体系改造分支立项前，不在本杂务周期排期** |
-| N11 | **评论、粉丝列表无分页、全量加载（用户点名，2026-09-18）**：关注/粉丝列表 `getFollowingList`/`getFollowerList` 无分页参数、`SetCache.getMembers` 走 `SMEMBERS` 一键全量回传 + miss 全量 DB 装载（`UNPLANNED_ISSUES.md` U-12）；评论树 `loadCommentTree` 整树从 DB 全量捞出 + 内存 `buildCommentTree` 重排、`getCommentsForContent` 无分页整树渲染（U-13）——两处此前均以"懒加载/分页范畴（接口契约 + DAO 分页 + 展示决策）"转留池，**用户 2026-09-18 明确要在本周期解决** | `FollowController.java` L34-38（无分页参数、全量返回）；`SetCache.getMembers` L112-139；`CommentCache.loadCommentTree` L99-114 + `buildCommentTree` L117-145；`CommentController.java` L82（整树渲染） | 用户量大后关注列表/粉丝列表/评论列表响应体无限增长：关注百万 BOX、评论数千条时单接口拉全量（既有 U-12/U-13 原文：SMEMBERS 全量装箱、整树重排 O(n)）；且不解决则"加载更多"等常见交互无法落地，是 feed 改造之外体验卡点。**2026-09-19：关注/粉丝侧已随 T7 落地**（A1 有序化 + B2 信封；命中路径不再全量回传，miss/降级仍为装载形态 → 留池）；**评论侧（N11b）待 T8** |
+| N11 | **评论、粉丝列表无分页、全量加载（用户点名，2026-09-18）**：关注/粉丝列表 `getFollowingList`/`getFollowerList` 无分页参数、`SetCache.getMembers` 走 `SMEMBERS` 一键全量回传 + miss 全量 DB 装载（`UNPLANNED_ISSUES.md` U-12）；评论树 `loadCommentTree` 整树从 DB 全量捞出 + 内存 `buildCommentTree` 重排、`getCommentsForContent` 无分页整树渲染（U-13）——两处此前均以"懒加载/分页范畴（接口契约 + DAO 分页 + 展示决策）"转留池，**用户 2026-09-18 明确要在本周期解决** | `FollowController.java` L34-38（无分页参数、全量返回）；`SetCache.getMembers` L112-139；`CommentCache.loadCommentTree` L99-114 + `buildCommentTree` L117-145；`CommentController.java` L82（整树渲染） | 用户量大后关注列表/粉丝列表/评论列表响应体无限增长：关注百万 BOX、评论数千条时单接口拉全量（既有 U-12/U-13 原文：SMEMBERS 全量装箱、整树重排 O(n)）；且不解决则"加载更多"等常见交互无法落地，是 feed 改造之外体验卡点。**2026-09-19：关注/粉丝侧已随 T7 落地**（A1 有序化 + B2 信封；命中路径不再全量回传，miss/降级仍为装载形态 → 留池）；**评论侧（N11b）已随 T8 落地**（D1=A 主楼分页 + 楼中楼整树、缓存整树结构不变；命中路径仍反序列化整树 → 留池 U-20） |
 | N12 | **常青文档臃肿**：`CURRENT_ARCHITECTURE.md` 已达 887+ 行，其中"十二、更新日志"横跨 2026-07-23~2026-09-18、单条 commit 记录动辄 400+ 字（把问题/选型/验证/文档细节全部写进常青正文），与 commit message、TASKS 执行回写内容高度重复；`BUSINESS_FLOW.md` 同步有逐 commit 注记叠加 | `.docs/常青/CURRENT_ARCHITECTURE.md` L844-883（更新日志 40+ 条）；`BUSINESS_FLOW.md`（版本 1.0，逐任务注记直接写正文） | 常青文档本意是"地图/快速导航"，被逐 commit 细节掩盖主干结构——新任务读文档成本上升，且每条 commit 都要改多处、文档维护成本翻倍；需要定粒度规范：**常青只留"结构与决策摘要"，不设独立变更记录（用户 2026-09-18 拍板：变更以 git 提交历史为准，N13 规范落地后常青更新日志也按同口径收敛）** |
 | N13 | **commit message 无规范、内容臃肿**：当前历史 commit 结构松散——header 长句 + 数百字正文（问题/选型/验证/文档一股脑无分节，如 `refactor(cache-02)`、`refactor(cache-03)` 单条正文 400+ 字），"看似说很多又像什么都没说"；`C-3 commit 语义闭环`只约定"代码+文档+勾选同 commit、message 带任务编号"，未定 message 本身格式 | `git log` 下 `refactor(cache-01)`~`(03)` 等条目（如 `002cb75`、`5610a9d`、`49d9367` 正文无分节）；`archive/目标与任务/260918-cache-ending/NEXT_CYCLE_TASKS.md` 二节（只有"message 强制带任务编号"） | 检索历史困难（scope/主题不统一、要点淹没在长文中）；后续要"按 commit 追溯某期决策/验证结论"成本高；**需定统一规范并回写周期模板**（type(scope) header ≤ 字数 + 正文固定分节如「问题/方案/验证/文档」，可选关联 ISSUES 编号） |
 | N14 | **测试必须在沙箱外跑——编译产物/日志/媒体目录都落在沙箱可写区之外**：砂箱可写区 = 仓库根 `D:\javaproject\VideoPlatform\TVhomework1`（及少量用户目录），但 a) 编译产物：`pom` 注释明言"沙箱内 javac 无法枚举 worktree 的 target/ 作 classpath"，`-Dstage8.buildDir` 需指外部可写目录（run_tests 用 stage8-target）；b) 运行/测试日志：落 `tomcat-test-18080\logs\tomcat_stderr.log` 等仓库外路径；c) 媒体上传目录：`context.xml` 硬编码 `D:/data/projects/VideoPlatform/stone`（绝对外部路径），run_tests 的媒体写入被沙箱拦（记于项目记忆）；d) `run_tests.py` 硬编码 `SHUTDOWN_PORT=18005`/`HTTP_PORT`/`BASE_URL=127.0.0.1` | `pom.xml` L20-22（stage8.buildDir 注释）；`src/main/webapp/META-INF/context.xml` L2-8（`D:/data/projects/VideoPlatform/stone`）；`tools/run_tests.py` L68-70；项目记忆"trae 沙箱拦截 run_tests*.py 的 process/port/network" | 每次测试/回归必须交 codex 在沙箱外验证，迭代闭环慢（trae 内改完不能直接自证）；目录本地化（buildDir/日志/媒体收进仓库内 ignore 目录 + 端口参数化）后需实测沙箱内能否带起 Tomcat——**若沙箱仍拦进程/端口则只能缓解而非根除，该边界拆任务时先探明** |
@@ -132,7 +147,7 @@
 | 随手清理（死注释 + 分页收敛） | N4 + N5 + N6 | T5 | 删除 RequestParser/web.xml 死注释；parsePage/parsePageSize 收敛公共（T7/T8 前置） |
 | 日志卫生 | N7 + N8 | T6 | LogUtil 自我合规；CountRepairTool 已按 R-05 拍板**删除**（统一入口 = `tools/check_integrity.py --fix`） |
 | 关注/粉丝列表分页 | N11a（U-12） | T7 | 新增可选 page/pageSize 缺省兼容；缓存分页载体拍板（**A1 = Set→ZSet 有序化 + ZSetCache 窗口读**）；前端 **user.js**（非 follow.js——那是 `#/follow` 关注流视图）分页。**2026-09-19 已落地**：JUnit 472 / pytest 135 全绿 |
-| 评论列表分页 | N11b（U-13） | T8 | 主楼分页 + 楼中楼整树，缺省兼容；缓存整树不动只做展示层切片；前端 detail.js 加载更多 |
+| 评论列表分页 | N11b（U-13） | T8 | 主楼分页 + 楼中楼整树，缺省兼容；缓存整树不动只做展示层切片；前端 detail.js 加载更多。**2026-09-19 已落地**：D1=A（`PageResult<CommentVO>` 信封 + `hasPagingParams` 判参），JUnit 482 / pytest 142 全绿 |
 | 测试目录本地化 | N14 | T9 | 沙箱边界探明 → buildDir/日志/媒体/端口参数化，可落地部分实现 |
 
 **本周期明确不做（反面清单，与"纳入"同等重要）**：

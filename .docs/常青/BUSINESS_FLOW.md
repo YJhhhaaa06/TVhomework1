@@ -416,6 +416,8 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 
 > 关键语义：内容与评论读/写**全部收敛 Redis**；**任何缓存失败降级走 DB、不导致业务失败**；计数（like_count/comment_count/comment_enabled）与评论树内容以 DB 为源真理，变更即失效让读自愈；类型分区索引启动 init 全量重建 + 索引 key 缺失时单飞懒重建（防 Redis 重启后 /start 空推荐）；评论树不再原地增删：评论增/删/点赞 = 失效 `content:comments:{id}` + 空标记，下次读 miss 单飞回填 DB 最新整树。
 >
+> **评论查询分页（T8）**：`/comment/show` 传 `page`/`pageSize` **任一** → 返回分页信封 `{list,total,page,pageSize,totalPages}`（`total`=**主楼条数**），每页 N 条**主楼**、每条主楼携带其**完整楼中楼**；**两者都不传 → 仍返回全量数组**（零破坏）。评论缓存仍是**整树 JSON、结构不变**，分页是**展示层按主楼切片**（不撕裂楼中楼、不改 `buildCommentTree` 语义）；成本边界与后续治本方向见 `CURRENT_ARCHITECTURE` 6.18。
+>
 > 启动与索引维护：启动全量重建拆两段（DB 事务内只读、事务外写 Redis，Redis 往返 ≈3 次与内容量解耦）；索引 key 生成/解析/匹配同源（`CacheKeys.contentIndex`）；读命中滑动续期（分域 TTL：content 30min / comment 10min / like 15min / follow 30min，空标记不续）；推荐读惰性探测（凑满 limit 即止，分布语义不变）+ 索引重建失败冷却退避 + 索引长尾无系统性漂移；详情见 `CURRENT_ARCHITECTURE` 6.5/6.10/6.11。
 
 ### 3.2 发布视频流程
@@ -913,6 +915,7 @@ Content-Type: application/json
 
 ```
 GET /comment/show?contentId=123&token=xxx（可选）
+GET /comment/show?contentId=123&page=2&pageSize=10（可选分页，T8）
 
 步骤：
 1. 先确认内容存在且评论区开启（contentCache.getContent：内容不存在/隐藏/删除或作者关闭 → 直接返回空）
@@ -920,6 +923,12 @@ GET /comment/show?contentId=123&token=xxx（可选）
 3. 如果已登录，批量查询点赞状态
 4. 转换为 CommentVO 树
 5. 返回评论列表
+
+分页（T8）：
+- 传 page/pageSize 任一 → 第 2 步取到整树后按**主楼**切片（**楼中楼整树随行**，不切不撕裂），
+  返回信封 {list,total,page,pageSize,totalPages}（total=主楼条数）；第 3 步的点赞批量查询只针对该页评论 id
+- 两者都不传 → 仍返回全量数组（与改造前逐字节一致）；分页解析复用公共方法（默认 1/10、pageSize 上限 50）
+- 缓存侧无变化：仍是整树 JSON（`content:comments:{id}`），分页属展示层切片
 
 CommentVO 结构：
 {
@@ -1303,7 +1312,7 @@ GET /feed?page=1&pageSize=10&token=xxx
 | `/start` | GET | 首页推荐 |
 | `/search` | GET | 搜索 |
 | `/search/IdSearch` | GET | 内容详情（无 /detail 端点） |
-| `/comment/show` | GET | 查看评论 |
+| `/comment/show` | GET | 查看评论（T8 起可选 `page`/`pageSize`：传任一返回分页信封 `{list,total,...}`，`total`=主楼条数；缺省仍全量数组） |
 | `/coupon/list` | GET | 优惠券列表 |
 | `/profile` | GET | 用户主页 |
 
