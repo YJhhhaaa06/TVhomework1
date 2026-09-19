@@ -78,8 +78,8 @@
 
 | 编号 | 标题 | 对应候选 | 依赖 | 验收关键（动态） | 期望 commit 主题 | 状态 |
 | -- | -- | ---- | -- | -------- | ------------ | -- |
-| T10-A | 评论分页①：缓存结构拆分（主楼 List + 楼中楼 Hash）+ 主楼窗口装载（后端基座） | NEEDS 4.2 ①（= 池 U-20，U-20 治本） | 用户 2026-09-19 放开 T8"不动缓存装载结构"红线（本任务正是要动它） | 命中成本 ∝ 该页（弱相关）；**对外行为零变化**（children 仍全量随行，pytest 评论用例零改动）；DDL：reply_count + 索引；全量 JUnit/pytest 绿 | `refactor(cache-10a)`（窗口内可调） | 待执行 |
-| T10-B | 评论分页②：楼中楼前 K=2 条装载 + replyCount 总数 + 展开加载回复接口 + 前端大 chunk/本地小批 + 公共"分块列表"helper（N15） | NEEDS 4.2 ① + N15 | T10-A 落地 | **契约变更**（children 仅前 2 条 + 每主楼 replyCount）；展开接口形态窗口内定并回写；前端 pageSize 域级上限（不动公共 cap 50）；helper 抽取供 T11 复用；pytest 评论用例重构后全绿 + JUnit 绿 | 待定（窗口内定） | 待执行（依赖 T10-A） |
+| T10-A | 评论分页①：缓存结构拆分（主楼 List + 楼中楼 Hash）+ 主楼窗口装载（后端基座） | NEEDS 4.2 ①（= 池 U-20，U-20 治本） | 用户 2026-09-19 放开 T8"不动缓存装载结构"红线（本任务正是要动它） | **已完成（2026-09-19/20）**：两键组 + 主楼窗口装载 + DDL（reply_count + idx），契约零变化（pytest 评论用例零改动）；全链绿 | `refactor(cache-10a)` | **已完成** |
+| T10-B | 评论分页②：楼中楼前 K=2 条装载 + replyCount 总数 + 展开加载回复接口 + 前端大 chunk/本地小批 + 公共"分块列表"helper（N15） | NEEDS 4.2 ① + N15 | T10-A 落地（已完成） | **已完成（2026-09-20）**：契约变更落地（children 前 2 + replyCount + `/comment/replies` 展开）；全链 JUnit 绿 + pytest 145 | `refactor(cache-10b)` | **已完成** |
 | T11 | 关注/粉丝列表分页（后端大分页 + 前端小分页） | NEEDS 4.2 ② | 无硬前置 | **预告**：范围与四要素由窗口调查后拍板并回写 | 待定（窗口内定） | **预告** |
 | T12 | 事务边界同型未治点 2 处（缓存读移出回调） | 池 **U-14**（2026-09-19 评估：进 TASKS） | 无 | 两处缓存读不再在事务回调内；对外行为零变化；JUnit + pytest 全绿 | `refactor(content)` / `refactor(follow)` | 待执行 |
 | T13 | 注册后自动登录缺兜底 | 池 **U-16**（同上） | 无 | 自动登录失败 → 返回"注册成功 + 提示手动登录"，不再无 token 无提示；补用例 | `fix(user)` | 待执行 |
@@ -120,14 +120,17 @@
 
 ### T10-B 评论分页②：楼中楼前 K=2 条 + replyCount 总数 + 展开加载回复接口 + 前端大 chunk/本地小批 + 公共"分块列表"helper
 
-> **已拍板（2026-09-19 T10 窗口）**：每主楼初始只带 **K=2 条**楼中楼（bilibili 范例，定死不算法）；"共 N 条回复"总数 = **`reply_count` 字段**（T10-A 已建）；前端"大 chunk 拉取 + 本地小批展示"，顺带抽公共"分块列表" helper（治 NEEDS 4.1 N15，T11 直接复用）。
+> **已拍板（2026-09-19/20 T10 窗口）**：每主楼初始只带 **K=2 条**楼中楼（bilibili 范例，定死不算法）；"共 N 条回复"总数 = **`reply_count` 字段**（T10-A 已建，本任务补写维护 + 存量回填）；前端"大 chunk 拉取 + 本地小批展示"，顺带抽公共"分块列表" helper（治 NEEDS 4.1 N15，T11 直接复用）。
+> **已拍板（2026-09-20 窗口补）**：① 展开"加载更多回复"出口 = **新接口 `/comment/replies?rootId&page&pageSize`**（信封；复用 `CommentController` `/comment/*` 通配加 case，不新增 Servlet）；② 缺省（不传参）路径**保持不变**——children 全量随行 + 逐字节兼容（pytest 缺省用例零改动），实现改 DB 全量直取（getComments+buildTree）；③ 评论域 pageSize 上限 = **域级常量 500**（`BaseServletUtil.parsePageSize(req, max)` 新增重载、公共 cap 50 语义不变）；另定：楼中楼缓存只存前 K（懒载 DB 全量取、HSET 截断前 K）、reply_count 口径 = 建树上溯后的 children 总数（增 +1 / 删 −1 防负 / 删主楼不扣）。
 
 * **意图**：楼中楼装载与展示从"整树随行"降为"前 K 条"——首屏响应体/反序列化与楼中楼总量解耦；"展开"才按需加载更多回复；前端一次拉大 chunk（评论域页大小突破公共 cap 50，**域级常量，不动公共 `parsePageSize` 语义**）、本地小批（10 条）展示、本地用尽再发请求。
 * **入口线索**：后端 = `ContentService.getCommentsForContent`（两键组装配处，T10-A 产物）+ `CommentCache` + `CommentDao`（新增按主楼分页查楼中楼、reply_count 消费）；前端 = `static/js/views/detail.js`（CHUNK_SIZE=50 / loadCommentPage / renderComments / createCommentItem / "共 N 条回复"折叠）+ `controller/BaseServletUtil.parsePageSize`（cap 50）+ N15 的 6 份"加载更多"（detail.js:281 / follow.js:73 / publish.js:235 / search.js:176 / user.js:186/257）。
-* **待定拍板点（窗口内定并回写本节 + NEEDS 4.0）**：① **"展开加载更多回复"出口**：新接口 `/comment/replies?rootId=&page=&pageSize=`（信封）vs `/comment/show` 传 `rootId` 扩展——取后者的注意契约叠加；② **缺省全量数组（不传参）路径的语义**：T10-A 保全量（children 全量随行），T10-B 后缺省是否也 K=2 裁剪，还是维持全量走独立拼装；③ 前端大 chunk 的后端承载（pageSize 域级上限取多大）与 `reply_count` 口径对齐（= 建树上溯后 children 总数，与"展开加载更多"返回集一致）。
+* **已拍板要点（2026-09-20 窗口，见上方两行拍板记录）**：① 展开出口 = 新接口 `/comment/replies`；② 缺省路径保持不变（children 全量 + 逐字节兼容；实现改 DB 全量直取）；③ 域级 pageSize 上限 500（`parsePageSize(req,max)` 重载，公共 cap 50 不动）；`reply_count` 口径 = 建树上溯后 children 总数（与"展开加载更多"返回集一致）。
 * **红线边界**：**契约变更已获批准**（children 全量 → 前 K 条 + 每主楼 replyCount），但变更仅限本次定义的口径，**其他接口/字段形状不动**；不动公共 `parsePageSize`（域级上限，改动面最小）；不引入新依赖/不引入 MQ；热度排序（N17）不入本任务；`reply_count` 写维护（增回复 +1、删回复/删整栋对称扣减）口径与 `updateCommentCount` 同款，漏维护即读侧失真——必须补 JUnit。
 * **强制探索步骤**：动刀前先 (0) 复核 T10-A 落地产物（两键组 + 窗口装载 + reply_count 字段已就位）(1) 界定"每主楼前 K 条"的取数（comment_id 升序前 K 条；热度选条属 N17 不做）与 replyCount 口径（与 children 数一致）(2) 拍板展开接口形态（上述待定①）与缺省路径语义（上述待定②）→ **回写本节 + NEEDS 4.0 后再动手**（G7）(3) 前端 helper 抽法：本地余量 + 用尽再请求的通用形态（供 follow/user 复用），detail.js 接入 chunk + 小批 + 展开状态管理 (4) 删除/点赞后展开态的失效一致性（定向失效已由 T10-A 承载，前端展开缓存需复位）(5) 若清单未覆盖 → 回写本文档再动手。
 * **验收**：首屏响应体每主楼 children ≤ K 条 + 每主楼带 replyCount 字段；"展开加载更多回复"分页不重不漏（页间由构造保证）；前端大 chunk 一次拉取 + 本地小批展示、本地用尽才发请求（可观测请求数下降）；公共"分块列表" helper 抽出并被 detail.js 使用（T11 可复用）；reply_count 增删维护 JUnit 全绿；pytest 评论用例**重构后**全绿 + 相关 JUnit 绿。
+
+> **执行回写（2026-09-20 T10-B 窗口收官）**：状态 = **已完成**（依赖 T10-A 已归档/提交）。落地：① 展开接口 `GET /comment/replies?rootId&page&pageSize`（信封，total=主楼 reply_count；CommentController `/comment/*` 通配加 case，未登录可看）② 分页信封每主楼只带 children 前 K=2 + `replyCount`（CommentCacheDTO 字段，`CommentService.convertToCommentVO` 透传修复——review 阶段发现构造器漏拷）③ 楼中楼缓存只存前 K（懒载 DB 全量取、HSET 截断前 2；`missingFingerprint` 单飞 key 修复 review M3）④ 缺省数组 = **DB 全量直取**（getComments+buildCommentTree，children 全量逐字节兼容，断言含 replyCount 字段向后兼容）⑤ `reply_count` 维护 = 增回复 +1 / 删回复 −1（防负守卫 `AND reply_count+?>=0`）/ 删主楼不扣；回填脚本 `temp_script/backfill_comment_reply_count.py` 已对 3306/3307 幂等执行（54/45 主楼全部满足）⑥ 域级 pageSize 上限 500（`BaseServletUtil.parsePageSize(req,max)` 重载，公共 cap 50 不动，`test_page_size_capped_at_50`→`_domain_max`）⑦ 前端 `static/js/chunkedList.js` 公共"分块列表"helper（T10-B 抽出，T11 复用）+ detail.js 大 chunk 200/小批 10/展开回复（展开态 `expandedRoots` 持久化重灌修复 review L2）。**DDL**：`comment.reply_count` + `idx_content_parent` 为 T10-A G9 闭环产物，本任务复用无新 DDL。**测试**：全链 `tv.py --env test test all` exit 0（JUnit 全绿 + pytest 145 passed——T10-B 新增展开/信封/增删维护/删主楼用例 3 个，142→145；缺省用例零改动通过）。**subagent review（用户点名）**：general-purpose 对照计划复审，**无阻断项**；处置——M1（展开 >1000 截断）修复为 50000 封顶（超大型主楼 keyset 化留档）、M3（懒载单飞按 contentId 粒度偏粗）修复为 `missingFingerprint`、L2（前端 render 重建丢展开态）修复为持久化重灌；M2（删回复不级联、存量 seed 二级链孤儿）属 D7 已声明边界（新数据扁平安全）仅记录；L1（replyCount 兜底瞬时低估）L3（nextBatch loading 返回 [] 由按钮 disabled 规避）L4（前端删除计数用预览 children 低估，下次重读纠正）为观察项留档；pytest 覆盖缺口（间接二级回复展开）记录：API 归一化无法动态构造二级链（seed 专有），委 seed 基线用例后续覆盖。**残余窗口**：超大型主楼展开 keyset 化（M1 回写）、chunkedList 迁移 follow/publish/search/user 归 T11（N15）。commit：`refactor(cache-10b)`（窗口内定稿）。
 
 ### T11 关注/粉丝列表分页（后端大分页 + 前端小分页）
 

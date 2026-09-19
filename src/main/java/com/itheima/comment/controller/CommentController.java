@@ -19,6 +19,9 @@ import java.util.List;
 
 @WebServlet("/comment/*")
 public class CommentController extends BaseServlet {
+    /** T10-B：评论域 pageSize 上限（大 chunk 前端承载；公共 parsePageSize cap 50 不动）。 */
+    private static final int COMMENT_PAGE_SIZE_MAX = 500;
+
     @Inject
     private CommentService commentService;
     @Inject
@@ -53,6 +56,8 @@ public class CommentController extends BaseServlet {
         }
         if ("/show".equals(action)) {
             showComment(req, resp);
+        } else if ("/replies".equals(action)) {
+            repliesComment(req, resp);
         } else {
             BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "未识别功能");
         }
@@ -84,11 +89,32 @@ public class CommentController extends BaseServlet {
         // 传任一分页参数 → 分页信封（主楼分页 + 楼中楼整树）。分页解析复用 T5 公共方法（默认 1/10、上限 50）。
         if (hasPagingParams(req)) {
             BaseServletUtil.writeSuccess(resp, contentService.getCommentsForContent(contentId, userId,
-                    BaseServletUtil.parsePage(req), BaseServletUtil.parsePageSize(req)));
+                    BaseServletUtil.parsePage(req),
+                    BaseServletUtil.parsePageSize(req, COMMENT_PAGE_SIZE_MAX))); // T10-B 域级上限 500（大 chunk）
         } else {
             List<?> comments = contentService.getCommentsForContent(contentId, userId);
             BaseServletUtil.writeSuccess(resp, comments);
         }
+    }
+
+    /** T10-B：展开某主楼全部回复（分页信封；未登录可看，AuthFilter 与 /show 同鉴权）。 */
+    protected void repliesComment(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        String rootIdStr = req.getParameter("rootId");
+        if (rootIdStr == null || rootIdStr.isEmpty()) {
+            BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "rootId不能为空");
+            return;
+        }
+        long rootId;
+        try {
+            rootId = Long.parseLong(rootIdStr);
+        } catch (NumberFormatException e) {
+            BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "rootId格式错误");
+            return;
+        }
+        Long userId = (Long) req.getAttribute("userId");
+        BaseServletUtil.writeSuccess(resp, commentService.getRepliesForRoot(rootId, userId,
+                BaseServletUtil.parsePage(req),
+                BaseServletUtil.parsePageSize(req, COMMENT_PAGE_SIZE_MAX)));
     }
 
     /**

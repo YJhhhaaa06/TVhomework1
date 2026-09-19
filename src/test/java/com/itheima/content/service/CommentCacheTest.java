@@ -113,56 +113,68 @@ class CommentCacheTest {
         assertEquals(1, page.getRootTotal(), "信封仍带真实 total");
     }
 
-    // ==================== getFullTree（缺省全量数组 = 两键组全量拼装） ====================
+    // ==================== getFullTree（缺省全量数组 = DB 全量直取 + 上溯建树，T10-B） ====================
 
     @Test
     void getFullTreeBuildsAllRootsWithChildren() throws SQLException {
         CommentCacheDTO m1 = comment(1L, 4L, 7L, null);
         CommentCacheDTO m2 = comment(2L, 4L, 8L, null);
         CommentCacheDTO reply = comment(3L, 4L, 9L, 1L);
-        when(commentDao.getMainCommentsAfter(eq(conn), eq(4L), eq(0L), anyInt())).thenReturn(List.of(m1, m2));
-        when(commentDao.getMainCommentsAfter(eq(conn), eq(4L), eq(2L), anyInt())).thenReturn(List.of());
-        when(commentDao.countMainComments(conn, 4L)).thenReturn(2);
-        when(commentDao.getRepliesByRootIds(conn, 4L, List.of(1L, 2L))).thenReturn(List.of(reply));
+        when(commentDao.getComments(conn, 4L)).thenReturn(List.of(m1, m2, reply));
 
         List<CommentCacheDTO> tree = cache.getFullTree(4L);
 
         assertEquals(2, tree.size());
         assertEquals(1L, tree.get(0).getCommentId());
         assertEquals(List.of(3L), tree.get(0).getChildren().stream()
-                .map(CommentCacheDTO::getCommentId).toList());
+                .map(CommentCacheDTO::getCommentId).toList(), "间接回复上溯挂主楼（DB 全量直取建树）");
         assertTrue(tree.get(1).getChildren().isEmpty());
     }
 
     @Test
-    void getFullTreeNoCommentsReturnsNullAndMarksEmpty() throws SQLException {
-        when(commentDao.getMainCommentsAfter(conn, 3L, 0L, 200)).thenReturn(List.of());
-        when(commentDao.countMainComments(conn, 3L)).thenReturn(0);
+    void getFullTreeNoCommentsReturnsNull() throws SQLException {
+        when(commentDao.getComments(conn, 3L)).thenReturn(List.of());
 
-        assertNull(cache.getFullTree(3L), "已确认无评论 → null（hit-empty 语义）");
+        assertNull(cache.getFullTree(3L), "已确认无评论 → null");
 
-        // 第二次读命中空标记，不再查 DB
+        // 缺省全量路径 = DB 直取（T10-B）：不占两键组缓存，每次都查（缺省调用方仅剩兼容场景）
         assertNull(cache.getFullTree(3L));
-        verify(commentDao, times(1)).getMainCommentsAfter(eq(conn), eq(3L), eq(0L), anyInt());
+        verify(commentDao, times(2)).getComments(eq(conn), eq(3L));
+    }
+
+    @Test
+    void getFullTreeCarriesReplyCountFromDb() throws SQLException {
+        CommentCacheDTO m1 = comment(1L, 4L, 7L, null);
+        m1.setReplyCount(3);
+        when(commentDao.getComments(conn, 4L)).thenReturn(List.of(m1));
+
+        List<CommentCacheDTO> tree = cache.getFullTree(4L);
+
+        assertEquals(3, tree.get(0).getReplyCount(), "缺省数组带 replyCount（DB reply_count 字段）");
     }
 
     // ==================== 楼中楼懒载（HMGET field 缺失 → 单飞 DB 分组回填） ====================
 
     @Test
-    void repliesAreLazilyLoadedAndCached() throws SQLException {
-        CommentCacheDTO m1 = comment(1L, 5L, 7L, null);
-        CommentCacheDTO reply = comment(2L, 5L, 8L, 1L);
-        when(commentDao.getMainCommentsAfter(eq(conn), eq(5L), eq(0L), anyInt())).thenReturn(List.of(m1));
-        when(commentDao.getMainCommentsAfter(eq(conn), eq(5L), eq(1L), anyInt())).thenReturn(List.of());
-        when(commentDao.getRepliesByRootIds(conn, 5L, List.of(1L))).thenReturn(List.of(reply));
+    void getRootPagePreviewRepliesCappedToKAndLazilyCached() throws SQLException {
+        CommentCacheDTO m1 = comment(1L, 7L, 10L, null);
+        m1.setReplyCount(3);
+        when(commentDao.getMainCommentsAfter(eq(conn), eq(7L), eq(0L), anyInt())).thenReturn(List.of(m1));
+        when(commentDao.getMainCommentsAfter(eq(conn), eq(7L), longThat(after -> after > 0L), anyInt()))
+                .thenReturn(List.of());
+        when(commentDao.countMainComments(conn, 7L)).thenReturn(1);
+        when(commentDao.getRepliesByRootIds(eq(conn), eq(7L), anyList()))
+                .thenReturn(List.of(comment(2L, 7L, 11L, 1L), comment(3L, 7L, 11L, 1L), comment(4L, 7L, 11L, 1L)));
 
-        List<CommentCacheDTO> first = cache.getFullTree(5L);
-        List<CommentCacheDTO> second = cache.getFullTree(5L);
+        CommentCache.PageWindow window = cache.getRootPage(7L, 1, 10);
 
-        assertEquals(1, first.get(0).getChildren().size());
-        assertEquals(1, second.get(0).getChildren().size());
-        // 第二次读命中 Hash field，不再查 DB
-        verify(commentDao, times(1)).getRepliesByRootIds(eq(conn), eq(5L), anyList());
+        assertEquals(2, window.getRoots().get(0).getChildren().size(),
+                "T10-B：缓存只存前 K=2（命中反序列化与楼中楼总量解耦）");
+        assertEquals(3, window.getRoots().get(0).getReplyCount(),
+                "replyCount 来自主楼字段（DB reply_count）");
+        // 第二次读命中 Hash field，不再查 DB（懒载缓存生效）
+        cache.getRootPage(7L, 1, 10);
+        verify(commentDao, times(1)).getRepliesByRootIds(eq(conn), eq(7L), anyList());
     }
 
     // ==================== 失效重映射（增量 / 删回复 / 点赞 → 定向 HDEL field） ====================
@@ -171,16 +183,19 @@ class CommentCacheTest {
     void invalidateReplyUnderRefreshesFieldOnNextRead() throws SQLException {
         CommentCacheDTO m1 = comment(1L, 6L, 7L, null);
         when(commentDao.getMainCommentsAfter(eq(conn), eq(6L), eq(0L), anyInt())).thenReturn(List.of(m1));
-        when(commentDao.getMainCommentsAfter(eq(conn), eq(6L), eq(1L), anyInt())).thenReturn(List.of());
+        when(commentDao.getMainCommentsAfter(eq(conn), eq(6L), longThat(after -> after > 0L), anyInt()))
+                .thenReturn(List.of());
+        when(commentDao.countMainComments(conn, 6L)).thenReturn(1);
         when(commentDao.getRepliesByRootIds(conn, 6L, List.of(1L)))
                 .thenReturn(List.of(comment(2L, 6L, 8L, 1L)))
                 .thenReturn(List.of(comment(2L, 6L, 8L, 1L), comment(3L, 6L, 9L, 1L)));
 
-        cache.getFullTree(6L); // 装载并缓存 replies field
+        cache.getRootPage(6L, 1, 10); // 装载并缓存 replies field（前 K）
         cache.invalidateReplyUnder(6L, 1L); // 模拟回复增删
-        List<CommentCacheDTO> refreshed = cache.getFullTree(6L);
+        CommentCache.PageWindow refreshed = cache.getRootPage(6L, 1, 10);
 
-        assertEquals(2, refreshed.get(0).getChildren().size(), "HDEL 后懒载刷新最新 children");
+        assertEquals(2, refreshed.getRoots().get(0).getChildren().size(),
+                "HDEL 后懒载刷新最新 children（≤K）");
         verify(commentDao, times(2)).getRepliesByRootIds(eq(conn), eq(6L), anyList());
     }
 
@@ -244,7 +259,7 @@ class CommentCacheTest {
     // ==================== Redis 异常降级（走 DB，不写回） ====================
 
     @Test
-    void getFullTreeDegradesToDbWhenRedisFails() throws SQLException {
+    void getRootPageDegradesToDbWhenRedisFails() throws SQLException {
         RedisAccess brokenRedis = mock(RedisAccess.class);
         when(brokenRedis.execute(any(Function.class))).thenThrow(new CacheException("redis down"));
         doThrow(new CacheException("redis down")).when(brokenRedis).executeVoid(any(Consumer.class));
@@ -252,12 +267,13 @@ class CommentCacheTest {
                 new JacksonCodec(), new CacheStats());
 
         CommentCacheDTO m1 = comment(1L, 3L, 7L, null);
-        when(commentDao.getMainCommentsAfter(conn, 3L, 0L, 200)).thenReturn(List.of(m1));
+        when(commentDao.getMainCommentsAfter(conn, 3L, 0L, 10)).thenReturn(List.of(m1));
+        when(commentDao.countMainComments(conn, 3L)).thenReturn(1);
 
-        List<CommentCacheDTO> tree = degraded.getFullTree(3L);
+        CommentCache.PageWindow window = degraded.getRootPage(3L, 1, 10);
 
-        assertEquals(1, tree.size(), "Redis 异常降级走 DB（不写回）");
-        assertTrue(tree.get(0).getChildren().isEmpty());
+        assertEquals(1, window.getRoots().size(), "Redis 异常分页降级走 DB 窗口读（不写回）");
+        assertEquals(1, window.getRootTotal(), "总数 DB 兜底");
     }
 
     // ==================== collectCommentIds（保留，行为不变） ====================

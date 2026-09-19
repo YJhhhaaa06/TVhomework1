@@ -44,7 +44,11 @@ public class BaseServletUtil extends HttpServlet {
         writeError(resp, code.getCode(), code.getMessage());
     }
 
-    // 分页参数解析（T5 收敛公共；默认 page=1 / pageSize=10 / 上限 50，与原 Feed/Profile 私有实现逐字符一致）
+    // 分页参数解析（T5 收敛公共；默认 page=1 / pageSize=10；T10-B 版本上限参数化，原语义不变）
+
+    /** 公共上限 50（原 Feed/Profile 语义，其它分页接口沿用）。 */
+    public static final int DEFAULT_PAGE_SIZE_MAX = 50;
+
     public static int parsePage(HttpServletRequest req) {
         String param = req.getParameter("page");
         if (param == null || param.isBlank()) {
@@ -58,14 +62,20 @@ public class BaseServletUtil extends HttpServlet {
         }
     }
 
+    /** 默认解析：上限 50（T10-B 起委托带 max 重载，公共语义零变化）。 */
     public static int parsePageSize(HttpServletRequest req) {
+        return parsePageSize(req, DEFAULT_PAGE_SIZE_MAX);
+    }
+
+    /** 域级上限版（T10-B）：默认 pageSize=10、上限 max（如评论域 500）；语义同原公共解析，仅上限参数化。 */
+    public static int parsePageSize(HttpServletRequest req, int max) {
         String param = req.getParameter("pageSize");
         if (param == null || param.isBlank()) {
             return 10;
         }
         try {
             int s = Integer.parseInt(param);
-            return s > 0 ? Math.min(s, 50) : 10;
+            return s > 0 ? Math.min(s, max) : 10;
         } catch (NumberFormatException e) {
             return 10;
         }

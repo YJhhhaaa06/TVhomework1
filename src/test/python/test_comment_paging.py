@@ -1,25 +1,28 @@
 # -*- coding: utf-8 -*-
 """
-test_comment_paging.py - 评论列表主楼分页（T8 / N11b）验收测试。
+test_comment_paging.py - 评论列表主楼分页 + 楼中楼前 K 条 + 展开接口（T8 / T10-A / T10-B 验收测试）。
 
 背景：
     `/comment/show` 原为整树全量返回（主楼 + 每条的楼中楼），评论多时响应体与成本随总量放大。
-    T8 落地：**主楼分页 + 楼中楼整树**（每页 N 条主楼，每条主楼携带其完整楼中楼），
-    缓存装载结构不变（仍是整树 JSON，切片发生在展示层）。
+    T8 落地：**主楼分页 + 楼中楼整树**；T10-A 落地：两键组 + 主楼窗口装载（契约零变化）；
+    T10-B 落地：分页信封每主楼只带 **前 K=2 条楼中楼 + replyCount 总数**，展开走 **/comment/replies**。
 
 契约（缺省兼容，硬要求）：
-- **不传** page/pageSize → data 仍为全量数组，与改造前逐字节一致（既有用例零破坏）；
+- **不传** page/pageSize → data 仍为全量数组（children 全量随行，另带 replyCount 字段），既有断言零破坏；
 - **传任一** → data = {list,total,page,pageSize,totalPages}，`total` = **主楼条数**；
-- 分页解析复用公共 `BaseServletUtil.parsePage/parsePageSize`（默认 1/10、上限 50）。
+- 分页解析：page 默认 1、pageSize 默认 10，评论域上限 **500**（公共 cap 50 仅其它接口沿用）；
+- 分页信封每主楼：children ≤ 2 条 + `replyCount`（该主楼回复总数）；
+- 展开：`GET /comment/replies?rootId&page&pageSize` → 分页信封，`total` = 该主楼回复总数。
 
 覆盖：
 1. 带分页参数 → 信封字段齐全，total 为主楼数
-2. 不传参数 → 仍是全量数组（缺省兼容回归）
+2. 不传参数 → 仍是全量数组（含 replyCount 字段）
 3. 页间主楼不重不漏、顺序与全量一致（comment_id 升序）
 4. 半参数（只传 page 或只传 pageSize）同样视为分页请求
 5. 越界页 → 空列表但保留真实 total
-6. pageSize 超上限 → 复用公共 cap 50
-7. 楼中楼随主楼整体返回、不被切
+6. pageSize 超上限 → 域级上限 500
+7. 每主楼只带前 K=2 条楼中楼 + replyCount，展开接口取齐全部（不重不漏、total 一致）
+8. reply_count 随增删回复维护
 
 说明：
 - 本文件自建一条专用内容（module 级 fixture）并只在其上发评论，使 total 完全可控；
@@ -50,6 +53,17 @@ def show(base_url, content_id, token=None, **params):
     resp = requests.get(f"{base_url}/comment/show", params=query, headers=headers, timeout=10)
     result = resp.json()
     assert result.get("code") == 200, f"查询评论失败: {result}"
+    return result.get("data")
+
+
+def show_replies(base_url, root_id, token=None, **params):
+    """T10-B：调 /comment/replies 展开某主楼回复；返回分页信封 data。"""
+    headers = {"token": token} if token else {}
+    query = {"rootId": root_id}
+    query.update(params)
+    resp = requests.get(f"{base_url}/comment/replies", params=query, headers=headers, timeout=10)
+    result = resp.json()
+    assert result.get("code") == 200, f"查询回复失败: {result}"
     return result.get("data")
 
 
@@ -144,6 +158,7 @@ class TestCommentPaging:
 
         assert isinstance(data, list), "不传分页参数应保持全量数组（缺省兼容）"
         assert root_ids(data) == main_ids
+        assert "replyCount" in data[0], "T10-B：缺省数组也带 replyCount 字段（向后兼容新增字段）"
 
     def test_pages_cover_all_roots_without_overlap(self, base_url, paging_seed):
         cid, main_ids = paging_seed
@@ -178,19 +193,73 @@ class TestCommentPaging:
         assert data["total"] == MAIN_COUNT, "越界页仍保留真实 total"
         assert data["totalPages"] == 3
 
-    def test_page_size_capped_at_50(self, base_url, paging_seed):
+    def test_page_size_capped_at_domain_max(self, base_url, paging_seed):
         cid, main_ids = paging_seed
         data = show(base_url, cid, page=1, pageSize=999)
 
-        assert data["pageSize"] == 50, "pageSize 上限复用公共解析（cap 50）"
+        assert data["pageSize"] == 500, "T10-B：评论域 pageSize 上限 500（公共 cap 50 仅其它接口沿用）"
         assert root_ids(data["list"]) == main_ids
 
-    def test_replies_stay_whole_with_root(self, base_url, paging_seed):
+    def test_replies_preview_k_and_expand(self, base_url, paging_seed):
         cid, main_ids = paging_seed
         data = show(base_url, cid, page=1, pageSize=1)
 
         assert len(data["list"]) == 1
         root = data["list"][0]
         assert root["commentId"] == main_ids[0]
-        assert len(root.get("children") or []) == ROOT_REPLY_COUNT, \
-            "楼中楼随主楼整体返回、不被切"
+        children = root.get("children") or []
+        assert len(children) <= 2, "T10-B：每主楼只带前 K=2 条楼中楼"
+        assert root.get("replyCount", -1) >= ROOT_REPLY_COUNT, "replyCount = 该主楼回复总数"
+
+        # 展开接口补齐全部回复（不重不漏、total 与 replyCount 一致）
+        replies = show_replies(base_url, root["commentId"], page=1, pageSize=50)
+        reply_ids = [r["commentId"] for r in replies["list"]]
+        assert len(reply_ids) == ROOT_REPLY_COUNT, "展开返回该主楼全部回复"
+        assert reply_ids == sorted(reply_ids), "comment_id 升序"
+        assert replies["total"] == root["replyCount"], "展开 total 与 replyCount 口径一致"
+
+    def test_replies_envelope_and_out_of_range(self, base_url, paging_seed):
+        cid, main_ids = paging_seed
+        data = show_replies(base_url, main_ids[0], page=1, pageSize=1)
+
+        assert data["total"] == ROOT_REPLY_COUNT
+        assert data["pageSize"] == 1
+        assert len(data["list"]) == 1
+
+        beyond = show_replies(base_url, main_ids[0], page=99, pageSize=1)
+        assert beyond["list"] == [], "越界页返回空列表"
+        assert beyond["total"] == ROOT_REPLY_COUNT, "越界页仍保留真实 total"
+
+    def test_reply_count_maintained_on_add_and_delete(self, base_url, token_a, paging_seed):
+        cid, main_ids = paging_seed
+        before = show_replies(base_url, main_ids[0], page=1, pageSize=50)["total"]
+
+        add_comment(base_url, token_a, cid, "pg_extra_reply_1", parent_id=main_ids[0])
+        after_add = show_replies(base_url, main_ids[0], page=1, pageSize=50)
+        assert after_add["total"] == before + 1, "增回复后 replyCount +1"
+
+        # 删除该新回复 → replyCount 回落
+        new_id = after_add["list"][-1]["commentId"]
+        resp = requests.post(f"{base_url}/comment/delete", params={"commentId": new_id},
+                             headers={"token": token_a}, timeout=10)
+        assert resp.json().get("code") == 200, f"删除回复失败: {resp.json()}"
+        after_del = show_replies(base_url, main_ids[0], page=1, pageSize=50)
+        assert after_del["total"] == before, "删回复后 replyCount 回落"
+
+    def test_delete_main_does_not_double_count(self, base_url, token_a, paging_seed):
+        """删主楼（整栋）后其回复不再计入任何 reply_count；其它主楼不受影响。"""
+        cid, main_ids = paging_seed
+        # 再造一条主楼 + 一条回复，然后删主楼
+        add_comment(base_url, token_a, cid, "pg_delete_me")
+        fresh = show(base_url, cid, page=1, pageSize=10)
+        target = fresh["list"][-1]
+        add_comment(base_url, token_a, cid, "pg_delete_me_reply", parent_id=target["commentId"])
+        resp = requests.post(f"{base_url}/comment/delete", params={"commentId": target["commentId"]},
+                             headers={"token": token_a}, timeout=10)
+        assert resp.json().get("code") == 200, f"删除主楼失败: {resp.json()}"
+        # 被删主楼不可再展开（404），原第一条主楼 replyCount 不变
+        resp = requests.get(f"{base_url}/comment/replies",
+                            params={"rootId": target["commentId"], "page": 1, "pageSize": 1}, timeout=10)
+        assert resp.json().get("code") != 200, "被删主楼展开应失败（评论不存在）"
+        root0 = show(base_url, cid, page=1, pageSize=1)["list"][0]
+        assert root0["replyCount"] == ROOT_REPLY_COUNT, "其它主楼 replyCount 不受影响"

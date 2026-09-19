@@ -64,6 +64,9 @@ public class CommentCache {
     /** 窗口装载单趟上限（每次 DB keyset 装载条数；并发水位按需轮次推进，防单趟过大）。 */
     private static final int LOAD_BATCH_LIMIT = 200;
 
+    /** T10-B：每主楼缓存只存前 K 条楼中楼（命中路径反序列化与楼中楼总量解耦；与 CommentService.REPLY_PREVIEW_K 同值）。 */
+    public static final int PREVIEW_REPLIES_PER_ROOT = 2;
+
     private static final TypeReference<List<CommentCacheDTO>> COMMENT_LIST_TYPE = new TypeReference<>() {
     };
 
@@ -111,16 +114,60 @@ public class CommentCache {
     }
 
     /**
-     * 缺省全量整树（不传分页参数的数组语义）：从两键组拼装等价整树（全量装载，语义即全量）。
+     * 缺省全量整树（不传分页参数的数组语义）：**DB 全量直取 + 上溯建树**（T10-B）。
      *
-     * @return 整树主楼列表（children 随行）；null = 已确认无评论
+     * <p>children 全量随行（缺省=全量语义、逐字节兼容）；不占两键组——前端已改传大 chunk，
+     * 缺省调用方仅剩兼容场景（pytest 缺省用例）。DB 查询失败 → 记日志转 null（对外行为不变）。
      */
     public List<CommentCacheDTO> getFullTree(long contentId) {
-        List<CommentCacheDTO> roots = prepareRoots(contentId, Long.MAX_VALUE);
-        if (roots == null) {
+        try {
+            List<CommentCacheDTO> rows = transactionTemplate.execute(conn -> {
+                try {
+                    return commentDao.getComments(conn, contentId);
+                } catch (SQLException e) {
+                    throw new DatabaseException("评论树 DB 查询失败", e);
+                }
+            });
+            if (rows == null || rows.isEmpty()) {
+                return null;
+            }
+            return buildCommentTree(rows);
+        } catch (DatabaseException e) {
+            LOGGER.log(Level.WARNING, "评论树 DB 查询失败（缺省全量路径，按无评论处理）, contentId=" + contentId, e);
             return null;
         }
-        return attachReplies(contentId, roots);
+    }
+
+    /** 楼中楼归一化建树（T10-B 缺省路径用）：回复一律挂主楼（沿 parent 链上溯到顶，防御存量脏数据）。 */
+    private List<CommentCacheDTO> buildCommentTree(List<CommentCacheDTO> list) {
+        Map<Long, CommentCacheDTO> map = new HashMap<>();
+        List<CommentCacheDTO> roots = new ArrayList<>();
+
+        for (CommentCacheDTO c : list) {
+            c.setChildren(new ArrayList<>());
+            map.put(c.getCommentId(), c);
+        }
+
+        for (CommentCacheDTO c : list) {
+            Long parentId = c.getParentId();
+            if (parentId == null || parentId == 0) {
+                roots.add(c);
+                continue;
+            }
+            CommentCacheDTO parent = map.get(parentId);
+            if (parent == null) {
+                continue; // 父缺失（理论不可达，迁移前已归一）
+            }
+            while (parent.getParentId() != null && parent.getParentId() != 0) {
+                CommentCacheDTO ancestor = map.get(parent.getParentId());
+                if (ancestor == null) {
+                    break;
+                }
+                parent = ancestor;
+            }
+            parent.getChildren().add(c);
+        }
+        return roots;
     }
 
     /**
@@ -394,7 +441,13 @@ public class CommentCache {
         List<CommentCacheDTO> pageTree = new ArrayList<>(roots.size());
         for (CommentCacheDTO root : roots) {
             List<CommentCacheDTO> children = childrenByRoot.get(root.getCommentId());
-            root.setChildren(children == null ? new ArrayList<>() : children);
+            children = children == null ? new ArrayList<>() : children;
+            root.setChildren(children);
+            // T10-B replyCount 兜底：旧缓存主楼无 replyCount 字段 → 以已缓存 children 数自愈（欠准但渐进正确，
+            // 失效/重装后由 DB reply_count 纠正）
+            if (root.getReplyCount() == 0 && !children.isEmpty()) {
+                root.setReplyCount(children.size());
+            }
             pageTree.add(root);
         }
         return pageTree;
@@ -404,7 +457,7 @@ public class CommentCache {
     private Map<Long, List<CommentCacheDTO>> lazilyLoadReplies(String repliesKey, long contentId, List<Long> missing) {
         Map<Long, List<CommentCacheDTO>> grouped;
         try {
-            grouped = singleFlight.get(repliesKey + ":load:" + contentId, () -> {
+            grouped = singleFlight.get(repliesKey + ":load:" + contentId + ":" + missingFingerprint(missing), () -> {
                 try {
                     List<CommentCacheDTO> rows = transactionTemplate.execute(conn -> {
                         try {
@@ -425,12 +478,15 @@ public class CommentCache {
             LOGGER.log(Level.WARNING, "评论楼中楼懒载异常（保持未装载态）, contentId=" + contentId, e);
             return Map.of();
         }
+        // T10-B：裁为前 K 后统一作为 HSET 内容与本次组装来源（保证缓存与响应同源）
+        Map<Long, List<CommentCacheDTO>> preview = truncateToPreview(grouped, missing);
         try {
             redisAccess.executeVoid(j -> {
                 Pipeline p = j.pipelined();
                 for (Long rootId : missing) {
-                    List<CommentCacheDTO> children = grouped.getOrDefault(rootId, new ArrayList<>());
-                    p.hset(repliesKey, String.valueOf(rootId), codec.toJson(children));
+                    // 缓存只存前 K 条（命中路径反序列化与楼中楼总量解耦；展开剩余走 /comment/replies DB）
+                    p.hset(repliesKey, String.valueOf(rootId),
+                            codec.toJson(preview.get(rootId)));
                 }
                 p.expire(repliesKey, ttlSeconds());
                 p.sync();
@@ -439,7 +495,30 @@ public class CommentCache {
             stats.record(CacheStats.Event.WRITE_FAIL, repliesKey);
             // 回填失败：不掩蔽，本次已拿到结果（调用方绕过缓存直接组装）；下次重试
         }
-        return grouped;
+        return preview;
+    }
+
+    /** 懒载单飞 key 指纹：missing 主楼集合的有序串联——同页并发只装载一次；异页并发互不误共享（review M3）。 */
+    private static String missingFingerprint(List<Long> missing) {
+        List<Long> sorted = new ArrayList<>(missing);
+        sorted.sort(Long::compareTo);
+        StringBuilder sb = new StringBuilder();
+        for (Long id : sorted) {
+            sb.append(id).append(',');
+        }
+        return sb.toString();
+    }
+
+    /** T10-B：按主楼截断为前 K 条（懒载返回与 HSET 内容一致，保证组装与缓存同源）。 */
+    private static Map<Long, List<CommentCacheDTO>> truncateToPreview(
+            Map<Long, List<CommentCacheDTO>> grouped, List<Long> rootIds) {
+        Map<Long, List<CommentCacheDTO>> preview = new HashMap<>();
+        for (Long rootId : rootIds) {
+            List<CommentCacheDTO> children = grouped.getOrDefault(rootId, new ArrayList<>());
+            preview.put(rootId, children.size() > PREVIEW_REPLIES_PER_ROOT
+                    ? new ArrayList<>(children.subList(0, PREVIEW_REPLIES_PER_ROOT)) : children);
+        }
+        return preview;
     }
 
     /** 降级 DB：按主楼批量取楼中楼（不写回，D4）。返回按 parent_id 分组；DB 失败返回 null。 */

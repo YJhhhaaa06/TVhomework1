@@ -220,6 +220,67 @@ public class CommentDao {
 
 
 
+    /**
+     * 按主楼展开全部回复的分页查询（T10-B 展开接口）：直接回复 + 间接二级回复（与建树上溯口径一致，
+     * 新数据 addComment 归一化 parent 直接挂主楼，seed 存量最多二级间接），comment_id 升序 keyset。
+     */
+    public List<CommentCacheDTO> getRepliesInTreeByRoot(Connection conn, long contentId, long rootId,
+                                                        long afterCommentId, int limit) throws SQLException {
+        String sql =
+                "SELECT c.*, u.username, r.username AS reply_to_username " +
+                "FROM comment c LEFT JOIN users u ON c.user_id = u.id " +
+                "LEFT JOIN users r ON c.reply_to_user_id = r.id " +
+                "WHERE c.content_id=? AND c.is_deleted=0 AND c.comment_id > ? AND (" +
+                "  c.parent_id=? OR c.parent_id IN (" +
+                "    SELECT s.comment_id FROM comment s " +
+                "    WHERE s.content_id=? AND s.parent_id=? AND s.is_deleted=0)) " +
+                "ORDER BY c.comment_id LIMIT ?";
+        List<CommentCacheDTO> list = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, contentId);
+            ps.setLong(2, afterCommentId);
+            ps.setLong(3, rootId);
+            ps.setLong(4, contentId);
+            ps.setLong(5, rootId);
+            ps.setInt(6, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    list.add(ResultMap.buildComment(rs));
+                }
+            }
+        }
+        return list;
+    }
+
+    /** 主楼 reply_count 增减（T10-B：增回复 +1、删回复 −1；防负守卫，删主楼不调用）。返回受影响行数。 */
+    public int updateReplyCount(Connection conn, long rootId, int delta) throws SQLException {
+        String sql = "UPDATE comment SET reply_count = reply_count + ? " +
+                "WHERE comment_id = ? AND reply_count + ? >= 0";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, delta);
+            ps.setLong(2, rootId);
+            ps.setInt(3, delta);
+            return ps.executeUpdate();
+        }
+    }
+
+    /** 定位未删除主楼（T10-B 展开接口前置校验）：主楼被删/非主楼 → null。 */
+    public CommentCacheDTO findMainById(Connection conn, long commentId) throws SQLException {
+        String sql = "SELECT c.*, u.username, r.username AS reply_to_username " +
+                "FROM comment c LEFT JOIN users u ON c.user_id = u.id " +
+                "LEFT JOIN users r ON c.reply_to_user_id = r.id " +
+                "WHERE c.comment_id=? AND c.is_deleted=0 AND (c.parent_id IS NULL OR c.parent_id = 0)";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, commentId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return ResultMap.buildComment(rs);
+                }
+            }
+        }
+        return null;
+    }
+
     //改
 
     public void updateLikeCount(Connection conn, Long commentId, int delta) throws SQLException {

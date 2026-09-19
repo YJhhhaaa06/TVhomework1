@@ -58,6 +58,8 @@ public class ResultMap {
         }
         cm.setReplyToUsername(rs.getString("reply_to_username"));
         cm.setLikeCount(rs.getInt("like_count"));
+        // T10-B：主楼回复总数（展开/信封 replyCount 字段来源；查询 SQL 带选出即可）
+        cm.setReplyCount(rs.getInt("reply_count"));
         return cm;
     }
 

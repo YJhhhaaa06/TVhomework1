@@ -484,17 +484,17 @@ com.itheima/
 - **前端**：`static/js/views/user.js` 的关注/粉丝 sheet 改为分页加载 + 「加载更多」（复用既有 `.load-more-btn` 样式；切换 following/followers 时重置页码与总页数）。
 - **包层边界**：分页信封落在 follow 域（**不 import content 域 `PageResult`**——content 已 import `follow.FollowCache`，反向引用会形成新的 follow↔content 包层环）；"PageResult 上移公共包供多域复用"登记留池（跨域重构不在本任务范围）。
 
-### 6.18 评论列表分页（T8 → T10-A：两键组 + 主楼窗口装载）
+### 6.18 评论列表分页（T8 → T10-A/T10-B：两键组 + 主楼窗口装载 + 楼中楼前 K + 展开接口）
 
-- **形态（T10-A 起）**：**两键组 + 主楼窗口装载**——`content:comments:{id}:roots`（LIST，主楼 JSON 无 children，comment_id 升序）+ `content:comments:{id}:replies`（HASH，field=主楼 id，值=该主楼 children 全量 JSON）+ `:count`（真实主楼总数）。命中路径 = 主楼 LRANGE 窗口 + 楼中楼 HMGET 该页主楼（**单次成本 ∝ 该页，与评论总量弱相关**——治 U-20 根因）；**DB 窗口装载**只发生在 List 水位不足时（keyset `comment_id > lastId LIMIT`），不再一次性查全库。
-- **切片点（T10-A 消除）**：原 `ContentService.sliceRoots` 已删除——切片改由 `CommentCache.getRootPage`（LRANGE 窗口取数）承担；越界页返回空列表但信封仍带真实 `total`（count key），语义不变。
-- **失效重映射（DB 源真理 + 失效自愈哲学不变）**：增/删主楼 → `invalidateRoots`（失效 roots+count，读懒重建窗口）；回复增删、点赞 → 定向 HDEL 该主楼 replies field（懒载刷新）；`CommentCache.notifyCommentLikeChanged` 经 `getRootIdByCommentId` 上溯主楼后定向失效。
-- **缺省全量数组**：不传分页参数由 `CommentCache.getFullTree` 从两键组**全量拼装**（缺省语义即全量，逐字节兼容；T10-B 前端改传参后自然少走全量路径）。
-- **接口口径（与 T7 同构，零变化）**：`GET /comment/show` 传 `page` 或 `pageSize` **任一** → `data = {list,total,page,pageSize,totalPages}`（复用 content 域 `PageResult`）；**两者都不传 → `data` 仍为全量数组**。分页参数解析复用 `BaseServletUtil.parsePage/parsePageSize`（默认 1 / 10、上限 50）。
-- **total 口径**：**主楼条数**（count key：首装惰性 COUNT 一次、增删主楼随失效重算），与"每页 N 条主楼"同源；与详情接口 `commentCount`（含楼中楼的总评论数）口径不同，前端头部计数仍取 `commentCount`。
-- **顺序**：主楼顺序 = `CommentDao.getMainCommentsAfter` 的 `ORDER BY c.comment_id`（键集升序，既有），页间不重不漏**由构造保证**；楼中楼 `children` 同序随行。
-- **前置判断不变**：内容不存在 / `commentEnabled=false` → 分页下返回空页（`total=0`），与缺省路径同一判断。
-- **前端**：`static/js/views/detail.js` 以 `CHUNK_SIZE=50` 主楼为一块加载（首屏第 1 页 + 「加载更多」追加下一块）；发/删评论后回到第 1 页重新累积；头部计数改用详情接口 `commentCount`。
+- **形态（T10-A 起）**：**两键组 + 主楼窗口装载**——`content:comments:{id}:roots`（LIST，主楼 JSON 无 children，comment_id 升序）+ `content:comments:{id}:replies`（HASH，field=主楼 id，值=该主楼 children **前 K=2 条** JSON）+ `:count`（真实主楼总数）。命中路径 = 主楼 LRANGE 窗口 + 楼中楼 HMGET 该页主楼（**单次成本 ∝ 该页**）；DB 窗口装载只发生在 List 水位不足时（keyset `comment_id > lastId LIMIT`）；**楼中楼缓存只存前 K**（懒载 DB 全量取该主楼、HSET 截断前 2），命中路径反序列化与楼中楼总量解耦。
+- **契约（T10-B，已批准变更）**：分页信封每主楼只带 **children 前 K=2 条 + `replyCount` 字段**（该主楼回复总数，= 建树上溯后 children 数，来自 DB `comment.reply_count`）；**展开剩余走 `/comment/replies`**；**缺省数组**（不传参）children 全量随行、逐字节兼容，实现 = **DB 全量直取**（getComments + 上溯建树，不占两键组）。
+- **展开接口 `/comment/replies`**（T10-B）：`rootId&page&pageSize` → 分页信封；`total` = 该主楼 `reply_count`（与 children 前 K 口径一致）；list = 直接回复 + 间接二级回复（keyset 升序，与建树上溯口径一致——新数据 parent 归一挂主楼、seed 存量最多二级间接），点赞态仅该页批量。
+- **切片点**：原 `ContentService.sliceRoots` 已删除（T10-A）；切片由 `CommentCache.getRootPage`（LRANGE 窗口取数）承担；越界页空列表但 `total` 真实。
+- **失效重映射（DB 源真理 + 失效自愈）**：增主楼 → `invalidateRoots`（roots+count，读懒重建）；**增回复/删回复/点赞** → `reply_count` 增量维护（+1/−1 防负守卫，删主楼不扣）+ 定向 HDEL 该主楼 replies field（懒载刷新前 K）；`notifyCommentLikeChanged` 经 `getRootIdByCommentId` 上溯主楼后定向失效。
+- **接口口径**：`GET /comment/show` 传任一 → 信封；不传 → 全量数组。分页解析：page 默认 1、pageSize 默认 10，评论域上限 **500**（`BaseServletUtil.parsePageSize(req, max)` 重载，公共 cap 50 仅其它接口沿用）。
+- **total 口径**：主楼 `total` = `:count` key（首装惰性 COUNT）；`replyCount` = DB `comment.reply_count`；与详情接口 `commentCount`（含楼中楼的总评论数）口径不同，前端头部计数仍取 `commentCount`。
+- **顺序**：主楼/展开回复均 `ORDER BY c.comment_id`（键集升序），页间不重不漏由构造保证。
+- **前端**：`static/js/views/detail.js` 评论列表走公共 **`chunkedList`** helper（`static/js/chunkedList.js`，T10-B 抽出、T11 复用）——大 chunk 200 + 本地小批 10，本地余量用尽才发下一个 chunk 请求；每条主楼首次只显示前 2 条回复 + "共 N 条回复"，展开时按需拉 `/comment/replies`；发/删评论后重置回第 1 页。
 
 ---
 
@@ -537,7 +537,8 @@ com.itheima/
 | GET | /like/comment/status | 点赞状态 | ✓ |
 | GET | /like/comment/count | 点赞数 | ✓ |
 | POST | /comment/add | 发表评论 | ✓ |
-| GET | /comment/show | 查看评论（**T8 起可选 `page`/`pageSize`**：传任一参数返回 `{list,total,page,pageSize,totalPages}`，`total`=主楼条数；缺省仍全量数组） | ✗ |
+| GET | /comment/show | 查看评论（可选 `page`/`pageSize`：传任一参数返回 `{list,total,page,pageSize,totalPages}`，`total`=主楼条数，**每主楼只带前 2 条楼中楼 + `replyCount` 总数**；缺省仍全量数组；pageSize 域级上限 **500**） | ✗ |
+| GET | /comment/replies | **T10-B**：展开某主楼全部回复（`rootId&page&pageSize` → 分页信封，`total`=该主楼回复总数） | ✗ |
 | POST | /comment/delete | 删除评论（软删除，仅自己） | ✓ |
 | POST | /content/commentEnabled | 作者开关自己作品的评论区（0=关/1=开） | ✓ |
 | POST | /follow/add | 关注 | ✓ |
