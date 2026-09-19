@@ -123,9 +123,15 @@ public class CommentService {
             }
         });
 
-        // 缓存更新放在事务提交后：失效评论树 key，读自愈回填最新评论（T3 4.5 业务显式失效）
+        // 缓存更新放在事务提交后（T3 4.5 业务显式失效，读自愈回填）：
+        // T10-A 失效重映射——增主楼 → 失效 roots+count（读懒建窗口）；增回复 → 定向 HDEL 所在主楼 replies field
         if (newComment != null) {
-            commentCache.invalidateComments(contentId);
+            Long effectiveParent = effectiveParentId[0];
+            if (effectiveParent == null || effectiveParent == 0) {
+                commentCache.invalidateRoots(contentId);
+            } else {
+                commentCache.invalidateReplyUnder(contentId, effectiveParent);
+            }
         }
     }
 
@@ -153,6 +159,8 @@ public class CommentService {
                 }
                 // 楼中楼删除规则：主楼整栋软删，回复只删自己
                 boolean isMain = comment.getParentId() == null || comment.getParentId() == 0;
+                // T10-A：删除前定位所属主楼（删主楼 = 自身；删回复 = 沿 parent 链上溯），供失效重映射
+                Long rootId = isMain ? commentId : commentDao.getRootIdByCommentId(conn, commentId);
                 int deletedCount;
                 if (isMain) {
                     // 必须先计数再软删：countFloorReplies 过滤 is_deleted=0，若先软删会数到 0 导致计数少扣
@@ -163,7 +171,7 @@ public class CommentService {
                     deletedCount = 1;
                 }
                 contentDao.updateCommentCount(conn, comment.getContentId(), -deletedCount);
-                return new DeletedComment(comment.getContentId(), commentId, deletedCount, isMain);
+                return new DeletedComment(comment.getContentId(), commentId, deletedCount, isMain, rootId);
             } catch (SQLException e) {
                 LOGGER.log(Level.SEVERE, "评论删除失败, commentId=" + commentId, e);
                 throw new ServerException("评论删除失败");
@@ -174,8 +182,14 @@ public class CommentService {
         if (deleted != null) {
             // 失效内容 key，读自愈回填 comment_count（DB 为源真理，T2 4.5）
             contentCache.notifyCommentCountChanged(deleted.contentId);
-            // 失效评论树 key，读自愈回填最新树（T3 4.5 业务显式失效）
-            commentCache.invalidateComments(deleted.contentId);
+            // T10-A 失效重映射：删主楼 → 失效 roots+count + 清该主楼 replies field；
+            // 删回复 → 定向 HDEL 所在主楼 replies field（懒载刷新）
+            if (deleted.isMain) {
+                commentCache.invalidateRoots(deleted.contentId);
+                commentCache.invalidateReplyUnder(deleted.contentId, deleted.commentId);
+            } else {
+                commentCache.invalidateReplyUnder(deleted.contentId, deleted.rootId);
+            }
         }
     }
 
@@ -184,12 +198,14 @@ public class CommentService {
         final long commentId;
         final int deletedCount;
         final boolean isMain;
+        final Long rootId;
 
-        DeletedComment(long contentId, long commentId, int deletedCount, boolean isMain) {
+        DeletedComment(long contentId, long commentId, int deletedCount, boolean isMain, Long rootId) {
             this.contentId = contentId;
             this.commentId = commentId;
             this.deletedCount = deletedCount;
             this.isMain = isMain;
+            this.rootId = rootId;
         }
     }
 

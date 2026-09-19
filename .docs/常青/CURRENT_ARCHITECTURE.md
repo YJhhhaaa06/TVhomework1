@@ -349,7 +349,9 @@ com.itheima/
 |----------|------|------|
 | content:{contentId} | String(JSON) | 内容详情缓存（Cache-Aside 数据 key，TTL 30min+抖动） |
 | content:index:{type}:{category} | LIST\<contentId\> | 类型分区索引（4 key/内容：t,c / t,-1 / -1,c / -1,-1；新前序；启动全量重建+懒重建） |
-| content:comments:{contentId} | String(JSON) | 内容评论树缓存（独立 TTL cache.comment.ttlMinutes=10min+抖动，与内容解耦） |
+| content:comments:{contentId}:roots | LIST\<主楼 JSON，无 children\> | 评论主楼序列（**T10-A 两键组①**：comment_id 升序=装载序，LRANGE 窗口读 + RPUSH 尾追加；水位不足时 DB keyset 窗口装载） |
+| content:comments:{contentId}:replies | HASH\<field=主楼 id, value=children JSON\> | 评论楼中楼（**T10-A 两键组②**：HMGET 只拉该页主楼，页成本 ∝ 该页；field 缺失懒载） |
+| content:comments:{contentId}:count | String(int) | 评论主楼总数（**T10-A 真实 total**：首装惰性 COUNT 一次，增删主楼随 roots 失效重算） |
 | empty:{dataKey} | String "1" | 空标记：已加载确认无数据（短 TTL 60s，不参与滑动续期） |
 | content:likeCount:{contentId} | String(int) | 内容点赞计数（高频读，计数/成员分离） |
 | comment:likeCount:{commentId} | String(int) | 评论点赞计数 |
@@ -482,16 +484,17 @@ com.itheima/
 - **前端**：`static/js/views/user.js` 的关注/粉丝 sheet 改为分页加载 + 「加载更多」（复用既有 `.load-more-btn` 样式；切换 following/followers 时重置页码与总页数）。
 - **包层边界**：分页信封落在 follow 域（**不 import content 域 `PageResult`**——content 已 import `follow.FollowCache`，反向引用会形成新的 follow↔content 包层环）；"PageResult 上移公共包供多域复用"登记留池（跨域重构不在本任务范围）。
 
-### 6.18 评论列表分页（T8）
+### 6.18 评论列表分页（T8 → T10-A：两键组 + 主楼窗口装载）
 
-- **形态（D1=A）**：**主楼分页 + 楼中楼整树**——`content:comments:{id}` 仍存完整整树 JSON（**评论缓存装载结构不变**，`loadCommentTree`/`buildCommentTree` 一行未动），分页是**展示层切片**：按主楼（roots）取该页，每条主楼携带其完整 `children`（楼中楼不切、不撕裂）。
-- **切片点唯一**：`ContentService.sliceRoots(roots, page, pageSize)` —— 越界页返回空列表但信封仍带真实 `total`；当前切片源是整树缓存的主楼列表，将来若改为缓存窗口读，只需替换该方法的取数方式，调用方与对外契约不变。
-- **成本边界（已声明）**：命中路径仍**每次读并反序列化整树**（单个 JSON 值无法按窗口读），未治"单次成本与总量正相关"；T8 优化的是**响应体大小 / VO 转换量 / 点赞批量查询量**（DB 侧只针对该页评论 id）。彻底治本需缓存结构改造（主楼序列独立键或 DB 窗口读）→ 留池 **U-20**。
-- **接口口径（与 T7 同构）**：`GET /comment/show` 传 `page` 或 `pageSize` **任一** → `data = {list,total,page,pageSize,totalPages}`（复用 content 域 `PageResult`，同域无包层环）；**两者都不传 → `data` 仍为全量数组**（逐字节兼容，既有调用方与 pytest 用例零破坏；不可用"默认 page=1&pageSize=50"实现，上限 50 会截断全量）。分页参数解析复用 `BaseServletUtil.parsePage/parsePageSize`（默认 1 / 10、上限 50）。
-- **total 口径**：**主楼条数**（`roots.size()`），与"每页 N 条主楼"同源；与详情接口 `commentCount`（含楼中楼的总评论数）口径不同，前端头部计数仍取 `commentCount` 以保持展示语义不变。
-- **顺序**：主楼顺序 = `CommentDao.getComments` 的 `ORDER BY c.comment_id`（升序，既有），页间不重不漏**由构造保证**；楼中楼 `children` 同序随行。
+- **形态（T10-A 起）**：**两键组 + 主楼窗口装载**——`content:comments:{id}:roots`（LIST，主楼 JSON 无 children，comment_id 升序）+ `content:comments:{id}:replies`（HASH，field=主楼 id，值=该主楼 children 全量 JSON）+ `:count`（真实主楼总数）。命中路径 = 主楼 LRANGE 窗口 + 楼中楼 HMGET 该页主楼（**单次成本 ∝ 该页，与评论总量弱相关**——治 U-20 根因）；**DB 窗口装载**只发生在 List 水位不足时（keyset `comment_id > lastId LIMIT`），不再一次性查全库。
+- **切片点（T10-A 消除）**：原 `ContentService.sliceRoots` 已删除——切片改由 `CommentCache.getRootPage`（LRANGE 窗口取数）承担；越界页返回空列表但信封仍带真实 `total`（count key），语义不变。
+- **失效重映射（DB 源真理 + 失效自愈哲学不变）**：增/删主楼 → `invalidateRoots`（失效 roots+count，读懒重建窗口）；回复增删、点赞 → 定向 HDEL 该主楼 replies field（懒载刷新）；`CommentCache.notifyCommentLikeChanged` 经 `getRootIdByCommentId` 上溯主楼后定向失效。
+- **缺省全量数组**：不传分页参数由 `CommentCache.getFullTree` 从两键组**全量拼装**（缺省语义即全量，逐字节兼容；T10-B 前端改传参后自然少走全量路径）。
+- **接口口径（与 T7 同构，零变化）**：`GET /comment/show` 传 `page` 或 `pageSize` **任一** → `data = {list,total,page,pageSize,totalPages}`（复用 content 域 `PageResult`）；**两者都不传 → `data` 仍为全量数组**。分页参数解析复用 `BaseServletUtil.parsePage/parsePageSize`（默认 1 / 10、上限 50）。
+- **total 口径**：**主楼条数**（count key：首装惰性 COUNT 一次、增删主楼随失效重算），与"每页 N 条主楼"同源；与详情接口 `commentCount`（含楼中楼的总评论数）口径不同，前端头部计数仍取 `commentCount`。
+- **顺序**：主楼顺序 = `CommentDao.getMainCommentsAfter` 的 `ORDER BY c.comment_id`（键集升序，既有），页间不重不漏**由构造保证**；楼中楼 `children` 同序随行。
 - **前置判断不变**：内容不存在 / `commentEnabled=false` → 分页下返回空页（`total=0`），与缺省路径同一判断。
-- **前端**：`static/js/views/detail.js` 以 `CHUNK_SIZE=50` 主楼为一块加载（首屏第 1 页 + 「加载更多」追加下一块）；发/删评论后回到第 1 页重新累积；头部计数改用详情接口 `commentCount`（分页后按"已加载条数"会随页数增长，与详情统计不一致）。
+- **前端**：`static/js/views/detail.js` 以 `CHUNK_SIZE=50` 主楼为一块加载（首屏第 1 页 + 「加载更多」追加下一块）；发/删评论后回到第 1 页重新累积；头部计数改用详情接口 `commentCount`。
 
 ---
 

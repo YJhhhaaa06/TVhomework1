@@ -28,9 +28,29 @@ public final class CacheKeys {
         return "content:" + contentId;
     }
 
-    /** 内容评论树：{@code content:comments:{id}}（JSON，Cache-Aside 数据 key）。 */
+    /**
+     * 内容评论树（旧整树单 key）：{@code content:comments:{id}}（JSON，Cache-Aside 数据 key）。
+     *
+     * <p>T10-A 起停用（评论缓存改两键组：{@link #contentCommentRoots}/{@link #contentCommentReplies}/
+     * {@link #contentCommentRootCount}），本方法保留仅供兼容/清理引用；旧 key 由 TTL 自然回收。
+     */
     public static String contentComments(long contentId) {
         return "content:comments:" + contentId;
+    }
+
+    /** 评论主楼序列（T10-A 两键组①）：{@code content:comments:{id}:roots}（LIST，窗口读 + 尾追加）。 */
+    public static String contentCommentRoots(long contentId) {
+        return contentComments(contentId) + ":roots";
+    }
+
+    /** 评论楼中楼（T10-A 两键组②）：{@code content:comments:{id}:replies}（HASH，field=主楼 id）。 */
+    public static String contentCommentReplies(long contentId) {
+        return contentComments(contentId) + ":replies";
+    }
+
+    /** 评论主楼总数（T10-A 真实 total）：{@code content:comments:{id}:count}（String int，窗口装载首装时惰性 COUNT + 增删同步维护）。 */
+    public static String contentCommentRootCount(long contentId) {
+        return contentComments(contentId) + ":count";
     }
 
     /**

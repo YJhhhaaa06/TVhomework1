@@ -141,7 +141,7 @@ class ContentServiceTest {
     void getCommentsForContentWithoutUserSkipsLikeQuery() {
         CommentCacheDTO root = new CommentCacheDTO("alice", 1L, 3L, 7L, "hi", null, 0);
         when(contentCache.getContent(3L)).thenReturn(dto(3L));
-        when(commentCache.getCommentTree(3L)).thenReturn(List.of(root));
+        when(commentCache.getFullTree(3L)).thenReturn(List.of(root));
         when(commentService.convertToCommentVOList(anyList(), anyMap()))
                 .thenReturn(List.of(new CommentVO()));
 
@@ -155,7 +155,7 @@ class ContentServiceTest {
     void getCommentsForContentWithUserQueriesLikedMap() {
         CommentCacheDTO root = new CommentCacheDTO("alice", 1L, 3L, 7L, "hi", null, 0);
         when(contentCache.getContent(3L)).thenReturn(dto(3L));
-        when(commentCache.getCommentTree(3L)).thenReturn(List.of(root));
+        when(commentCache.getFullTree(3L)).thenReturn(List.of(root));
         when(commentCache.collectCommentIds(List.of(root))).thenReturn(List.of(1L));
         when(likeService.batchIsCommentLiked(7L, List.of(1L))).thenReturn(Map.of(1L, true));
         when(commentService.convertToCommentVOList(anyList(), anyMap()))
@@ -170,25 +170,25 @@ class ContentServiceTest {
     @Test
     void getCommentsForContentEmptyTreeReturnsEmpty() {
         when(contentCache.getContent(4L)).thenReturn(dto(4L));
-        when(commentCache.getCommentTree(4L)).thenReturn(null);
+        when(commentCache.getFullTree(4L)).thenReturn(null);
 
         List<CommentVO> result = service.getCommentsForContent(4L, null);
 
         assertTrue(result.isEmpty());
     }
 
-    // ===== T8 评论列表分页（主楼分页 + 楼中楼整树，缺省路径不受影响） =====
+    // ===== T10-A 评论列表分页（两键组窗口读：stubRootPage 模拟"页窗口 + 真实 total"，切片在 CommentCache） =====
 
     @Test
     void getCommentsForContentPagedFirstPageReturnsWindowAndEnvelope() {
         when(contentCache.getContent(3L)).thenReturn(dto(3L));
-        when(commentCache.getCommentTree(3L)).thenReturn(roots(5));
+        stubRootPage(3L, roots(5));
         when(commentService.convertToCommentVOList(anyList(), anyMap()))
                 .thenAnswer(inv -> voOf(inv.getArgument(0)));
 
         PageResult<CommentVO> result = service.getCommentsForContent(3L, null, 1, 2);
 
-        assertEquals(5, result.getTotal(), "total = 主楼条数");
+        assertEquals(5, result.getTotal(), "total = 主楼条数（真实 total）");
         assertEquals(1, result.getPage());
         assertEquals(2, result.getPageSize());
         assertEquals(3, result.getTotalPages());
@@ -198,7 +198,7 @@ class ContentServiceTest {
     @Test
     void getCommentsForContentPagedLastPageReturnsRemainder() {
         when(contentCache.getContent(3L)).thenReturn(dto(3L));
-        when(commentCache.getCommentTree(3L)).thenReturn(roots(5));
+        stubRootPage(3L, roots(5));
         when(commentService.convertToCommentVOList(anyList(), anyMap()))
                 .thenAnswer(inv -> voOf(inv.getArgument(0)));
 
@@ -211,7 +211,7 @@ class ContentServiceTest {
     @Test
     void getCommentsForContentPagedOutOfRangeReturnsEmptyButKeepsTotal() {
         when(contentCache.getContent(3L)).thenReturn(dto(3L));
-        when(commentCache.getCommentTree(3L)).thenReturn(roots(5));
+        stubRootPage(3L, roots(5));
         when(commentService.convertToCommentVOList(anyList(), anyMap()))
                 .thenAnswer(inv -> voOf(inv.getArgument(0)));
 
@@ -224,7 +224,7 @@ class ContentServiceTest {
     @Test
     void getCommentsForContentPagedPagesCoverTreeWithoutOverlap() {
         when(contentCache.getContent(3L)).thenReturn(dto(3L));
-        when(commentCache.getCommentTree(3L)).thenReturn(roots(5));
+        stubRootPage(3L, roots(5));
         when(commentService.convertToCommentVOList(anyList(), anyMap()))
                 .thenAnswer(inv -> voOf(inv.getArgument(0)));
 
@@ -242,7 +242,7 @@ class ContentServiceTest {
         CommentCacheDTO reply = new CommentCacheDTO("u2", 2L, 3L, 12L, "r1", 1L, 0);
         root.setChildren(new ArrayList<>(List.of(reply)));
         when(contentCache.getContent(3L)).thenReturn(dto(3L));
-        when(commentCache.getCommentTree(3L)).thenReturn(new ArrayList<>(List.of(root)));
+        stubRootPage(3L, new ArrayList<>(List.of(root)));
         when(commentService.convertToCommentVOList(anyList(), anyMap()))
                 .thenAnswer(inv -> voOf(inv.getArgument(0)));
 
@@ -256,7 +256,7 @@ class ContentServiceTest {
     @Test
     void getCommentsForContentPagedEmptyTreeReturnsEmptyEnvelope() {
         when(contentCache.getContent(4L)).thenReturn(dto(4L));
-        when(commentCache.getCommentTree(4L)).thenReturn(null);
+        stubRootPage(4L, new ArrayList<>());
 
         PageResult<CommentVO> result = service.getCommentsForContent(4L, null, 1, 10);
 
@@ -275,13 +275,13 @@ class ContentServiceTest {
 
         assertTrue(result.getList().isEmpty());
         assertEquals(0, result.getTotal());
-        verify(commentCache, never()).getCommentTree(anyLong());
+        verify(commentCache, never()).getRootPage(anyLong(), anyInt(), anyInt());
     }
 
     @Test
     void getCommentsForContentPagedQueriesLikedOnlyForPageComments() {
         when(contentCache.getContent(3L)).thenReturn(dto(3L));
-        when(commentCache.getCommentTree(3L)).thenReturn(roots(3));
+        stubRootPage(3L, roots(3));
         when(commentCache.collectCommentIds(anyList())).thenAnswer(inv -> {
             List<CommentCacheDTO> given = inv.getArgument(0);
             return ids(given);
@@ -300,7 +300,7 @@ class ContentServiceTest {
     @Test
     void getCommentsForContentPagedWithoutUserSkipsLikeQuery() {
         when(contentCache.getContent(3L)).thenReturn(dto(3L));
-        when(commentCache.getCommentTree(3L)).thenReturn(roots(2));
+        stubRootPage(3L, roots(2));
         when(commentService.convertToCommentVOList(anyList(), anyMap()))
                 .thenAnswer(inv -> voOf(inv.getArgument(0)));
 
@@ -313,7 +313,7 @@ class ContentServiceTest {
     @Test
     void getCommentsForContentPagedInvalidParamsReturnEmptyInsteadOfThrowing() {
         when(contentCache.getContent(3L)).thenReturn(dto(3L));
-        when(commentCache.getCommentTree(3L)).thenReturn(roots(3));
+        stubRootPage(3L, roots(3));
         when(commentService.convertToCommentVOList(anyList(), anyMap()))
                 .thenAnswer(inv -> voOf(inv.getArgument(0)));
 
@@ -324,6 +324,23 @@ class ContentServiceTest {
 
         PageResult<CommentVO> zeroSize = service.getCommentsForContent(3L, null, 1, 0);
         assertTrue(zeroSize.getList().isEmpty(), "pageSize=0 应给空页而非抛异常");
+    }
+
+    /**
+     * T10-A：stub CommentCache.getRootPage 为"内存切片 + 真实 total"（对齐旧 sliceRoots 语义——
+     * Service 层只观察到页窗口与 total，切片细节由 CommentCache 承担）。
+     */
+    private void stubRootPage(long contentId, List<CommentCacheDTO> allRoots) {
+        when(commentCache.getRootPage(eq(contentId), anyInt(), anyInt())).thenAnswer(inv -> {
+            int page = inv.getArgument(1);
+            int pageSize = inv.getArgument(2);
+            if (page < 1 || pageSize < 1) {
+                return new CommentCache.PageWindow(new ArrayList<>(), allRoots.size());
+            }
+            int from = Math.max(0, Math.min((int) ((long) (page - 1) * pageSize), allRoots.size()));
+            int to = Math.max(from, Math.min(from + pageSize, allRoots.size()));
+            return new CommentCache.PageWindow(new ArrayList<>(allRoots.subList(from, to)), allRoots.size());
+        });
     }
 
     private static List<CommentCacheDTO> roots(int n) {
@@ -452,7 +469,7 @@ class ContentServiceTest {
         List<CommentVO> result = service.getCommentsForContent(3L, null);
 
         assertTrue(result.isEmpty());
-        verify(commentCache, never()).getCommentTree(anyLong());
+        verify(commentCache, never()).getFullTree(anyLong());
         verify(commentService, never()).convertToCommentVOList(anyList(), anyMap());
     }
 
@@ -465,7 +482,7 @@ class ContentServiceTest {
         List<CommentVO> result = service.getCommentsForContent(3L, null);
 
         assertTrue(result.isEmpty());
-        verify(commentCache, never()).getCommentTree(anyLong());
+        verify(commentCache, never()).getFullTree(anyLong());
         verify(commentService, never()).convertToCommentVOList(anyList(), anyMap());
     }
 

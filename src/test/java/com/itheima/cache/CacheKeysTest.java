@@ -19,6 +19,18 @@ class CacheKeysTest {
     }
 
     @Test
+    void t10aCommentTwoKeyGroupUsesSharedPrefixAndCommentDomain() {
+        // T10-A：整树单 key 拆两键组 + count；共用 content:comments: 前缀 → domainOf 归 COMMENT 不变
+        assertEquals("content:comments:7:roots", CacheKeys.contentCommentRoots(7L));
+        assertEquals("content:comments:7:replies", CacheKeys.contentCommentReplies(7L));
+        assertEquals("content:comments:7:count", CacheKeys.contentCommentRootCount(7L));
+        assertEquals(CacheDomain.COMMENT, CacheKeys.domainOf(CacheKeys.contentCommentRoots(7L)));
+        assertEquals(CacheDomain.COMMENT, CacheKeys.domainOf(CacheKeys.contentCommentReplies(7L)));
+        assertEquals(CacheDomain.COMMENT, CacheKeys.domainOf(CacheKeys.contentCommentRootCount(7L)));
+        assertEquals(CacheDomain.COMMENT, CacheKeys.domainOf("empty:" + CacheKeys.contentCommentRoots(7L)));
+    }
+
+    @Test
     void emptyKeyPrefixesDataKey() {
         assertEquals("empty:content:1", CacheKeys.empty("content:1"));
         assertEquals("empty:content:comments:7", CacheKeys.empty("content:comments:7"));

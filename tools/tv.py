@@ -56,16 +56,18 @@ CMD_TO_DESC = {name: desc for name, _, desc in SUBCOMMANDS}
 FORCE_TEST_CMDS = ("init-test-db", "test")      # 固定测试库语义；prod 语境拒绝
 PROD_ONLY_CMDS = ("cleanup-orphan-media",)      # 会移动磁盘媒体文件；test 语境拒绝
 
-# backup.py 不解析参数（无 argparse），-h/--help 会按无参数直接触发备份；
-# tv.py 在此拦截并打印帮助（codex 验收反馈 3）。
+# backup.py 现支持 argparse（--out）；tv.py 在 backup -h/--help 时打印这里的高层帮助，
+# 其余参数（如 --out）原样透传给 backup.py。
 BACKUP_HELP = """backup - 数据库备份（tools/backup.py）
 
 用法:
-    python tools\\tv.py backup                # 备份当前声明环境（默认 test）的数据库
-    python tools\\tv.py --env prod backup     # 备份生产库（需二次确认）
+    python tools\\tv.py backup [--out <目录>]      # 备份当前声明环境（默认 test）的数据库
+    python tools\\tv.py --env prod backup [--out <目录>]   # 备份生产库（需二次确认）
 
 说明:
-    * 输出到 D:\\dev\\WorkSpace\\VideoPlatform\\auto_backup\\<时间戳>\\（db.sql + manifest.txt）
+    * 默认输出到 D:\\dev\\WorkSpace\\VideoPlatform\\auto_backup\\<时间戳>\\（db.sql + manifest.txt）
+    * --out <目录> 指定输出目录（沙箱会话内备份请用项目内路径，如 --out .docs\\DBbackups；
+      供 G9 DDL 备份闭环 / 归档为测试库重建源）
     * 仅备份数据库；媒体资源请自行打包备份（手动）。
     * prod 语境执行需二次确认。
     * 原生直调: python tools\\backup.py（不经 tv.py，环境变量 DB_* 直接生效）
