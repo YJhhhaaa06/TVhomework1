@@ -1,6 +1,6 @@
 # 当前系统架构地图
 
-> 版本：3.1（2026-09-19 T6：LogUtil 初始化改走自身日志通道、删除 CountRepairTool——计数修复统一入口 = `tools/check_integrity.py --fix`）
+> 版本：3.2（2026-09-19 T7：关注/粉丝列表分页——成员 key Set→ZSet 有序化 + 基建新增 ZSetCache 按序窗口读 + `/follow/following|followers` 可选 page/pageSize（缺省仍全量）+ 前端 user.js 分页）
 > 最后更新：2026-09-19
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
@@ -89,7 +89,7 @@ com.itheima/
 ├── config/                 # 基建不动：AppConfig
 ├── controller/             # 仅保留跨域基建：BaseServlet/BaseServletUtil/RequestParser/AppShutDownListener
 ├── dao/                    # 仅保留跨域基建：ResultMap
-├── cache/                  # 统一缓存基建：Redis 访问+熔断/JSON 序列化/统一 key 规范/单飞/三态空标记/写失败 DEL 降级/SetCache
+├── cache/                  # 统一缓存基建：Redis 访问+熔断/JSON 序列化/统一 key 规范/单飞/三态空标记/写失败 DEL 降级/SetCache/ZSetCache
 │
 ├── user/                   # 用户/认证域
 ├── content/                # 内容域：含首页/搜索/详情/关注流/主页读接口 + 共享缓存组件
@@ -202,9 +202,10 @@ com.itheima/
 | CacheStatus | 15 | 三态枚举：MISS / HIT_EMPTY / HIT_DATA |
 | CacheResult | 39 | 三态读取结果载体（status + value，HIT_EMPTY 时 value=null） |
 | CacheAside | 575 | 统一 Cache-Aside 封装：`read` 三态读 / `get` 带单飞回填 / `getBatch` 批量读（4 参与 5 参批量装载重载）/ `writeOrInvalidate`（写失败=DEL 自愈，写数据同时清空标记）/ `markEmpty`（存在守卫）/ `invalidate`；TTL ±10% 抖动；读路径 pipeline 化（EXISTS 空标记+GET 一趟往返）；命中滑动续期（空标记从不续期）；降级读与 miss 共用单飞、仅装载不写回；loader 抛 DatabaseException 视为加载失败——不写空标记、不 DEL 数据 key |
-| SetCache | 393 | 原生 Set 缓存基建：单成员三态 `isMember` / 全量 `getMembers`（不排序，需确定性顺序的调用方自包装）/ 批量判定（`batchIsMember` 单 set 多成员、`batchKeysIsMember` 多 set 单成员）/ `writeSet` 回填（空→`cacheAside.markEmpty` 含存在守卫）/ `loadViaSingleFlight` 降级装载；探针续期精确 TTL 无抖动、空标记不续；批量 DB 答案失败上抛、回填 best-effort |
+| SetCache | 393 | 原生 Set 缓存基建：单成员三态 `isMember` / 全量 `getMembers`（不排序，需确定性顺序的调用方自包装）/ 批量判定（`batchIsMember` 单 set 多成员、`batchKeysIsMember` 多 set 单成员）/ `writeSet` 回填（空→`cacheAside.markEmpty` 含存在守卫）/ `loadViaSingleFlight` 降级装载；探针续期精确 TTL 无抖动、空标记不续；批量 DB 答案失败上抛、回填 best-effort。**第六期 T7 起生产调用方 = like 域（`user:likeSet` / `user:commentLikeSet`）**；follow 域已迁 ZSetCache |
+| ZSetCache | 403 | 有序集合（ZSet）缓存基建（T7 新增，A1「缓存有序结构」落点）：命令层 ZSCORE/ZRANGE/ZADD，**score = 成员自身数值**（故 ZRANGE 天然按成员数值升序）；API 与 SetCache 同构（`isMember` / `getMembers` / `batchIsMember` / `writeZSet` 回填（空→`markEmpty` 含存在守卫）/ `loadViaSingleFlight` 降级不写回）+ **新增按序窗口读 `getWindow(key, offset, count)`**——一趟 pipeline 取 `ZRANGE[start,stop]` + `ZCARD`，返回 `Window{ids,total}`（total 与页同源）；hit / miss（回填后重读）/ 降级（全量装载后按 score 口径升序切片）三路径**同序**；探针续期精确 TTL、空标记不续 |
 
-> 测试：`src/test/java/com/itheima/cache/` 8 类单测（mockStatic MyRedisPool + mock Jedis，不碰真实 Redis），用例清单以 `surefire-reports` 为准（见九节指针）。
+> 测试：`src/test/java/com/itheima/cache/` 9 类单测（mockStatic MyRedisPool + mock Jedis，不碰真实 Redis），用例清单以 `surefire-reports` 为准（见九节指针）。
 
 ### 4.3 业务域包（每域 controller/service/dao/model 分层）
 
@@ -214,7 +215,7 @@ com.itheima/
 |----|------|------|
 | controller | LoginController（80，/user/*） | 登录、注册、修改密码/用户名 |
 | service | UserService（241） | 用户认证 + 管理员判定 + 改名后级联失效内容缓存（注入 ContentCache） |
-| dao | UserDao（225） | users 用户 CRUD + 角色查询 |
+| dao | UserDao（258） | users 用户 CRUD + 角色查询（`findUsersByIds` T7 起带 `ORDER BY id`：关注/粉丝列表顺序由此保证，唯一调用方 FollowService） |
 | model | entity/User（89）、dto/LoginDTO（28）/RegisterDTO（41）/ChangePasswordDTO（35）/ChangeUserNameDTO（13）、command/LoginCommand（63）/RegisterCommand（44）/ChangePasswordCommand（44）/LoginType（7）、vo/LoginVO（40） | 用户实体与请求/命令/响应对象 |
 
 #### content 域 — `com.itheima.content`（含共享缓存组件）
@@ -232,11 +233,11 @@ com.itheima/
 
 | 层 | 类（行数） | 职责 |
 |----|------|------|
-| controller | FollowController（91，/follow/*） | 关注/取关/关注列表/粉丝列表 |
-| service | FollowService（142） | 关注业务（读路径委托 FollowCache；关注/取关 DB 提交后缓存双写） |
-| service | FollowCache（326） | 关注关系 Redis 缓存（双 Set + 条件 MULTI 双写 + 失败双 DEL + 三态读 + 单飞 + 降级单飞全量装载作答；读路径收口 SetCache——单成员三态/批量/全量走基建 + `sortIds` 统一升序，写路径 MULTI 双写语义保持；关注/粉丝计数 key 读写） |
+| controller | FollowController（114，/follow/*） | 关注/取关/关注列表/粉丝列表（**T7：列表支持可选 `page`/`pageSize`**——显式判"是否传分页参数"分支：缺省全量数组、传参走分页信封） |
+| service | FollowService（190） | 关注业务（读路径委托 FollowCache；关注/取关 DB 提交后缓存双写；**T7 新增分页读**——缓存窗口取该页 ids+total，仅对该页 ids 做 DB 装载与批量判重，信封在事务外组装，事务边界与缺省路径一致） |
+| service | FollowCache（446） | 关注关系 Redis 缓存（**双 ZSet（score=成员 id）+ 条件 MULTI 双写 + 失败双 DEL** + 三态读 + 单飞 + 降级单飞全量装载作答；读路径收口 **ZSetCache**——单成员三态/批量/全量/窗口走基建 + `sortIds` 归一升序，写路径 MULTI 双写语义保持；关注/粉丝计数 key 读写） |
 | dao | FollowDao（107） | follow 关注关系（仅 FollowService 业务校验与 FollowCache 回填 loader 使用） |
-| model | — | 无专属 model |
+| model | FollowPageResult（79） | 关注/粉丝列表分页信封（T7 B2）：`list/total/page/pageSize/totalPages`，与 content 域 `PageResult` 同形但**归属 follow 域**——避免 follow 反向 import content 形成新包层环（content 已 import `follow.FollowCache`） |
 
 > 注：FeedService/ProfileService/ContentStatusFiller 跨域 import `follow.service.FollowCache`（服务层），不再直连 FollowDao。守关注读路径走缓存、写路径 DB 提交后双写。
 
@@ -354,8 +355,8 @@ com.itheima/
 | comment:likeCount:{commentId} | String(int) | 评论点赞计数 |
 | user:likeSet:{userId} | Set\<contentId\> | 我点赞过的内容（用户维度成员，装载量=该用户点赞数，与内容热度解耦） |
 | user:commentLikeSet:{userId} | Set\<commentId\> | 我点赞过的评论（用户维度成员） |
-| user:following:{userId} | Set\<followedUserId\> | 我关注了谁（MULTI 双写，失败双 DEL） |
-| user:follower:{userId} | Set\<userId\> | 谁关注了我（MULTI 双写，失败双 DEL） |
+| user:following:{userId} | ZSet\<followedUserId\>（score=id） | 我关注了谁（MULTI 双写，失败双 DEL；**T7 起为 ZSet**：`ZRANGE[start,stop]` 窗口读 + `ZCARD` 取总数，ZRANGE 天然按 id 升序） |
+| user:follower:{userId} | ZSet\<userId\>（score=id） | 谁关注了我（逻辑同 user:following） |
 | user:followCount:{userId} | String(int) | 我的关注数（独立计数 key，Cache-Aside，0 合法；写路径条件 INCRBY、冷 key no-op 由读回填） |
 | user:followerCount:{userId} | String(int) | 我的粉丝数（逻辑同 user:followCount） |
 
@@ -369,7 +370,7 @@ com.itheima/
 - **六类事件**：HIT_DATA / HIT_EMPTY / MISS / LOAD / DEGRADE / WRITE_FAIL。
 - **分域分桶**：`CacheKeys.domainOf(String dataKey)` 唯一解析源——**长前缀优先**（content:index / content:comments 先于通用 content:；user:like* / user:commentLike* 先于通用 user:）；`empty:` 空标记先解包到底层数据 key 再归域；映射：content:index / content:{id}→CONTENT、content:like*/comment:like* / user:like*/user:commentLike*→LIKE、content:comments / comment:*→COMMENT、user:following / user:follower / user:followCount*（user:* 兜底）→FOLLOW、未知/null→OTHER。
 - **惰性日志输出**：每 N=1000 次记录输出一次各域摘要（INFO 单行）；不引入定时器、不新增 admin 端点。
-- **挂点**：CacheAside 自动打点（三态读 + 降级 + LOAD + 写失败）；SetCache 自动打点；LikeCacheService / FollowCache 原生路径手动打点（批量记录粒度=每 (数据 key, 决策) 记一次）。
+- **挂点**：CacheAside 自动打点（三态读 + 降级 + LOAD + 写失败）；SetCache / ZSetCache 自动打点；LikeCacheService / FollowCache 原生路径手动打点（批量记录粒度=每 (数据 key, 决策) 记一次）。
 - **红线段**：`record()` 自身异常吞掉记 WARNING，不影响主链路；统计不引入 MQ。
 - **用途**：分域命中率/穿透曲线为分域 TTL 与读路径优化提供数据依据。
 
@@ -470,6 +471,17 @@ com.itheima/
 - **场景**：内容缓存 DTO 的 `authorName` 是 `findContent`/`findAllContent` `JOIN users` 时的反规范化副本，只存在于内容数据 key——`content:index:*` 只存 id、评论/点赞缓存不含 authorName，故改名只需失效内容数据 key，索引无需失效。
 - **落地**：`POST /user/changeUserName`（LoginController `/user/*` switch + AuthFilter 精确保护）；`UserService.changeUserName` DB 提交后调 `ContentCache.invalidateAuthorContentKeys(userId)`（事务内 `findContentIdsByUser` 查该作者全部内容 id → 事务外逐个失效内容 key + 空标记）；**读自愈**重新 JOIN users 回填新名；DB/Redis 失败仅记日志跳过、TTL 自愈，不影响改名成功语义。UserService 注入 ContentCache（user→content 跨域，对齐 like/comment 先例无环）。
 
+### 6.17 关注关系有序化与分页窗口（T7）
+
+- **Set→ZSet 有序化**：`user:following:{userId}` / `user:follower:{userId}` 由 Set 升级为 ZSet（score = 成员自身 id）；写路径 `SADD/SREM → ZADD/ZREM`（MULTI 条件双写 / 双 key 探针 / 空标记 / TTL 骨架不变），读路径收口**新建的 `ZSetCache`**（与 SetCache 平行，命令层 ZSCORE/ZRANGE/ZADD）。like 域成员 key 仍为 Set、仍走 SetCache（不受影响）。
+- **等价性依据**：score = 成员数值 ⇒ `ZRANGE` 遍历序 = 成员数值升序 = 改造前 `sortIds` 升序口径，全量读/单项判定/批量判定的对外结果与顺序**逐条不变**。
+- **分页窗口读**：`ZSetCache.getWindow(key, offset, count)` **窗口取数**为一趟 pipeline（`ZRANGE[start,stop]` + `ZCARD` → `Window{ids,total}`；探针一趟另行，与 SetCache 同模式）；**hit 路径 O(log n + N)**（不再 `SMEMBERS` 全量回传 + String→Long 装箱）；miss 单飞回填后重读窗口；Redis 异常 → 单飞全量装载 + 按 score 口径升序内存切片、**不写回**。**残留**：miss / 降级仍是全量装载形态（缓存装载既有形态，与 R-01 索引全量读同型 → 留池 **U-18**）。
+- **顺序保证**：分页切片的成员集合与顺序来自 ZSet 升序（score=成员 id）；**列表最终输出顺序由 `UserDao.findUsersByIds` 决定**，T7 已为该查询补 `ORDER BY id`（此前无 ORDER BY，输出序依赖存储引擎默认序——HEAD 既有脆弱点，唯一调用方为 FollowService），使"ZSet 升序切片"与"DB 返回序"同口径，分页顺序稳定**由构造保证**而非巧合。
+- **接口口径（B2）**：`GET /follow/following|followers` 传 `page` 或 `pageSize` **任一** → `data = {list,total,page,pageSize,totalPages}`（follow 域信封 `FollowPageResult`）；**两者都不传 → `data` 仍为全量数组**（逐字节兼容，既有调用方与 pytest 用例零破坏；不可用"默认 page=1&pageSize=50"实现兼容，上限 50 会截断全量）。分页参数解析复用 `BaseServletUtil.parsePage/parsePageSize`（默认 1 / 10、上限 50）；越界页返回空数组但保留 total。
+- **total 口径**：同一 ZSet 的 `ZCARD`（与页内容同源）；不用独立计数 key `user:followCount`（两 key 可能瞬时不一致）。
+- **前端**：`static/js/views/user.js` 的关注/粉丝 sheet 改为分页加载 + 「加载更多」（复用既有 `.load-more-btn` 样式；切换 following/followers 时重置页码与总页数）。
+- **包层边界**：分页信封落在 follow 域（**不 import content 域 `PageResult`**——content 已 import `follow.FollowCache`，反向引用会形成新的 follow↔content 包层环）；"PageResult 上移公共包供多域复用"登记留池（跨域重构不在本任务范围）。
+
 ---
 
 ## 七、API 接口清单
@@ -516,8 +528,8 @@ com.itheima/
 | POST | /content/commentEnabled | 作者开关自己作品的评论区（0=关/1=开） | ✓ |
 | POST | /follow/add | 关注 | ✓ |
 | POST | /follow/remove | 取关 | ✓ |
-| GET | /follow/following | 关注列表 | ✓ |
-| GET | /follow/followers | 粉丝列表 | ✓ |
+| GET | /follow/following | 关注列表（**可选 `page`/`pageSize`**：传参→分页信封 `{list,total,page,pageSize,totalPages}`；缺省→全量数组） | ✓ |
+| GET | /follow/followers | 粉丝列表（分页口径同 /follow/following） | ✓ |
 | GET | /profile | 用户主页 | ✗ |
 
 ### 7.4 优惠券模块
@@ -571,7 +583,7 @@ src/main/webapp/
             ├── follow.js      # #/follow      关注流（/feed 分页）
             ├── detail.js      # #/video/:id   详情（播放器 + 楼中楼评论 + 相关推荐）
             ├── search.js      # #/search?kw=  搜索
-            ├── user.js        # #/user/:id    个人主页（本人/他人合一）
+            ├── user.js        # #/user/:id    个人主页（本人/他人合一；T7 起关注/粉丝 sheet 分页加载）
             ├── publish.js     # #/publish     创作中心（我的投稿 + 投稿上传）
             ├── login.js       # #/login       登录/注册
             ├── coupon.js      # #/coupon      优惠券中心

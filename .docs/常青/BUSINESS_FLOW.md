@@ -394,16 +394,17 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 │  feed 关注列表）                                                  │
 │    ↓  FollowCache（com.itheima.follow.service，T5）               │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │ user:following:{userId} / user:follower:{userId} 双 Set    │   │
-│  │ 三态：empty 空标记（60s）=确认真无；set 存在=SISMEMBER/SMEMBERS│   │
-│  │  miss=单飞回填 DB 全量（非空 SADD+EXPIRE 10min；空集→空标记，│   │
-│  │  空标记写入带 set 存在守卫防并发覆盖新写）；Redis 挂=降级 DB  │   │
+│  │ user:following / user:follower 双 ZSet（score=id）           │   │
+│  │ 三态：empty 空标记（60s）=确认真无；key 存在=ZSCORE/ZRANGE     │   │
+│  │  miss=单飞回填 DB全量（非空 ZADD+EXPIRE 30min；空集→空标记， │   │
+│  │  分页=窗口读 ZRANGE[offset, offset+N) + ZCARD（hit O(log n+N)）  │   │
+│  │  空标记写入带 key 存在守卫防并发覆盖新写）；Redis 挂=降级 DB  │   │
 │  │ user:followCount:{userId} / user:followerCount:{userId}     │   │
 │  │  （String int，T6 计数入缓存 R-01：Cache-Aside、0 合法、     │   │
 │  │   miss/降级走 DB 单列计数 loader，与 content:likeCount 同构）│   │
 │  └──────────────────────────────────────────────────────────┘   │
 │  关注/取关写路径（FollowService DB 提交后）：                     │
-│    两 key 均"已加载"（set 或空标记存在）→ MULTI 原子 SADD/SREM 双写+续 TTL │
+│    两 key 均"已加载"（key 或空标记存在）→ MULTI 原子 ZADD/ZREM 双写+续 TTL │
 │    （新关注时解除空标记）；任一侧冷 key 或空标记命中 → 双双 DEL 失效让读自愈 │
 │    ；Redis 异常 → 双 DEL（4.10 失败双 DEL），不抛出、不影响业务     │
 │    + 计数条件增量（T6）：EVAL"计数 key 存在才 INCRBY±1"，冷 key   │
@@ -411,7 +412,7 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-> 缓存读写语义要点：关注读路径（`isFollowing` 单成员/`batchIsFollowing` 批量/`getFollowingIds`/`getFollowerIds` 全量列表）统一走基建 `SetCache`，列表升序由 `FollowCache.sortIds` 唯一包装点统一（写路径 MULTI 条件双写 + 失败双 DEL 保留在 FollowCache）；关注/粉丝计数入独立 key（`user:followCount`/`user:followerCount`，Cache-Aside、0 合法、条件 INCRBY）；Feed/Profile 缓存批量读在 DB 事务外执行（防连接池互相等连接）；详情见 `CURRENT_ARCHITECTURE` 6.4/6.12/6.14。
+> 缓存读写语义要点：关注读路径（`isFollowing` 单成员 / `batchIsFollowing` 批量 / `getFollowingIds`/`getFollowerIds` 全量列表 / **`getFollowingWindow`/`getFollowerWindow` 分页窗口（T7）**）统一走基建 `ZSetCache`——成员 key 为 ZSet（score=成员 id），故 `ZRANGE` 天然升序，列表升序另由 `FollowCache.sortIds` 归一（写路径 MULTI 条件双写 + 失败双 DEL 保留在 FollowCache）；**关注/粉丝列表接口传 `page`/`pageSize` 任一 → 返回分页信封 `{list,total,page,pageSize,totalPages}`，两者都不传 → 仍返回全量数组（零破坏）**；关注/粉丝计数入独立 key（`user:followCount`/`user:followerCount`，Cache-Aside、0 合法、条件 INCRBY）；Feed/Profile 缓存批量读在 DB 事务外执行（防连接池互相等连接）；详情见 `CURRENT_ARCHITECTURE` 6.4/6.12/6.17。
 
 > 关键语义：内容与评论读/写**全部收敛 Redis**；**任何缓存失败降级走 DB、不导致业务失败**；计数（like_count/comment_count/comment_enabled）与评论树内容以 DB 为源真理，变更即失效让读自愈；类型分区索引启动 init 全量重建 + 索引 key 缺失时单飞懒重建（防 Redis 重启后 /start 空推荐）；评论树不再原地增删：评论增/删/点赞 = 失效 `content:comments:{id}` + 空标记，下次读 miss 单飞回填 DB 最新整树。
 >
@@ -1042,7 +1043,7 @@ CommentVO 结构：
 | 4 | 更新关注者 follow_count +1 | - |
 | 5 | 更新被关注者 follower_count +1 | - |
 | 6 | 提交事务 | - |
-| 7 | 提交后缓存双写 FollowCache.cacheFollow：两 key 已加载 → MULTI SADD 双写；冷 key/空标记 → 双 DEL 失效 | 缓存失败降级（双 DEL），不影响业务 |
+| 7 | 提交后缓存双写 FollowCache.cacheFollow：两 key 已加载 → MULTI ZADD 双写（score=成员 id，2026-09-19 T7 起成员 key 为 ZSet）；冷 key/空标记 → 双 DEL 失效 | 缓存失败降级（双 DEL），不影响业务 |
 
 #### 接口定义
 
@@ -1101,6 +1102,11 @@ GET /follow/following?userId=123&token=xxx（必填：/follow/* 前缀守卫需�
     },
     ...
 ]
+
+分页（2026-09-19 T7）：可选 page/pageSize（默认 1/10、上限 50；page<1 归一为 1）
+  - 传 page 或 pageSize 任一 → 返回信封 {"list": [...], "total": N, "page": p, "pageSize": s, "totalPages": t}
+  - 两者都不传 → 返回上面的全量数组（与改造前逐字节一致，零破坏）
+  - 越界页（offset ≥ total）→ list 为空数组，total 照常返回（前端据此判末页）
 ```
 
 ---
@@ -1115,6 +1121,9 @@ GET /follow/followers?userId=123&token=xxx（必填：/follow/* 前缀守卫需�
 2. 批量查询用户信息
 3. 如果已登录，查询当前用户对这些用户的关注状态
 4. 返回用户列表
+
+分页（2026-09-19 T7）：口径与 4.3.3 完全一致（可选 page/pageSize；缺省返回全量数组；
+传参返回 {"list","total","page","pageSize","totalPages"} 信封；越界页空 list + total 照常）
 ```
 
 ---
