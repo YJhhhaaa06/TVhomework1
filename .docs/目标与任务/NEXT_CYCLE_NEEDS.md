@@ -1,7 +1,7 @@
 # 下一周期需求与痛点（NEEDS）
 
 > 用途：回答"下一周期为什么做这些"——本周期要处理的杂务与痛点、候选任务的优先级映射、以及开工前必须拍板的技术决策。
-> 状态：**杂务/准备周期（2026-09-18 立项，分支 `prep/next-phase`）**——本周期**不做正式功能方向、不立业务主线**，只处理代码仓库的杂务与铺垫清理，为后续 feed 流改造 / 日志体系改造 / 新功能（届时各开新分支）腾出干净地基。**用户 2026-09-18 已给出方向想法**（见 4.1 N11~N14：评论/粉丝分页、常青文档瘦身、commit message 规范、测试目录本地化），连同首轮探查杂务 N1~N10 一并待评审；**评审/拆任务待用户最终确认**；配套 How 见任务清单（拍板后新建）。
+> 状态：**杂务/准备周期（2026-09-18 立项，分支 `prep/next-phase`）**——本周期**不做正式功能方向、不立业务主线**，只处理代码仓库的杂务与铺垫清理，为后续 feed 流改造 / 日志体系改造 / 新功能（届时各开新分支）腾出干净地基。**用户 2026-09-18 已给出方向想法**（见 4.1 N11~N14：评论/粉丝分页、常青文档瘦身、commit message 规范、测试目录本地化），连同首轮探查杂务 N1~N10 一并待评审；**评审与拆任务已于 2026-09-18 完成（R-03 拍板，T1~T9 见任务清单）**，执行进度以 `NEXT_CYCLE_TASKS.md` 为准。
 > **变更纪律（2026-09-18 用户拍板）**：本档不设"六、变更记录"节（模板已同步移除）——变更以 git 提交历史为准，不再维护文档级变更记录。
 > 术语约定：**周期 > 任务**。本文档只回答 Why（需求与决策），How（拆任务）在任务清单文档。
 
@@ -52,7 +52,7 @@
 | ---- | ---- | ---- | ---- | ---- |
 | R-03 | **本周期方向（杂务周期做什么）** | 本档新增 | **已拍板（2026-09-18）**：杂务周期范围 = T1~T9（见 4.3）——第一批 T1~T6 基座/卫生 + 第二批 T7~T9 用户点名主菜；U-14 不随本周期，N10 转留池（U-15） | 已拆任务见 `NEXT_CYCLE_TASKS.md`；分页形态（T7 缓存载体 / T8 主楼分页）与 CountRepairTool 去留（R-05）属开工前拍板点 |
 | R-04 | content ↔ comment 包层环（= R-02）怎么处置 | `260918/R-04` | 待定 | 多周期未动；包架构纯净化是否本周期做（若不做继续留池） |
-| R-05 | `CountRepairTool` 去留（详情见 4.1 N8） | 本档新增 4.1 N8 | 待定 | 三类候选：保留（现状，javadoc 已有说明）/ 移出主代码 / 删除 |
+| R-05 | `CountRepairTool` 去留（详情见 4.1 N8） | 本档新增 4.1 N8 | **已拍板（2026-09-19）**：**A 案删除**（否决 B 迁测试源码树 / C 保留+改造，决策段见 4.0） | 三类候选：保留（现状，javadoc 已有说明）/ 移出主代码 / 删除；删除理由：零引用 + 能力被 `tools/check_integrity.py` 严格超集覆盖 + 随 war 出货 + 拉低覆盖率，且**反转 `260902/T4` 原保留决议**（已在 4.0 显式记录） |
 
 ***
 
@@ -62,7 +62,17 @@
 
 ### 4.0 已回写技术决策与质疑记录（执行中拍板/质疑，按任务追加）
 
-> 本周期尚未开工，此节留空待回写。
+> T1~T5 窗口无 Why 层新决策、无疑似被覆盖的需求（实现细节与 L1 记录见 `NEXT_CYCLE_TASKS.md` 各任务"执行回写"）。
+
+**决策 R-05（2026-09-19，T6 窗口，用户拍板）**：`CountRepairTool` 处置 = **A 案删除**。
+
+- **依据**：① 全仓**零生产引用、零测试引用**（仅 `tools/check_integrity.py` L110/L137 注释提及）；② 能力被 `check_integrity.py` 的 `COUNT_CHECKS`/`FIX_STATEMENTS` **严格超集**覆盖——5 条修复 SQL 逐条等价，且该入口默认 dry-run、`--fix` 才写库、单事务、修后复查、prod 二次确认、报告落盘；③ 实测该类**随 war 出货**（`stage8-target/untitled-1.0-SNAPSHOT.war` 内 `WEB-INF/classes/com/itheima/util/CountRepairTool.class`），jacoco 记 97 指令 / 28 行 / 3 方法 0 覆盖；④ 其唯一独有能力（不依赖 mysql CLI 的 JDBC 直连）恰是"运维入口分裂"本身，价值低于统一入口原则。
+- **否决 B（迁 `src/test/java/com/itheima/tools/`）**：虽同样退出 war 与覆盖率分母，但会把"运维工具放测试树"确认为模式（既有 `CouponAdmin` 已硬编码本机库）。
+- **否决 C（保留+改造）**：为零引用且已被统一入口覆盖的工具新增 dry-run/环境门禁逻辑与配套测试，与"杂务/准备周期、改动面小"不符，且仍是第二套运维入口。
+- **历史关系（显式记录，G11 去向不悬空）**：本决策**反转** `260902/T4` 的"能力整合 + 类头标注（保留）"决议；该周期"唯一允许的 main 运维工具"口径随之作废——能力已由统一入口承接（属**迁移完成**，非废弃）。
+- **附带拍板**：LogUtil 兜底口径取**硬口径**——`LogUtil` 内不出现任何 `System.out/err`。
+- **已声明的语义变化**（T6 对外可感知变化，均为本次改造的预期结果）：初始化信息改走 `java.util.logging` 后 ① **全部初始化信息受 `log.level` 过滤**——默认 INFO 可见；级别调至 WARNING 及以上时 "successfully load logs" 等 INFO 行不再出现，级别调至 SEVERE 时"log dir 创建失败""非法 log.level 回退 INFO"等 WARNING 行亦不再出现（改造前 `System.out/err` 一律不受级别影响）；② 控制台通道变为 `ConsoleHandler`（**stderr** + `SimpleFormatter` 格式，改造前为 stdout 裸行）；③ 初始化信息**同时落入 `system.log`**（改造前只进 stdout，从不进文件——N7 痛点本身）；④ 初始化时清空 root 既有 handler 的副作用被显式记录（同一 JVM 内容器/第三方 JUL 日志也会路由到本工具的 Console+File；该行为 HEAD 已存在，非本次新增，仅补文档说明）。
+
 
 ### 4.1 候选杂务（周期探查的代码卫生/铺垫清理，**待评审纳入，尚未拍板**）
 
@@ -78,8 +88,8 @@
 | N4 | **`RequestParser` 三段落灰旧 `getBody` 实现**（保留 `BufferedReader.readLine` 循环版、`ContentLength` 定长版、`try-with-resources` 版，均为注释代码），现役实现是 L13-17 流式 `getBody` | `src/main/java/com/itheima/controller/RequestParser.java` L19-56 | 注释残留误导后来者（不知哪个是现役实现）；`ContentLength` 版甚至隐藏着定长读取的边界写法，易被误当可选方案抄袭 |
 | N5 | **`web.xml` 顶部整段注释掉的旧 `<web-app>` 骨架**（`xmlns=javaee` web-app_4_0 空的声明块） | `src/main/webapp/WEB-INF/web.xml` L1-6 | 死注释；后续编辑 web.xml 时易误解除注释导致 XML 重复声明冲突 |
 | N6 | **分页参数解析重复实现**：`FeedController` 与 `ProfileController` 各有一份逐字符相同的 `parsePage`（默认 1）+ `parsePageSize`（默认 10，cap 50），均为私有方法；`BaseServlet`)（基类）与 `BaseServletUtil` 无此公共能力 | `FeedController.java` L32-56；`ProfileController.java` L45-70 | 新增分页接口（feed 改造/新功能）时重复第三份拷贝；两处已出现局部漂移风险（若一处改上限另一处漏改）——趁新功能加接口前收敛到公共处 |
-| N7 | **日志工具类自身用 `System.out/err` 直接打印**：`LogUtil` 初始化（建目录失败、加载成功、非法级别 fallback）与全局失败信息不经过 java.util.logging 自身通道 | `src/main/java/com/itheima/util/LogUtil.java` L25/L36/L38/L46 | 与"日志体系改造"预演矛盾：系统里唯一例外把初始化日志打到控制台而非落文件，改造成本最小的一处；且 `successfully load logs` 用 info 口吻但进 stdout、错误反而不进日志文件，调试排查看不到 |
-| N8 | **运维 main 工具类残留主代码且不脱轨**：`CountRepairTool` 是带 `main` 的计数修复 CLI（计数 SQL 与 `tools/check_integrity.py` 语义一致），用 `System.out/err` + `e.printStackTrace()`，**javadoc 已声明"由 check_integrity.py 提供统一入口、本类保留供直连调试/交叉验证"** | `src/main/java/com/itheima/util/CountRepairTool.java` 全文（L18-60 main/repair）；javadoc L10-14 | 主代码里藏着与本项目运维规范重复的裸 CLI，且未过统一工具入口；每年维护读到会疑惑"为什么不直接用 check_integrity"；保留理由已被 javadoc 自述但无评审记录（去留见 R-05） |
+| N7 | **日志工具类自身用 `System.out/err` 直接打印**：`LogUtil` 初始化（建目录失败、加载成功、非法级别 fallback）与全局失败信息不经过 java.util.logging 自身通道 | `src/main/java/com/itheima/util/LogUtil.java` L25/L36/L38/L46 | 与"日志体系改造"预演矛盾：系统里唯一例外把初始化日志打到控制台而非落文件，改造成本最小的一处；且 `successfully load logs` 用 info 口吻但进 stdout、错误反而不进日志文件，调试排查看不到（**2026-09-19 T6 已落地**：初始化改走 logger，先挂 ConsoleHandler 再打日志，硬口径零 System.out/err） |
+| N8 | **运维 main 工具类残留主代码且不脱轨**：`CountRepairTool` 是带 `main` 的计数修复 CLI（计数 SQL 与 `tools/check_integrity.py` 语义一致），用 `System.out/err` + `e.printStackTrace()`，**javadoc 已声明"由 check_integrity.py 提供统一入口、本类保留供直连调试/交叉验证"** | `src/main/java/com/itheima/util/CountRepairTool.java` 全文（L18-60 main/repair）；javadoc L10-14 | 主代码里藏着与本项目运维规范重复的裸 CLI，且未过统一工具入口；每年维护读到会疑惑"为什么不直接用 check_integrity"；保留理由已被 javadoc 自述但无评审记录（去留见 R-05）→ **2026-09-19 R-05 拍板删除（已落地）**，能力由 `tools/check_integrity.py --fix` 承接 |
 | N9 | **`CURRENT_ARCHITECTURE.md` 头部版本元数据滞后**：头部写"版本：2.23 / 最后更新：2026-09-16"，但更新日志节已记录到 **2.26（2026-09-18）**，2.24~2.26 三条（T1~T3）未体现在头部——**历史复现**：260917 归档记录已留 L1"header 版本号 T1 未按惯例 bump"（`260918/R` 更新日志 2.17 条目） | `.docs/常青/CURRENT_ARCHITECTURE.md` L3-4（头部）vs L847-849（更新日志 2.24~2.26） | 读者按头部判断文档新鲜度会误判滞后三期；同一问题第二次出现说明"更新日志 bump ≠ 头部 bump"是系统性疏漏，可在杂务周期一次性对齐（顺带检查 BUSINESS_FLOW 版本头） |
 | N10 | **无统一请求/响应日志**：仅 `ExceptionFilter` 记录异常（WARNING/SEVERE + 堆栈）；`BaseServlet` 基类只做 `init` 注入与 `writeSuccess/writeError`，各 Controller `doGet/doPost` 无入参、无耗时记录——全仓 controller 层仅 `AppShutDownListener` 有 logger | `BaseServlet.java` 全文（无 logger）；`ExceptionFilter.java` L24-35（仅异常日志）；controller 包 grep `logger.info/warning/severe` 仅命中 `AppShutDownListener` | 现网/测试排查全靠异常日志与外部 access log，**无"谁在什么时刻调了哪个接口、耗时多少"的链路痕迹**；属日志体系改造的主干缺失——**2026-09-18 评审：转留池（U-15），摸底放日志体系改造分支立项前，不在本杂务周期排期** |
 | N11 | **评论、粉丝列表无分页、全量加载（用户点名，2026-09-18）**：关注/粉丝列表 `getFollowingList`/`getFollowerList` 无分页参数、`SetCache.getMembers` 走 `SMEMBERS` 一键全量回传 + miss 全量 DB 装载（`UNPLANNED_ISSUES.md` U-12）；评论树 `loadCommentTree` 整树从 DB 全量捞出 + 内存 `buildCommentTree` 重排、`getCommentsForContent` 无分页整树渲染（U-13）——两处此前均以"懒加载/分页范畴（接口契约 + DAO 分页 + 展示决策）"转留池，**用户 2026-09-18 明确要在本周期解决** | `FollowController.java` L34-38（无分页参数、全量返回）；`SetCache.getMembers` L112-139；`CommentCache.loadCommentTree` L99-114 + `buildCommentTree` L117-145；`CommentController.java` L82（整树渲染） | 用户量大后关注列表/粉丝列表/评论列表响应体无限增长：关注百万 BOX、评论数千条时单接口拉全量（既有 U-12/U-13 原文：SMEMBERS 全量装箱、整树重排 O(n)）；且不解决则"加载更多"等常见交互无法落地，是 feed 改造之外体验卡点 |
@@ -109,7 +119,7 @@
 | pom Kotlin 残留清理 | N1 | T3 | 移除 kotlin 三件套，`mvn -o` 编译/JUnit 回归全绿 |
 | git 卫生 | N2 + N3 | T4 | `.idea/` 整目录出库 + ignore；`temp_script` 例外出库 |
 | 随手清理（死注释 + 分页收敛） | N4 + N5 + N6 | T5 | 删除 RequestParser/web.xml 死注释；parsePage/parsePageSize 收敛公共（T7/T8 前置） |
-| 日志卫生 | N7 + N8 | T6 | LogUtil 自我合规；CountRepairTool 按 R-05 拍板（缺省删除） |
+| 日志卫生 | N7 + N8 | T6 | LogUtil 自我合规；CountRepairTool 已按 R-05 拍板**删除**（统一入口 = `tools/check_integrity.py --fix`） |
 | 关注/粉丝列表分页 | N11a（U-12） | T7 | 新增可选 page/pageSize 缺省兼容；缓存分页载体拍板；前端 follow.js 分页 |
 | 评论列表分页 | N11b（U-13） | T8 | 主楼分页 + 楼中楼整树，缺省兼容；缓存整树不动只做展示层切片；前端 detail.js 加载更多 |
 | 测试目录本地化 | N14 | T9 | 沙箱边界探明 → buildDir/日志/媒体/端口参数化，可落地部分实现 |

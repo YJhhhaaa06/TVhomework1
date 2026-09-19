@@ -1,7 +1,7 @@
 # 当前系统架构地图
 
-> 版本：3.0（2026-09-18 T2 瘦身：删除更新日志/统计快照/重复清单，缓存机制小节去周期标注按主题归并）
-> 最后更新：2026-09-18
+> 版本：3.1（2026-09-19 T6：LogUtil 初始化改走自身日志通道、删除 CountRepairTool——计数修复统一入口 = `tools/check_integrity.py --fix`）
+> 最后更新：2026-09-19
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
 ---
@@ -163,11 +163,10 @@ com.itheima/
 | PasswordUtil | 58 | BCrypt 密码哈希 |
 | JwtUtil | 40 | JWT 生成/校验 |
 | MyRedisPool | 49 | Redis 连接池（显式 connect/so 超时 + maxWait，8 参 JedisPool 构造器） |
-| LogUtil | 54 | 日志工具 |
+| LogUtil | 61 | 日志工具（初始化先清空 root 既有 handler 再挂 Console+File，自身零 System.out/err） |
 | RequestContext | 31 | 请求上下文路径（动态拼接媒体 URL） |
 | StringUtil | 37 | 字符串校验 |
 | ResultUtil | 26 | 响应格式构建 |
-| CountRepairTool | 69 | 数据修复工具（运维入口见 tools/check_integrity.py） |
 | TimeUtil | 15 | 时间工具 |
 
 #### controller 包（跨域基建，业务 Controller 已全部搬出）

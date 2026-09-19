@@ -289,7 +289,7 @@ python tools\tv.py --env prod integrity                  # 本次检查生产库
 
 退出码：0 完成 / 1 参数或其它错误（含 `--fix` 失败已回滚）/ 2 mysql 客户端不可用 / 3 数据库连接或健康门禁失败（未触碰任何数据）/ 5 疑似配置错误（库内存在媒体记录但磁盘与被引用 URL 无重叠或媒体目录缺失）。
 
-**职责边界**：`check_integrity.py` 默认只做只读检查并输出报告；计数漂移可经显式 `--fix` 单事务重算修复（不删行、不动文件，逻辑与 CountRepairTool 一致）；其余清理按报告另行执行 `cleanup_data.py`（测试污染/孤儿 content\_media/comment\_like）或 `cleanup_orphan_media.py`（孤儿媒体移回收站）；其余检查项（孤儿 comment/content\_like/comment\_media/楼中楼、重复引用、库引用缺失文件）cleanup 暂不支持，需人工或后续工具处理。
+**职责边界**：`check_integrity.py` 默认只做只读检查并输出报告；计数漂移可经显式 `--fix` 单事务重算修复（不删行、不动文件；SQL 语义以本文件 `FIX_STATEMENTS` 为唯一基准）；其余清理按报告另行执行 `cleanup_data.py`（测试污染/孤儿 content\_media/comment\_like）或 `cleanup_orphan_media.py`（孤儿媒体移回收站）；其余检查项（孤儿 comment/content\_like/comment\_media/楼中楼、重复引用、库引用缺失文件）cleanup 暂不支持，需人工或后续工具处理。
 
 ***
 
