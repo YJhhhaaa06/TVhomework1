@@ -33,6 +33,8 @@ export function mount(container, params) {
     page: 1,
     totalPages: 0,
     listType: 'following',
+    listPage: 1,
+    listTotalPages: 0,
   };
   state.isSelf = state.currentUserId != null && state.currentUserId === profileUserId;
   render();
@@ -71,6 +73,7 @@ function render() {
       <div class="sheet">
         <div class="sheet-header"><span class="sheet-title" id="sheetTitle">关注</span><button class="sheet-close" id="sheetClose">✕</button></div>
         <div class="sheet-list" id="sheetList"></div>
+        <div class="load-more" id="sheetMore"></div>
       </div>
     </div>
 
@@ -212,19 +215,33 @@ function updateFollowerCount(delta) {
   if (!Number.isNaN(cur)) el.textContent = cur + delta;
 }
 
-// ---------- 关注/粉丝列表 ----------
+// ---------- 关注/粉丝列表（T7：后端有序分页 + 前端「加载更多」） ----------
 async function openUserList(type) {
   if (!state.profileUserId) return;
   state.listType = type;
+  state.listPage = 1;
+  state.listTotalPages = 0;
   const c = state.container;
   c.querySelector('#sheetTitle').textContent = type === 'following' ? '关注' : '粉丝';
   c.querySelector('#sheetList').innerHTML = '<div class="sheet-empty">加载中...</div>';
+  c.querySelector('#sheetMore').innerHTML = '';
   c.querySelector('#sheetOverlay').classList.remove('hidden');
+  await loadUserList(1, false);
+}
+
+async function loadUserList(page, append) {
+  const c = state.container;
+  if (append) setSheetMore('loading');
   try {
-    const data = await request(`follow/${type}?userId=${state.profileUserId}`);
-    renderUserList(data || []);
+    const data = await request(
+      `follow/${state.listType}?userId=${state.profileUserId}&page=${page}&pageSize=${PAGE_SIZE}`);
+    state.listPage = data.page;
+    state.listTotalPages = data.totalPages;
+    renderUserList(data.list || [], append);
+    renderSheetMore();
   } catch (e) {
-    c.querySelector('#sheetList').innerHTML = '<div class="sheet-empty">加载失败</div>';
+    if (append) { setSheetMore('retry'); showToast('加载失败，请重试'); }
+    else { c.querySelector('#sheetList').innerHTML = '<div class="sheet-empty">加载失败</div>'; }
   }
 }
 
@@ -232,10 +249,30 @@ function closeUserList() {
   state.container.querySelector('#sheetOverlay').classList.add('hidden');
 }
 
-function renderUserList(users) {
-  const box = state.container.querySelector('#sheetList');
-  if (!users.length) { box.innerHTML = '<div class="sheet-empty">暂无数据</div>'; return; }
+function renderSheetMore() {
+  const box = state.container.querySelector('#sheetMore');
   box.innerHTML = '';
+  if (state.listPage >= state.listTotalPages) return; // 已到末页
+  const btn = document.createElement('button');
+  btn.className = 'load-more-btn';
+  btn.textContent = '加载更多';
+  btn.addEventListener('click', () => loadUserList(state.listPage + 1, true));
+  box.appendChild(btn);
+}
+
+function setSheetMore(mode) {
+  const btn = state.container.querySelector('#sheetMore .load-more-btn');
+  if (!btn) return;
+  if (mode === 'loading') { btn.disabled = true; btn.textContent = '加载中...'; }
+  else { btn.disabled = false; btn.textContent = '加载更多'; }
+}
+
+function renderUserList(users, append) {
+  const box = state.container.querySelector('#sheetList');
+  if (!append) {
+    if (!users.length) { box.innerHTML = '<div class="sheet-empty">暂无数据</div>'; return; }
+    box.innerHTML = '';
+  }
   users.forEach((u) => {
     const item = document.createElement('div');
     item.className = 'user-list-item';

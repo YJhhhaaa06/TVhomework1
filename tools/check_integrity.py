@@ -107,7 +107,7 @@ DUP_CHECKS = [
 ]
 
 # 计数漂移检查（T4）：stored=表内冗余计数，actual=关联表实时统计（LEFT JOIN 聚合子查询）。
-# 语义与 CountRepairTool.java 一致：content.comment_count 只数 is_deleted=0 的评论（含楼中楼），
+# 计数口径基准（2026-09-19 T6 起本文件为本项目唯一计数修复入口）：content.comment_count 只数 is_deleted=0 的评论（含楼中楼），
 # like/follow 类直接数关联表行（点赞/取关/关注/取关均硬删行）。
 # 注意：计数字段 schema 为 `int DEFAULT '0'`（允许 NULL），NULL <> 0 结果为 NULL（非真），
 # 必须用 `stored IS NULL OR stored <> actual` 才能把 NULL 也判为漂移。
@@ -134,7 +134,7 @@ COUNT_CHECKS = [
      "ON f.followed_user_id=u.id WHERE u.follower_count IS NULL OR u.follower_count <> COALESCE(f.cnt,0) ORDER BY u.id"),
 ]
 
-# --fix 修复语句（T4，与 CountRepairTool.java 语义一致；只重算漂移行，幂等）。
+# --fix 修复语句（源自 260902/T4，2026-09-19 T6 起为本项目唯一计数修复入口；只重算漂移行，幂等）。
 # 注意：子查询只引用被更新表以外的表（content_like/comment_like/comment/follow），
 # 不触发 MySQL "can't specify target table for update in FROM clause"。
 # WHERE 同样用 `IS NULL OR <>`：NULL 计数字段会被修复为实际统计值（SET 子查询结果），

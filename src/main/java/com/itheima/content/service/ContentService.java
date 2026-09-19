@@ -134,6 +134,67 @@ public class ContentService {
         }
     }
 
+    /**
+     * 评论列表**分页**（T8 D1=A：主楼分页 + 楼中楼整树）。
+     *
+     * <p>仍从整树缓存取主楼的完整列表（**评论缓存装载结构不变**——本方法只在展示层切片），
+     * 按主楼切片取该页，每条主楼携带其完整 {@code children}（楼中楼不切、不撕裂）；
+     * DB 侧批量查询只针对该页评论 id（含该页主楼的楼中楼），不再展开全树。
+     *
+     * <p>缺省路径 {@link #getCommentsForContent(long, Long)} 不受影响：不传分页参数时仍返回
+     * 全量数组、与改造前逐字节一致（是否传参由 Controller 显式判定）。
+     *
+     * @param page     页码（≥1，Controller 经 {@code BaseServletUtil.parsePage} 归一）
+     * @param pageSize 每页主楼条数（1~50，经 {@code BaseServletUtil.parsePageSize} 归一）
+     * @return 分页信封 {@code {list,total,page,pageSize,totalPages}}，{@code total} = **主楼条数**
+     */
+    public PageResult<CommentVO> getCommentsForContent(long contentId, Long userId, int page, int pageSize) {
+        ContentCacheDTO dto = contentCache.getContent(contentId);
+        // 评论区开关 / 内容不存在或隐藏：与缺省路径同一前置判断，分页下返回空页（total=0）
+        if (dto == null || !dto.isCommentEnabled()) {
+            return new PageResult<>(new ArrayList<>(), 0, page, pageSize);
+        }
+        List<CommentCacheDTO> commentTree = commentCache.getCommentTree(contentId);
+        if (commentTree == null || commentTree.isEmpty()) {
+            return new PageResult<>(new ArrayList<>(), 0, page, pageSize);
+        }
+
+        // total 取主楼总数：与"每页 N 条主楼"同源同口径，前端判断"还有没有下一批"不依赖已加载量
+        int total = commentTree.size();
+        List<CommentCacheDTO> pageRoots = sliceRoots(commentTree, page, pageSize);
+
+        // 点赞态只对该页评论批量查询（含该页主楼的楼中楼）
+        Map<Long, Boolean> likedMap = new HashMap<>();
+        if (userId != null) {
+            List<Long> pageCommentIds = commentCache.collectCommentIds(pageRoots);
+            likedMap = likeService.batchIsCommentLiked(userId, pageCommentIds);
+            if (likedMap == null) likedMap = new HashMap<>();
+        }
+        return new PageResult<>(commentService.convertToCommentVOList(pageRoots, likedMap),
+                total, page, pageSize);
+    }
+
+    /**
+     * 主楼分页切片（T8 的**唯一切片点**）：越界页返回空列表，但信封仍带真实 {@code total}。
+     *
+     * <p>当前切片源是"整树缓存的主楼列表"；若将来改为缓存窗口读（主楼序列独立键等），
+     * 只需替换本方法的取数方式，调用方与对外契约不变。
+     */
+    private List<CommentCacheDTO> sliceRoots(List<CommentCacheDTO> roots, int page, int pageSize) {
+        // 兜底非法分页参数（Controller 已归一：page≥1、pageSize 1~50）——非正参数给空页而不是
+        // 假装第 1 页，避免 subList 越界；合法入参的任何行为不受影响
+        if (page < 1 || pageSize < 1) {
+            return new ArrayList<>();
+        }
+        long offset = (long) (page - 1) * pageSize;
+        if (offset >= roots.size()) {
+            return new ArrayList<>();
+        }
+        int from = (int) offset;
+        int to = (int) Math.min(offset + pageSize, roots.size());
+        return new ArrayList<>(roots.subList(from, to));
+    }
+
     // ===== 管理 =====
 
     public long addVideo(UploadCommand uc, String videoUrl, String coverUrl) {

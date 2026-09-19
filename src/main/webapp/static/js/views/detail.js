@@ -8,6 +8,10 @@ import { showToast, formatTime, formatNumber, emptyBox, initialChar, avatarColor
 import { navigate } from '../router.js';
 import { openEditWorkModal } from '../editWork.js';
 
+// 评论一次请求的"大 chunk"（主楼条数）：前端本地累积，本地用尽才发下一次请求
+// （T8：后端主楼分页 + 前端按 chunk 加载，"加载更多"每次追加一个 chunk）
+const CHUNK_SIZE = 50;
+
 let state = null;
 
 export function mount(container, params) {
@@ -16,6 +20,8 @@ export function mount(container, params) {
     contentId: params.id,
     content: null,
     comments: [],
+    commentPage: 1,
+    commentTotalPages: 1,
     related: [],
     parentId: null,
   };
@@ -57,6 +63,7 @@ function render() {
             <button class="btn-primary" id="sendBtn">发送</button>
           </div>
           <div class="comment-list" id="commentList"></div>
+          <div class="load-more" id="commentMore"></div>
         </div>
       </div>
       <div class="detail-side">
@@ -76,12 +83,11 @@ function render() {
 
 async function init() {
   try {
-    const [content, comments] = await Promise.all([
+    const [content] = await Promise.all([
       request(`search/IdSearch?contentId=${state.contentId}`),
-      request(`comment/show?contentId=${state.contentId}`),
+      loadCommentPage(1),
     ]);
     state.content = content;
-    state.comments = comments || [];
     renderContent();
     loadRelated();
   } catch (e) {
@@ -185,6 +191,7 @@ function renderContent() {
     c.querySelector('#commentInputRow').style.display = 'none';
     c.querySelector('#commentHeader').textContent = '评论区已关闭';
     c.querySelector('#commentList').innerHTML = '<div class="empty-comments">作者已关闭评论区</div>';
+    c.querySelector('#commentMore').innerHTML = '';
   } else {
     // 评论输入（登录后显示）
     if (isLoggedIn()) c.querySelector('#commentInputRow').style.display = '';
@@ -257,18 +264,56 @@ function createSideItem(item) {
   return el;
 }
 
+// ---------- 评论分页加载（T8：后端主楼分页 + 楼中楼整树，前端按 chunk 累积） ----------
+async function loadCommentPage(page) {
+  const data = await request(
+    `comment/show?contentId=${state.contentId}&page=${page}&pageSize=${CHUNK_SIZE}`);
+  state.commentPage = data.page;
+  state.commentTotalPages = data.totalPages;
+  state.comments = page === 1 ? (data.list || []) : state.comments.concat(data.list || []);
+}
+
+function renderCommentLoadMore() {
+  const box = state.container.querySelector('#commentMore');
+  box.innerHTML = '';
+  if (state.commentPage >= state.commentTotalPages) return;
+  const btn = document.createElement('button');
+  btn.className = 'load-more-btn';
+  btn.textContent = '加载更多评论';
+  btn.addEventListener('click', () => loadMoreComments(btn));
+  box.appendChild(btn);
+}
+
+async function loadMoreComments(btn) {
+  btn.disabled = true;
+  btn.textContent = '加载中...';
+  try {
+    await loadCommentPage(state.commentPage + 1);
+    renderComments();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '加载更多评论';
+    showToast(e.message || '加载失败');
+  }
+}
+
 // ---------- 评论渲染（楼中楼：主楼 + 楼内回复平铺，回复仅一级） ----------
 function renderComments() {
   const c = state.container;
   const list = c.querySelector('#commentList');
-  const count = countTotal(state.comments);
+  // 计数用详情接口的 commentCount（含楼中楼的总评论数）：分页后只加载了部分主楼，
+  // 不能再按"已加载条数"显示，否则数字会随加载页数增长、与详情统计不一致
+  const count = (state.content && state.content.commentCount != null)
+    ? state.content.commentCount : countTotal(state.comments);
   c.querySelector('#commentHeader').textContent = '评论 (' + count + ')';
   list.innerHTML = '';
   if (!state.comments.length) {
     list.innerHTML = '<div class="empty-comments">暂无评论，快来抢沙发吧</div>';
+    renderCommentLoadMore();
     return;
   }
   state.comments.forEach((cm) => list.appendChild(createCommentItem(cm, false)));
+  renderCommentLoadMore();
 }
 
 function countTotal(list) {
@@ -370,7 +415,8 @@ async function deleteComment(comment) {
   try {
     await request(`comment/delete?commentId=${comment.commentId}`, { method: 'POST' });
     showToast('删除成功');
-    state.comments = await request(`comment/show?contentId=${state.contentId}`);
+    // 删除后回到第 1 页重新累积（避免页码与已加载内容错位）
+    await loadCommentPage(1);
     if (state.content) {
       state.content.commentCount = Math.max(0, (state.content.commentCount || 0) - removed);
       state.container.querySelector('#stats').textContent =
@@ -462,7 +508,8 @@ async function sendComment() {
     input.placeholder = '发一条友善的评论';
     state.parentId = null;
     showToast('评论成功');
-    state.comments = await request(`comment/show?contentId=${state.contentId}`);
+    // 新评论进入主楼升序末位，回到第 1 页重新累积（与删除后同一处置）
+    await loadCommentPage(1);
     renderComments();
   } catch (e) {
     showToast(e.message || '评论失败');

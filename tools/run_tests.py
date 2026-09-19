@@ -36,13 +36,16 @@ def _env(name: str, default: str) -> str:
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEST_DIR = PROJECT_ROOT / "src" / "test" / "python"
-STAGE8_TARGET = Path(_env("TV_STAGE8_TARGET", r"D:\data\projects\VideoPlatform\stone\temp\stage8-target"))
+# T9 测试目录本地化：构建产物收进项目内（沙箱可写区），不再指向 D 盘外部目录；
+# env TV_STAGE8_TARGET 仍可覆盖（与 gen_coverage_map.py 的默认值同步）。
+STAGE8_TARGET = Path(_env("TV_STAGE8_TARGET", str(PROJECT_ROOT / ".stage8-target")))
 WAR_FILE = STAGE8_TARGET / "untitled-1.0-SNAPSHOT.war"
 
 MAVEN_CMD = Path(_env("TV_MAVEN_CMD", r"D:\IDE\IDEA\IntelliJ IDEA 2025.3.2\plugins\maven\lib\maven3\bin\mvn.cmd"))
 JAVA_HOME = Path(_env("TV_JAVA_HOME", r"D:\dev\DevTools\jdk\openjdk-25.0.2"))
 CATALINA_HOME = Path(_env("TV_CATALINA_HOME", r"D:\dev\DevTools\tomcat\apache-tomcat-10.1.54"))
-CATALINA_BASE = Path(_env("TV_CATALINA_BASE", r"D:\data\projects\VideoPlatform\stone\temp\tomcat-test-18080"))
+# T9 本地化：测试实例运行目录（conf/webapps/logs/pid）收进项目内，不再指向 D 盘外部目录。
+CATALINA_BASE = Path(_env("TV_CATALINA_BASE", str(PROJECT_ROOT / ".stage8-target" / "tomcat-test-18080")))
 M2_REPO = Path(_env("TV_M2_REPO", r"D:\dev\WorkSpace\VideoPlatform\maven"))
 PYTEST_DEPS = Path(_env("TV_PYTEST_DEPS", r"D:\dev\WorkSpace\VideoPlatform\temp\pytest-deps"))
 # T2 媒体目录隔离：测试实例上传落盘与 /upload 挂载的独立目录（与生产 stone 隔离）。
@@ -54,12 +57,13 @@ PYTEST_DEPS = Path(_env("TV_PYTEST_DEPS", r"D:\dev\WorkSpace\VideoPlatform\temp\
 #  - TV_TEST_MEDIA_ROOT 覆盖值如与本常量不一致 → start 直接 exit 12 拒绝，绝不动其它目录；
 #  - 想改换被移动的目录，唯一途径是把本常量改成那个目录（必须经用户明示后人工修改，勿作随手调整）；
 #  - 即使改了本常量，生产媒体根（见 _media_dir_is_production）仍会被第二道门禁拦截。
-DEFAULT_TEST_MEDIA_ROOT = Path(r"D:\data\projects\VideoPlatform\media-test")
+# T9 本地化：测试媒体根收进项目内 .stage8-target（沙箱可写区），不再指向 D 盘外部目录。
+DEFAULT_TEST_MEDIA_ROOT = Path(PROJECT_ROOT / ".stage8-target" / "media-test")
 TEST_MEDIA_ROOT = Path(_env("TV_TEST_MEDIA_ROOT", str(DEFAULT_TEST_MEDIA_ROOT)))
 # 测试媒体回收站（T2 只移不删落点）：每次 fresh-start 把旧 media-test 整体移入此处
-# （<media-test>-<时间戳>/），由用户手动删除以释放空间。默认与 media-test 同级；
+# （<media-test>-<时间戳>/），由用户手动删除以释放空间。默认与 media-test 同根（.stage8-target 下）；
 # env TV_TEST_TRASH_ROOT 可覆盖，但落点会校验（不得命中生产根/与 src 重叠，否则 exit 12）。
-TEST_TRASH_ROOT = Path(_env("TV_TEST_TRASH_ROOT", r"D:\data\projects\VideoPlatform\test_trash"))
+TEST_TRASH_ROOT = Path(_env("TV_TEST_TRASH_ROOT", str(PROJECT_ROOT / ".stage8-target" / "test_trash")))
 MEDIA_DIRS = ("video", "image", "cover")  # 与 FileUploadService / MediaAuditService 一致
 # 生产媒体根兜底（清空黑名单第一道门禁）：与 tools/media_paths.py 的 PROD_UPLOAD_ROOT_DEFAULT 一致
 PROD_UPLOAD_ROOT_DEFAULT = Path("D:/data/projects/VideoPlatform/stone")
@@ -123,6 +127,9 @@ def base_env() -> dict:
     # T2 媒体目录隔离：upload.path -> UPLOAD_PATH 环境变量覆盖（AppConfig 统一机制），
     # 使测试实例上传落盘指向独立 media-test；与 WAR context.xml 的 /upload 挂载保持一致。
     env["UPLOAD_PATH"] = _norm_media_path(TEST_MEDIA_ROOT)
+    # T9 本地化：应用日志（app.properties log.file=logs/system.log 相对路径）随 LOG_PATH
+    # 收进项目内测试实例的 logs/，避免解析到 Tomcat 安装目录 logs（沙箱外）被拦截。
+    env["LOG_PATH"] = str(CATALINA_BASE / "logs" / "system.log")
     return env
 
 

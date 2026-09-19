@@ -161,6 +161,8 @@ public class UserDao {
 
 
     //批量查询用户（仅id和username，给关注/粉丝列表用）
+    //T7：补 ORDER BY id —— 关注/粉丝列表顺序由此处决定（上层 ZSet 窗口按 id 升序切片），
+    //无 ORDER BY 时输出序依赖存储引擎默认序，分页"顺序稳定"只能靠巧合（唯一调用方：FollowService）
     public List<User> findUsersByIds(Connection conn, List<Long> ids) throws SQLException {
         if (ids == null || ids.isEmpty()) return java.util.Collections.emptyList();
         StringBuilder sql = new StringBuilder("SELECT id, username FROM users WHERE id IN (");
@@ -168,7 +170,7 @@ public class UserDao {
             if (i > 0) sql.append(", ");
             sql.append("?");
         }
-        sql.append(")");
+        sql.append(") ORDER BY id");
         List<User> result = new java.util.ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
             for (int i = 0; i < ids.size(); i++) {

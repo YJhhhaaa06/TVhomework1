@@ -30,15 +30,38 @@ public class FollowController extends BaseServlet {
         long userId = parseUserId(req);
 
         switch (action) {
+            // T7：显式区分"是否传了分页参数"——**缺省（都不传）维持全量返回**，与改造前逐字节一致
+            // （既有调用方与 pytest 用例零破坏；不能用"默认 page=1&pageSize=50"代替，上限 50 会截断全量）；
+            // 传任一分页参数 → 分页信封（A1 有序窗口）。分页解析复用 T5 公共方法（默认 1/10、上限 50）。
             case "/following":
-                BaseServletUtil.writeSuccess(resp, followService.getFollowingList(userId, currentUserId));
+                if (hasPagingParams(req)) {
+                    BaseServletUtil.writeSuccess(resp, followService.getFollowingList(userId, currentUserId,
+                            BaseServletUtil.parsePage(req), BaseServletUtil.parsePageSize(req)));
+                } else {
+                    BaseServletUtil.writeSuccess(resp, followService.getFollowingList(userId, currentUserId));
+                }
                 break;
             case "/followers":
-                BaseServletUtil.writeSuccess(resp, followService.getFollowerList(userId, currentUserId));
+                if (hasPagingParams(req)) {
+                    BaseServletUtil.writeSuccess(resp, followService.getFollowerList(userId, currentUserId,
+                            BaseServletUtil.parsePage(req), BaseServletUtil.parsePageSize(req)));
+                } else {
+                    BaseServletUtil.writeSuccess(resp, followService.getFollowerList(userId, currentUserId));
+                }
                 break;
             default:
                 BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "未识别操作");
         }
+    }
+
+    /**
+     * 是否显式传了分页参数（T7 缺省兼容判据）：{@code page} 与 {@code pageSize} **任一**出现即视为分页请求。
+     *
+     * <p>不用"默认值是否等于 1/10"来判断——那无法区分"没传"与"显式传 page=1&pageSize=10"，
+     * 也就无法保留"不传 → 全量返回"的既有行为。
+     */
+    private boolean hasPagingParams(HttpServletRequest req) {
+        return req.getParameter("page") != null || req.getParameter("pageSize") != null;
     }
 
     @Override

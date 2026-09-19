@@ -29,8 +29,9 @@ APP_PROPERTIES = PROJECT_ROOT / "src" / "main" / "resources" / "app.properties"
 TEST_DB_NAME = "TVDatabase_test"
 
 # 测试媒体根默认值：与 tools/run_tests.py TEST_MEDIA_ROOT、src/test/python/conftest.py
-# STONE_DIR 默认值三处同步（T2）；env TV_TEST_MEDIA_ROOT 可覆盖
-TEST_MEDIA_ROOT_DEFAULT = Path(r"D:\data\projects\VideoPlatform\media-test")
+# STONE_DIR 默认值三处同步（T2）；env TV_TEST_MEDIA_ROOT 可覆盖。
+# T9 本地化：收进项目内 .stage8-target（沙箱可写区），不再指向 D 盘外部目录。
+TEST_MEDIA_ROOT_DEFAULT = Path(PROJECT_ROOT / ".stage8-target" / "media-test")
 
 # 生产媒体根（app.properties upload.path / TV_STONE_DIR 缺失时的兜底）
 PROD_UPLOAD_ROOT_DEFAULT = Path("D:/data/projects/VideoPlatform/stone")

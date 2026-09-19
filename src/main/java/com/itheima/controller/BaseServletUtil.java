@@ -7,6 +7,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.itheima.exception.ErrorCode;
 import com.itheima.util.ResultUtil;
 import jakarta.servlet.http.HttpServlet;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
@@ -43,7 +44,30 @@ public class BaseServletUtil extends HttpServlet {
         writeError(resp, code.getCode(), code.getMessage());
     }
 
+    // 分页参数解析（T5 收敛公共；默认 page=1 / pageSize=10 / 上限 50，与原 Feed/Profile 私有实现逐字符一致）
+    public static int parsePage(HttpServletRequest req) {
+        String param = req.getParameter("page");
+        if (param == null || param.isBlank()) {
+            return 1;
+        }
+        try {
+            int p = Integer.parseInt(param);
+            return p > 0 ? p : 1;
+        } catch (NumberFormatException e) {
+            return 1;
+        }
+    }
 
-
-
+    public static int parsePageSize(HttpServletRequest req) {
+        String param = req.getParameter("pageSize");
+        if (param == null || param.isBlank()) {
+            return 10;
+        }
+        try {
+            int s = Integer.parseInt(param);
+            return s > 0 ? Math.min(s, 50) : 10;
+        } catch (NumberFormatException e) {
+            return 10;
+        }
+    }
 }

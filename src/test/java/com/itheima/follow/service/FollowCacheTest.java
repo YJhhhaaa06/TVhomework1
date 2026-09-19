@@ -5,8 +5,8 @@ import com.itheima.cache.CacheDomain;
 import com.itheima.cache.CacheKeys;
 import com.itheima.cache.CacheStats;
 import com.itheima.cache.RedisAccess;
-import com.itheima.cache.SetCache;
 import com.itheima.cache.SingleFlight;
+import com.itheima.cache.ZSetCache;
 import com.itheima.config.AppConfig;
 import com.itheima.exception.CacheException;
 import com.itheima.exception.ServerException;
@@ -41,11 +41,13 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * T5 关注关系缓存（双 Set + MULTI 双写 + 失败双 DEL + 三态读 + 单飞 + 降级）单测。
- * 第四期 T3 起：读路径收口 SetCache（同一 mock redis + 真实 SingleFlight + 同一 stats
- * 组合注入），用例桩透明平移；风格对齐 LikeCacheServiceTest：mock DAO/RedisAccess/CacheAside
- * + tt 跑 loader；通过 Mockito 令 RedisAccess.execute/Void 作用于 mock Jedis（含 pipeline/multi），
- * 可验证 key 与写命令。
+ * T5 关注关系缓存（双 ZSet + MULTI 双写 + 失败双 DEL + 三态读 + 单飞 + 降级）单测。
+ *
+ * <p>第四期 T3：读路径收口基建组件（同一 mock redis + 真实 SingleFlight + 同一 stats 组合注入）；
+ * 第六期 T7（A1 缓存有序结构）：成员 key 由 Set 升级为 **ZSet**（score = 成员数值），
+ * 读命令 SISMEMBER/SMEMBERS → ZSCORE/ZRANGE，写命令 SADD/SREM → ZADD/ZREM，
+ * 并新增「按序窗口读」用例（ZRANGE[start,stop] + ZCARD 一趟 pipeline）。
+ * 用例桩相应平移，断言语义（三态/单飞/降级/空标记/续期/统计）保持不变。
  */
 class FollowCacheTest {
 
@@ -73,11 +75,11 @@ class FollowCacheTest {
         cacheAside = mock(CacheAside.class);
         jedis = mock(Jedis.class);
         stats = new CacheStats();
-        // 第四期 T3：读路径收口 SetCache（复用同一 mock redis / 真实 SingleFlight / 同一 stats，
-        // 保证既有三态/回填/降级并发与统计断言不因组件平移而破）
-        SetCache setCache = new SetCache(redis, cacheAside, new SingleFlight(), stats);
+        // 第四期 T3：读路径收口基建组件（复用同一 mock redis / 真实 SingleFlight / 同一 stats，
+        // 保证既有三态/回填/降级并发与统计断言不因组件平移而破）；T7 起该组件是 ZSetCache
+        ZSetCache zSetCache = new ZSetCache(redis, cacheAside, new SingleFlight(), stats);
         // 第四期 T6（R-01）：计数读写入缓存，构造补 UserDao
-        cache = new FollowCache(followDao, userDao, tt, redis, setCache, cacheAside, stats);
+        cache = new FollowCache(followDao, userDao, tt, redis, zSetCache, cacheAside, stats);
 
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
@@ -104,26 +106,48 @@ class FollowCacheTest {
         return r;
     }
 
-    /** 单条三态扫描（scanSet）命中所给 [空标记, set 存在, 成员]。 */
-    private void stubSetScan(String setKey, Boolean empty, Boolean exists, Boolean member) {
-        Response<Boolean> emptyResp = booleanResponse(empty);
-        Response<Boolean> existsResp = booleanResponse(exists);
-        Response<Boolean> memberResp = booleanResponse(member);
-        Pipeline p = mock(Pipeline.class);
-        when(jedis.pipelined()).thenReturn(p);
-        when(p.exists(CacheKeys.empty(setKey))).thenReturn(emptyResp);
-        when(p.exists(setKey)).thenReturn(existsResp);
-        when(p.sismember(setKey, String.valueOf(FOLLOWED))).thenReturn(memberResp);
+    /** ZSCORE 响应 mock（非 null = 成员；null = 非成员）。 */
+    private Response<Double> doubleResponse(Double v) {
+        @SuppressWarnings("unchecked")
+        Response<Double> r = mock(Response.class);
+        when(r.get()).thenReturn(v);
+        return r;
     }
 
-    /** 列表类双探针（getSetMembers / probePair 前两 x 两 y）命中所给 [empty, exists]。 */
-    private void stubExistsProbe(String setKey, Boolean empty, Boolean exists) {
+    private Response<Long> longResponse(Long v) {
+        @SuppressWarnings("unchecked")
+        Response<Long> r = mock(Response.class);
+        when(r.get()).thenReturn(v);
+        return r;
+    }
+
+    private Response<List<String>> listResponse(List<String> v) {
+        @SuppressWarnings("unchecked")
+        Response<List<String>> r = mock(Response.class);
+        when(r.get()).thenReturn(v);
+        return r;
+    }
+
+    /** 单条三态扫描（scanZSet）命中所给 [空标记, key 存在, ZSCORE]。 */
+    private void stubZSetScan(String zsetKey, Boolean empty, Boolean exists, Double score) {
+        Response<Boolean> emptyResp = booleanResponse(empty);
+        Response<Boolean> existsResp = booleanResponse(exists);
+        Response<Double> scoreResp = doubleResponse(score);
+        Pipeline p = mock(Pipeline.class);
+        when(jedis.pipelined()).thenReturn(p);
+        when(p.exists(CacheKeys.empty(zsetKey))).thenReturn(emptyResp);
+        when(p.exists(zsetKey)).thenReturn(existsResp);
+        when(p.zscore(zsetKey, String.valueOf(FOLLOWED))).thenReturn(scoreResp);
+    }
+
+    /** 列表类双探针（全量读 / 窗口读 / probePair 前两 x 两 y）命中所给 [empty, exists]。 */
+    private void stubExistsProbe(String zsetKey, Boolean empty, Boolean exists) {
         Response<Boolean> emptyResp = booleanResponse(empty);
         Response<Boolean> existsResp = booleanResponse(exists);
         Pipeline p = mock(Pipeline.class);
         when(jedis.pipelined()).thenReturn(p);
-        when(p.exists(CacheKeys.empty(setKey))).thenReturn(emptyResp);
-        when(p.exists(setKey)).thenReturn(existsResp);
+        when(p.exists(CacheKeys.empty(zsetKey))).thenReturn(emptyResp);
+        when(p.exists(zsetKey)).thenReturn(existsResp);
     }
 
     private String followingKey(long userId) {
@@ -138,7 +162,7 @@ class FollowCacheTest {
 
     @Test
     void isFollowingEmptyMarkerReturnsFalseWithoutDb() {
-        stubSetScan(followingKey(USER), true, null, null);
+        stubZSetScan(followingKey(USER), true, null, null);
 
         assertFalse(cache.isFollowing(USER, FOLLOWED));
         verify(tt, never()).execute(any());
@@ -146,58 +170,58 @@ class FollowCacheTest {
 
     @Test
     void isFollowingTrueWhenMember() {
-        stubSetScan(followingKey(USER), false, true, true);
+        stubZSetScan(followingKey(USER), false, true, 1.0);
 
         assertTrue(cache.isFollowing(USER, FOLLOWED));
         verify(tt, never()).execute(any());
     }
 
     @Test
-    void isFollowingFalseWhenSetHasNoMember() {
-        stubSetScan(followingKey(USER), false, true, false);
+    void isFollowingFalseWhenZSetHasNoMember() {
+        stubZSetScan(followingKey(USER), false, true, null);
 
         assertFalse(cache.isFollowing(USER, FOLLOWED));
         verify(tt, never()).execute(any());
     }
 
-    // ==================== T9 滑动续期：命中 set 顺带续期、空标记不续 ====================
+    // ==================== T9 滑动续期：命中顺带续期、空标记不续 ====================
 
     @Test
-    void isFollowingHitDataRenewsSetTtlButNotEmptyMarker() {
+    void isFollowingHitDataRenewsKeyTtlButNotEmptyMarker() {
         Response<Boolean> emptyResp = booleanResponse(false);
         Response<Boolean> existsResp = booleanResponse(true);
-        Response<Boolean> memberResp = booleanResponse(true);
+        Response<Double> scoreResp = doubleResponse(1.0);
         Pipeline p = mock(Pipeline.class);
         when(jedis.pipelined()).thenReturn(p);
-        String setKey = followingKey(USER);
-        when(p.exists(CacheKeys.empty(setKey))).thenReturn(emptyResp);
-        when(p.exists(setKey)).thenReturn(existsResp);
-        when(p.sismember(setKey, String.valueOf(FOLLOWED))).thenReturn(memberResp);
+        String zsetKey = followingKey(USER);
+        when(p.exists(CacheKeys.empty(zsetKey))).thenReturn(emptyResp);
+        when(p.exists(zsetKey)).thenReturn(existsResp);
+        when(p.zscore(zsetKey, String.valueOf(FOLLOWED))).thenReturn(scoreResp);
 
         assertTrue(cache.isFollowing(USER, FOLLOWED));
 
-        // hit-data：set key 续期（值=域 TTL，与写路径 expire 口径一致；读配置 getter 防分域调参断挂）
-        verify(p).expire(setKey, AppConfig.getFollowTtlSeconds());
+        // hit-data：数据 key 续期（值=域 TTL，与写路径 expire 口径一致；读配置 getter 防分域调参断挂）
+        verify(p).expire(zsetKey, AppConfig.getFollowTtlSeconds());
         // 空标记 key 从不被续期
         verify(p, never()).expire(startsWith("empty:"), anyLong());
     }
 
     @Test
-    void isFollowingMissBackfillsSetAndReturnsContains() throws SQLException {
-        stubSetScan(followingKey(USER), false, false, null);
+    void isFollowingMissBackfillsZSetAndReturnsContains() throws SQLException {
+        stubZSetScan(followingKey(USER), false, false, null);
         when(followDao.getAllFollowedUserIds(conn, USER)).thenReturn(List.of(FOLLOWED, 9L));
 
         boolean result = cache.isFollowing(USER, FOLLOWED);
 
         assertTrue(result);
-        verify(jedis).sadd(eq(followingKey(USER)), any(String[].class));
+        verify(jedis).zadd(eq(followingKey(USER)), anyMap());
         verify(jedis).expire(eq(followingKey(USER)), anyLong());
         verify(cacheAside, never()).markEmpty(anyString());
     }
 
     @Test
     void isFollowingMissBackfillRecordsMissAndLoadToFollowDomain() throws SQLException {
-        stubSetScan(followingKey(USER), false, false, null);
+        stubZSetScan(followingKey(USER), false, false, null);
         when(followDao.getAllFollowedUserIds(conn, USER)).thenReturn(List.of(FOLLOWED, 9L));
 
         assertTrue(cache.isFollowing(USER, FOLLOWED));
@@ -208,27 +232,27 @@ class FollowCacheTest {
 
     @Test
     void isFollowingMissEmptyFollowsWritesEmptyMarker() throws SQLException {
-        stubSetScan(followingKey(USER), false, false, null);
+        stubZSetScan(followingKey(USER), false, false, null);
         when(followDao.getAllFollowedUserIds(conn, USER)).thenReturn(Collections.emptyList());
 
         assertFalse(cache.isFollowing(USER, FOLLOWED));
         // 三期 T4/N3：空集写空标记统一走 CacheAside.markEmpty（内含存在守卫，U-09 定向复用）
         verify(cacheAside).markEmpty(followingKey(USER));
-        verify(jedis, never()).sadd(anyString(), any(String[].class));
+        verify(jedis, never()).zadd(anyString(), anyMap());
     }
 
     @Test
-    void writeEmptyMarkerSkipsWhenSetAlreadyExists() throws SQLException {
-        // 并发守卫回归（review 必修②）：回填读到旧空 DB，但 set 已被并发 cacheFollow 写入 → 不得覆盖。
+    void writeEmptyMarkerSkipsWhenKeyAlreadyExists() throws SQLException {
+        // 并发守卫回归（review 必修②）：回填读到旧空 DB，但 key 已被并发 cacheFollow 写入 → 不得覆盖。
         // 三期 T4/N3 起守卫内聚于 CacheAside.markEmpty（行为断言在 CacheAsideTest.markEmptySkipsWhenDataKeyExists），
         // 此处验证空集回填委托 markEmpty（守卫随公共实现生效）
-        stubSetScan(followingKey(USER), false, false, null);
+        stubZSetScan(followingKey(USER), false, false, null);
         when(followDao.getAllFollowedUserIds(conn, USER)).thenReturn(Collections.emptyList());
         when(jedis.exists(followingKey(USER))).thenReturn(true);
 
         assertFalse(cache.isFollowing(USER, FOLLOWED));
         verify(cacheAside).markEmpty(followingKey(USER));
-        verify(jedis, never()).sadd(anyString(), any(String[].class));
+        verify(jedis, never()).zadd(anyString(), anyMap());
     }
 
     @Test
@@ -239,7 +263,7 @@ class FollowCacheTest {
         assertTrue(cache.isFollowing(USER, FOLLOWED));
         // 三期 T2：降级经单飞全量装载作答（替代原单行查询），且不写回
         verify(followDao).getAllFollowedUserIds(conn, USER);
-        verify(jedis, never()).sadd(anyString(), any(String[].class));
+        verify(jedis, never()).zadd(anyString(), anyMap());
     }
 
     @Test
@@ -275,7 +299,7 @@ class FollowCacheTest {
         }
     }
 
-    // ==================== 读-批量 batchIsFollowing（同一 set 一趟 pipeline） ====================
+    // ==================== 读-批量 batchIsFollowing（同一 key 一趟 pipeline） ====================
 
     @Test
     void batchIsFollowingEmptyInputSkipsRedis() {
@@ -290,44 +314,44 @@ class FollowCacheTest {
     void batchIsFollowingEmptyMarkerAllFalseWithoutDb() {
         Response<Boolean> emptyResp = booleanResponse(true);
         Response<Boolean> existsResp = booleanResponse(true);
-        Response<Boolean> mem8 = booleanResponse(false);
-        Response<Boolean> mem9 = booleanResponse(false);
+        Response<Double> score8 = doubleResponse(null);
+        Response<Double> score9 = doubleResponse(null);
         Pipeline p = mock(Pipeline.class);
         when(jedis.pipelined()).thenReturn(p);
         when(p.exists(CacheKeys.empty(followingKey(USER)))).thenReturn(emptyResp);
         when(p.exists(followingKey(USER))).thenReturn(existsResp);
-        when(p.sismember(followingKey(USER), "8")).thenReturn(mem8);
-        when(p.sismember(followingKey(USER), "9")).thenReturn(mem9);
+        when(p.zscore(followingKey(USER), "8")).thenReturn(score8);
+        when(p.zscore(followingKey(USER), "9")).thenReturn(score9);
 
         Map<Long, Boolean> result = cache.batchIsFollowing(USER, List.of(8L, 9L));
 
         assertEquals(false, result.get(8L));
         assertEquals(false, result.get(9L));
         verify(tt, never()).execute(any());
-        // R-06 ②（第四期 T7）：批量 pipeline 续期直接断言——hit-empty 亦入列续期（set 不存在返回 0 无效果）、空标记不续
+        // R-06 ②（第四期 T7）：批量 pipeline 续期直接断言——hit-empty 亦入列续期（key 不存在返回 0 无效果）、空标记不续
         verify(p).expire(followingKey(USER), AppConfig.getFollowTtlSeconds());
         verify(p, never()).expire(startsWith("empty:"), anyLong());
     }
 
     @Test
-    void batchIsFollowingMixedMembersOnExistingSet() {
+    void batchIsFollowingMixedMembersOnExistingZSet() {
         Response<Boolean> emptyResp = booleanResponse(false);
         Response<Boolean> existsResp = booleanResponse(true);
-        Response<Boolean> mem8 = booleanResponse(true);
-        Response<Boolean> mem9 = booleanResponse(false);
+        Response<Double> score8 = doubleResponse(8.0);
+        Response<Double> score9 = doubleResponse(null);
         Pipeline p = mock(Pipeline.class);
         when(jedis.pipelined()).thenReturn(p);
         when(p.exists(CacheKeys.empty(followingKey(USER)))).thenReturn(emptyResp);
         when(p.exists(followingKey(USER))).thenReturn(existsResp);
-        when(p.sismember(followingKey(USER), "8")).thenReturn(mem8);
-        when(p.sismember(followingKey(USER), "9")).thenReturn(mem9);
+        when(p.zscore(followingKey(USER), "8")).thenReturn(score8);
+        when(p.zscore(followingKey(USER), "9")).thenReturn(score9);
 
         Map<Long, Boolean> result = cache.batchIsFollowing(USER, List.of(8L, 9L));
 
         assertEquals(true, result.get(8L));
         assertEquals(false, result.get(9L));
         verify(tt, never()).execute(any());
-        // R-06 ②（第四期 T7）：批量 hit-data 续期直接断言——对 set 入列域 TTL、空标记不续
+        // R-06 ②（第四期 T7）：批量 hit-data 续期直接断言——对数据 key 入列域 TTL、空标记不续
         verify(p).expire(followingKey(USER), AppConfig.getFollowTtlSeconds());
         verify(p, never()).expire(startsWith("empty:"), anyLong());
     }
@@ -336,14 +360,14 @@ class FollowCacheTest {
     void batchIsFollowingMissBackfillsAllFromDb() throws SQLException {
         Response<Boolean> emptyResp = booleanResponse(false);
         Response<Boolean> existsResp = booleanResponse(false);
-        Response<Boolean> mem8 = booleanResponse(false);
-        Response<Boolean> mem9 = booleanResponse(false);
+        Response<Double> score8 = doubleResponse(null);
+        Response<Double> score9 = doubleResponse(null);
         Pipeline p = mock(Pipeline.class);
         when(jedis.pipelined()).thenReturn(p);
         when(p.exists(CacheKeys.empty(followingKey(USER)))).thenReturn(emptyResp);
         when(p.exists(followingKey(USER))).thenReturn(existsResp);
-        when(p.sismember(followingKey(USER), "8")).thenReturn(mem8);
-        when(p.sismember(followingKey(USER), "9")).thenReturn(mem9);
+        when(p.zscore(followingKey(USER), "8")).thenReturn(score8);
+        when(p.zscore(followingKey(USER), "9")).thenReturn(score9);
         when(followDao.getFollowedIds(conn, USER, List.of(8L, 9L))).thenReturn(Set.of(9L));
         when(followDao.getAllFollowedUserIds(conn, USER)).thenReturn(List.of(9L));
 
@@ -351,8 +375,8 @@ class FollowCacheTest {
 
         assertEquals(false, result.get(8L));
         assertEquals(true, result.get(9L));
-        verify(jedis).sadd(eq(followingKey(USER)), any(String[].class));
-        // R-06 ②（第四期 T7）：探针续期入列（miss 时 set 不存在返回 0 无效果；回填 TTL 由 writeSet 负责）
+        verify(jedis).zadd(eq(followingKey(USER)), anyMap());
+        // R-06 ②（第四期 T7）：探针续期入列（miss 时 key 不存在返回 0 无效果；回填 TTL 由 writeZSet 负责）
         verify(p).expire(followingKey(USER), AppConfig.getFollowTtlSeconds());
         verify(p, never()).expire(startsWith("empty:"), anyLong());
     }
@@ -368,7 +392,7 @@ class FollowCacheTest {
         // 三期 T2：降级经单飞全量装载作答——不再走 targeted 批量查询，也不尝试回填写入
         verify(followDao).getAllFollowedUserIds(conn, USER);
         verify(followDao, never()).getFollowedIds(any(), anyLong(), anyList());
-        verify(jedis, never()).sadd(anyString(), any(String[].class));
+        verify(jedis, never()).zadd(anyString(), anyMap());
     }
 
     @Test
@@ -376,12 +400,12 @@ class FollowCacheTest {
         // 建议项 ②回归：DB 兜底已算出结果，回填全量查询抛异常 → 结果照常返回、不 500
         Response<Boolean> emptyResp = booleanResponse(false);
         Response<Boolean> existsResp = booleanResponse(false);
-        Response<Boolean> mem8 = booleanResponse(false);
+        Response<Double> score8 = doubleResponse(null);
         Pipeline p = mock(Pipeline.class);
         when(jedis.pipelined()).thenReturn(p);
         when(p.exists(CacheKeys.empty(followingKey(USER)))).thenReturn(emptyResp);
         when(p.exists(followingKey(USER))).thenReturn(existsResp);
-        when(p.sismember(followingKey(USER), "8")).thenReturn(mem8);
+        when(p.zscore(followingKey(USER), "8")).thenReturn(score8);
         when(followDao.getFollowedIds(conn, USER, List.of(8L))).thenReturn(Set.of(8L));
         when(followDao.getAllFollowedUserIds(conn, USER)).thenThrow(new ServerException("服务器异常，查询关注列表失败"));
 
@@ -391,7 +415,7 @@ class FollowCacheTest {
         verify(redis).executeVoid(any(Consumer.class));
     }
 
-    // ==================== 读-关注/粉丝列表（smembers / 空标记 / 单飞回填 / 降级） ====================
+    // ==================== 读-关注/粉丝列表（ZRANGE / 空标记 / 单飞回填 / 降级） ====================
 
     @Test
     void getFollowingIdsEmptyMarkerReturnsEmptyWithoutDb() {
@@ -404,9 +428,10 @@ class FollowCacheTest {
     }
 
     @Test
-    void getFollowingIdsSmembersSortedDeterministically() {
+    void getFollowingIdsZrangeIsAscending() {
         stubExistsProbe(followingKey(USER), false, true);
-        when(jedis.smembers(followingKey(USER))).thenReturn(Set.of("9", "3", "8"));
+        // ZSet 天然按 score（= 成员数值）升序返回，与改造前 sortIds 升序口径一致
+        when(jedis.zrange(followingKey(USER), 0, -1)).thenReturn(List.of("3", "8", "9"));
 
         List<Long> result = cache.getFollowingIds(USER);
 
@@ -422,7 +447,7 @@ class FollowCacheTest {
         List<Long> result = cache.getFollowingIds(USER);
 
         assertEquals(List.of(8L, 9L), result);
-        verify(jedis).sadd(eq(followingKey(USER)), any(String[].class));
+        verify(jedis).zadd(eq(followingKey(USER)), anyMap());
         verify(jedis).expire(eq(followingKey(USER)), anyLong());
     }
 
@@ -450,7 +475,7 @@ class FollowCacheTest {
     }
 
     @Test
-    void getFollowerIdsReturnsFollowersFromSetOrDb() throws SQLException {
+    void getFollowerIdsReturnsFollowersFromCacheOrDb() throws SQLException {
         stubExistsProbe(followerKey(USER), false, false);
         when(followDao.getFollowerUserIds(conn, USER)).thenReturn(List.of(8L));
 
@@ -458,6 +483,97 @@ class FollowCacheTest {
 
         assertEquals(List.of(8L), result);
         verify(followDao).getFollowerUserIds(conn, USER);
+    }
+
+    // ==================== 读-按序窗口（T7 A1 新增：ZRANGE[start,stop] + ZCARD 一趟 pipeline） ====================
+
+    /** 窗口命中桩：探针 [empty, exists] + 窗口 pipeline 的 zrange/zcard（同一 mock Pipeline 承载两段）。 */
+    private void stubWindow(String zsetKey, Boolean empty, Boolean exists,
+                            long offset, int count, List<String> page, Long card) {
+        Response<Boolean> emptyResp = booleanResponse(empty);
+        Response<Boolean> existsResp = booleanResponse(exists);
+        Response<List<String>> rangeResp = listResponse(page);
+        Response<Long> cardResp = longResponse(card);
+        Pipeline p = mock(Pipeline.class);
+        when(jedis.pipelined()).thenReturn(p);
+        when(p.exists(CacheKeys.empty(zsetKey))).thenReturn(emptyResp);
+        when(p.exists(zsetKey)).thenReturn(existsResp);
+        when(p.zrange(zsetKey, offset, offset + count - 1L)).thenReturn(rangeResp);
+        when(p.zcard(zsetKey)).thenReturn(cardResp);
+    }
+
+    @Test
+    void getFollowingWindowHitDataTakesPageAndTotalWithoutDb() throws SQLException {
+        stubWindow(followingKey(USER), false, true, 2L, 2, List.of("8", "9"), 7L);
+
+        ZSetCache.Window window = cache.getFollowingWindow(USER, 2L, 2);
+
+        assertEquals(List.of(8L, 9L), window.getIds());
+        assertEquals(7L, window.getTotal());
+        verify(tt, never()).execute(any());
+        verify(followDao, never()).getAllFollowedUserIds(any(), anyLong());
+    }
+
+    @Test
+    void getFollowingWindowHitEmptyReturnsEmptyWindow() {
+        stubWindow(followingKey(USER), true, null, 0L, 10, null, null);
+
+        ZSetCache.Window window = cache.getFollowingWindow(USER, 0L, 10);
+
+        assertTrue(window.getIds().isEmpty());
+        assertEquals(0L, window.getTotal());
+        verify(tt, never()).execute(any());
+    }
+
+    @Test
+    void getFollowingWindowMissBackfillsThenReadsWindow() throws SQLException {
+        // 探针两段：第一次 miss 触发回填，回填后 readWindow 复用同一 pipeline 桩返回该页与总数
+        stubWindow(followingKey(USER), false, false, 0L, 2, List.of("8", "9"), 2L);
+        when(followDao.getAllFollowedUserIds(conn, USER)).thenReturn(List.of(8L, 9L));
+
+        ZSetCache.Window window = cache.getFollowingWindow(USER, 0L, 2);
+
+        assertEquals(List.of(8L, 9L), window.getIds());
+        assertEquals(2L, window.getTotal());
+        verify(jedis).zadd(eq(followingKey(USER)), anyMap());
+        assertEquals(1, stats.count(CacheDomain.FOLLOW, CacheStats.Event.MISS));
+        assertEquals(1, stats.count(CacheDomain.FOLLOW, CacheStats.Event.LOAD));
+    }
+
+    @Test
+    void getFollowingWindowRedisErrorDegradesAndSlicesAscending() throws SQLException {
+        doThrow(new CacheException("redis down")).when(redis).execute(any(Function.class));
+        // loader 返回乱序（DB 无 ORDER BY），降级路径按 score 口径升序切页，与 hit-data 的 ZRANGE 序一致
+        when(followDao.getAllFollowedUserIds(conn, USER)).thenReturn(List.of(9L, 3L, 8L));
+
+        ZSetCache.Window window = cache.getFollowingWindow(USER, 1L, 2);
+
+        assertEquals(List.of(8L, 9L), window.getIds());
+        assertEquals(3L, window.getTotal());
+        verify(jedis, never()).zadd(anyString(), anyMap()); // 降级不写回
+    }
+
+    @Test
+    void getFollowingWindowOffsetBeyondTotalReturnsEmptyButKeepsTotal() {
+        stubWindow(followingKey(USER), false, true, 10L, 2, Collections.emptyList(), 3L);
+
+        ZSetCache.Window window = cache.getFollowingWindow(USER, 10L, 2);
+
+        assertTrue(window.getIds().isEmpty());
+        assertEquals(3L, window.getTotal());
+    }
+
+    @Test
+    void getFollowerWindowUsesFollowerKeyAndLoader() throws SQLException {
+        stubWindow(followerKey(USER), false, false, 0L, 1, List.of("8"), 1L);
+        when(followDao.getFollowerUserIds(conn, USER)).thenReturn(List.of(8L));
+
+        ZSetCache.Window window = cache.getFollowerWindow(USER, 0L, 1);
+
+        assertEquals(List.of(8L), window.getIds());
+        assertEquals(1L, window.getTotal());
+        verify(followDao).getFollowerUserIds(conn, USER);
+        verify(followDao, never()).getAllFollowedUserIds(any(), anyLong());
     }
 
     // ==================== 读-关注/粉丝计数（T6 R-01：CacheAside 独立计数 key） ====================
@@ -509,7 +625,7 @@ class FollowCacheTest {
     // ==================== 写路径 cacheFollow（条件双写 + MULTI + 失败双 DEL） ====================
 
     @Test
-    void cacheFollowBothSetsReadyWritesViaMulti() {
+    void cacheFollowBothKeysReadyZaddViaMulti() {
         Response<Boolean> existsFg = booleanResponse(true);
         Response<Boolean> emptyFg = booleanResponse(false);
         Response<Boolean> existsFr = booleanResponse(true);
@@ -525,8 +641,9 @@ class FollowCacheTest {
 
         cache.cacheFollow(USER, FOLLOWED);
 
-        verify(multi).sadd(followingKey(USER), String.valueOf(FOLLOWED));
-        verify(multi).sadd(followerKey(FOLLOWED), String.valueOf(USER));
+        // score = 成员自身 id（与 ZSet 有序读口径一致：按 id 升序）
+        verify(multi).zadd(followingKey(USER), (double) FOLLOWED, String.valueOf(FOLLOWED));
+        verify(multi).zadd(followerKey(FOLLOWED), (double) USER, String.valueOf(USER));
         verify(multi).expire(eq(followingKey(USER)), anyLong());
         verify(multi).expire(eq(followerKey(FOLLOWED)), anyLong());
         verify(multi).exec();
@@ -551,8 +668,8 @@ class FollowCacheTest {
         cache.cacheFollow(USER, FOLLOWED);
 
         verify(multi).del(CacheKeys.empty(followingKey(USER)));
-        verify(multi).sadd(followingKey(USER), String.valueOf(FOLLOWED));
-        verify(multi).sadd(followerKey(FOLLOWED), String.valueOf(USER));
+        verify(multi).zadd(followingKey(USER), (double) FOLLOWED, String.valueOf(FOLLOWED));
+        verify(multi).zadd(followerKey(FOLLOWED), (double) USER, String.valueOf(USER));
         verify(multi).exec();
     }
 
@@ -586,10 +703,10 @@ class FollowCacheTest {
         verify(cacheAside).invalidate(followingKey(USER), followerKey(FOLLOWED));
     }
 
-    // ==================== 写路径 cacheUnfollow（条件 SREM + 失败双 DEL） ====================
+    // ==================== 写路径 cacheUnfollow（条件 ZREM + 失败双 DEL） ====================
 
     @Test
-    void cacheUnfollowBothSetsReadySremViaMulti() {
+    void cacheUnfollowBothKeysReadyZremViaMulti() {
         Response<Boolean> existsFg = booleanResponse(true);
         Response<Boolean> emptyFg = booleanResponse(false);
         Response<Boolean> existsFr = booleanResponse(true);
@@ -605,8 +722,8 @@ class FollowCacheTest {
 
         cache.cacheUnfollow(USER, FOLLOWED);
 
-        verify(multi).srem(followingKey(USER), String.valueOf(FOLLOWED));
-        verify(multi).srem(followerKey(FOLLOWED), String.valueOf(USER));
+        verify(multi).zrem(followingKey(USER), String.valueOf(FOLLOWED));
+        verify(multi).zrem(followerKey(FOLLOWED), String.valueOf(USER));
         verify(multi).expire(eq(followingKey(USER)), anyLong());
         verify(multi).expire(eq(followerKey(FOLLOWED)), anyLong());
         verify(multi).exec();
@@ -643,7 +760,7 @@ class FollowCacheTest {
 
     // ==================== 写路径 计数条件增量（T6 R-01：exists 才 INCRBY，独立失败隔离） ====================
 
-    /** 成员双 Set 均就绪的 pipeline/multi 桩（写路径共用于计数调整用例）。 */
+    /** 成员双 key 均就绪的 pipeline/multi 桩（写路径共用于计数调整用例）。 */
     private void stubMemberPairReady() {
         Response<Boolean> existsFg = booleanResponse(true);
         Response<Boolean> emptyFg = booleanResponse(false);

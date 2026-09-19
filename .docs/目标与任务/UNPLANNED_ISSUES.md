@@ -22,13 +22,19 @@
 
 | 编号 | 类别 | 问题 | 位置/证据 | 来源 | 状态 |
 |----|------|------|-----------|------|------|
-| U-07 | 观察（包架构） | content ↔ comment 包层循环依赖：content 域共享组件（ContentCacheDTO / ContentCache / CommentCache 等）被 comment 域引用，而 content 域又引用 comment 域的 CommentService。**非 IoC/Bean 环**（依赖链有向无环，容器可正常构建、测试全绿），仅包架构不纯净，Java 允许 | content.ContentService 注入 comment.CommentService（含 comment.dao.CommentDao）；comment.CommentService 注入 content.service 的 ContentCache / CommentCache | 260912 周期（B）探索记录（2026-09-10）；260913 周期复查（2026-09-13）；260914 周期复查（2026-09-14：T3 移除 CommentService→ContentCacheManager 依赖，包层环未解除）；第四期复查（T1~T8 未涉包层结构） | 待定（第四期**未消化**；已结转第五期 `目标与任务/NEXT_CYCLE_NEEDS.md` 三节 R-04，随第五期立项评审决定消化点；第四期已归档 2026-09-17，其 NEEDS 三节 R-12 见 `archive/目标与任务/260917-cache-overhaul/`） |
 | U-11 | 观察（降级质量） | Redis 停机时 `/start` 推荐返回**空列表**（HTTP 200 `data:[]`），无 DB 兜底——`getRecommendByFilter` 依赖 Redis 索引（`ensureIndex` 懒重建需写 Redis、失败"本次推荐降级为空"；`readIndex` 失败"降级为空推荐"），索引不可读即无候选可批量装载。属**既有语义**（C 周期实现注释明写"Redis 异常降级为空/不 crash"），非 T1 引入；T1 熔断只是让"降级为空"来得更快。业务未 500，但"缓存失败不导致业务失败"在此处体现为"返回空推荐"而非"DB 兜底推荐"，用户可感知 | `ContentCache.ensureIndex`（懒重建失败 catch"降级为空"）；`ContentCache.readIndex`（catch"降级为空推荐"）；运行时实证：docker stop redis → /start 38B 空响应（2026-09-13） | 三期 T1（cache-01）运行时验证发现（2026-09-13）；2026-09-15 复查发现**加重面**（四期 NEEDS 4.1 的 N1：停机期间每次 /start 重试索引全量重建，逐请求 DB 全表查询，无失败退避） | 空推荐语义维持留池；**N1 加重面已随第四期 T5 落地**（`refactor(cache-05)`，2026-09-16——重建失败进程内冷却退避，停机期间零 DB 查询）；"停机返回 DB 兜底推荐"属对外行为变更，第四期 4.3 明确不做、留池待另行拍板（第四期已归档 2026-09-17） |
-| U-12 | 观察（懒加载/分页） | follow 域大集全量装载（自第五期 NEEDS 4.1 的 N3 转入）：`SetCache.getMembers` hit-data 走 `SMEMBERS` 一键全量回传 + String→Long 装箱全量，miss 装载同样全量 DB 粉丝/关注列表——**懒加载但无分页/无上限**，与四期 R-08 点赞反转同动机（like 侧压了装载量、follow 侧天然粉丝维度未做） | `SetCache.getMembers` L112-139（L122 `j.smembers(setKey)` 全量）；`FollowCache.getFollowerIds` L152-155 / `getFollowingIds` L144-147；`FollowController` L34-37（`getFollowerList`/`getFollowingList` **无分页参数、全量返回**） | 第五期 NEEDS 4.1 N3（2026-09-17 代码复查） | **留池**：改动面 = 业务接口契约加分页参数 + DAO 分页查询 + `SetCache` 分页支持（`prange`/sorted-set），远超缓存体系、属懒加载/分页范畴；待数据量级触发或专项周期（用户 2026-09-17 拍板转留池） |
-| U-13 | 观察（懒加载/分页） | 评论树全量装载重排（自第五期 NEEDS 4.1 的 N4 转入）：miss 装载把整棵评论树（含楼中楼）从 DB 全量捞出 + `buildCommentTree` 内存重排；分页会撕裂楼中楼树结构，属展示/接口契约决策层；另 `notifyCommentLikeChanged` 每次评论点赞先 `findContentIdByCommentId` 轻查 DB 定位所属内容（写路径多一次 DB，低频） | `CommentCache.loadCommentTree` L99-114 + `buildCommentTree` L117-145；`CommentCache.notifyCommentLikeChanged` L84-89 + `findContentIdByCommentId` L148-162；`CommentController` L82（`getCommentsForContent` 无分页、整树渲染） | 第五期 NEEDS 4.1 N4（2026-09-17 代码复查） | **留池**：评论树结构决定难以缓存侧分页（整树语义），分页属产品/接口契约决策，不动缓存体系；待评论量级触发或产品拉开评论分页时再评估（用户 2026-09-17 拍板转留池） |
-| U-14 | 代码债（事务边界） | **同型 N2 未治点 2 处（事务回调内调缓存读）**：① `ContentService.search` 事务回调内逐 key `contentCache.getContent` + `contentStatusFiller.fillLikeAndFollowBatch`（点赞/关注缓存批量读，miss 会走 DB 装载）；② `FollowService.getFollowingList`/`getFollowerList` 经私有 `buildUserList` 在事务回调内调 `followCache.batchIsFollowing`。与第五期 T3 已治的 N2（Feed/Profile）同根因——自研 `TransactionTemplate` 无传播语义，外层事务持连接期间缓存装载再取新连接，`db.pool.maxSize=20`（timeoutMs=5000）下高峰互相等连接、事务持有期被 Redis 往返与 DB 装载拉长 | `ContentService.search` L71-91（L77 逐 key `getContent`、L83 `fillLikeAndFollowBatch`）；`FollowService.buildUserList` L94-105（L99 `batchIsFollowing`，调用点 L71/L85 在事务回调内） | 第五期 T3（cache-03）探索发现（2026-09-18，L1 仅记录） | **留池**：T3 范围由任务清单明确限定 Feed/Profile（入口线索 + 红线"不动推荐路径"），两处不在本任务范围、不擅自扩范围；改动形态与 T3 同款（DB 查询与缓存读分离，search 侧还需先把逐 key `getContent` 换成批量读），待评审决定是否排入下周期 |
+| U-17 | 观察（能力缺失 / 限流） | **限流能力缺失**（2026-09-19 改写；原记为"超卖风险"）：抢购接口无用户级/接口级限流与排队，高并发下**无效请求直打 DB**（DB 压力与长尾延迟放大）。**前提已核实**：超卖与重复抢在 DB 层**已被阻止**——`coupon/dao/CouponDao.java:20` 为单语句条件更新（`UPDATE coupon SET stock = stock - 1 WHERE id = ? AND stock > 0 AND begin_time <= NOW() AND end_time >= NOW()`，InnoDB 行锁原子）+ `coupon_order` 唯一索引（1062 → "您已抢过该优惠券"）；故本项属**新能力建设**而非修缺陷 | `CouponService.grabCoupon()`（`deductStock` 条件更新 + `insertOrder` 唯一索引兜底）；`CouponDao.deductStock:20` | `BUSINESS_FLOW` 八节问题5（2026-07-23 登记；2026-09-18 T2 常青瘦身转出）；2026-09-19 第七期评估改写 | 待定（留池）：若做，形态 = 进程内限流（令牌桶等），**不引入第三方依赖、不引入 MQ**；当前无明确业务场景，故不排期 |
+| U-18 | 观察（装载量） | 关注/粉丝列表**装载路径仍为全量**：`ZSetCache` miss 单飞回填与 Redis 降级作答都走"DB 全量 loader + 全量 ZADD 回填"（`FollowDao.getAllFollowedUserIds`/`getFollowerUserIds` 无 LIMIT）；T7 只消除了**命中路径**的 `SMEMBERS` 全量回传与 String→Long 装箱（hit 为 `ZRANGE[start,stop]`+`ZCARD`，O(log n + N)）。与 R-01（索引全量读保留）同型：真解决需装载侧分页（DAO 分页 SQL / keyset）或分段回填，属独立改造 | `ZSetCache.getWindow`/`getMembers`（miss 与降级分支的 loader 全量）；`FollowCache.loadFollowingIds/loadFollowerIds`；`FollowDao`（无分页 SQL） | 第六期 T7 执行发现（2026-09-19，随 A1 落地显式登记） | 待定（留池）——**是否并入第七期"后端大分页"方向待评**（与 U-20 同型：装载侧上限，而 U-20 是读侧成本） |
 
-> 已消化/已修复项（U-05、U-08、U-09、U-10）已随各周期落地，2026-09-17 清理移出本档。
+> 已消化/已修复项（U-05、U-08、U-09、U-10）已随各周期落地，2026-09-17 清理移出本档；**U-12（follow 域大集全量装载）已随第六期 T7 落地**（转 NEEDS N11 → T7；残留装载形态转 **U-18**）。U-13（评论树全量）已随第六期 **T8** 落地（2026-09-19：`/comment/show` 主楼分页 + 楼中楼整树、缓存结构不变；装载侧残留与命中路径读放大转 **U-20**）。
+
+> **2026-09-19 第七期处置结果（已执行）**——池由 9 条收敛为 **3 条**；移出项去向如下（编号不悬空）：
+> - **进 TASKS**：`U-14` → **T12**（事务边界同型未治点 2 处）；`U-16` → **T13**（注册后自动登录缺兜底）；`U-07` + `U-19` → **T14**（包层结构清扫：content↔comment 环 + 分页信封上移公共包；`U-07` 同时是 NEEDS 三节 **R-03** 的拍板点）。
+> - **进 NEEDS 4.2 / TASKS 预告**：`U-20`（评论命中路径整树反序列化）→ **T10** 评论分页（预告条目）。
+> - **移出本池（属方向内部工作）**：`U-15`（无统一请求/响应日志）→ 随**日志体系改造方向**立项时盘点。
+> - **已落地移出**：`U-12`（第六期 T7）、`U-13`（第六期 T8）。
+> - **改写后留池**：`U-17`（"超卖风险"前提不成立 → 改写为"限流能力缺失"，见本行）。
+> - **池内存量（3 条）**：`U-11` 停机 `/start` 空推荐（待人拍板）/ `U-17` 限流能力 / `U-18` 装载侧全量（待随 T10/T11 窗口评估）。
 
 ***
 
@@ -39,9 +45,3 @@
 ```
 
 类别取值示例：文档滞后 / 文案与实现不一致 / 代码债 / 观察 / 其它。
-
-***
-
-## 四、变更记录
-
-为了减缓文档膨胀，本文档不写变更记录

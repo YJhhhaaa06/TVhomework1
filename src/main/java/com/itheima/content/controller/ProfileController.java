@@ -22,8 +22,8 @@ public class ProfileController extends BaseServlet {
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
         long profileUserId = parseUserId(req);
-        int page = parsePage(req);
-        int pageSize = parsePageSize(req);
+        int page = BaseServletUtil.parsePage(req);
+        int pageSize = BaseServletUtil.parsePageSize(req);
         Long currentUserId = (Long) req.getAttribute("userId");
 
         ProfileVO profile = profileService.getProfile(profileUserId, currentUserId, page, pageSize);
@@ -39,32 +39,6 @@ public class ProfileController extends BaseServlet {
             return Long.parseLong(param);
         } catch (NumberFormatException e) {
             throw new ParamException("userId 格式错误");
-        }
-    }
-
-    private int parsePage(HttpServletRequest req) {
-        String param = req.getParameter("page");
-        if (param == null || param.isBlank()) {
-            return 1;
-        }
-        try {
-            int p = Integer.parseInt(param);
-            return p > 0 ? p : 1;
-        } catch (NumberFormatException e) {
-            return 1;
-        }
-    }
-
-    private int parsePageSize(HttpServletRequest req) {
-        String param = req.getParameter("pageSize");
-        if (param == null || param.isBlank()) {
-            return 10;
-        }
-        try {
-            int s = Integer.parseInt(param);
-            return s > 0 ? Math.min(s, 50) : 10;
-        } catch (NumberFormatException e) {
-            return 10;
         }
     }
 }
