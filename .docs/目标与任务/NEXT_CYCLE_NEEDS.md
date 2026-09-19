@@ -148,7 +148,7 @@
 | 日志卫生 | N7 + N8 | T6 | LogUtil 自我合规；CountRepairTool 已按 R-05 拍板**删除**（统一入口 = `tools/check_integrity.py --fix`） |
 | 关注/粉丝列表分页 | N11a（U-12） | T7 | 新增可选 page/pageSize 缺省兼容；缓存分页载体拍板（**A1 = Set→ZSet 有序化 + ZSetCache 窗口读**）；前端 **user.js**（非 follow.js——那是 `#/follow` 关注流视图）分页。**2026-09-19 已落地**：JUnit 472 / pytest 135 全绿 |
 | 评论列表分页 | N11b（U-13） | T8 | 主楼分页 + 楼中楼整树，缺省兼容；缓存整树不动只做展示层切片；前端 detail.js 加载更多。**2026-09-19 已落地**：D1=A（`PageResult<CommentVO>` 信封 + `hasPagingParams` 判参），JUnit 482 / pytest 142 全绿 |
-| 测试目录本地化 | N14 | T9 | 沙箱边界探明 → buildDir/日志/媒体/端口参数化，可落地部分实现 |
+| 测试目录本地化 | N14 | T9 | 沙箱边界探明 → buildDir/日志/媒体本地化实现（端口参数化判定非阻塞跳过）→ **2026-09-19 已落地：沙箱内 `tv.py test all` 全链可跑，JUnit 482 / pytest 142 全绿**（详见 TASKS T9 执行回写） |
 
 **本周期明确不做（反面清单，与"纳入"同等重要）**：
 

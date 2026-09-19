@@ -16,8 +16,8 @@
         <maven.compiler.source>25</maven.compiler.source>
         <maven.compiler.target>25</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <!-- 沙箱内 javac 无法枚举 worktree 的 target/ 作为 classpath，
-             测试/打包时通过 -Dstage8.buildDir 指向 D 盘可写目录（默认保持 ./target）。 -->
+        <!-- 测试链路（run_tests.py）用 -Dstage8.buildDir 覆盖为项目内 .stage8-target（gitignore，
+             与 IDE 的 ./target 隔离，避免产物互踩）；默认保持 ./target。 -->
         <stage8.buildDir>${project.basedir}/target</stage8.buildDir>
     </properties>
 

@@ -27,7 +27,8 @@ JACOCO_XML = os.path.join(ROOT, "target", "site", "jacoco", "jacoco.xml")
 # 自动化链路（run_tests / codex）打包时 jacoco 落 stage8-target（TV_STAGE8_TARGET），
 # IDEA mvn test 落 ./target —— 取两者中较新的一份，保证 JUnit 数字跟随最近一次构建
 STAGE8_JACOCO_XML = os.path.join(
-    os.environ.get("TV_STAGE8_TARGET", r"D:\data\projects\VideoPlatform\stone\temp\stage8-target"),
+    # T9 本地化：默认与 run_tests.py 同指项目内 .stage8-target（沙箱可写区）；env 仍可覆盖
+    os.environ.get("TV_STAGE8_TARGET", os.path.join(ROOT, ".stage8-target")),
     "site", "jacoco", "jacoco.xml",
 )
 OUT_MD = os.path.join(ROOT, ".docs", "报告", "覆盖率地图.md")

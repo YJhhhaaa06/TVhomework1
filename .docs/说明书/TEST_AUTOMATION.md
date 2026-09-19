@@ -120,11 +120,11 @@ python tools\tv.py admin|cleanup|integrity|backup|init-test-db|test|cleanup-orph
 | Maven          | `D:\IDE\IDEA\IntelliJ IDEA 2025.3.2\plugins\maven\lib\maven3\bin\mvn.cmd`                 | TV\_MAVEN\_CMD        | IDEA 自带发行版                                                 |
 | 离线本地仓库         | `D:\dev\WorkSpace\VideoPlatform\maven`                                                    | TV\_M2\_REPO          | 由 `C:\Users\ASUS\.m2\repository` 复制而来；javac 需要可写目录读取依赖 jar |
 | pytest 依赖      | `D:\dev\WorkSpace\VideoPlatform\temp\pytest-deps`                                         | TV\_PYTEST\_DEPS      | 由用户在自己的终端用 `pip install --target` 生成，沙盒只读使用                |
-| 独立 Tomcat 运行目录 | `D:\data\projects\VideoPlatform\stone\temp\tomcat-test-18080`                             | TV\_CATALINA\_BASE    | CATALINA\_BASE，含 conf/webapps/logs                         |
-| 构建输出目录（war）    | `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（其下 `untitled-1.0-SNAPSHOT.war`） | TV\_STAGE8\_TARGET    | 由 `build` 生成                                               |
-| 测试报告目录         | `D:\data\projects\VideoPlatform\stone\temp\test-reports`                                  | TV\_TEST\_REPORT\_DIR | run\_tests\_report.py 完整日志与 latest.json 落盘位置               |
-| 测试媒体目录         | `D:\data\projects\VideoPlatform\media-test`（video/image/cover）                          | TV\_TEST\_MEDIA\_ROOT | T2 起 18080 测试实例上传落盘 + `/upload` 挂载指向此处，与生产 stone 隔离；**白名单硬编码于 run_tests.py**：仅该目录会被移动式回收（整目录移入 test_trash，只移不删），env 覆盖为其它路径/命中生产根均拒绝（exit 12）  |
-| 测试媒体回收站         | `D:\data\projects\VideoPlatform\test_trash`（含 `<media-test>-<时间戳>/` 历史快照）                       | TV\_TEST\_TRASH\_ROOT | 旧 media-test 移动式回收落点（不删除任何文件，用户手动清理）；落点命中生产根或与 media-test 重叠/嵌套时拒绝（exit 12）  |
+| 独立 Tomcat 运行目录 | 项目内 `.stage8-target\tomcat-test-18080`（T9 起，相对项目根；含 conf/webapps/logs）                | TV\_CATALINA\_BASE    | CATALINA\_BASE，含 conf/webapps/logs                         |
+| 构建输出目录（war）    | 项目内 `.stage8-target`（其下 `untitled-1.0-SNAPSHOT.war`，T9 起）                      | TV\_STAGE8\_TARGET    | 由 `build` 生成                                               |
+| 测试报告目录         | 项目内 `.stage8-target\test-reports`（T9 起）                                              | TV\_TEST\_REPORT\_DIR | run\_tests\_report.py 完整日志与 latest.json 落盘位置               |
+| 测试媒体目录         | 项目内 `.stage8-target\media-test`（video/image/cover，T9 起）                        | TV\_TEST\_MEDIA\_ROOT | T2 起 18080 测试实例上传落盘 + `/upload` 挂载指向此处，与生产 stone 隔离；**白名单硬编码于 run_tests.py**：仅该目录会被移动式回收（整目录移入 test_trash，只移不删），env 覆盖为其它路径/命中生产根均拒绝（exit 12）  |
+| 测试媒体回收站         | 项目内 `.stage8-target\test_trash`（含 `<media-test>-<时间戳>/` 历史快照，T9 起）                  | TV\_TEST\_TRASH\_ROOT | 旧 media-test 移动式回收落点（不删除任何文件，用户手动清理）；落点命中生产根或与 media-test 重叠/嵌套时拒绝（exit 12）  |
 | 测试代码           | 项目 `src\test\python`                                                                      | 无                     | pytest 用例 + conftest.py + pytest.ini                       |
 
 > 覆盖机制：上述路径均可在 `tools/run_tests*.py` 中通过同名 `TV_*` 环境变量覆盖（T1 落地，与 conftest.py 的 TV\_BASE\_URL 等先例一致）。HTTP 端口 18080/shutdown 18005 属安全隔离设计，**不可覆盖**。
@@ -384,7 +384,7 @@ python tools\run_tests_report.py stop      # 仅关停
 
 ### 9.3 产物
 
-- 完整日志：`D:\data\projects\VideoPlatform\stone\temp\test-reports\run-<yyyyMMdd_HHmmss>.log`（UTF-8，只追加不删除）
+- 完整日志：项目内 `.stage8-target\test-reports\run-<yyyyMMdd_HHmmss>.log`（UTF-8，只追加不删除；T9 起）
 
 - 机器可读结果：同目录 `latest.json`
 
@@ -412,7 +412,7 @@ python tools\run_tests_report.py stop      # 仅关停
 3. 失败时只读日志尾部（约 60 行）或按 `FAILED` 关键词定位，禁止整份日志灌入上下文：
 
    ```powershell
-   Get-Content -Encoding UTF8 -Tail 60 "D:\data\projects\VideoPlatform\stone\temp\test-reports\run-<时间戳>.log"
+   Get-Content -Encoding UTF8 -Tail 60 "d:\javaproject\VideoPlatform\TVhomework1\.stage8-target\test-reports\run-<时间戳>.log"
    ```
 
 4. 确认 `port_18080_open_after=false`；若为 true，先 `python tools\run_tests.py stop`，无法停止时把 PID/端口信息交给用户人工处理。
