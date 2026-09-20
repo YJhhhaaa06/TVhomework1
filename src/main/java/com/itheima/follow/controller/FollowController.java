@@ -16,6 +16,12 @@ import java.io.IOException;
 
 @WebServlet("/follow/*")
 public class FollowController extends BaseServlet {
+    /** T11-A：follow 域 pageSize 上限（大 chunk 前端承载；公共 cap 50 不动，镜像评论域 500 先例）。 */
+    private static final int FOLLOW_PAGE_SIZE_MAX = 200;
+
+    /** T11-A：follow 域信封大小——前端只传 `page` 时后端返回的条数（不再落公共默认 10）。 */
+    private static final int FOLLOW_PAGE_SIZE_DEFAULT = 200;
+
     @Inject
     private FollowService followService;
 
@@ -29,39 +35,23 @@ public class FollowController extends BaseServlet {
         Long currentUserId = (Long) req.getAttribute("userId");
         long userId = parseUserId(req);
 
+        // T11-A（契约变更，已获用户批准）：删除 T7 的「缺省不传参 → 全量数组」分支，缺省**归一为第一页信封**
+        // ——不传参 = page 1 / pageSize 200，与显式 `page=1&pageSize=200` 响应逐字节一致；
+        // 信封大小由本域常量决定，前端只传 `page`；显式 pageSize 仍受上限 200 约束（保留小信封跨页验证能力）。
         switch (action) {
-            // T7：显式区分"是否传了分页参数"——**缺省（都不传）维持全量返回**，与改造前逐字节一致
-            // （既有调用方与 pytest 用例零破坏；不能用"默认 page=1&pageSize=50"代替，上限 50 会截断全量）；
-            // 传任一分页参数 → 分页信封（A1 有序窗口）。分页解析复用 T5 公共方法（默认 1/10、上限 50）。
             case "/following":
-                if (hasPagingParams(req)) {
-                    BaseServletUtil.writeSuccess(resp, followService.getFollowingList(userId, currentUserId,
-                            BaseServletUtil.parsePage(req), BaseServletUtil.parsePageSize(req)));
-                } else {
-                    BaseServletUtil.writeSuccess(resp, followService.getFollowingList(userId, currentUserId));
-                }
+                BaseServletUtil.writeSuccess(resp, followService.getFollowingList(userId, currentUserId,
+                        BaseServletUtil.parsePage(req),
+                        BaseServletUtil.parsePageSize(req, FOLLOW_PAGE_SIZE_MAX, FOLLOW_PAGE_SIZE_DEFAULT)));
                 break;
             case "/followers":
-                if (hasPagingParams(req)) {
-                    BaseServletUtil.writeSuccess(resp, followService.getFollowerList(userId, currentUserId,
-                            BaseServletUtil.parsePage(req), BaseServletUtil.parsePageSize(req)));
-                } else {
-                    BaseServletUtil.writeSuccess(resp, followService.getFollowerList(userId, currentUserId));
-                }
+                BaseServletUtil.writeSuccess(resp, followService.getFollowerList(userId, currentUserId,
+                        BaseServletUtil.parsePage(req),
+                        BaseServletUtil.parsePageSize(req, FOLLOW_PAGE_SIZE_MAX, FOLLOW_PAGE_SIZE_DEFAULT)));
                 break;
             default:
                 BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "未识别操作");
         }
-    }
-
-    /**
-     * 是否显式传了分页参数（T7 缺省兼容判据）：{@code page} 与 {@code pageSize} **任一**出现即视为分页请求。
-     *
-     * <p>不用"默认值是否等于 1/10"来判断——那无法区分"没传"与"显式传 page=1&pageSize=10"，
-     * 也就无法保留"不传 → 全量返回"的既有行为。
-     */
-    private boolean hasPagingParams(HttpServletRequest req) {
-        return req.getParameter("page") != null || req.getParameter("pageSize") != null;
     }
 
     @Override

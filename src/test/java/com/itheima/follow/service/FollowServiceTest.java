@@ -135,101 +135,14 @@ class FollowServiceTest {
         verify(followCache, never()).cacheUnfollow(anyLong(), anyLong());
     }
 
-    // ===== getFollowingList（列表走关注缓存） =====
+    // ===== 缺省读路径（T11-A：两个缺省重载已删除） =====
+    // 原 `getFollowingList(long,Long)` / `getFollowerList(long,Long)` 与对应 8 条用例已随 T11-A 删除
+    // （缺省由 Controller 归一为 page 1 / pageSize 200，Service 只剩分页入口）。
+    // 这 8 条里**仍有语义价值的断言已迁入分页路径**（见下方 getFollowingListPagedMarksSelfWhenIdMatchesCurrentUser /
+    // getFollowingListPagedWithoutCurrentUserSkipsFollowQuery / getFollowerListPagedEmptyPageSkipsDbAndFollowQuery），
+    // 覆盖面未削弱——「缺省返回数组」这一被废除的契约不再有对应断言。
 
-    @Test
-    void getFollowingListEmptyReturnsEmptyList() throws SQLException {
-        when(followCache.getFollowingIds(7L)).thenReturn(Collections.emptyList());
-
-        List<Map<String, Object>> result = service.getFollowingList(7L, 7L);
-
-        assertTrue(result.isEmpty());
-        verify(userDao, never()).findUsersByIds(any(), anyList());
-        verify(followCache, never()).batchIsFollowing(anyLong(), anyList());
-    }
-
-    @Test
-    void getFollowingListWithCurrentUserFillsFollowedFlag() throws SQLException {
-        when(followCache.getFollowingIds(7L)).thenReturn(List.of(8L, 9L));
-        when(userDao.findUsersByIds(conn, List.of(8L, 9L)))
-                .thenReturn(List.of(user(8L, "bob"), user(9L, "carol")));
-        // 当前用户仅关注了 9
-        when(followCache.batchIsFollowing(7L, List.of(8L, 9L))).thenReturn(Map.of(9L, true));
-
-        List<Map<String, Object>> result = service.getFollowingList(7L, 7L);
-
-        assertEquals(2, result.size());
-        assertEquals(8L, result.get(0).get("userId"));
-        assertEquals("bob", result.get(0).get("username"));
-        assertFalse((Boolean) result.get(0).get("isFollowed"));
-        assertFalse((Boolean) result.get(0).get("isSelf"));
-        assertEquals(9L, result.get(1).get("userId"));
-        assertTrue((Boolean) result.get(1).get("isFollowed"));
-        assertFalse((Boolean) result.get(1).get("isSelf"));
-    }
-
-    @Test
-    void getFollowingListMarksSelfWhenIdMatchesCurrentUser() throws SQLException {
-        when(followCache.getFollowingIds(7L)).thenReturn(List.of(7L));
-        when(userDao.findUsersByIds(conn, List.of(7L))).thenReturn(List.of(user(7L, "alice")));
-        when(followCache.batchIsFollowing(7L, List.of(7L))).thenReturn(Collections.emptyMap());
-
-        List<Map<String, Object>> result = service.getFollowingList(7L, 7L);
-
-        assertEquals(1, result.size());
-        assertTrue((Boolean) result.get(0).get("isSelf"));
-        assertFalse((Boolean) result.get(0).get("isFollowed"));
-    }
-
-    @Test
-    void getFollowingListWithoutCurrentUserSkipsFollowQuery() throws SQLException {
-        when(followCache.getFollowingIds(7L)).thenReturn(List.of(8L));
-        when(userDao.findUsersByIds(conn, List.of(8L))).thenReturn(List.of(user(8L, "bob")));
-
-        List<Map<String, Object>> result = service.getFollowingList(7L, null);
-
-        assertEquals(1, result.size());
-        assertFalse((Boolean) result.get(0).get("isFollowed"));
-        assertFalse((Boolean) result.get(0).get("isSelf"));
-        verify(followCache, never()).batchIsFollowing(anyLong(), anyList());
-    }
-
-    @Test
-    void getFollowingListUserQuerySqlErrorThrowsServerException() throws SQLException {
-        when(followCache.getFollowingIds(7L)).thenReturn(List.of(8L));
-        when(userDao.findUsersByIds(conn, List.of(8L))).thenThrow(new SQLException("db down"));
-
-        assertThrows(ServerException.class, () -> service.getFollowingList(7L, 7L));
-    }
-
-    // ===== getFollowerList（列表走关注缓存） =====
-
-    @Test
-    void getFollowerListEmptyReturnsEmptyList() throws SQLException {
-        when(followCache.getFollowerIds(9L)).thenReturn(Collections.emptyList());
-
-        List<Map<String, Object>> result = service.getFollowerList(9L, 7L);
-
-        assertTrue(result.isEmpty());
-        verify(userDao, never()).findUsersByIds(any(), anyList());
-    }
-
-    @Test
-    void getFollowerListNormalFillsStatus() throws SQLException {
-        when(followCache.getFollowerIds(9L)).thenReturn(List.of(8L));
-        when(userDao.findUsersByIds(conn, List.of(8L))).thenReturn(List.of(user(8L, "bob")));
-        when(followCache.batchIsFollowing(7L, List.of(8L))).thenReturn(Map.of(8L, true));
-
-        List<Map<String, Object>> result = service.getFollowerList(9L, 7L);
-
-        assertEquals(1, result.size());
-        assertEquals(8L, result.get(0).get("userId"));
-        assertEquals("bob", result.get(0).get("username"));
-        assertTrue((Boolean) result.get(0).get("isFollowed"));
-        assertFalse((Boolean) result.get(0).get("isSelf"));
-    }
-
-    // ===== 分页读（T7：A1 有序窗口 + B2 分页信封） =====
+    // ===== 分页读（T7：A1 有序窗口 + B2 分页信封；T11-A：唯一读入口） =====
 
     private List<Long> idsOf(List<Map<String, Object>> list) {
         List<Long> ids = new ArrayList<>();
@@ -300,21 +213,56 @@ class FollowServiceTest {
         assertEquals(List.of(8L), idsOf(page.getList()));
         assertEquals(1, page.getTotal());
         assertEquals(1, page.getTotalPages());
+        // T11-A 评审补强：粉丝路径的 username / isSelf 也需有显式断言（此前只在已删的缺省用例里覆盖）
+        assertEquals("bob", page.getList().get(0).get("username"));
         assertTrue((Boolean) page.getList().get(0).get("isFollowed"));
+        assertFalse((Boolean) page.getList().get(0).get("isSelf"));
     }
 
     @Test
-    void getFollowingListDefaultPathDoesNotUseWindowRead() throws SQLException {
-        // 缺省兼容回归：不传分页参数走全量路径（getFollowingIds），不触达窗口读
-        when(followCache.getFollowingIds(7L)).thenReturn(List.of(8L, 9L));
-        when(userDao.findUsersByIds(conn, List.of(8L, 9L)))
-                .thenReturn(List.of(user(8L, "bob"), user(9L, "carol")));
-        when(followCache.batchIsFollowing(7L, List.of(8L, 9L))).thenReturn(Collections.emptyMap());
+    void getFollowingListPagedMarksSelfWhenIdMatchesCurrentUser() throws SQLException {
+        // 由原缺省路径用例迁移（T11-A）：isSelf 判定在分页路径下语义不变
+        when(followCache.getFollowingWindow(7L, 0L, 10))
+                .thenReturn(new ZSetCache.Window(List.of(7L), 1L));
+        when(userDao.findUsersByIds(conn, List.of(7L))).thenReturn(List.of(user(7L, "alice")));
+        when(followCache.batchIsFollowing(7L, List.of(7L))).thenReturn(Collections.emptyMap());
 
-        List<Map<String, Object>> result = service.getFollowingList(7L, 7L);
+        FollowPageResult<Map<String, Object>> page = service.getFollowingList(7L, 7L, 1, 10);
 
-        assertEquals(2, result.size());
-        verify(followCache, never()).getFollowingWindow(anyLong(), anyLong(), anyInt());
+        assertEquals(1, page.getList().size());
+        // T11-A 评审补强：username 装箱也需有断言（此前随缺省用例一并删除）
+        assertEquals("alice", page.getList().get(0).get("username"));
+        assertTrue((Boolean) page.getList().get(0).get("isSelf"));
+        assertFalse((Boolean) page.getList().get(0).get("isFollowed"));
+    }
+
+    @Test
+    void getFollowingListPagedWithoutCurrentUserSkipsFollowQuery() throws SQLException {
+        // 由原缺省路径用例迁移（T11-A）：currentUserId 为 null 时跳过批量判关注态
+        when(followCache.getFollowingWindow(7L, 0L, 10))
+                .thenReturn(new ZSetCache.Window(List.of(8L), 1L));
+        when(userDao.findUsersByIds(conn, List.of(8L))).thenReturn(List.of(user(8L, "bob")));
+
+        FollowPageResult<Map<String, Object>> page = service.getFollowingList(7L, null, 1, 10);
+
+        assertEquals(1, page.getList().size());
+        assertFalse((Boolean) page.getList().get(0).get("isFollowed"));
+        assertFalse((Boolean) page.getList().get(0).get("isSelf"));
+        verify(followCache, never()).batchIsFollowing(anyLong(), anyList());
+    }
+
+    @Test
+    void getFollowerListPagedEmptyPageSkipsDbAndFollowQuery() throws SQLException {
+        // 由原缺省路径用例迁移（T11-A）：空窗口 → 不打事务、不装载、不判关注态
+        when(followCache.getFollowerWindow(9L, 0L, 10))
+                .thenReturn(new ZSetCache.Window(Collections.emptyList(), 0L));
+
+        FollowPageResult<Map<String, Object>> page = service.getFollowerList(9L, 7L, 1, 10);
+
+        assertTrue(page.getList().isEmpty());
+        assertEquals(0, page.getTotal());
+        verify(userDao, never()).findUsersByIds(any(), anyList());
+        verify(followCache, never()).batchIsFollowing(anyLong(), anyList());
     }
 
     @Test

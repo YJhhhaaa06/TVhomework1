@@ -1,7 +1,7 @@
 # 业务流程文档
 
-> 版本：2.0
-> 最后更新：2026-09-18（T2 瘦身：删除八~十节与变更记录，缓存机制细节指向 CURRENT_ARCHITECTURE 六节）
+> 版本：2.1
+> 最后更新：2026-09-20（T11-A：follow 关注/粉丝列表契约变更——列表恒为分页信封、缺省=第一页信封、`pageSize` 上限 50→200）
 > 用途：保障重构时不破坏业务逻辑
 
 ---
@@ -412,7 +412,7 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-> 缓存读写语义要点：关注读路径（`isFollowing` 单成员 / `batchIsFollowing` 批量 / `getFollowingIds`/`getFollowerIds` 全量列表 / **`getFollowingWindow`/`getFollowerWindow` 分页窗口（T7）**）统一走基建 `ZSetCache`——成员 key 为 ZSet（score=成员 id），故 `ZRANGE` 天然升序，列表升序另由 `FollowCache.sortIds` 归一（写路径 MULTI 条件双写 + 失败双 DEL 保留在 FollowCache）；**关注/粉丝列表接口传 `page`/`pageSize` 任一 → 返回分页信封 `{list,total,page,pageSize,totalPages}`，两者都不传 → 仍返回全量数组（零破坏）**；关注/粉丝计数入独立 key（`user:followCount`/`user:followerCount`，Cache-Aside、0 合法、条件 INCRBY）；Feed/Profile 缓存批量读在 DB 事务外执行（防连接池互相等连接）；详情见 `CURRENT_ARCHITECTURE` 6.4/6.12/6.17。
+> 缓存读写语义要点：关注读路径（`isFollowing` 单成员 / `batchIsFollowing` 批量 / `getFollowingIds`/`getFollowerIds` 全量列表 / **`getFollowingWindow`/`getFollowerWindow` 分页窗口（T7）**）统一走基建 `ZSetCache`——成员 key 为 ZSet（score=成员 id），故 `ZRANGE` 天然升序，列表升序另由 `FollowCache.sortIds` 归一（写路径 MULTI 条件双写 + 失败双 DEL 保留在 FollowCache）；**关注/粉丝列表接口恒返回分页信封 `{list,total,page,pageSize,totalPages}`——缺省（不传参）= 第一页信封（page 1 / pageSize 200），与显式 `page=1&pageSize=200` 逐字节一致；`pageSize` 上限 200（T11-A 契约变更，T7 的"缺省返回全量数组"已删除）**；关注/粉丝计数入独立 key（`user:followCount`/`user:followerCount`，Cache-Aside、0 合法、条件 INCRBY）；Feed/Profile 缓存批量读在 DB 事务外执行（防连接池互相等连接）；详情见 `CURRENT_ARCHITECTURE` 6.4/6.12/6.17。
 
 > 关键语义：内容与评论读/写**全部收敛 Redis**；**任何缓存失败降级走 DB、不导致业务失败**；计数（like_count/comment_count/comment_enabled）与评论树内容以 DB 为源真理，变更即失效让读自愈；类型分区索引启动 init 全量重建 + 索引 key 缺失时单飞懒重建（防 Redis 重启后 /start 空推荐）；评论树不再原地增删：评论增/删/点赞 = 失效 `content:comments:{id}` + 空标记，下次读 miss 单飞回填 DB 最新整树。
 >
@@ -1101,20 +1101,26 @@ GET /follow/following?userId=123&token=xxx（必填：/follow/* 前缀守卫需�
 3. 如果已登录，查询当前用户对这些用户的关注状态
 4. 返回用户列表
 
-返回结构：
-[
-    {
-        "userId": 456,
-        "username": "李四",
-        "isFollowed": true,   // 当前用户是否关注
-        "isSelf": false       // 是否是自己
-    },
-    ...
-]
+返回结构（列表恒为分页信封，2026-09-20 T11-A）：
+{
+    "list": [
+        {
+            "userId": 456,
+            "username": "李四",
+            "isFollowed": true,   // 当前用户是否关注
+            "isSelf": false       // 是否是自己
+        },
+        ...
+    ],
+    "total": N, "page": 1, "pageSize": 200, "totalPages": t
+}
 
-分页（2026-09-19 T7）：可选 page/pageSize（默认 1/10、上限 50；page<1 归一为 1）
-  - 传 page 或 pageSize 任一 → 返回信封 {"list": [...], "total": N, "page": p, "pageSize": s, "totalPages": t}
-  - 两者都不传 → 返回上面的全量数组（与改造前逐字节一致，零破坏）
+分页（2026-09-19 T7 → 2026-09-20 T11-A 契约变更，已获用户批准）：
+  - **列表恒为信封** {"list": [...], "total": N, "page": p, "pageSize": s, "totalPages": t}
+    （T7 的"缺省不传参 → 返回全量数组"分支已**删除**）
+  - **缺省（不传任何分页参数）= 第一页信封**（page 1 / pageSize 200），与显式
+    page=1&pageSize=200 响应**逐字节一致**（信封大小由后端 follow 域常量决定，前端只传 page）
+  - page 缺省 1、page<1 归一为 1；pageSize 缺省 **200**、上限 **200**（原 50）；显式传 pageSize 仍生效
   - 越界页（offset ≥ total）→ list 为空数组，total 照常返回（前端据此判末页）
 ```
 
@@ -1131,8 +1137,9 @@ GET /follow/followers?userId=123&token=xxx（必填：/follow/* 前缀守卫需�
 3. 如果已登录，查询当前用户对这些用户的关注状态
 4. 返回用户列表
 
-分页（2026-09-19 T7）：口径与 4.3.3 完全一致（可选 page/pageSize；缺省返回全量数组；
-传参返回 {"list","total","page","pageSize","totalPages"} 信封；越界页空 list + total 照常）
+分页（2026-09-19 T7 → 2026-09-20 T11-A）：口径与 4.3.3 完全一致（列表恒为
+{"list","total","page","pageSize","totalPages"} 信封；缺省=第一页信封；pageSize 缺省/上限均 200；
+越界页空 list + total 照常）
 ```
 
 ---

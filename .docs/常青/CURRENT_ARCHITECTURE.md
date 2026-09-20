@@ -1,7 +1,7 @@
 # 当前系统架构地图
 
-> 版本：3.3（2026-09-19 T8：评论列表主楼分页——`/comment/show` 可选 `page`/`pageSize`（缺省仍全量数组），每页 N 条主楼且**楼中楼整树随行**；评论缓存整树结构不变、切片只在展示层 + 前端 detail.js 分块加载）
-> 最后更新：2026-09-19
+> 版本：3.4（2026-09-20 T11-A：follow 域关注/粉丝列表**接口口径**改造——`pageSize` 上限 50→200、信封大小改由**后端域级常量**决定（前端只传 `page`）、缺省（不传参）由「全量数组」**反转为「第一页信封」**；前端 sheet 接公共 `chunkedList`。评论分页见 6.18）
+> 最后更新：2026-09-20
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
 ---
@@ -174,7 +174,7 @@ com.itheima/
 | 类 | 行数 | 职责 |
 |----|------|------|
 | BaseServlet | 41 | 基类，IoC 注入 + JSON 响应 |
-| BaseServletUtil | 49 | 静态工具，writeSuccess/writeError |
+| BaseServletUtil | 99 | 静态工具，writeSuccess/writeError + 分页参数解析（`parsePage`；`parsePageSize` 三档重载：无参=公共 50/10、`(req,max)`=域级上限、`(req,max,defaultSize)`=域级上限 + **域级信封**，T11-A） |
 | RequestParser | 69 | JSON 请求体解析 |
 | AppShutDownListener | 102 | 容器生命周期管理（@WebListener，统一关闭 IoC 容器） |
 
@@ -233,8 +233,8 @@ com.itheima/
 
 | 层 | 类（行数） | 职责 |
 |----|------|------|
-| controller | FollowController（114，/follow/*） | 关注/取关/关注列表/粉丝列表（**T7：列表支持可选 `page`/`pageSize`**——显式判"是否传分页参数"分支：缺省全量数组、传参走分页信封） |
-| service | FollowService（190） | 关注业务（读路径委托 FollowCache；关注/取关 DB 提交后缓存双写；**T7 新增分页读**——缓存窗口取该页 ids+total，仅对该页 ids 做 DB 装载与批量判重，信封在事务外组装，事务边界与缺省路径一致） |
+| controller | FollowController（104，/follow/*） | 关注/取关/关注列表/粉丝列表（**T11-A：列表只有分页入口**——`page`/`pageSize` 均可选，缺省归一为 page 1 / `pageSize` 200；域级常量 `FOLLOW_PAGE_SIZE_MAX = 200` + 信封 `FOLLOW_PAGE_SIZE_DEFAULT = 200`，T7 的「缺省返回全量数组」分支已删除） |
+| service | FollowService（173） | 关注业务（读路径委托 FollowCache；关注/取关 DB 提交后缓存双写；**T7 新增分页读**——缓存窗口取该页 ids+total，仅对该页 ids 做 DB 装载与批量判重，信封在事务外组装；**T11-A 删除两个缺省全量重载**，分页读为唯一入口） |
 | service | FollowCache（446） | 关注关系 Redis 缓存（**双 ZSet（score=成员 id）+ 条件 MULTI 双写 + 失败双 DEL** + 三态读 + 单飞 + 降级单飞全量装载作答；读路径收口 **ZSetCache**——单成员三态/批量/全量/窗口走基建 + `sortIds` 归一升序，写路径 MULTI 双写语义保持；关注/粉丝计数 key 读写） |
 | dao | FollowDao（107） | follow 关注关系（仅 FollowService 业务校验与 FollowCache 回填 loader 使用） |
 | model | FollowPageResult（79） | 关注/粉丝列表分页信封（T7 B2）：`list/total/page/pageSize/totalPages`，与 content 域 `PageResult` 同形但**归属 follow 域**——避免 follow 反向 import content 形成新包层环（content 已 import `follow.FollowCache`） |
@@ -473,15 +473,18 @@ com.itheima/
 - **场景**：内容缓存 DTO 的 `authorName` 是 `findContent`/`findAllContent` `JOIN users` 时的反规范化副本，只存在于内容数据 key——`content:index:*` 只存 id、评论/点赞缓存不含 authorName，故改名只需失效内容数据 key，索引无需失效。
 - **落地**：`POST /user/changeUserName`（LoginController `/user/*` switch + AuthFilter 精确保护）；`UserService.changeUserName` DB 提交后调 `ContentCache.invalidateAuthorContentKeys(userId)`（事务内 `findContentIdsByUser` 查该作者全部内容 id → 事务外逐个失效内容 key + 空标记）；**读自愈**重新 JOIN users 回填新名；DB/Redis 失败仅记日志跳过、TTL 自愈，不影响改名成功语义。UserService 注入 ContentCache（user→content 跨域，对齐 like/comment 先例无环）。
 
-### 6.17 关注关系有序化与分页窗口（T7）
+### 6.17 关注关系有序化与分页窗口（T7 → T11-A：域级信封 + 缺省反转）
 
 - **Set→ZSet 有序化**：`user:following:{userId}` / `user:follower:{userId}` 由 Set 升级为 ZSet（score = 成员自身 id）；写路径 `SADD/SREM → ZADD/ZREM`（MULTI 条件双写 / 双 key 探针 / 空标记 / TTL 骨架不变），读路径收口**新建的 `ZSetCache`**（与 SetCache 平行，命令层 ZSCORE/ZRANGE/ZADD）。like 域成员 key 仍为 Set、仍走 SetCache（不受影响）。
 - **等价性依据**：score = 成员数值 ⇒ `ZRANGE` 遍历序 = 成员数值升序 = 改造前 `sortIds` 升序口径，全量读/单项判定/批量判定的对外结果与顺序**逐条不变**。
 - **分页窗口读**：`ZSetCache.getWindow(key, offset, count)` **窗口取数**为一趟 pipeline（`ZRANGE[start,stop]` + `ZCARD` → `Window{ids,total}`；探针一趟另行，与 SetCache 同模式）；**hit 路径 O(log n + N)**（不再 `SMEMBERS` 全量回传 + String→Long 装箱）；miss 单飞回填后重读窗口；Redis 异常 → 单飞全量装载 + 按 score 口径升序内存切片、**不写回**。**残留**：miss / 降级仍是全量装载形态（缓存装载既有形态，与 R-01 索引全量读同型 → 留池 **U-18**）。
 - **顺序保证**：分页切片的成员集合与顺序来自 ZSet 升序（score=成员 id）；**列表最终输出顺序由 `UserDao.findUsersByIds` 决定**，T7 已为该查询补 `ORDER BY id`（此前无 ORDER BY，输出序依赖存储引擎默认序——HEAD 既有脆弱点，唯一调用方为 FollowService），使"ZSet 升序切片"与"DB 返回序"同口径，分页顺序稳定**由构造保证**而非巧合。
-- **接口口径（B2）**：`GET /follow/following|followers` 传 `page` 或 `pageSize` **任一** → `data = {list,total,page,pageSize,totalPages}`（follow 域信封 `FollowPageResult`）；**两者都不传 → `data` 仍为全量数组**（逐字节兼容，既有调用方与 pytest 用例零破坏；不可用"默认 page=1&pageSize=50"实现兼容，上限 50 会截断全量）。分页参数解析复用 `BaseServletUtil.parsePage/parsePageSize`（默认 1 / 10、上限 50）；越界页返回空数组但保留 total。
+- **接口口径（T7 B2 → T11-A 契约变更，已获用户批准）**：`GET /follow/following|followers` **始终**返回 `data = {list,total,page,pageSize,totalPages}`（follow 域信封 `FollowPageResult`）。
+  - `page` 缺省 1；`pageSize` 缺省 **200**（`FOLLOW_PAGE_SIZE_DEFAULT` = 域级信封）、上限 **200**（`FOLLOW_PAGE_SIZE_MAX`，原 50）。显式传 `pageSize` 仍生效（**不采纳"后端硬忽略参数"**：那会摧毁 pytest 用小信封逐页比对"页间不重不漏"的能力）。
+  - **缺省（不传任何分页参数）= 第一页信封**，与显式 `page=1&pageSize=200` 响应**逐字节一致**；T7 的「两者都不传 → `data` 仍为全量数组」分支**已删除**——该分支同时是"一次拉全量"的攻击放大面。
+  - 参数解析走 `BaseServletUtil.parsePageSize(req, max, defaultSize)` **三参重载（T11-A 新增）**：传了 → `min(s, max)`、未传 → `defaultSize`；两参重载委托 `(req, max, 10)`、无参重载经两参委托 → **其它域（feed/search/profile/content/coupon）语义零变化**。`page < 1` 归一为 1；越界页返回空数组但保留 total。
 - **total 口径**：同一 ZSet 的 `ZCARD`（与页内容同源）；不用独立计数 key `user:followCount`（两 key 可能瞬时不一致）。
-- **前端**：`static/js/views/user.js` 的关注/粉丝 sheet 改为分页加载 + 「加载更多」（复用既有 `.load-more-btn` 样式；切换 following/followers 时重置页码与总页数）。
+- **前端**：`static/js/views/user.js` 的关注/粉丝 sheet 接公共 **`chunkedList`** helper（`static/js/chunkedList.js`——T10-B 抽出，T11-A 为第二个消费方）：请求**只传 `page`**（信封大小由后端域常量决定，前端不再出现 pageSize 魔法数）、大 chunk 200 + 本地小批 10，本地余量足够时「加载更多」**0 请求**；每次 `openUserList` 重建实例（等价 reset，防 following/followers 本地余量串台）。
 - **包层边界**：分页信封落在 follow 域（**不 import content 域 `PageResult`**——content 已 import `follow.FollowCache`，反向引用会形成新的 follow↔content 包层环）；"PageResult 上移公共包供多域复用"登记留池（跨域重构不在本任务范围）。
 
 ### 6.18 评论列表分页（T8 → T10-A/T10-B：两键组 + 主楼窗口装载 + 楼中楼前 K + 展开接口）
@@ -543,7 +546,7 @@ com.itheima/
 | POST | /content/commentEnabled | 作者开关自己作品的评论区（0=关/1=开） | ✓ |
 | POST | /follow/add | 关注 | ✓ |
 | POST | /follow/remove | 取关 | ✓ |
-| GET | /follow/following | 关注列表（**可选 `page`/`pageSize`**：传参→分页信封 `{list,total,page,pageSize,totalPages}`；缺省→全量数组） | ✓ |
+| GET | /follow/following | 关注列表（**始终分页信封** `{list,total,page,pageSize,totalPages}`；T11-A：缺省=第一页，`pageSize` 缺省/上限均 200） | ✓ |
 | GET | /follow/followers | 粉丝列表（分页口径同 /follow/following） | ✓ |
 | GET | /profile | 用户主页 | ✗ |
 
@@ -593,12 +596,13 @@ src/main/webapp/
         ├── auth.js            # token/username/userId 存取、JWT sub 解码
         ├── utils.js           # 工具 + createVideoCard（字段降级收敛）
         ├── editWork.js        # 编辑作品弹层（作者改标题/简介 + 替换/删除媒体，创作中心与详情共用）
+        ├── chunkedList.js     # 公共「分块列表」helper（大 chunk 拉取 + 本地小批展示；消费方：detail 评论主楼、user 关注/粉丝 sheet）
         └── views/
             ├── home.js        # #/            首页（推荐流 + 换一换）
             ├── follow.js      # #/follow      关注流（/feed 分页）
             ├── detail.js      # #/video/:id   详情（播放器 + 楼中楼评论 + 相关推荐）
             ├── search.js      # #/search?kw=  搜索
-            ├── user.js        # #/user/:id    个人主页（本人/他人合一；T7 起关注/粉丝 sheet 分页加载）
+            ├── user.js        # #/user/:id    个人主页（本人/他人合一；关注/粉丝 sheet 走公共 chunkedList，T11-A 起只传 page）
             ├── publish.js     # #/publish     创作中心（我的投稿 + 投稿上传）
             ├── login.js       # #/login       登录/注册
             ├── coupon.js      # #/coupon      优惠券中心

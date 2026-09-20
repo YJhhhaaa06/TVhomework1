@@ -7,8 +7,14 @@ import { request } from '../api.js';
 import { isLoggedIn, getUserId, clearAuth } from '../auth.js';
 import { createVideoCard, showToast, escapeHtml, initialChar, avatarColor } from '../utils.js';
 import { navigate } from '../router.js';
+import { createChunkedList } from '../chunkedList.js';
 
+// 创作网格（/profile）分页大小（后端公共上限 50；后端改动归 T19）。
 const PAGE_SIZE = 10;
+// 关注/粉丝 sheet（T11-A）：信封大小由**后端 follow 域常量**决定（200），前端**只传 `page`**；
+// chunkSize 仅用于「本 chunk 是否已到末页」的本地判定，与后端信封保持一致。
+const SHEET_CHUNK_SIZE = 200;
+const SHEET_BATCH_SIZE = 10;
 let state = null;
 
 export function mount(container, params) {
@@ -33,8 +39,7 @@ export function mount(container, params) {
     page: 1,
     totalPages: 0,
     listType: 'following',
-    listPage: 1,
-    listTotalPages: 0,
+    sheetList: null,   // T11-A：createChunkedList 实例（关注/粉丝 sheet 大 chunk + 本地小批）
   };
   state.isSelf = state.currentUserId != null && state.currentUserId === profileUserId;
   render();
@@ -215,33 +220,46 @@ function updateFollowerCount(delta) {
   if (!Number.isNaN(cur)) el.textContent = cur + delta;
 }
 
-// ---------- 关注/粉丝列表（T7：后端有序分页 + 前端「加载更多」） ----------
+// ---------- 关注/粉丝列表（T7 后端有序分页 → T11-A 接公共 chunkedList） ----------
+// 信封大小由后端 follow 域常量决定（200），请求**只传 `page`**；本地按 10 条小批消费，
+// 本地余量足够时「加载更多」0 请求（N15 收敛点，helper 见 js/chunkedList.js）。
 async function openUserList(type) {
   if (!state.profileUserId) return;
   state.listType = type;
-  state.listPage = 1;
-  state.listTotalPages = 0;
   const c = state.container;
   c.querySelector('#sheetTitle').textContent = type === 'following' ? '关注' : '粉丝';
   c.querySelector('#sheetList').innerHTML = '<div class="sheet-empty">加载中...</div>';
   c.querySelector('#sheetMore').innerHTML = '';
   c.querySelector('#sheetOverlay').classList.remove('hidden');
-  await loadUserList(1, false);
-}
-
-async function loadUserList(page, append) {
-  const c = state.container;
-  if (append) setSheetMore('loading');
+  // 每次打开重建实例（等价 reset）：本地余量与已展示集清空，防 following/followers 串台
+  state.sheetList = createChunkedList({
+    fetchChunk: async (page) => request(
+      `follow/${state.listType}?userId=${state.profileUserId}&page=${page}`),
+    chunkSize: SHEET_CHUNK_SIZE,
+    batchSize: SHEET_BATCH_SIZE,
+  });
   try {
-    const data = await request(
-      `follow/${state.listType}?userId=${state.profileUserId}&page=${page}&pageSize=${PAGE_SIZE}`);
-    state.listPage = data.page;
-    state.listTotalPages = data.totalPages;
-    renderUserList(data.list || [], append);
+    const batch = await state.sheetList.nextBatch();
+    renderUserList(batch, false);
     renderSheetMore();
   } catch (e) {
-    if (append) { setSheetMore('retry'); showToast('加载失败，请重试'); }
-    else { c.querySelector('#sheetList').innerHTML = '<div class="sheet-empty">加载失败</div>'; }
+    c.querySelector('#sheetList').innerHTML = '<div class="sheet-empty">加载失败</div>';
+    c.querySelector('#sheetMore').innerHTML = '';
+  }
+}
+
+// 「加载更多」：本地余量足够则不发请求；不足才由 helper 拉下一个 chunk
+async function loadMoreUserList(btn) {
+  btn.disabled = true;
+  btn.textContent = '加载中...';
+  try {
+    const batch = await state.sheetList.nextBatch();
+    renderUserList(batch, true);
+    renderSheetMore();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '加载更多';
+    showToast('加载失败，请重试');
   }
 }
 
@@ -252,19 +270,12 @@ function closeUserList() {
 function renderSheetMore() {
   const box = state.container.querySelector('#sheetMore');
   box.innerHTML = '';
-  if (state.listPage >= state.listTotalPages) return; // 已到末页
+  if (!state.sheetList || !state.sheetList.hasMore()) return; // 本地余量与服务器均耗尽
   const btn = document.createElement('button');
   btn.className = 'load-more-btn';
   btn.textContent = '加载更多';
-  btn.addEventListener('click', () => loadUserList(state.listPage + 1, true));
+  btn.addEventListener('click', () => loadMoreUserList(btn));
   box.appendChild(btn);
-}
-
-function setSheetMore(mode) {
-  const btn = state.container.querySelector('#sheetMore .load-more-btn');
-  if (!btn) return;
-  if (mode === 'loading') { btn.disabled = true; btn.textContent = '加载中...'; }
-  else { btn.disabled = false; btn.textContent = '加载更多'; }
 }
 
 function renderUserList(users, append) {

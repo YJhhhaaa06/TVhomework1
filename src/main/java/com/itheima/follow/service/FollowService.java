@@ -66,32 +66,16 @@ public class FollowService {
     }
 
     /**
-     * 关注列表（**缺省路径**：调用方未传分页参数时使用，T7 起语义与改造前逐字节一致）：
-     * 取缓存全量关注 ids（升序）→ 事务内批量装载用户 + 批量判关注态。
-     */
-    public List<Map<String, Object>> getFollowingList(long userId, Long currentUserId) {
-        List<Long> ids = followCache.getFollowingIds(userId);
-        return loadUserList(ids, currentUserId);
-    }
-
-    /**
-     * 粉丝列表（**缺省路径**，逻辑同 {@link #getFollowingList(long, Long)}，缓存入口换粉丝集）。
-     */
-    public List<Map<String, Object>> getFollowerList(long userId, Long currentUserId) {
-        List<Long> ids = followCache.getFollowerIds(userId);
-        return loadUserList(ids, currentUserId);
-    }
-
-    /**
-     * 关注列表**分页**（T7 B2：page/pageSize 由 Controller 解析归一后传入）：
+     * 关注列表**分页**（T7 B2：page/pageSize 由 Controller 解析归一后传入；T11-A 起为**唯一读入口**
+     * ——缺省（不传参）由 Controller 归一为 page 1 / pageSize 200，不再有"缺省全量数组"分支）：
      * 缓存侧经 A1 有序窗口读（ZRANGE[start,stop] + ZCARD，一趟 pipeline）只取该页 ids 与总数，
-     * **不再全量回传**；DB 装载与判重也只针对该页 ids（事务边界与缺省路径完全一致——
+     * **不再全量回传**；DB 装载与判重也只针对该页 ids（事务边界与改造前一致——
      * 私有 {@code buildUserList} 原样复用，U-14②号点不在本任务范围）。
      *
-     * <p>分页信封（{@code FollowPageResult}）在事务**外**组装，事务内语句集与全量路径相同。
+     * <p>分页信封（{@code FollowPageResult}）在事务**外**组装，事务内语句集与改造前一致。
      *
      * @param page     页码（≥1，已归一）
-     * @param pageSize 页大小（1~50，已归一）
+     * @param pageSize 页大小（1~200，已归一；缺省 200 = follow 域信封）
      */
     public FollowPageResult<Map<String, Object>> getFollowingList(long userId, Long currentUserId,
                                                                   int page, int pageSize) {
@@ -111,7 +95,7 @@ public class FollowService {
     }
 
     /**
-     * 全量 ids → 用户视图列表（缺省路径共用）：空 ids 直接返回空列表（不打事务），
+     * 该页 ids → 用户视图列表（分页信封组装共用）：空 ids 直接返回空列表（不打事务），
      * 非空走事务批量装载 + 批量判关注态（事务内语句集与改造前一致）。
      */
     private List<Map<String, Object>> loadUserList(List<Long> ids, Long currentUserId) {
@@ -128,7 +112,7 @@ public class FollowService {
     }
 
     /**
-     * 分页信封组装：该页 ids 走与全量路径同一装载逻辑（{@link #loadUserList}），
+     * 分页信封组装：该页 ids 走统一装载逻辑（{@link #loadUserList}），
      * 总数取缓存窗口的 total（同一 key 的 ZCARD，与页内容同源）。
      */
     private FollowPageResult<Map<String, Object>> buildPage(ZSetCache.Window window,
