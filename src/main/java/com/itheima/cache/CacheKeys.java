@@ -14,6 +14,9 @@ public final class CacheKeys {
     /** 空标记的固定值（仅需 EXISTS 判断，值语义不重要）。 */
     public static final String EMPTY_MARKER_VALUE = "1";
 
+    /** 部分装载标记的固定值（T11-C，同 {@link #EMPTY_MARKER_VALUE} 仅需 EXISTS 判断）。 */
+    public static final String PARTIAL_MARKER_VALUE = "1";
+
     /** 空标记短 TTL（秒）：NEEDS 4.4 约定约 30s~5min，取 60s。 */
     public static final long EMPTY_MARKER_TTL_SECONDS = 60;
 
@@ -73,6 +76,20 @@ public final class CacheKeys {
         return "empty:" + dataKey;
     }
 
+    /**
+     * 部分装载标记（T11-C）：{@code partial:{dataKey}}（String），与数据 key 一一对应。
+     *
+     * <p>语义（与 {@link #empty(String)} 互斥）：**存在 ⇒ 集合不完整**——已知内容为 DB 按序的
+     * **前 W 个**（W = 数据 key 的 ZCARD）；**不存在 ⇒ 集合完整**。这把改造前"数据 key 存在
+     * 即完整"的不变量从**存在性**放宽为**标记**（前缀窗口装载的落点，治 U-18）。
+     *
+     * <p>TTL 与数据 key **同步续期**（读命中时一并 EXPIRE，见 ZSetCache）：一旦两者生命周期
+     * 错位（标记先过期），已装载的前缀会被误判为完整集合 → 静默漏成员，属数据正确性问题。
+     */
+    public static String partial(String dataKey) {
+        return "partial:" + dataKey;
+    }
+
     /** 内容点赞计数：{@code content:likeCount:{id}}（int，高频读，计数/成员分离 4.6）。 */
     public static String contentLikeCount(long contentId) {
         return "content:likeCount:" + contentId;
@@ -125,7 +142,8 @@ public final class CacheKeys {
      *
      * <p>注意前缀重叠：{@code content:} 是 {@code content:comments:} / {@code content:index:} /
      * {@code content:like*} 的公共前缀，**长前缀必须先于通用前缀判断**。
-     * {@code empty:{dataKey}} 空标记先解包到内层数据 key 再归域。
+     * {@code empty:{dataKey}} 空标记与 {@code partial:{dataKey}} 部分装载标记（T11-C）
+     * 先解包到内层数据 key 再归域。
      *
      * <p>映射（T7 执行定稿 + 第四期 T4 扩展，见 {@link CacheDomain}）：
      * content:index 归 CONTENT（索引归内容域）；content:like* 与 comment:like* 归 LIKE；
@@ -139,6 +157,9 @@ public final class CacheKeys {
         }
         if (dataKey.startsWith("empty:")) {
             return domainOf(dataKey.substring("empty:".length()));
+        }
+        if (dataKey.startsWith("partial:")) {
+            return domainOf(dataKey.substring("partial:".length()));
         }
         if (dataKey.startsWith(CONTENT_INDEX_PREFIX)) {
             return CacheDomain.CONTENT;

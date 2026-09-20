@@ -1,7 +1,7 @@
 # 业务流程文档
 
-> 版本：2.2
-> 最后更新：2026-09-20（T11-A：follow 关注/粉丝列表契约变更——列表恒为分页信封、缺省=第一页信封、`pageSize` 上限 50→200；T11-B：评论域分页**缺省 `pageSize` 10→200**（信封由后端域常量决定，前端只传 `page`），`feed`/`search`/`profile` 前端改走公共分块 helper）
+> 版本：2.3
+> 最后更新：2026-09-20（T11-A：follow 关注/粉丝列表契约变更——列表恒为分页信封、缺省=第一页信封、`pageSize` 上限 50→200；T11-B：评论域分页**缺省 `pageSize` 10→200**（信封由后端域常量决定，前端只传 `page`），`feed`/`search`/`profile` 前端改走公共分块 helper；T11-C：关注/粉丝列表**装载侧解耦**（前缀窗口装载 + `partial:` 标记；降级改 DB 窗口直查，不装载不写回））
 > 用途：保障重构时不破坏业务逻辑
 
 ---
@@ -412,7 +412,7 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-> 缓存读写语义要点：关注读路径（`isFollowing` 单成员 / `batchIsFollowing` 批量 / `getFollowingIds`/`getFollowerIds` 全量列表 / **`getFollowingWindow`/`getFollowerWindow` 分页窗口（T7）**）统一走基建 `ZSetCache`——成员 key 为 ZSet（score=成员 id），故 `ZRANGE` 天然升序，列表升序另由 `FollowCache.sortIds` 归一（写路径 MULTI 条件双写 + 失败双 DEL 保留在 FollowCache）；**关注/粉丝列表接口恒返回分页信封 `{list,total,page,pageSize,totalPages}`——缺省（不传参）= 第一页信封（page 1 / pageSize 200），与显式 `page=1&pageSize=200` 逐字节一致；`pageSize` 上限 200（T11-A 契约变更，T7 的"缺省返回全量数组"已删除）**；关注/粉丝计数入独立 key（`user:followCount`/`user:followerCount`，Cache-Aside、0 合法、条件 INCRBY）；Feed/Profile 缓存批量读在 DB 事务外执行（防连接池互相等连接）；详情见 `CURRENT_ARCHITECTURE` 6.4/6.12/6.17。
+> 缓存读写语义要点：关注读路径（`isFollowing` 单成员 / `batchIsFollowing` 批量 / `getFollowingIds` 全量关注列表 / **`getFollowingWindow`/`getFollowerWindow` 分页窗口（T7）**）统一走基建 `ZSetCache`——成员 key 为 ZSet（score=成员 id），故 `ZRANGE` 天然升序，列表升序另由 `FollowCache.sortIds` 归一（写路径 MULTI 条件双写 + 失败双 DEL 保留在 FollowCache）；**关注/粉丝列表接口恒返回分页信封 `{list,total,page,pageSize,totalPages}`——缺省（不传参）= 第一页信封（page 1 / pageSize 200），与显式 `page=1&pageSize=200` 逐字节一致；`pageSize` 上限 200（T11-A 契约变更，T7 的"缺省返回全量数组"已删除）**；**T11-C 起分页读只装载"被看的那一段"**（冷 key 取 `[0, offset+count)`、前缀不足只补差量、Redis 降级改 DB 窗口直查）——集合完整性由 `partial:{数据key}` 标记表达，带标记时判定不命中回落 DB、全量读先补齐、写路径任一侧带标记则三件套双 DEL；关注/粉丝计数入独立 key（`user:followCount`/`user:followerCount`，Cache-Aside、0 合法、条件 INCRBY）；Feed/Profile 缓存批量读在 DB 事务外执行（防连接池互相等连接）；详情见 `CURRENT_ARCHITECTURE` 6.4/6.12/6.17。
 
 > 关键语义：内容与评论读/写**全部收敛 Redis**；**任何缓存失败降级走 DB、不导致业务失败**；计数（like_count/comment_count/comment_enabled）与评论树内容以 DB 为源真理，变更即失效让读自愈；类型分区索引启动 init 全量重建 + 索引 key 缺失时单飞懒重建（防 Redis 重启后 /start 空推荐）；评论树不再原地增删：评论增/删/点赞 = 失效 `content:comments:{id}` + 空标记，下次读 miss 单飞回填 DB 最新整树。
 >
@@ -1055,7 +1055,7 @@ CommentVO 结构：
 | 4 | 更新关注者 follow_count +1 | - |
 | 5 | 更新被关注者 follower_count +1 | - |
 | 6 | 提交事务 | - |
-| 7 | 提交后缓存双写 FollowCache.cacheFollow：两 key 已加载 → MULTI ZADD 双写（score=成员 id，2026-09-19 T7 起成员 key 为 ZSet）；冷 key/空标记 → 双 DEL 失效 | 缓存失败降级（双 DEL），不影响业务 |
+| 7 | 提交后缓存双写 FollowCache.cacheFollow：两 key 已加载且**均非部分装载态** → MULTI ZADD 双写（score=成员 id，2026-09-19 T7 起成员 key 为 ZSet）；冷 key/空标记/任一侧带 `partial:` 标记（T11-C：插入非前缀成员会破坏 `ZRANGE offset` 语义）→ 三件套双 DEL（数据 key + 空标记 + `partial:` 标记）失效 | 缓存失败降级（双 DEL），不影响业务 |
 
 #### 接口定义
 
@@ -1099,7 +1099,7 @@ POST /follow/remove?followedUserId=456&token=xxx
 GET /follow/following?userId=123&token=xxx（必填：/follow/* 前缀守卫需登录，2026-09-09 按代码修正"可选"标注）
 
 步骤：
-1. 查询用户的所有关注 ID
+1. 取该页关注 ID（缓存**窗口读**；冷 key / 前缀不足时只装载该页所需的那一段，T11-C）
 2. 批量查询用户信息
 3. 如果已登录，查询当前用户对这些用户的关注状态
 4. 返回用户列表
@@ -1125,6 +1125,15 @@ GET /follow/following?userId=123&token=xxx（必填：/follow/* 前缀守卫需�
     page=1&pageSize=200 响应**逐字节一致**（信封大小由后端 follow 域常量决定，前端只传 page）
   - page 缺省 1、page<1 归一为 1；pageSize 缺省 **200**、上限 **200**（原 50）；显式传 pageSize 仍生效
   - 越界页（offset ≥ total）→ list 为空数组，total 照常返回（前端据此判末页）
+
+装载与 total 口径（2026-09-20 T11-C，对外契约不变、仅内部装载形态变化）：
+  - 装载量与**页位置**相关：冷 key 只装载 [0, offset+count)、已知前缀不足只补差量；
+    集合可能处于"前缀"态（带 partial: 标记），完全装载后自动退化为完整 ZSet
+  - total：**完整态 = ZCARD**（与页内容同源，与 T7 一致）；**部分态 / Redis 降级态 = 域级计数 key**
+    （user:followCount / user:followerCount，miss 回落 users 表计数列）——此时 ZCARD 只是已知前缀大小
+  - Redis 降级：DB **窗口直查**（只查被看的那一段）、不装载不写回（第三期 T2"降级不放量"口径保持）
+  - 内部实现与不变量（partial: 标记 / 判定回落 DB / 全量读补齐 / 写路径双 DEL）见
+    CURRENT_ARCHITECTURE 6.17
 ```
 
 ---

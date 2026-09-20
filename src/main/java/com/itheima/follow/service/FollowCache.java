@@ -65,6 +65,17 @@ import java.util.logging.Logger;
  * （key 存在或空标记存在）"时用 Redis MULTI 原子 ZADD/ZREM 双写并续 TTL；任一侧为冷 key
  * （未加载）则直接失效（双 DEL 含空标记）让读自愈回填全量，**不创建残缺集**（与 T4
  * 条件写先例同构）；任何 Redis 异常 → 双 DEL（4.10 失败双 DEL），不抛出，DB 为最终真理。
+ *
+ * <p><b>T11-C 装载侧解耦（治池 U-18）：前缀窗口装载</b>。分页读不再走"全量 loader + 全量
+ * 回填"——miss 只装载 {@code [0, offset+count)}、部分态只补 {@code [W, offset+count)}，
+ * 装载量与本页位置相关、与列表总量弱相关（场景锚：某博主 100 万粉丝时，任何一次粉丝列表
+ * 分页都不得触发百万行装载）；集合不变量从"数据 key 存在 ⇒ 完整"放宽为
+ * **"无 {@code partial:{dataKey}} 标记 ⇒ 完整"**（成员 = DB 按序的前 W 个，W = ZCARD）。
+ * 配套三处同步：① 判定（{@code isFollowing} / {@code batchIsFollowing}）在部分态下
+ * **未命中回落 DB**（前缀里查不到 ≠ 不是成员）；② 全量读（{@link #getFollowingIds}）
+ * 遇部分态**先补齐**（feed 依赖全量关注 ids，不能静默漏人）；③ 写路径任一侧部分态 → 双 DEL
+ * （取关会在前缀留"洞"、关注会插入非前缀成员，两者都破坏 {@code ZRANGE offset} 语义）。
+ * 降级语义随之从"全量装载 + 内存切片"改为 **DB 窗口直查、不装载不写回**（三期 T2 口径不变）。
  */
 @Component
 public class FollowCache {
@@ -109,11 +120,36 @@ public class FollowCache {
      * hit-empty（空标记）→ false；hit-data（key 存在）→ ZSCORE；miss → 单飞回填后判成员；
      * Redis 异常 → 降级 DB（三期 T2：经单飞全量装载作答，同 key 并发只打一次 DB；不写回，4.2 读降级）。
      *
+     * <p>T11-C：{@code user:following:{userId}} 可能处于**部分装载态**（前缀窗口装载的产物），
+     * 此时 ZSCORE 未命中**不代表"未关注"**——由 {@link ZSetCache#isMember} 回落
+     * {@link #isFollowingInDb} 单行查询定论（前缀里查不到 ≠ 不是成员）。
+     *
      * @return 是否已关注（数据库为最终答案，永不抛缓存异常）
      */
     public boolean isFollowing(long userId, long followedUserId) {
         return zSetCache.isMember(CacheKeys.userFollowing(userId), followedUserId,
-                () -> loadFollowingIds(userId), ttlSeconds());
+                () -> loadFollowingIds(userId),
+                () -> isFollowingInDb(userId, followedUserId),
+                ttlSeconds());
+    }
+
+    /** 关注状态 DB 单行判定（T11-C：部分态下 ZSCORE 未命中的兜底；DB 即真理，失败上抛）。 */
+    private boolean isFollowingInDb(long userId, long followedUserId) {
+        try {
+            return transactionTemplate.execute(conn -> {
+                try {
+                    return followDao.isFollowing(conn, userId, followedUserId);
+                } catch (SQLException e) {
+                    LOGGER.log(Level.SEVERE, "关注状态 DB 查询失败, userId=" + userId
+                            + ", followedUserId=" + followedUserId, e);
+                    throw new ServerException("服务器异常，查询关注状态失败");
+                }
+            });
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ServerException("服务器异常，查询关注状态失败", e);
+        }
     }
 
     // ==================== 读-批量 isFollowing（同一 following key 一趟 pipeline，经 ZSetCache） ====================
@@ -136,46 +172,55 @@ public class FollowCache {
                 ttlSeconds());
     }
 
-    // ==================== 读-关注/粉丝列表（ZRANGE / 空标记 / 单飞回填 / 降级，经 ZSetCache） ====================
+    // ==================== 读-关注/粉丝列表（ZRANGE / 空标记 / 部分态补齐 / 降级，经 ZSetCache） ====================
 
     /**
-     * 获取用户关注的所有博主 ID（feed 拉取关注列表 / 关注列表页）：经 {@link ZSetCache#getMembers}
+     * 获取用户关注的所有博主 ID（feed 拉取关注列表）：经 {@link ZSetCache#getMembers}
      * （hit-empty → 空列表；key 存在 → ZRANGE 0 -1；miss → 单飞回填；Redis 异常 → DB 降级），
      * 结果统一 {@link #sortIds} 升序（ZSet score 序已升序，此处为防御性归一，维持既有确定性顺序契约）。
+     *
+     * <p>T11-C：集合可能只装了**前缀**（带 {@code partial} 标记），{@link ZSetCache#getMembers}
+     * 会**先补齐再返回**——feed 依赖"全量关注 ids"，返回前缀会静默漏关注者。
+     *
+     * <p>注：粉丝方向的全量读（原 {@code getFollowerIds}）已随 T11-C 删除——自 T11-A 删除
+     * Service 层两个缺省全量重载后它已无主代码调用方（池 **U-21**），粉丝方向只经窗口读
+     * （见 {@link #getFollowerWindow}），无全量语义需求。
      */
     public List<Long> getFollowingIds(long userId) {
         return sortIds(zSetCache.getMembers(CacheKeys.userFollowing(userId),
                 () -> loadFollowingIds(userId), ttlSeconds()));
     }
 
-    /**
-     * 获取用户的所有粉丝 ID：逻辑同 {@link #getFollowingIds(long)}，loader 换粉表查询。
-     */
-    public List<Long> getFollowerIds(long userId) {
-        return sortIds(zSetCache.getMembers(CacheKeys.userFollower(userId),
-                () -> loadFollowerIds(userId), ttlSeconds()));
-    }
-
-    // ==================== 读-关注/粉丝列表「按序窗口」（T7 A1 新增，分页载体） ====================
+    // ==================== 读-关注/粉丝列表「按序窗口」（T7 A1 新增，分页载体；T11-C 前缀装载） ====================
 
     /**
-     * 取关注列表的**升序窗口**（分页载体，T7 A1）：经 {@link ZSetCache#getWindow} 一趟
-     * pipeline 取 {@code [offset, offset+count)} 成员 + 总数（ZCARD），成本与列表总量弱相关
-     * （不再全量回传）；三态/单飞/降级语义与全量读同源，**顺序口径一致**（score=id 升序）。
+     * 取关注列表的**升序窗口**（分页载体，T7 A1）：经 {@link ZSetCache#getWindow} 取
+     * {@code [offset, offset+count)} 成员 + 总数；三态/单飞/降级语义与全量读同源，
+     * **顺序口径一致**（score=id 升序）。
+     *
+     * <p>T11-C：装载侧改为**前缀窗口装载**——miss 只查 {@code [0, offset+count)}、
+     * 部分态只补 {@code [W, offset+count)}，装载量与**页位置**相关而非列表总量（治 U-18）；
+     * total 在部分态 / 降级态取本域**计数口径**（{@link #getFollowCount}），
+     * 完整态仍是 ZCARD（**与 T7 逐字节一致**）。
      *
      * @param offset 0 基起始下标；越界 → 空窗口
      */
     public ZSetCache.Window getFollowingWindow(long userId, long offset, int count) {
         return zSetCache.getWindow(CacheKeys.userFollowing(userId), offset, count,
-                () -> loadFollowingIds(userId), ttlSeconds());
+                (from, size) -> loadFollowingWindow(userId, from, size),
+                () -> (long) getFollowCount(userId),
+                ttlSeconds());
     }
 
     /**
-     * 取粉丝列表的升序窗口：逻辑同 {@link #getFollowingWindow(long, long, int)}，loader 换粉表查询。
+     * 取粉丝列表的升序窗口：逻辑同 {@link #getFollowingWindow(long, long, int)}，
+     * 窗口 loader 与 total 均换粉丝方向（窗口查询由 `idx_followed_user_user` 支撑同序、免 filesort）。
      */
     public ZSetCache.Window getFollowerWindow(long userId, long offset, int count) {
         return zSetCache.getWindow(CacheKeys.userFollower(userId), offset, count,
-                () -> loadFollowerIds(userId), ttlSeconds());
+                (from, size) -> loadFollowerWindow(userId, from, size),
+                () -> (long) getFollowerCount(userId),
+                ttlSeconds());
     }
 
     // ==================== 读-关注/粉丝计数（CacheAside：hit-data / miss 单飞回填 / Redis 异常降级 loader） ====================
@@ -235,8 +280,9 @@ public class FollowCache {
     // ==================== 写路径（关注/取关，DB 提交后调用 4.10，双 key 原子语义保持） ====================
 
     /**
-     * 缓存：用户关注他人。条件双写——两条 data key 均"已加载"（key 存在或空标记存在）时
-     * MULTI 原子 ZADD 双写（score = 成员数值）+ 续 TTL + 解除空标记；任一侧冷 key → 双 DEL 失效让读自愈；
+     * 缓存：用户关注他人。条件双写——两条 data key 均"已加载"（key 存在或空标记存在）
+     * **且两侧均非部分装载态**时 MULTI 原子 ZADD 双写（score = 成员数值）+ 续 TTL + 解除空标记；
+     * 任一侧冷 key / 部分态 → 双 DEL 失效让读自愈（**不创建残缺集**，也不在部分态上前缀里插非前缀成员）；
      * Redis 异常 → 双 DEL；全程不抛出（失败由 Cache-Aside 读自愈兜底，关注接口不 500）。
      */
     public void cacheFollow(long userId, long followedUserId) {
@@ -245,8 +291,8 @@ public class FollowCache {
         try {
             redis.executeVoid(j -> {
                 Probe probe = probePair(j, followingKey, followerKey);
-                if (!probe.followingReady() || !probe.followerReady()) {
-                    // 冷 key：不创建残缺集，双 DEL（含空标记）让读自愈回填全量
+                if (!probe.memberWritable()) {
+                    // 冷 key 或部分态：不创建残缺集，双 DEL（含空标记与 partial 标记）让读自愈重装
                     invalidateKeysQuietly(j, followingKey, followerKey);
                     return;
                 }
@@ -267,14 +313,14 @@ public class FollowCache {
             LOGGER.log(Level.WARNING, "关注缓存双写失败，双 DEL 生效让读自愈, userId=" + userId
                     + ", followedUserId=" + followedUserId, e);
             stats.record(CacheStats.Event.WRITE_FAIL, followingKey);
-            cacheAside.invalidate(followingKey, followerKey);
+            invalidatePairQuietly(followingKey, followerKey);
         }
         // 计数条件增量（T6，R-01）：DB 已提交、关注数各自 +1；冷 key no-op 由读回填；失败只失效计数 key
         adjustCountsQuietly(userId, followedUserId, 1);
     }
 
     /**
-     * 缓存：用户取关。条件双写（ZREM）+ 续 TTL；空标记命中或冷 key → 双 DEL 失效；
+     * 缓存：用户取关。条件双写（ZREM）+ 续 TTL；空标记命中、冷 key 或**部分装载态** → 双 DEL 失效；
      * Redis 异常 → 双 DEL；全程不抛出。
      */
     public void cacheUnfollow(long userId, long followedUserId) {
@@ -283,9 +329,9 @@ public class FollowCache {
         try {
             redis.executeVoid(j -> {
                 Probe probe = probePair(j, followingKey, followerKey);
-                if (!probe.followingReady() || !probe.followerReady()
-                        || probe.emptyFollowing || probe.emptyFollower) {
-                    // 任一侧确认"无关系"或冷 key：失效整套（含空标记）最安全，读自愈对齐 DB
+                if (!probe.memberWritable() || probe.emptyFollowing || probe.emptyFollower) {
+                    // 任一侧确认"无关系"、冷 key 或部分态：失效整套（含空标记与 partial 标记）
+                    // 最安全，读自愈对齐 DB（部分态下取关会在前缀里留"洞"）
                     invalidateKeysQuietly(j, followingKey, followerKey);
                     return;
                 }
@@ -300,7 +346,7 @@ public class FollowCache {
             LOGGER.log(Level.WARNING, "取关缓存双写失败，双 DEL 生效让读自愈, userId=" + userId
                     + ", followedUserId=" + followedUserId, e);
             stats.record(CacheStats.Event.WRITE_FAIL, followingKey);
-            cacheAside.invalidate(followingKey, followerKey);
+            invalidatePairQuietly(followingKey, followerKey);
         }
         // 计数条件增量（T6，R-01）：DB 已提交、关注数各自 -1；冷 key no-op 由读回填；失败只失效计数 key
         adjustCountsQuietly(userId, followedUserId, -1);
@@ -330,29 +376,38 @@ public class FollowCache {
 
     // ==================== 内部：一条连接上的双 key 探测 ====================
 
-    /** 两条 data key 的状态快照：key 存在性 + 各自空标记。 */
+    /**
+     * 两条 data key 的状态快照：key 存在性 + 各自空标记 + 各自**部分装载标记**（T11-C）。
+     */
     private static final class Probe {
         final boolean existsFollowing;
         final boolean emptyFollowing;
+        final boolean partialFollowing;
         final boolean existsFollower;
         final boolean emptyFollower;
+        final boolean partialFollower;
 
-        Probe(boolean existsFollowing, boolean emptyFollowing,
-              boolean existsFollower, boolean emptyFollower) {
+        Probe(boolean existsFollowing, boolean emptyFollowing, boolean partialFollowing,
+              boolean existsFollower, boolean emptyFollower, boolean partialFollower) {
             this.existsFollowing = existsFollowing;
             this.emptyFollowing = emptyFollowing;
+            this.partialFollowing = partialFollowing;
             this.existsFollower = existsFollower;
             this.emptyFollower = emptyFollower;
+            this.partialFollower = partialFollower;
         }
 
-        /** following 侧已加载（set 存在或空标记存在），可安全增量写。 */
-        boolean followingReady() {
-            return existsFollowing || emptyFollowing;
-        }
-
-        /** follower 侧已加载（set 存在或空标记存在），可安全增量写。 */
-        boolean followerReady() {
-            return existsFollower || emptyFollower;
+        /**
+         * 两条 data key 均可安全**增量写**：各自"已加载"（set 存在或空标记存在），
+         * 且**两侧均无部分装载标记**。
+         *
+         * <p>T11-C 说明：部分态下集合只是前缀——取关会在前缀中留"洞"、关注会插入非前缀成员，
+         * 两者都破坏 {@code ZRANGE offset} 的偏移语义 → 只剩"整体失效让读按需重装"一条安全路径
+         * （与既有"冷 key → 双 DEL"同构，不新增语义）。
+         */
+        boolean memberWritable() {
+            return (existsFollowing || emptyFollowing) && !partialFollowing
+                    && (existsFollower || emptyFollower) && !partialFollower;
         }
     }
 
@@ -360,21 +415,46 @@ public class FollowCache {
         Pipeline p = j.pipelined();
         Response<Boolean> existsFollowing = p.exists(followingKey);
         Response<Boolean> emptyFollowing = p.exists(CacheKeys.empty(followingKey));
+        Response<Boolean> partialFollowing = p.exists(CacheKeys.partial(followingKey));
         Response<Boolean> existsFollower = p.exists(followerKey);
         Response<Boolean> emptyFollower = p.exists(CacheKeys.empty(followerKey));
+        Response<Boolean> partialFollower = p.exists(CacheKeys.partial(followerKey));
         p.sync();
-        return new Probe(existsFollowing.get(), emptyFollowing.get(),
-                existsFollower.get(), emptyFollower.get());
+        return new Probe(existsFollowing.get(), emptyFollowing.get(), partialFollowing.get(),
+                existsFollower.get(), emptyFollower.get(), partialFollower.get());
     }
 
-    /** 同一连接上 DEL 双 data key 及各自空标记（best-effort，静默）。 */
+    /**
+     * 同一连接上 DEL 双 data key 及各自空标记 / **部分装载标记**（best-effort，静默）。
+     *
+     * <p>T11-C：三者必须一起删——数据 key 失效后残留的空标记会让读"假空"，残留的 partial
+     * 标记会让新装载的完整集合被误读为前缀（total 失真、越界时多余补齐）。
+     */
     private void invalidateKeysQuietly(Jedis j, String... dataKeys) {
-        String[] toDel = new String[dataKeys.length * 2];
+        String[] toDel = new String[dataKeys.length * 3];
         for (int i = 0; i < dataKeys.length; i++) {
-            toDel[2 * i] = dataKeys[i];
-            toDel[2 * i + 1] = CacheKeys.empty(dataKeys[i]);
+            toDel[3 * i] = dataKeys[i];
+            toDel[3 * i + 1] = CacheKeys.empty(dataKeys[i]);
+            toDel[3 * i + 2] = CacheKeys.partial(dataKeys[i]);
         }
         j.del(toDel);
+    }
+
+    /**
+     * 写路径失败后的兜底失效（T11-C）：与 {@link #invalidateKeysQuietly} **共用同一实现口径**
+     * ——数据 key、空标记、部分装载标记三件套一起 DEL。
+     *
+     * <p>不沿用 {@link CacheAside#invalidate(String...)}：它只删数据 key 与空标记，
+     * 残留的 {@code partial:} 标记会让下一次装载被当作"仍是前缀"（total 走计数口径、触发多余补齐）。
+     * best-effort：Redis 异常场景下 DEL 也可能失败，此处静默记日志，由读路径自愈兜底。
+     */
+    private void invalidatePairQuietly(String followingKey, String followerKey) {
+        try {
+            redis.executeVoid(j -> invalidateKeysQuietly(j, followingKey, followerKey));
+        } catch (CacheException e) {
+            LOGGER.log(Level.WARNING, "兜底失效双 DEL 也失败，读路径将自愈, key=" + followingKey, e);
+            stats.record(CacheStats.Event.WRITE_FAIL, followingKey);
+        }
     }
 
     // ==================== 内部：DB 装载（loader 样板参数化，异常抛 ServerException 属真实失败） ====================
@@ -390,9 +470,22 @@ public class FollowCache {
                 (conn, id) -> followDao.getAllFollowedUserIds(conn, id));
     }
 
-    private List<Long> loadFollowerIds(long userId) {
-        return loadIds(userId, "粉丝列表", "查询粉丝列表失败",
-                (conn, id) -> followDao.getFollowerUserIds(conn, id));
+    /**
+     * 关注方向**窗口** loader（T11-C）：按 followed_user_id 升序取 {@code [offset, offset+count)}
+     * ——装载量只与本页位置相关（治 U-18）；调用方据"返回不足 count 行"判定 DB 已到底。
+     */
+    private List<Long> loadFollowingWindow(long userId, long offset, int count) {
+        return loadIds(userId, "关注列表窗口", "查询关注列表失败",
+                (conn, id) -> followDao.getFollowedUserIdsInWindow(conn, id, offset, count));
+    }
+
+    /**
+     * 粉丝方向**窗口** loader（T11-C）：按 user_id 升序取 {@code [offset, offset+count)}
+     * （同序索引 `idx_followed_user_user`，免 filesort）。
+     */
+    private List<Long> loadFollowerWindow(long userId, long offset, int count) {
+        return loadIds(userId, "粉丝列表窗口", "查询粉丝列表失败",
+                (conn, id) -> followDao.getFollowerUserIdsInWindow(conn, id, offset, count));
     }
 
     /** 列表 loader 样板（label 仅用于日志；errMsg 为用户可见异常文案，逐字保持既有）。 */
