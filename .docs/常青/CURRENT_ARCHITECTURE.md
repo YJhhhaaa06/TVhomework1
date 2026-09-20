@@ -1,6 +1,6 @@
 # 当前系统架构地图
 
-> 版本：3.9（2026-09-20 T14：**包层结构清扫**（R-03 已拍板，治池 U-07 + U-19 + N14）——① **分页信封统一**：新增 `com.itheima.common.model.dto.PageResult` 为全项目**唯一**信封，同形的 `content.model.dto.PageResult` 与 `follow.model.dto.FollowPageResult` 一并删除（JSON 字段名与推导公式逐字段不变，前端零改动）；② **`com.itheima.dao` 包删除**：原 `ResultMap` 的 6 个 ResultSet→对象映射方法按域下沉为各自 DAO 的 `private static` 方法（方法体逐行不变），基础包不再反向 import 业务域模型；③ **content↔comment 包层环按 R-03 口径①保留现状**（业务互依，纯搬移无法单向化）。对外行为零变化）
+> 版本：3.10（2026-09-20 T15：文档与代码事实一致性清理——目录树、AuthFilter 两个名单、API 表、§4.2/§4.3 全部行数为 `wc -l` 实测复核；§5.2/§5.3 表结构按 3306 实际 DDL 复核）
 > 最后更新：2026-09-20
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
@@ -49,10 +49,9 @@ untitled/
 │   │   └── BUSINESS_FLOW.md         # 业务流程文档
 │   ├── 目标与任务/                   # 当前周期目标与任务（周期文档 + UNPLANNED_ISSUES 常驻）
 │   ├── 说明书/                       # 按需读的参考手册（TEST_AUTOMATION / COMMIT_CONVENTION / TEST_SEED / DATABASE / AVAILABLE_TOOLS）
-│   ├── archive/                     # 历史存档（追踪可追溯，勿读）
-│   │   ├── 目标与任务/               # 已完成周期（ARCHITECTURE_PLAN、CURRENT_TASK 等）
-│   │   ├── 说明书/                  # 已归档：TEST_GUIDE、ACCEPTANCE_CRITERIA（T1 文档收口）
-│   │   └── 报告/                    # 项目分析报告、TEST_COVERAGE、覆盖率地图
+│   ├── 报告/                        # 分析报告（覆盖率地图等）
+│   ├── DBbackups/                   # DDL 备份（G9 备份闭环产物，不追踪）
+│   ├── archive/                     # 历史存档（勿读，追踪可追溯；结构与顶层一致）
 │   └── temp/                        # 临时文档（永不追踪，可删）
 │
 ├── src/
@@ -69,9 +68,10 @@ untitled/
 │       ├── java/com/itheima/        # JUnit 单元测试（按被测类同包随迁至各域 service 包）
 │       └── python/                  # pytest 端到端脚本
 │
-├── ssm_*/                           # 空壳子模块（待删除）
 ├── logs/                            # 运行日志
-└── tools/                           # 工具脚本（统一入口 tools/tv.py）
+├── temp_script/                     # 一次性临时脚本（gitignore，可删）
+├── tools/                           # 工具脚本（统一入口 tools/tv.py）
+└── target/                          # Maven 构建输出（gitignore；测试链路改用项目内 .stage8-target）
 ```
 
 ---
@@ -101,7 +101,7 @@ com.itheima/
 └── admin/                  # 运维/审核域
 ```
 
-> 每域内部保留 `controller / service / dao / model` 分层子包，与既有技术层级命名一致（行数统计为 2026-09-12 快照，以实际代码为准）。
+> 每域内部保留 `controller / service / dao / model` 分层子包，与既有技术层级命名一致（**行数口径 = `wc -l` 换行符数**，下表为 2026-09-20 T15 实测快照；仓库内部分 `.java` 末行无换行符，其 `wc -l` 比编辑器显示少 1 行；以实际代码为准）。
 > 跨域依赖允许：feature 包间可互相 import（Java 无包环限制）；任何域不反向依赖基建包。
 > **包层环实测（2026-09-20 T14）**：全仓 `src/main/java/com/itheima/**` 的双向包环在 **T14 改造前共 9 个**（`admin↔content`、`comment↔content`、`comment↔like`、`content↔dao`、`content↔like`、`content↔upload`、`content↔user`、`dao↔user`、`ioc↔util`）；T14 消除了其中 **2 个 dao 相关环**（`content↔dao`、`dao↔user`：`dao` 包删除，基础包不再 import 业务模型），**改造后剩 7 个**，且新增的 `common` 包**零出边**（未引入新环）。**`content↔comment` 按 R-03 口径①保留现状**（comment→content 由 10 条降至 9 条——信封上移所致）——其 15 条边中只有 5 条属"组件错位"，其余为真业务互依（内容删除级联软删评论、评论新增改 `comment_count` 并校验内容存在），纯搬移无法单向化，彻底解决需引入抽象层（属新能力，另行立项）。
 
@@ -112,13 +112,15 @@ com.itheima/
 | 类 | 行数 | 职责 |
 |----|------|------|
 | IocContainer | 258 | 单例容器：构造器注入优先、字段注入兼容，管理 Bean 生命周期（@PostConstruct → Initializable.init；关闭时 Disposable.destroy / 反射 shutdown） |
-| ClassScanner | 48 | 扫描 @Component 注解的类（`scan("com.itheima")` 整根递归，子包增减不影响 Bean 发现） |
-| @Component | 11 | 标记为受管 Bean |
-| @Inject | 11 | 字段依赖注入 |
+| ClassScanner | 47 | 扫描 @Component 注解的类（`scan("com.itheima")` 整根递归，子包增减不影响 Bean 发现） |
+| @Component | 10 | 标记为受管 Bean |
+| @Inject | 10 | 字段依赖注入 |
 | @InjectConstructor | 11 | 构造器依赖注入（带注解的构造器优先） |
-| @PostConstruct | 11 | 初始化回调 |
+| @PostConstruct | 10 | 初始化回调 |
 | Initializable | 8 | 生命周期接口：依赖注入完成后调用 init() |
 | Disposable | 8 | 生命周期接口：容器关闭时调用 destroy() |
+
+> 4 个注解类在子包 `ioc/annotation/`；其余在 `ioc/` 根。
 
 #### filter 包 — 请求过滤器
 
@@ -127,13 +129,13 @@ com.itheima/
 | ExceptionFilter | 53 | 全局异常处理（业务异常按 code/msg 输出，未知异常 500） | /* |
 | EncodingFilter | 27 | UTF-8 编码 | /* |
 | LoginFilter | 41 | 解析 JWT Token，设置 userId | /* |
-| AuthFilter | 76 | 权限校验（登录 + /api/admin 管理员角色） | /* |
+| AuthFilter | 77 | 权限校验（登录 + /api/admin 管理员角色） | /* |
 
 **执行顺序**：ExceptionFilter → EncodingFilter → LoginFilter → AuthFilter（web.xml 注册）
 
-**AuthFilter 保护路径**：
+**AuthFilter 保护路径**（`PROTECTED_PREFIXES` 5 项 + `PROTECTED_EXACT` 10 项）：
 - 前缀：`/api/upload`、`/api/admin`、`/follow`、`/like`、`/feed`
-- 精确：`/comment/add`、`/comment/delete`、`/content/commentEnabled`、`/user/changePassword`、`/user/changeUserName`、`/coupon/grab`、`/coupon/my`
+- 精确：`/comment/add`、`/comment/delete`、`/content/commentEnabled`、`/content/update`、`/content/mediaDelete`、`/content/delete`、`/user/changePassword`、`/user/changeUserName`、`/coupon/grab`、`/coupon/my`
 - `/api/admin/*` 额外校验 `role == 1`，非管理员返回 403（每次请求查库）
 
 #### exception 包 — 异常体系
@@ -174,9 +176,9 @@ com.itheima/
 
 | 类 | 行数 | 职责 |
 |----|------|------|
-| BaseServlet | 41 | 基类，IoC 注入 + JSON 响应 |
-| BaseServletUtil | 99 | 静态工具，writeSuccess/writeError + 分页参数解析（`parsePage`；`parsePageSize` 三档重载：无参=公共 50/10、`(req,max)`=域级上限、`(req,max,defaultSize)`=域级上限 + **域级信封**，T11-A） |
-| RequestParser | 69 | JSON 请求体解析 |
+| BaseServlet | 40 | 基类，IoC 注入 + JSON 响应 |
+| BaseServletUtil | 101 | 静态工具，writeSuccess/writeError + 分页参数解析（`parsePage`；`parsePageSize` 三档重载：无参=公共 50/10、`(req,max)`=域级上限、`(req,max,defaultSize)`=域级上限 + **域级信封**，T11-A） |
+| RequestParser | 28 | JSON 请求体解析 |
 | AppShutDownListener | 102 | 容器生命周期管理（@WebListener，统一关闭 IoC 容器） |
 
 #### common 包 — 跨域共享模型（T14 新增）
@@ -195,17 +197,17 @@ com.itheima/
 | 类 | 行数 | 职责 |
 |----|------|------|
 | CacheKeys | 193 | 统一 key 命名/生成规范（唯一源）+ 空标记常量（EMPTY_MARKER_TTL_SECONDS=60s）与**部分装载标记**常量（`PARTIAL_MARKER_VALUE`，T11-C）+ `domainOf` 统计域解析（长前缀优先；`empty:` / `partial:` 先解包到底层数据 key）+ `contentIndex(type, categoryId)` 索引 key 生成（前缀 `CONTENT_INDEX_PREFIX`，生成/解析/匹配三处同源）+ 计数/成员/关注各 key 工厂 |
-| CacheDomain | 26 | 统计分域枚举：CONTENT/COMMENT/LIKE/FOLLOW/OTHER（LIKE 域含用户维度点赞成员 key） |
-| CacheStats | 131 | 观测统计组件：六类事件（HIT_DATA/HIT_EMPTY/MISS/LOAD/DEGRADE/WRITE_FAIL）AtomicLong 计数 + 分域分桶 + 惰性日志（每 N=1000 输出摘要），record 异常吞掉不影响主链路；DEGRADE=本次读未命中缓存、走 DB 兜底次数（含熔断快速失败） |
-| JacksonCodec | 53 | JSON 序列化（jackson-databind + jsr310），异常抛 CacheException；忽略未知字段（旧缓存 JSON 兼容，DTO 删/改名后仍可反序列化）、日期 ISO-8601（WRITE_DATES_AS_TIMESTAMPS 关闭） |
-| RedisAccess | 91 | 统一 Redis 访问封装：`execute`/`executeVoid` 回调式取还连接（支持同连接 pipeline/MULTI），Jedis 异常包装为 CacheException；唯一出入口接全局熔断（tryAcquire 拒绝即快速失败、finally 按成败回填） |
+| CacheDomain | 27 | 统计分域枚举：CONTENT/COMMENT/LIKE/FOLLOW/OTHER（LIKE 域含用户维度点赞成员 key） |
+| CacheStats | 130 | 观测统计组件：六类事件（HIT_DATA/HIT_EMPTY/MISS/LOAD/DEGRADE/WRITE_FAIL）AtomicLong 计数 + 分域分桶 + 惰性日志（每 N=1000 输出摘要），record 异常吞掉不影响主链路；DEGRADE=本次读未命中缓存、走 DB 兜底次数（含熔断快速失败） |
+| JacksonCodec | 64 | JSON 序列化（jackson-databind + jsr310），异常抛 CacheException；忽略未知字段（旧缓存 JSON 兼容，DTO 删/改名后仍可反序列化）、日期 ISO-8601（WRITE_DATES_AS_TIMESTAMPS 关闭） |
+| RedisAccess | 90 | 统一 Redis 访问封装：`execute`/`executeVoid` 回调式取还连接（支持同连接 pipeline/MULTI），Jedis 异常包装为 CacheException；唯一出入口接全局熔断（tryAcquire 拒绝即快速失败、finally 按成败回填） |
 | RedisCircuitBreaker | 141 | 全局 Redis 熔断器：CLOSED→OPEN（连续失败 ≥5，可配）→（冷却 10s 期满唯一探针）HALF_OPEN→探针成功 CLOSED / 失败重开；AtomicInteger CAS 无锁，状态迁移打日志 |
-| SingleFlight | 65 | 统一单飞组件：ConcurrentHashMap+FutureTask，失败/成功均 remove（防缓存失败结果 + 防泄漏）；降级读路径与 miss 回填共用同一 key 空间 |
+| SingleFlight | 70 | 统一单飞组件：ConcurrentHashMap+FutureTask，失败/成功均 remove（防缓存失败结果 + 防泄漏）；降级读路径与 miss 回填共用同一 key 空间 |
 | CacheStatus | 15 | 三态枚举：MISS / HIT_EMPTY / HIT_DATA |
-| CacheResult | 39 | 三态读取结果载体（status + value，HIT_EMPTY 时 value=null） |
-| CacheAside | 575 | 统一 Cache-Aside 封装：`read` 三态读 / `get` 带单飞回填 / `getBatch` 批量读（4 参与 5 参批量装载重载）/ `writeOrInvalidate`（写失败=DEL 自愈，写数据同时清空标记）/ `markEmpty`（存在守卫）/ `invalidate`；TTL ±10% 抖动；读路径 pipeline 化（EXISTS 空标记+GET 一趟往返）；命中滑动续期（空标记从不续期）；降级读与 miss 共用单飞、仅装载不写回；loader 抛 DatabaseException 视为加载失败——不写空标记、不 DEL 数据 key |
+| CacheResult | 47 | 三态读取结果载体（status + value，HIT_EMPTY 时 value=null） |
+| CacheAside | 619 | 统一 Cache-Aside 封装：`read` 三态读 / `get` 带单飞回填 / `getBatch` 批量读（4 参与 5 参批量装载重载）/ `writeOrInvalidate`（写失败=DEL 自愈，写数据同时清空标记）/ `markEmpty`（存在守卫）/ `invalidate`；TTL ±10% 抖动；读路径 pipeline 化（EXISTS 空标记+GET 一趟往返）；命中滑动续期（空标记从不续期）；降级读与 miss 共用单飞、仅装载不写回；loader 抛 DatabaseException 视为加载失败——不写空标记、不 DEL 数据 key |
 | SetCache | 393 | 原生 Set 缓存基建：单成员三态 `isMember` / 全量 `getMembers`（不排序，需确定性顺序的调用方自包装）/ 批量判定（`batchIsMember` 单 set 多成员、`batchKeysIsMember` 多 set 单成员）/ `writeSet` 回填（空→`cacheAside.markEmpty` 含存在守卫）/ `loadViaSingleFlight` 降级装载；探针续期精确 TTL 无抖动、空标记不续；批量 DB 答案失败上抛、回填 best-effort。**第六期 T7 起生产调用方 = like 域（`user:likeSet` / `user:commentLikeSet`）**；follow 域已迁 ZSetCache |
-| ZSetCache | 623 | 有序集合（ZSet）缓存基建（T7 新增，A1「缓存有序结构」落点）：命令层 ZSCORE/ZRANGE/ZADD，**score = 成员自身数值**（故 ZRANGE 天然按成员数值升序）；API 与 SetCache 同构（`isMember` / `getMembers` / `batchIsMember` / `writeZSet` 回填（空→`markEmpty` 含存在守卫）/ `loadViaSingleFlight` 降级不写回）+ **按序窗口读 `getWindow(key, offset, count, WindowLoader, totalLoader)`**——完整态一趟 pipeline `ZRANGE[start,stop]` + `ZCARD`（total 与页同源）；**T11-C 前缀窗口装载**：miss 只装载 `[0, offset+count)`（不再全量）、部分态越界只补 `[W, offset+count)` 并按"DB 返回不足即到底"清 `partial` 标记、降级改 **DB 窗口直查**（单飞去重、不装载不写回、total 走域级计数口径）；部分态下 `isMember` 未命中回落 dbAnswer、`batchIsMember` 未命中并入 dbAnswer 且**不回填全量**、`getMembers` 遇部分态**先补齐且直接返回 DB 装载结果**（不回读缓存，防写回失败时返回前缀）；探针续期精确 TTL（**`partial:` 标记与数据 key 同步续期**）、空标记不续；窗口装载单飞 key 带窗口指纹 `key@offset+count` 防不同页串用 |
+| ZSetCache | 623 | 有序集合（ZSet）缓存基建（A1「缓存有序结构」落点）：命令层 ZSCORE/ZRANGE/ZADD，**score = 成员自身数值**（故 ZRANGE 天然按成员数值升序）；API 与 SetCache 同构（`isMember` / `getMembers` / `batchIsMember` / `writeZSet` 回填（空→`markEmpty` 含存在守卫）/ `loadViaSingleFlight` 降级不写回）+ **按序窗口读 `getWindow(key, offset, count, WindowLoader, totalLoader)`**——完整态一趟 pipeline `ZRANGE[start,stop]` + `ZCARD`（total 与页同源）；**T11-C 前缀窗口装载**（miss/部分态/降级/部分态三处配套的完整口径见 6.17）；探针续期精确 TTL（`partial:` 标记与数据 key 同步续期）、空标记不续；窗口装载单飞 key 带窗口指纹 `key@offset+count` 防不同页串用 |
 
 > 测试：`src/test/java/com/itheima/cache/` 9 类单测（mockStatic MyRedisPool + mock Jedis，不碰真实 Redis），用例清单以 `surefire-reports` 为准（见九节指针）。
 
@@ -218,16 +220,16 @@ com.itheima/
 | controller | LoginController（95，/user/*） | 登录、注册、修改密码/用户名 |
 | service | UserService（271） | 用户认证 + 管理员判定 + 改名后级联失效内容缓存（注入 ContentCache）；**`registerAndLogin`（T13，池 U-16 兜底）= 注册 + 自动登录编排**——自动登录失败不回抛，返回 `token=null` 的 LoginVO（注册已提交即算成功），注册本身失败仍抛错 |
 | dao | UserDao（275） | users 用户 CRUD + 角色查询（`findUsersByIds` T7 起带 `ORDER BY id`：关注/粉丝列表顺序由此保证，唯一调用方 FollowService）；T14 起内含从 `dao.ResultMap` 下沉的 `buildUserForLogin` / `buildUserForProfile` 两个 `private static` 行映射方法 |
-| model | entity/User（89）、dto/LoginDTO（28）/RegisterDTO（41）/ChangePasswordDTO（35）/ChangeUserNameDTO（13）、command/LoginCommand（63）/RegisterCommand（44）/ChangePasswordCommand（44）/LoginType（7）、vo/LoginVO（40） | 用户实体与请求/命令/响应对象 |
+| model | entity/User（89）、dto/LoginDTO（28）/RegisterDTO（41）/ChangePasswordDTO（35）/ChangeUserNameDTO（15）、command/LoginCommand（63）/RegisterCommand（44）/ChangePasswordCommand（44）/LoginType（7）、vo/LoginVO（40） | 用户实体与请求/命令/响应对象 |
 
 #### content 域 — `com.itheima.content`（含共享缓存组件）
 
 | 层 | 类（行数） | 职责 |
 |----|------|------|
-| controller | ContentController（182，/content/*）、StartController（49，/start）、SearchController（95，/search/*）、FeedController（57，/feed）、ProfileController（70，/profile） | 内容管理 + 首页推荐 + 搜索 + 关注流 + 用户主页 |
-| service | ContentService（497：内容/搜索业务 + 评论读路径编排——**T10-A/T10-B 起评论查询两键组 + 主楼窗口装载**（切片点在 `CommentCache.getRootPage`，楼中楼前 K=2 + `replyCount`），缺省重载仍全量数组；**T12 起 `search` 事务回调只做 DB 查询**，页内批量读 `getContentsBatch` + 点赞/关注状态填充在事务外）、ContentCache（710：Redis 内容缓存=三态 Cache-Aside+索引；loader 失败抛 DatabaseException 不污染空标记；`invalidateAuthorContentKeys` 改名级联失效；`getContentsBatch` miss/降级装载走 `loadContentsFromDb` 一趟事务两查）、CommentCache（716：Redis 评论缓存=三态 Cache-Aside+独立 TTL+空标记+显式失效+**两键组（主楼 List + 楼中楼 Hash）+ 主楼窗口/count**；loader 失败抛 DatabaseException）、ContentStatusFiller（81）、FeedService（107）、ProfileService（118） | 内容业务 + Redis 内容缓存 + Redis 评论缓存 + 状态填充 + 关注流 + 主页（Feed/Profile/Search 与关注·粉丝列表装载的缓存读在 DB 事务外执行） |
+| controller | ContentController（181，/content/*）、StartController（49，/start）、SearchController（95，/search/*）、FeedController（31，/feed）、ProfileController（44，/profile） | 内容管理 + 首页推荐 + 搜索 + 关注流 + 用户主页 |
+| service | ContentService（497）、ContentCache（710）、CommentCache（716）、ContentStatusFiller（81）、FeedService（107）、ProfileService（118） | 内容业务（内容/搜索 + 评论读路径编排）+ Redis 内容缓存（三态 Cache-Aside + 索引 + `invalidateAuthorContentKeys` 改名级联失效 + `getContentsBatch` 批量装载）+ Redis 评论缓存（两键组 主楼 List + 楼中楼 Hash + 主楼窗口/count）+ 点赞/关注状态填充 + 关注流 + 主页；**Feed/Profile/Search 与关注·粉丝列表的缓存读一律在 DB 事务外**（见 6.4） |
 | dao | ContentDao（446）、ContentMediaDao（202） | content/content_media 数据访问（ContentLikeDao 按 like 域归属）；`findContentsByIds` 批量 IN 查询（供批量缓存装载，列与 findContent 同源）；T14 起各自内含从 `dao.ResultMap` 下沉的 `private static` 行映射方法（2 / 1） |
-| model | entity/ContentMedia（63）、cache/ContentCacheDTO（136）/CommentCacheDTO（110）、vo/ContentVO（42）/ContentDetailVO（26）/CommentVO（22）/ProfileVO（43）、dto/SearchDTO（51）、command/CommandConverter（139）/ContentType（16） | 内容模型 + 共享缓存 DTO + 共享 VO/DTO/转换器（**`PageResult` 已随 T14 上移 `common.model.dto`**） |
+| model | entity/ContentMedia（63）、cache/ContentCacheDTO（135）/CommentCacheDTO（119）、vo/ContentVO（42）/ContentDetailVO（25）/CommentVO（21）/ProfileVO（43）、dto/SearchDTO（51）、command/CommandConverter（139）/ContentType（16） | 内容模型 + 共享缓存 DTO + 共享 VO/DTO/转换器（`PageResult` 归 `common.model.dto`） |
 
 > **共享组件归属**：ContentCache / CommentCache / ContentStatusFiller / ContentCacheDTO / CommentCacheDTO / CommandConverter / ContentVO / ContentDetailVO / CommentVO 归本域，其它域 controller/service 跨域 import（**`PageResult` 已于 T14 上移 `common` 包，不再归本域**）。
 
@@ -248,7 +250,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | LikeController（113，/like/*） | 点赞/取消点赞 |
-| service | LikeService（205）、LikeCacheService（394） | 内容/评论点赞业务 + Redis 点赞缓存（计数/成员分离；成员 key 为用户维度，读路径收口 SetCache——content/comment 孪生方法合并为 id 维度参数化单实现、批量回填 best-effort；写路径 Lua 条件写原子化） |
+| service | LikeService（215）、LikeCacheService（393） | 内容/评论点赞业务 + Redis 点赞缓存（计数/成员分离；成员 key 为用户维度，读路径收口 SetCache——content/comment 孪生方法合并为 id 维度参数化单实现、批量回填 best-effort；写路径 Lua 条件写原子化） |
 | dao | ContentLikeDao（137）、CommentLikeDao（129） | content_like / comment_like 数据访问 |
 | model | — | 无专属 model |
 
@@ -285,7 +287,7 @@ com.itheima/
 
 | 层 | 类（行数） | 职责 |
 |----|------|------|
-| controller | MediaAdminController（74，/api/admin/media/*）、AdminContentController（73，/api/admin/content/*）、AdminCommentController（47，/api/admin/comment/*） | 媒体运维 + 内容审核下架 + 评论运维（仅管理员） |
+| controller | MediaAdminController（74，/api/admin/media/*）、AdminContentController（73，/api/admin/content/*）、AdminCommentController（46，/api/admin/comment/*） | 媒体运维 + 内容审核下架 + 评论运维（仅管理员） |
 | service | MediaAuditService（263） | 媒体完整性扫描与恢复 |
 | dao | —（复用 content.ContentDao / comment.CommentDao，跨域 import） | 数据访问 |
 | model | vo/AdminContentVO（56）、audit/MediaAuditItem（87）/MediaAuditResult（88）/RestoreResult（49） | 管理端清单 VO + 媒体审计/恢复结果 |
@@ -311,7 +313,7 @@ com.itheima/
 |------|------|----------|
 | users | 用户表 | id, username, hashed_password, phone, follow_count, follower_count, role（0=普通/1=管理员） |
 | content | 内容表 | id, user_id, title, description, type, category_id, comment_count, like_count, comment_enabled, is_deleted, create_time, file_exists, last_verify_time |
-| comment | 评论表 | id, content_id, user_id, message, parent_id, reply_to_user_id, like_count, is_deleted |
+| comment | 评论表 | comment_id, content_id, user_id, content, parent_id, reply_to_user_id, like_count, is_deleted, reply_count |
 | follow | 关注关系表 | user_id, followed_user_id |
 | content_like | 内容点赞表 | user_id, content_id |
 | comment_like | 评论点赞表 | user_id, comment_id |
@@ -321,10 +323,13 @@ com.itheima/
 
 > `content.is_deleted` 语义：`0=正常 / 1=作者删除（A1，不可恢复）/ 2=管理员下架（A2，可恢复）`；前台可见性统一按 `is_deleted = 0` 过滤。
 
+> 库中另有 **3 张遗留表** `video` / `videoinfo` / `comment_media`（原型期残留，仍有数据）——`src/main` 与 `src/test` 全量 grep **零引用**，本表只列业务在用表。
+
 ### 5.3 特殊索引
 
 - content 表：全文索引 `MATCH(title, description) AGAINST(? IN NATURAL LANGUAGE MODE)`
 - coupon_order 表：唯一索引 `(coupon_id, user_id)`
+- comment 表：`idx_content_parent (content_id, parent_id)`（**T10-A**，G9 备份闭环已落地）——主楼区间扫描与楼中楼按主楼批量取数（`parent_id IN (…)`）需要"等值列 + 范围/IN 列"同序
 - follow 表：`idx_followed_user_user (followed_user_id, user_id)`（**T11-C**，G9 备份闭环已落地）——粉丝方向**窗口查询** `WHERE followed_user_id=? ORDER BY user_id LIMIT ? OFFSET ?` 需要"等值列 + 排序列"同序，原 `idx_followed_user_id(followed_user_id)` 只能等值定位、排序仍需 filesort；关注方向复用既有 `uk_user_follow(user_id, followed_user_id)`（已有同序），不新建索引。EXPLAIN 实测两方向均 `Using index`（覆盖索引）且无 `Using filesort`。
 
 ---
@@ -532,7 +537,7 @@ com.itheima/
 | 方法 | 路径 | 说明 | 需要登录 |
 |------|------|------|----------|
 | GET | /start | 首页推荐 | ✗ |
-| GET | /search | 搜索 | ✗ |
+| GET | /search/keywordSearch | 关键词搜索（`SearchController` 无裸 `/search` 分支，`/search` 命中默认分支返回"未识别功能"） | ✗ |
 | GET | /search/IdSearch | 内容详情（无 /detail 端点） | ✗ |
 | GET | /feed | 关注动态流 | ✓ |
 | POST | /api/upload/video | 上传视频 | ✓ |

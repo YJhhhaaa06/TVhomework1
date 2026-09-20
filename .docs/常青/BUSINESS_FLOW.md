@@ -1,7 +1,7 @@
 # 业务流程文档
 
-> 版本：2.4
-> 最后更新：2026-09-20（T11-A：follow 关注/粉丝列表契约变更——列表恒为分页信封、缺省=第一页信封、`pageSize` 上限 50→200；T11-B：评论域分页**缺省 `pageSize` 10→200**（信封由后端域常量决定，前端只传 `page`），`feed`/`search`/`profile` 前端改走公共分块 helper；T11-C：关注/粉丝列表**装载侧解耦**（前缀窗口装载 + `partial:` 标记；降级改 DB 窗口直查，不装载不写回）；T13：注册后自动登录**兜底**——注册成功即成功，自动登录失败返回 `token=null` 的 LoginVO（前端提示「注册成功，请手动登录」））
+> 版本：2.5
+> 最后更新：2026-09-20（T15 文档与代码一致性清理：Filter 链补 `ExceptionFilter`、AuthFilter 精确名单补 `/content/update`·`/content/mediaDelete`·`/content/delete`、搜索端点更正为 `GET /search/keywordSearch`、公开接口补 `/comment/replies`。历史变更见 git 提交历史与 `NEXT_CYCLE_TASKS.md` 执行回写）
 > 用途：保障重构时不破坏业务逻辑
 
 ---
@@ -28,8 +28,9 @@
     ▼
 ┌─────────────────────────────────────────────────────────┐
 │                    Filter 链                             │
-│  EncodingFilter → LoginFilter → AuthFilter              │
-│  (UTF-8编码)      (解析Token)    (权限校验)               │
+│  ExceptionFilter → EncodingFilter → LoginFilter          │
+│  (全局异常)        (UTF-8编码)      (解析Token)            │
+│  → AuthFilter（权限校验）                                  │
 └─────────────────────────────────────────────────────────┘
     │
     ▼
@@ -434,7 +435,7 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
                                       │ FileUploadService │
                                       │ 1. 校验文件类型   │
                                       │ 2. 生成UUID文件名 │
-                                      │ 3. 保存到 D:/stone│
+                                      │ 3. 保存到上传根目录│
                                       └──────────────────┘
                                               │
                                               ▼
@@ -587,7 +588,7 @@ GET /start?limit=10&token=xxx（可选）
 ### 3.5 搜索流程
 
 ```
-┌──────────┐  GET /search?keyword=xxx  ┌─────────────────┐
+┌──────────┐  GET /search/keywordSearch?keyword=xxx  ┌─────────────────┐
 │  客户端   │ ────────────────────────► │ SearchController │
 └──────────┘                            └─────────────────┘
                                               │
@@ -624,7 +625,7 @@ GET /start?limit=10&token=xxx（可选）
 #### 接口定义
 
 ```
-GET /search?keyword=关键词&page=1&pageSize=10&token=xxx（可选）
+GET /search/keywordSearch?keyword=关键词&page=1&pageSize=10&token=xxx（可选）
 
 成功响应：
 {
@@ -1321,6 +1322,9 @@ GET /feed?page=1&pageSize=10&token=xxx
 | `/comment/add` | 精确 | ✓ |
 | `/comment/delete` | 精确 | ✓ |
 | `/content/commentEnabled` | 精确 | ✓ |
+| `/content/update` | 精确 | ✓ |
+| `/content/mediaDelete` | 精确 | ✓ |
+| `/content/delete` | 精确 | ✓ |
 | `/user/changePassword` | 精确 | ✓ |
 | `/user/changeUserName` | 精确 | ✓ |
 | `/coupon/grab` | 精确 | ✓ |
@@ -1333,9 +1337,10 @@ GET /feed?page=1&pageSize=10&token=xxx
 | `/user/login` | POST | 登录 |
 | `/user/register` | POST | 注册（自动登录失败时仍 200、`data.token=null`：注册成功但需手动登录，T13） |
 | `/start` | GET | 首页推荐 |
-| `/search` | GET | 搜索 |
+| `/search/keywordSearch` | GET | 搜索 |
 | `/search/IdSearch` | GET | 内容详情（无 /detail 端点） |
 | `/comment/show` | GET | 查看评论（T8 起可选 `page`/`pageSize`：传任一返回分页信封 `{list,total,...}`，`total`=主楼条数；缺省仍全量数组；`pageSize` 缺省 200（域级信封，T11-B）、上限 500） |
+| `/comment/replies` | GET | 展开某主楼全部回复（`rootId&page&pageSize`；`pageSize` 缺省 200、上限 500） |
 | `/coupon/list` | GET | 优惠券列表 |
 | `/profile` | GET | 用户主页 |
 

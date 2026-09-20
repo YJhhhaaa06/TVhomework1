@@ -28,6 +28,7 @@
 | U-18 | 观察（装载量） | 关注/粉丝列表**装载路径仍为全量**：`ZSetCache` miss 单飞回填与 Redis 降级作答都走"DB 全量 loader + 全量 ZADD 回填"（`FollowDao.getAllFollowedUserIds`/`getFollowerUserIds` 无 LIMIT）；T7 只消除了**命中路径**的 `SMEMBERS` 全量回传与 String→Long 装箱（hit 为 `ZRANGE[start,stop]`+`ZCARD`，O(log n + N)）。与 R-01（索引全量读保留）同型：真解决需装载侧分页（DAO 分页 SQL / keyset）或分段回填，属独立改造 | `ZSetCache.getWindow`/`getMembers`（miss 与降级分支的 loader 全量）；`FollowCache.loadFollowingIds/loadFollowerIds`；`FollowDao`（无分页 SQL） | 第六期 T7 执行发现（2026-09-19，随 A1 落地显式登记） | **已处置 → T11-C**（2026-09-20 T11 窗口拍板）：形态 = **P1 前缀窗口装载**——ZSet 成员 = DB 按 id 升序的**前 W 个**（W = ZCARD）+ 新增 `partial:{数据key}` 标记（无标记 = 完整）；分页读按 `[W, offset+count)` 窗口装载、miss 走窗口装载、**降级改 DB 窗口直查不写回**（取代全量装载 + 内存切片）；`partial` 态下判定**未命中回落 DB**、`getMembers` 遇 `partial` **补齐**；写路径任一侧 `partial` → 双 DEL。**DDL**：`follow` 加 `idx_followed_user_user (followed_user_id, user_id)`（G9 闭环）。**边界（不在本项）**：`getFollowingIds` 的 feed 全量关注 ids 读路径（R-01 明确保留）；`follow`/`follower` 计数 key 口径不变。**✅ 已于 2026-09-20 T11-C 窗口落地**（拆 C-1 DDL + 窗口 DAO / C-2 前缀装载；`follow` 加 `idx_followed_user_user` 走 G9 闭环；JUnit 500/0/0/0 + pytest 145；残余竞态与两处实现层偏离见 `NEXT_CYCLE_TASKS.md` T11-C 执行回写） |
 | U-21 | 代码债 | **`FollowCache.getFollowerIds(long)` 成为死方法**：T11-A 删除 `FollowService` 的两个缺省全量重载后，**主代码已无调用方**（`src/main` 全量 grep 仅剩定义处；作对照 `getFollowingIds` 仍被 `FeedService:51` 使用）。**未随之删除属刻意克制**——本任务范围是 follow 域**接口口径**（删 Service 层缺省重载），连带删缓存层公共方法属越界；且 T11-C 要改的正是这批读路径方法，此时删除会与 C-2 的 `partial` 态改造打架 | `follow/service/FollowCache.java:154`；唯一引用 = `src/test/java/com/itheima/follow/service/FollowCacheTest.java:478`（`getFollowerIdsReturnsFollowersFromCacheOrDb`） | 第七期 T11-A 窗口（2026-09-20，执行回写 L1 记录） | **已关闭（2026-09-20 T11-C-2 执行，移出池）**：评估结论 = **删除**——C-2 引入 `partial` 态后它**仍无主代码调用方**（粉丝方向已无全量语义需求，分页读走窗口装载），故连同其唯一单测 `getFollowerIdsReturnsFollowersFromCacheOrDb` 一并删除；连带删除随之失去用途的私有 `loadFollowerIds`（粉丝方向全量 loader）。JUnit 用例数 43 → 50（该类 +8 新增 / −1 删除随本项）。编号不悬空 |
 | U-22 | 代码债 | **评论新增时缓存失效写在 DB 事务回调内**：`CommentService.addComment` 的 `transactionTemplate.execute` 回调体内直接调 `contentCache.notifyCommentCountChanged(contentId)`——是缓存 **DEL（失效写）**、无嵌套装载，与 U-14 的"缓存读"**判据不同**。现状影响：失效发生在提交前（"先失效后提交"，并发读者可能在窗口内回填刚更新的计数，但 DB 为源真理 + Cache-Aside 读自愈，表现为计数短暂陈旧、非缺陷）；治本需把失效移到**提交后**，属**时序语义变更**，须先拍板 | `comment/service/CommentService.java:175`（execute）→ `:200`（`notifyCommentCountChanged`）；T12 窗口全仓扫描（13 文件 / 56 处 execute、含"经私有方法间接调用"形态）命中的唯一"非读"形态 | 第七期 T12 窗口（2026-09-20）全仓扫描发现（未并入 T12，越界） | 待定（留池）：形态 = 将失效移到事务提交后（`addComment` 已在提交后做 `commentCache` 失效，可与之一并收口）；**不引入 MQ/新依赖** |
+| U-23 | 文档滞后 | `说明书/DATABASE.md`（手写建表语句）与 **3306 实际 DDL 大面积不符** | `_docs/说明书/DATABASE.md`：`users` 缺 `role`；`content` 缺 `comment_enabled` / `file_exists` / `last_verify_time`；`comment` 的文本列实为 `content`（该档写 `content` 但缺 `reply_count`）且缺 `idx_content_parent`；`content_media` 类型列实为 `type`；`follow` 缺 `idx_followed_user_user`；该档还**未收录** 3306 实有的 3 张遗留表（`video` / `videoinfo` / `comment_media`）。权威源 = `SHOW CREATE TABLE` 或 G9 备份 `.docs/DBbackups/20260920_163919/db.sql` | 第七期 **T15** 窗口（2026-09-20）文档一致性核对发现（**越出 T15 范围**：T15 只改常青文档；且该档 INDEX 标注"本机 / 敏感、**不追踪**"——改动不进 `git diff`、无 review 通道） | **待定（留池）**：可选去向 = ① 用 `SHOW CREATE TABLE` 重新生成该档 ② 加"**已过期、勿作建表依据、以 3306 为准**"抬头 ③ 废弃该档、指向 `DBbackups/`。**拍板前请勿照它建表**。2026-09-20 已登记，**该档未动** |
 
 > **2026-09-20 T11-A 窗口登记（本窗口仅登记一项）**——池内存量 **2 → 3 条**：
 > - **新登记 `U-21`**：`FollowCache.getFollowerIds` 死方法（T11-A 删除 Service 层两个缺省全量重载后无主代码调用方）。**去向 = T11-C 窗口一并评估**（编号不悬空，见本行）。
@@ -75,6 +76,13 @@
 > - **同批消除 2 个包环（非池项，随 N14 落地）**：`content↔dao`、`dao↔user`——`dao/ResultMap` 删除，6 个 ResultSet→对象映射方法按域下沉到各自 DAO 的 `private static` 方法，基础包不再 import 业务域模型（原 5 条）。
 > - **`U-11` / `U-17` / `U-22` 维持留池**：口径不变（`U-17` 的 T11 残余窗口引用继续有效）。
 > - **池内存量（3 条）**：`U-11` 停机 `/start` 空推荐（待人拍板）/ `U-17` 限流能力（已挂 T11 残余窗口引用）/ `U-22` 评论新增的缓存失效写在事务回调内。
+
+> **2026-09-20 T15 窗口处置（已执行）**——池内存量 **3 → 4 条**（无关闭项，新登记 1 条）：
+> - **新登记 `U-23`**（见上表）：`说明书/DATABASE.md` 与 3306 实际 DDL 大面积不符。**该档未动**——T15 范围只含常青文档，且该档 INDEX 已标注"本机 / 敏感、**不追踪**"（改动不进 `git diff`、无 review 通道）。
+> - **T15 未关闭任何池项**：本任务对应的是 **N16 + N9（文档部分）**——二者是 NEEDS 4.1 候选编号（去向 = T15），**不属于本池**，故池存量不受其影响。
+> - **`U-11` / `U-17` / `U-22` 维持留池**：口径不变（`U-17` 的 T11 残余窗口引用继续有效）。
+> - **本窗口新登记（不占池）**：无。
+> - **池内存量（4 条）**：`U-11` 停机 `/start` 空推荐（待人拍板）/ `U-17` 限流能力（已挂 T11 残余窗口引用）/ `U-22` 评论新增的缓存失效写在事务回调内 / `U-23` `说明书/DATABASE.md` 与 3306 DDL 不符。
 
 ***
 
