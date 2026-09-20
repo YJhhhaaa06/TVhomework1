@@ -1,7 +1,7 @@
 # 下一周期需求与痛点（NEEDS）
 
 > 用途：回答"下一周期为什么做这些"——本周期要处理的需求与痛点、候选任务的优先级映射、以及开工前必须拍板的技术决策。
-> 状态：**待立项（2026-09-19）**——第六期「杂务/准备周期」（`260919-prep-cleanup`，分支 `prep/next-phase`，T1~T9 全部完成）已归档，本档为**第七期结转稿**：二/三节承接归档周期的未关闭事项与留池项。**主线方向仍未拍板**；已完成：① 周期探查（2026-09-19）——4.1 登记 **N9~N16** 跨方向通用前置（N1~N8 已按用户指令移出）② **任务清单已建**（`NEXT_CYCLE_TASKS.md`，9 个任务 T10~T18：T10/T11 预告条目 + T12~T18 清理类）③ `UNPLANNED_ISSUES.md` 池已按 2026-09-19 评估收敛（见该档）。评审时按 `R-##` / `N#` / `T10`~`T18` 点单。
+> 状态：**待立项（2026-09-19 建；2026-09-20 T11 窗口更新）**——第六期「杂务/准备周期」（`260919-prep-cleanup`，分支 `prep/next-phase`，T1~T9 全部完成）已归档，本档为**第七期结转稿**：二/三节承接归档周期的未关闭事项与留池项。**主线方向仍未拍板**；已完成：① 周期探查（2026-09-19）——4.1 登记 **N9~N16** 跨方向通用前置（N1~N8 已按用户指令移出）② **任务清单已建**（`NEXT_CYCLE_TASKS.md`：现 **12 个任务**——T10-A/T10-B 已完成、T11-A/T11-B/T11-C 已拍板待执行、T12~T18 清理类、**T19** 推后项）③ `UNPLANNED_ISSUES.md` 池已按 2026-09-19 评估收敛（见该档）；④ **T10-A/T10-B 已完成**（评论分页两键组 + 主楼窗口装载 + 楼中楼 K=2 + 展开接口，`refactor(cache-10a/10b)`）；⑤ **T11 已于 2026-09-20 窗口完成范围拍板并拆 T11-A/T11-B/T11-C**（接口口径 / 评论信封 + 公共 helper / 装载侧解耦），四要素已回写。评审时按 `R-##` / `N#` / `T10`~`T19` 点单。
 > 配套：How（拆任务）见 `目标与任务/NEXT_CYCLE_TASKS.md`（**已建**：T10/T11 预告条目 + T12~T14 清理类，含周期约定 G1~G11 与四要素模板）。
 > 注意：二/三为**结转总账**，不等于本周期范围；本周期做什么、不做什么，将以 **4.3** 为准（现为空，待方向拍板）。
 > 来源：`260919-prep-cleanup` 周期（第六期「杂务/准备周期」，T1~T9 全部完成）归档后（2026-09-19）：结转未完成需求与未拍板决策（二/三表）+ `UNPLANNED_ISSUES.md` 池（**收敛后仅剩 U-11 / U-17（已改写）/ U-18**，见该档"第七期评估"）；**4.1 的 N9~N16 = 2026-09-19 代码探查的跨方向通用前置**（逐条读码取证，结论已复核）；**4.2 = 两个待拍板任务**（评论分页 / 关注·粉丝列表分页，已落 T10/T11）。
@@ -72,6 +72,9 @@
 
 **T10-B（2026-09-20 拍板——楼中楼前 K=2 + replyCount + 展开接口 + 前端大 chunk/公共 helper）**：
 拍板取向：楼中楼装载/展示从"整树随行"降为"前 K 条"，首屏响应体与反序列化与楼中楼总量解耦；"展开"才按需加载更多。关键拍板：① 展开出口 = **新接口 `/comment/replies?rootId&page&pageSize`**（信封；`CommentController` `/comment/*` 通配加 case，不新增 Servlet，AuthFilter 不变=未登录可看）；② 缺省（不传参）路径**保持不变**（children 全量逐字节兼容，pytest 缺省用例零改动；实现改 **DB 全量直取** getComments+buildTree，前端改传参后缺省调用方仅剩 pytest）；③ 域级 pageSize 上限 = **500**（`BaseServletUtil.parsePageSize(req,max)` 新增重载、公共 cap 50 语义不变）。`reply_count` 口径 = **建树上溯后的 children 总数**（与树/展开返回集一致）：增回复 +1、删回复 −1（防负守卫 `AND reply_count + ? >= 0`）、删主楼不扣；存量/种子一次性回填脚本（temp_script，3306/3307 幂等）。**缓存只存前 K=2**（懒载 DB 全量取该主楼、HSET 截断前 K）——命中路径反序列化与总量解耦；展开剩余走 DB 两层级 keyset（新数据 parent 归一挂主楼 + seed 存量最多二级间接，SQL 两层覆盖）。前端抽公共 `chunkedList.js`（chunk=200 / 本地小批 10 / 用尽再请求；T11 复用治 N15）、detail.js 接入 + 展开回复交互。落点：`comment/service/CommentService`、`comment/dao/CommentDao`、`content/service/CommentCache`、`content/model/cache/CommentCacheDTO`、`controller/BaseServletUtil`、`comment/controller/CommentController`、`static/js/chunkedList.js`、`static/js/views/detail.js`（详见 `NEXT_CYCLE_TASKS.md` T10-B；验证 JUnit + pytest + 回填脚本见该档执行回写）。
+
+**T11-A / T11-B / T11-C（`refactor(cache-11a)` 起，2026-09-20 拍板——关注/粉丝列表分页：接口口径定稿 + 公共 helper 能力 + 装载侧解耦，推后项落 T19）**：
+拍板取向：**① 接口口径（T11-A）**——follow 域 `pageSize` 上限 **200** + **信封大小改由后端域级常量决定**（新增 `BaseServletUtil.parsePageSize(req, max, defaultSize)` 三参重载，前端只传 `page`、不再出现"要多少条"的魔法数，读响应回显自适应），缺省（不传参）由 T7 的"返回全量数组"**反转为「= 第一页信封」**（**破坏性契约变更，用户明确批准**——同时关闭"缺省可拉全量"的放大后门），删 `FollowService` 两个缺省重载 + 8 条 JUnit 用例（grep 实测无调用方 = 死代码）。**② 公共 helper（T11-B）**——评论域 `parsePageSize(req, 500, 200)`（**上限 500 口径不变**，仅决定权后移）；`chunkedList` 增 `keyOf`+`seen` **去重**（防热门博主/热门内容翻页重复展示同一条目）与 `chunkSize` **自适应**；`feed`/`search`/`profile` 三处**仅前端**迁移（`chunk = 50` 顶现有公共 cap，**后端不动** → 后端侧补齐**另立 T19**，编号不悬空）。**③ 装载侧解耦（T11-C，池 U-18 治本）**——形态 **P1 前缀窗口装载**（α"分页直读 DB"、β"任意窗口装载"均否决）：ZSet 成员 = DB 中按 id 升序的**前 W 个**（W = ZCARD），新增 `partial:{数据key}` 标记（**无标记 = 完整**，把 T7"key 存在即完整"的存在性不变量放宽为标记不变量；`empty:` 仍表示确认无数据）；分页读 `offset+count ≤ W` → `ZRANGE` + total（无标记 → ZCARD（与 T7 逐字节一致）、有标记 → 计数 key），超出则单飞内 DB 查 `[W, offset+count)` **追加**（不 DEL、不依赖 total 做上界）；miss 与前缀补齐改为**窗口装载**、降级改为 **DB 窗口直查不写回**（取代原"全量装载 + 内存切片"）；`partial` 态下判定**未命中回落 DB**（批量复用既有 `dbAnswer`，仅扩展触发条件）、**`getMembers` 遇 `partial` 必须补齐**（`FeedService.java:51` 依赖全量关注 ids，否则 feed 静默漏关注者 —— 本设计最危险点，评审重点）；写路径 `probePair` 增探 `partial`，**任一侧 partial → 双 DEL**（取关会在前缀留洞、关注会插非前缀成员，二者均破坏 `ZRANGE offset` 语义），与既有"冷 key → 双 DEL"同构。**DDL（G9 已定）**：`ALTER TABLE follow ADD KEY idx_followed_user_user (followed_user_id, user_id)`（粉丝方向窗口查询同序；关注方向复用 `uk_user_follow`），执行走三步备份闭环（改前备份 → ALTER 3306 → 备份新结构 → 重建 3307）。**commit 结构**：T11-A（`cache-11a`）→ T11-B（`cache-11b`）→ T11-C（`cache-11c`，内部拆 **C-1** DDL + 窗口 DAO（纯新增、行为零变化）/ **C-2** 前缀装载 + 判定回落 + 写路径 partial）。**相关性拍板**：① "缺省 = 第一页"为**破坏性契约变更**（T7 曾明确保留全量数组，本次用户批准反转）；② 前端去重**只兜 offset 漂移**（翻页期间集合变化），pytest 直打 API 的「页间不重不漏」断言**一条未改** —— 去重不得掩盖后端分页 bug；③ **U-17（限流能力缺失）记入 T11 残余窗口**（用户 2026-09-20 提出"脚本直打 DB"担忧；本改造客观上把冷路径单请求成本从 O(总量) 降到 O(页)，但防脚本的正解是限流，不占 T11 范围）；④ `feed`/`search`/`profile` 的**后端**大分页（上限 + 域级信封）推后为 **T19**。落点：`follow/controller/FollowController`、`controller/BaseServletUtil`、`follow/service/FollowService`、`follow/service/FollowCache`、`follow/dao/FollowDao`、`cache/ZSetCache`、`cache/CacheKeys`、`comment/controller/CommentController`、`static/js/chunkedList.js`、`static/js/views/{user,follow,search,publish,detail}.js`（详见 `NEXT_CYCLE_TASKS.md` T11-A/T11-B/T11-C 与 T19；验证见该档执行回写）。
 ```
 
 ### 4.1 候选痛点（跨方向通用前置，**待评审纳入，尚未拍板**）
@@ -96,7 +99,7 @@
 > **本次探查已排除项（防下次重复探查）**：① 主代码无 `System.out`/`System.err`/`printStackTrace` 残留（仅测试工具 `src/test/java/com/itheima/tools/CouponAdmin.java:51`）；② feed 页内点赞状态已是批量查询（`FeedService.java:92`），非 N+1；③ 敏感信息已脱敏（`UserService.java:106` `maskPhone`），无密码/token 明文日志；④ `LogUtil` 文件不可写时有降级日志；⑤ 无绕过 IoC 容器的 `new *Service(`/`new *Dao(`。
 
 > **候选去向（2026-09-19 建 TASKS 后）**：
-> **已排进清单**（清单"对应候选"列保留 N 编号，Why→How 可追溯）——`N9`（文档名单部分）→ **T15**；`N11` → **T16**；`N12`（前半：注入静默失败）→ **T17**；`N13` → **T18**；`N14` → **T14**；`N15` → **T11**（顺带治）；`N16` → **T15**。
+> **已排进清单**（清单"对应候选"列保留 N 编号，Why→How 可追溯）——`N9`（文档名单部分）→ **T15**；`N11` → **T16**；`N12`（前半：注入静默失败）→ **T17**；`N13` → **T18**（注：**分页上限参数化已随 T10-B/T11-A 落地**，本任务不含该部分）；`N14` → **T14**；**`N15` → T10-B（首步：抽公共 helper）+ T11-A/T11-B（接入与增强：关注/粉丝 sheet、评论列表、feed/search/profile 内容列表）**；`N16` → **T15**。**`N15` 残留未治部分**：`main.js` 路由注册硬编码（9 条 `register(...)` + import + 抽屉导航三处同改）——不在 T11 范围，留待后续（与前端结构改造同批）。
 > **未排**（属**新功能方向的能力建设**，待该方向立项时评估）：`N9` 的"声明式鉴权"（注解/路由表）、`N10`（admin 角色每请求查库）、`N12` 的"声明式事务 / AOP"。
 > **待你点单调整**：以上归组如与预期不符（例如希望 `N10` 也本期做、或某条改期），直接在评审时点名即可——清单与本节同步改。
 
@@ -105,24 +108,31 @@
 | 候选 | 内容 | 依据 | 结论 |
 | ---- | ---- | ---- | ---- |
 | **评论分页（后端大分页 + 前端小分页）** | **已拍板（2026-09-19 T10 窗口，拆 T10-A/T10-B）**：命中路径单次成本与评论总量**弱相关**、请求数下降。方向 = 主楼/楼中楼缓存分开（整树单键 → **两键组**：主楼 List + 楼中楼 Hash）+ 主楼**窗口装载**（不一次性查全库）+ 楼中楼前 **K=2** 条 + `reply_count` 总数 + 展开加载回复 + 前端大 chunk/本地小批 | 用户 2026-09-19 澄清（后端大分页不止改前端 chunk，还含评论主楼/楼中楼缓存分开、可能动 DB 索引）；T8 的 D1=A 仅做展示层切片、命中路径仍整树反序列化（原 `U-20`）；切片接缝已收敛为 `ContentService.sliceRoots` 唯一方法；这次窗口进一步明确了"窗口**装载**"诉求（不只窗口读） | **已落 T10-A / T10-B（四要素已回写）**：T10-A = 两键组 + 主楼窗口装载 + DDL（`reply_count` + `(content_id,parent_id)` 索引），**对外契约零变化**；T10-B = 楼中楼 K=2 + 展开接口 + 前端大 chunk/helper（契约变更，已批准）。**前置已解决**：① T8 红线已由用户放开 ② comment 索引已拍板并按 G9 备份闭环。**不做**：offset→游标（属 feed 流方向）；hot_comments 打分表/前端去重（结构性硬伤，登记 N17 延后）；权限热度排序本窗口不做 |
-| **关注/粉丝列表分页（后端大分页 + 前端小分页）** | **预告**：后端页大小上限（突破公共 `parsePageSize` 的 cap 50 需加**域级常量**，不动公共语义）+ 前端 chunk 拉取 + 本地小批（10 条）展示（先放本地余量、用尽再请求），顺带抽公共"分块列表" helper 收敛重复实现（治 4.1 **N15**） | T7 已给 ZSet 有序化 + `ZSetCache.getWindow` 窗口读 + B2 信封；前端 `views/user.js:11` 为 `PAGE_SIZE=10`（每次"加载更多"发一页请求）；相关接口已支持 `page`/`pageSize` | **已落 T11（预告条目）**：同上（四要素窗口内补）；**待评**：池内 `U-18`（miss/降级仍全量装载）是否一并纳入 |
+| **关注/粉丝列表分页（后端大分页 + 前端小分页）** | **已拍板（2026-09-20 T11 窗口，拆 T11-A/T11-B/T11-C）**：① follow 域上限 **200** + **信封大小由后端定**（三参 `parsePageSize(req, max, defaultSize)`，前端只传 `page`）+ 缺省**反转为「= 第一页信封」**（**破坏性契约变更，已批准**）；② 评论域信封 `default 200 / max 500` + 公共 helper **去重**（`keyOf`+`seen`）与 `chunkSize` 自适应 + feed/search/profile **仅前端**迁移（`chunk=50`）；③ **P1 前缀窗口装载**治池 **U-18**（冷/降级装载 O(总量) → O(offset+页大小)） | T7 已给 ZSet 有序化 + `ZSetCache.getWindow` 窗口读（命中路径成本已 ∝ 页）+ B2 信封；**U-18 实测触发点 = `ZSetCache.getWindow` miss 单飞全量 loader 与降级全量装载**（`ZSetCache.java:174-192`）+ `FollowDao` 全量 SQL 无 LIMIT/ORDER BY（`:47-74`）；判定路径 key 一律是 `user:following:{当前用户}`（与"大 V 百万粉丝"无关）；`follow` 实索引支持关注方向窗口查询、粉丝方向需补复合索引（备份实测）。详见 `.docs/temp/T11_PLAN.md` 证据表 E1~E17 | **已落 T11-A / T11-B / T11-C（四要素已回写）**；`feed`/`search`/`profile` 的**后端**大分页推后为 **T19**（三处前端迁移仍在 T11-B）。**不做**：offset→游标（属 feed 流方向）；删 `pageSize` 参数（会摧毁 pytest 小信封跨页验证能力）；`getFollowingIds` 的 feed 全量读（R-01 保留） |
 
-> **（2026-09-19 按用户口径调整）**：候选**已拆为两个任务**——**T10 评论分页 / T11 关注·粉丝列表分页**（见 `NEXT_CYCLE_TASKS.md`）。**T10 已于 2026-09-19 T10 窗口完成拍板并拆 T10-A/T10-B**（结论见上表与本档 4.0）；**T11 仍为预告条目**：实现形态（缓存侧窗口读 vs DB 窗口读）、是否调整 `comment` 表索引、任务内范围与四要素，一律由**执行窗口调查后拍板并回写**；本节只保留目标、已确认事实与前置条件。
+> **（2026-09-19 按用户口径调整；2026-09-20 T11 窗口更新）**：候选**已拆为两个任务**——**T10 评论分页 / T11 关注·粉丝列表分页**（见 `NEXT_CYCLE_TASKS.md`）。**T10 已于 2026-09-19 T10 窗口完成拍板并拆 T10-A/T10-B**（结论见上表与本档 4.0）；**T11 已于 2026-09-20 T11 窗口完成拍板并拆 T11-A（接口口径）/ T11-B（评论信封 + 公共 helper）/ T11-C（装载侧解耦）**，另立推后项 **T19**（feed/search/profile 后端大分页）；实现形态选中"缓存窗口读 + 前缀装载"（非 DB 窗口读）、`follow` 表索引改动已定（`idx_followed_user_user`，走 G9），四要素均已回写 `NEXT_CYCLE_TASKS.md` 四节。
 
 
 ### 4.3 本周期范围（方向拍板结果）
 
-**主题**：待拍板（T10-A/T10-B 已先行拍板落地，为当前窗口主菜）。
+**主题**：待拍板（T10-A/T10-B 已完成；T11-A/T11-B/T11-C 已于 2026-09-20 拍板待执行，为当前窗口主菜）。
 
 | 纳入 | 对应编号 | 落到任务 | 一句话 |
 | ---- | ---- | ---- | ---- |
 | 评论分页①：缓存结构拆分 + 主楼窗口装载 + DDL | 4.2 ①（= 池 U-20，治本） | **T10-A** | 两键组（主楼 List + 楼中楼 Hash）+ 主楼窗口装载；对外契约零变化；DDL `reply_count` + 索引 |
 | 评论分页②：楼中楼 K=2 + 展开接口 + 前端大 chunk/helper | 4.2 ① + N15 | **T10-B**（依赖 T10-A） | children 前 2 条 + replyCount 总数 + 展开加载回复 + 域级 pageSize 上限 + 公共分块列表 helper（N15，T11 复用） |
+| 关注/粉丝列表接口口径：域级上限 200 + 后端固定信封 + 缺省归一为第一页 + sheet 接 helper | 4.2 ② + N15 | **T11-A** | follow 域 `pageSize` 上限 200、信封由后端定（前端只传 `page`）、缺省 = 第一页信封（契约变更）；sheet 接 `chunkedList` |
+| 评论域固定信封 + 公共 helper 去重/自适应 + 内容列表前端迁移 | 4.2 ② + 4.1 **N15** | **T11-B**（依赖 T11-A 的 helper 形态） | 评论域 `default 200 / max 500`；`keyOf`+`seen` 去重；feed/search/profile 前端迁移（`chunk=50`，后端不动） |
+| 关注/粉丝列表装载侧解耦（池 U-18 治本） | 4.2 ② + 池 **U-18** | **T11-C**（依赖 T11-A；内部 C-1 → C-2） | P1 前缀窗口装载：冷/降级装载 O(总量) → O(offset+页大小)；DDL 粉丝方向复合索引 |
 
 **本周期明确不做（反面清单，与"纳入"同等重要）**：
 
 | 不做 | 原因 / 去向 |
 | ---- | ---- |
+| `feed` / `search` / `profile` 的**后端**大分页（域级上限 + 域级信封） | 2026-09-20 T11 窗口用户拍板推后 → **另立 T19**（三处内容列表的**前端**迁移仍在 T11-B 内完成），编号不悬空 |
+| 删除 `pageSize` 参数 / 由后端硬忽略该参数 | 会摧毁 pytest 的小信封跨页验证能力（`test_comment_paging` 用 `pageSize=1/3`、`test_follow_list` 用 `page_size=1` 验证页间不重不漏；信封固定 200 需造 200+ 行数据）→ 改采"保留参数 + 域级 `defaultSize`" |
+| offset → 游标（keyset 分页） | 属 **feed 流方向**；前端去重只作漂移缓解，不替代正确性 |
+| `getFollowingIds` 的 feed 全量关注 ids 读路径 | 与 R-01（索引全量读）同型，明确保留 |
 
 ***
 
