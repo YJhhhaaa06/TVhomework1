@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Context>
     <Resources>
+        <!-- T18：base 使用 ${upload.path:-<默认>} 系统属性占位符（Tomcat 原生替换，SystemPropertySource 始终启用）；
+             默认值必须与 app.properties 的 upload.path 保持同步；换环境部署时用 -Dupload.path=<目录>
+             （CATALINA_OPTS/JAVA_OPTS/setenv）外部覆盖，无需改源码/重打包 -->
         <PostResources
             className="org.apache.catalina.webresources.DirResourceSet"
-            base="D:/data/projects/VideoPlatform/stone"
+            base="${upload.path:-D:/data/projects/VideoPlatform/stone}"
             webAppMount="/upload"/>
     </Resources>
 </Context>

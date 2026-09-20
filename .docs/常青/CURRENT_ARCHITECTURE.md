@@ -60,7 +60,7 @@ untitled/
 │   │   ├── resources/               # 配置文件（app.properties）
 │   │   └── webapp/                  # Web 应用
 │   │       ├── WEB-INF/web.xml      # Servlet 配置
-│   │       ├── META-INF/context.xml # Tomcat 配置
+│   │       ├── META-INF/context.xml # Tomcat 配置（/upload 静态挂载 base 为 ${upload.path:-默认} 占位符，见 §5.1.1）
 │   │       ├── index.html           # 应用外壳（SPA 入口）
 │   │       └── static/              # 前端资源（css/common.css + js/ 基础设施与视图模块）
 │   │
@@ -306,6 +306,19 @@ com.itheima/
 | 密码 | MySQL | app.properties (db.password) / AppConfig |
 | 连接池初始大小 | 5 | app.properties (db.pool.initSize) / AppConfig |
 | 连接池上限/超时 | 20 / 5000ms | app.properties (db.pool.*) / AppConfig |
+
+### 5.1.1 配置外部覆盖机制（T18，N13）
+
+- **加载**：`config/AppConfig` 从 classpath 的 `app.properties` 加载全部键（缺失/解析失败启动即失败）。
+- **外部覆盖两级**（优先级从高到低）：
+  1. **环境变量**：键去点转大写（`db.password` → `DB_PASSWORD`；`log.file` 额外支持 `LOG_PATH` 别名）；
+  2. **JVM 系统属性**：`-Dkey=value`（T18 新增，与 Tomcat context.xml 的 `${key:-default}` 占位符**同源**）。
+- **`upload.path` 与 `/upload` 挂载**：`src/main/webapp/META-INF/context.xml` 的 `<PostResources base="${upload.path:-D:/data/projects/VideoPlatform/stone}"/>`（T18）——
+  Tomcat 对 `${...}` 做系统属性替换（SystemPropertySource 始终启用），**默认值必须与 `app.properties` 的 `upload.path` 保持同步**；
+  换环境部署时用 `-Dupload.path=<目录>`（`CATALINA_OPTS`/`JAVA_OPTS`/setenv，不改源码/不重打包）即可同时覆盖静态挂载与上传落盘；
+  `AppShutDownListener` 启动强校验"Tomcat 实际挂载 == AppConfig 实际使用"，不一致拒绝启动。
+  ⚠️ 只设 `UPLOAD_PATH` 环境变量（不设 `-D`）时 context.xml 挂载仍是打包默认值 → 校验拒绝启动（与 T18 前行为一致）；覆盖 `upload.path` **推荐用 `-Dupload.path`**。
+- **带默认值读取**：`AppConfig` 提供 `get/getInt/getLong/getBoolean(key, default)` 包可见重载（T18，键缺失/空 → 默认值；数值解析失败照旧抛）——新配置键无需预置 app.properties 默认即可读取。
 
 ### 5.2 数据库表
 

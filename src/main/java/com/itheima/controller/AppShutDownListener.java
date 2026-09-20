@@ -19,6 +19,8 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
 import java.util.logging.Logger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @WebListener
 public class AppShutDownListener implements ServletContextListener {
@@ -51,6 +53,10 @@ public class AppShutDownListener implements ServletContextListener {
      */
     private void validateUploadPath(ServletContextEvent sce) {
         String expected = normalizePath(AppConfig.getUploadPath());
+        // 防御：upload.path 为空（如 -Dupload.path= 空覆盖）时挂载与落盘都是无效路径，直接拒绝（review 建议）
+        if (expected.isEmpty()) {
+            throw new IllegalStateException("upload.path 未配置或为空，拒绝启动");
+        }
         try (InputStream in = openContextXml(sce)) {
             if (in == null) {
                 throw new IllegalStateException("无法读取 META-INF/context.xml，拒绝启动");
@@ -65,7 +71,10 @@ public class AppShutDownListener implements ServletContextListener {
                 if (base == null || base.isEmpty()) {
                     continue;
                 }
-                if (!normalizePath(base).equals(expected)) {
+                // T18：base 可能为 ${upload.path:-<默认>} 占位符（Tomcat 原生展开），先模拟展开再比对，
+                // 语义 = "Tomcat 实际挂载 == AppConfig 实际使用"，仍防传 A 目录取 B 目录
+                String resolved = normalizePath(resolvePlaceholder(base));
+                if (!resolved.equals(expected)) {
                     throw new IllegalStateException(
                             "context.xml 的 /upload base 与 app.properties 不一致: "
                                     + "context.xml=" + base + ", upload.path=" + expected);
@@ -78,6 +87,29 @@ public class AppShutDownListener implements ServletContextListener {
         } catch (Exception e) {
             throw new IllegalStateException("解析 META-INF/context.xml 失败", e);
         }
+    }
+
+    /** ${name:-default} 占位符（name 为属性名，default 可含冒号如 Windows 盘符；默认值缺省）。 */
+    private static final Pattern PLACEHOLDER = Pattern.compile("^\\$\\{(.+?)(?::-([^}]*))?\\}$");
+
+    /**
+     * 模拟 Tomcat 对 context.xml 属性值的 ${...} 展开（SystemPropertySource 始终启用）：
+     * 系统属性优先，未设置则取占位符内默认值；字面路径原样返回。
+     * 注意与 AppConfig 的覆盖链不同——这里只模拟 Tomcat 展开，不查环境变量。
+     */
+    static String resolvePlaceholder(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String text = raw.trim();
+        Matcher m = PLACEHOLDER.matcher(text);
+        if (!m.matches()) {
+            return text;
+        }
+        String name = m.group(1);
+        String def = m.group(2);
+        String value = System.getProperty(name);
+        return value != null ? value.trim() : (def != null ? def : "");
     }
 
     private InputStream openContextXml(ServletContextEvent sce) throws Exception {

@@ -5,8 +5,10 @@ import java.io.InputStream;
 import java.util.Properties;
 
 /**
- * 应用配置：classpath 加载 app.properties，环境变量覆盖（key 去点转大写，
- * 例：db.password -> DB_PASSWORD；log.file 额外支持 LOG_PATH 别名）。
+ * 应用配置：classpath 加载 app.properties，外部覆盖两级（优先级从高到低）：
+ *   1. 环境变量（key 去点转大写，例：db.password -> DB_PASSWORD；log.file 额外支持 LOG_PATH 别名）
+ *   2. JVM 系统属性（-Dkey=value，T18：与 Tomcat context.xml 的 ${key:-default} 占位符同源，
+ *      保证 /upload 静态挂载与上传落盘两侧一致）
  * 配置文件缺失或解析失败时启动即失败（fail-fast）。
  */
 public final class AppConfig {
@@ -33,6 +35,9 @@ public final class AppConfig {
             if (value == null && "log.file".equals(key)) {
                 value = System.getenv("LOG_PATH");
             }
+            if (value == null) {
+                value = System.getProperty(key);   // T18：-Dkey=value 系统属性覆盖（与 context.xml ${key:-default} 同源）
+            }
             if (value != null) {
                 props.setProperty(key, value.trim());
             }
@@ -42,6 +47,29 @@ public final class AppConfig {
 
     private static String get(String key) {
         return PROPS.getProperty(key, "").trim();
+    }
+
+    // ===== 带默认值读取（T18）：键缺失/值为空时返回默认值；键存在但数值解析失败照旧抛（fail-fast）。
+    //      既有无默认值 getter 语义不变。包可见（同包 getter/测试可用）。
+
+    static String get(String key, String defaultValue) {
+        String v = PROPS.getProperty(key);
+        return (v == null || v.trim().isEmpty()) ? defaultValue : v.trim();
+    }
+
+    static int getInt(String key, int defaultValue) {
+        String v = get(key);
+        return v.isEmpty() ? defaultValue : Integer.parseInt(v);
+    }
+
+    static long getLong(String key, long defaultValue) {
+        String v = get(key);
+        return v.isEmpty() ? defaultValue : Long.parseLong(v);
+    }
+
+    static boolean getBoolean(String key, boolean defaultValue) {
+        String v = get(key);
+        return v.isEmpty() ? defaultValue : Boolean.parseBoolean(v);
     }
 
     private static int getInt(String key) {
