@@ -1,11 +1,11 @@
 package com.itheima.content.dao;
 
-import com.itheima.dao.ResultMap;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.content.model.cache.ContentCacheDTO;
 import com.itheima.admin.model.vo.AdminContentVO;
 
 import java.sql.*;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -69,7 +69,7 @@ public class ContentDao {
             pstmt.setLong(1, contentId);
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
-                    return ResultMap.buildContentCacheDTO(rs);
+                    return buildContentCacheDTO(rs);
                 } else {
                     return null;
                 }
@@ -120,7 +120,7 @@ public class ContentDao {
             }
             try (ResultSet rs = pstmt.executeQuery()) {
                 while (rs.next()) {
-                    list.add(ResultMap.buildContentCacheDTO(rs));
+                    list.add(buildContentCacheDTO(rs));
                 }
             }
         }
@@ -150,7 +150,7 @@ public class ContentDao {
         try (PreparedStatement pstmt = conn.prepareStatement(sql);
              ResultSet res = pstmt.executeQuery()) {
             while (res.next()) {
-                list.add(ResultMap.buildContentCacheDTO(res));
+                list.add(buildContentCacheDTO(res));
             }
         }
         return list;
@@ -409,9 +409,38 @@ public class ContentDao {
         try (PreparedStatement ps = conn.prepareStatement(sql);
              ResultSet rs = ps.executeQuery()) {
             while (rs.next()) {
-                list.add(ResultMap.buildAdminContent(rs));
+                list.add(buildAdminContent(rs));
             }
         }
         return list;
+    }
+
+    // ===== ResultSet → 对象映射（T14：由 com.itheima.dao.ResultMap 按域拆分下沉，方法体逐行不变）=====
+
+    private static ContentCacheDTO buildContentCacheDTO(ResultSet rs) throws SQLException {
+        ContentCacheDTO dto = new ContentCacheDTO();
+        dto.setId(rs.getLong("id"));
+        dto.setAuthorId(rs.getLong("user_id"));
+        dto.setType(rs.getInt("type"));
+        dto.setTitle(rs.getString("title"));
+        dto.setDescription(rs.getString("description"));
+        dto.setCategoryId(rs.getInt("category_id"));
+        dto.setCommentCount(rs.getInt("comment_count"));
+        dto.setLikeCount(rs.getInt("like_count"));
+        dto.setCommentEnabled(rs.getInt("comment_enabled") != 0);
+        dto.setAuthorName(rs.getString("username"));
+        dto.setCreateTime(rs.getObject("create_time", LocalDateTime.class));
+        return dto;
+    }
+
+    /** 管理端内容清单（A2 审核下架）：hidden = is_deleted == 2 */
+    private static AdminContentVO buildAdminContent(ResultSet rs) throws SQLException {
+        AdminContentVO vo = new AdminContentVO();
+        vo.setId(rs.getLong("id"));
+        vo.setTitle(rs.getString("title"));
+        vo.setType(rs.getInt("type"));
+        vo.setAuthorName(rs.getString("author_name"));
+        vo.setHidden(rs.getInt("is_deleted") == 2);
+        return vo;
     }
 }

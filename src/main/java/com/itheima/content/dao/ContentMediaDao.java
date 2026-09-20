@@ -1,6 +1,5 @@
 package com.itheima.content.dao;
 
-import com.itheima.dao.ResultMap;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.content.model.entity.ContentMedia;
 
@@ -42,7 +41,7 @@ public class ContentMediaDao {
                 while (rs.next()){
                     int type= rs.getInt("type");
                     map.computeIfAbsent(type, k -> new ArrayList<>())  //如果 map 中不存在这个 type，就创建一个新的 ArrayList 并放进去
-                            .add(ResultMap.buildContentMedia(rs));//；不管是否新建，都会返回这个 type 对应的 List，然后往这个 List 里 add 数据。
+                            .add(buildContentMedia(rs));//；不管是否新建，都会返回这个 type 对应的 List，然后往这个 List 里 add 数据。
                     //k就是Key,但这里没有用到key
                 }
             }
@@ -75,7 +74,7 @@ public class ContentMediaDao {
             }
             try (ResultSet rs = pstmt.executeQuery()) {
                 while (rs.next()) {
-                    list.add(ResultMap.buildContentMedia(rs));
+                    list.add(buildContentMedia(rs));
                 }
             }
         }
@@ -89,7 +88,7 @@ public class ContentMediaDao {
         try (PreparedStatement pstmt = conn.prepareStatement(sql);
              ResultSet rs = pstmt.executeQuery()) {
             while (rs.next()) {
-                list.add(ResultMap.buildContentMedia(rs));
+                list.add(buildContentMedia(rs));
             }
         }
         return list;
@@ -102,7 +101,7 @@ public class ContentMediaDao {
             pstmt.setLong(1, mediaId);
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
-                    return ResultMap.buildContentMedia(rs);
+                    return buildContentMedia(rs);
                 }
                 return null;
             }
@@ -129,7 +128,7 @@ public class ContentMediaDao {
             pstmt.setInt(3, sort);
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
-                    return ResultMap.buildContentMedia(rs);
+                    return buildContentMedia(rs);
                 }
                 return null;
             }
@@ -185,6 +184,17 @@ public class ContentMediaDao {
             pstmt.setLong(1, contentId);
             return pstmt.executeUpdate();
         }
+    }
+
+    // ===== ResultSet → 对象映射（T14：由 com.itheima.dao.ResultMap 按域拆分下沉，方法体逐行不变）=====
+
+    private static ContentMedia buildContentMedia(ResultSet rs) throws SQLException {
+        long mediaId = rs.getLong("id");
+        long contentId = rs.getLong("content_id");
+        String url = rs.getString("url");
+        int type = rs.getInt("type");
+        int sort = rs.getInt("sort");
+        return new ContentMedia(mediaId, contentId, url, type, sort);
     }
 
 

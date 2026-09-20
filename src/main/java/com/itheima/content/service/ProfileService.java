@@ -4,7 +4,7 @@ import com.itheima.user.model.entity.User;
 import com.itheima.content.model.vo.ContentVO;
 import com.itheima.content.model.vo.ProfileVO;
 
-import com.itheima.content.model.dto.PageResult;
+import com.itheima.common.model.dto.PageResult;
 import com.itheima.content.dao.ContentDao;
 import com.itheima.follow.service.FollowCache;
 import com.itheima.like.service.LikeService;

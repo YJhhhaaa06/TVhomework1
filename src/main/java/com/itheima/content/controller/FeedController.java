@@ -3,7 +3,7 @@ package com.itheima.content.controller;
 import com.itheima.controller.BaseServlet;
 import com.itheima.controller.BaseServletUtil;
 import com.itheima.controller.RequestParser;
-import com.itheima.content.model.dto.PageResult;
+import com.itheima.common.model.dto.PageResult;
 import com.itheima.ioc.annotation.Inject;
 import com.itheima.content.model.vo.ContentVO;
 import com.itheima.content.service.FeedService;

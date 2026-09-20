@@ -1,6 +1,6 @@
 # 当前系统架构地图
 
-> 版本：3.8（2026-09-20 T13：**注册后自动登录兜底**（治池 U-16）——`/user/register` 的「注册 + 自动登录」编排下沉到新增的 `UserService.registerAndLogin`：注册事务提交后自动登录失败（用户查不到 / 密码不匹配 / 登录期 DB 异常，理论上不应发生）**不再抛错**，改为返回 `token == null` 的 `LoginVO`（id/username 仍是刚注册的用户），前端据此提示「注册成功，请手动登录」并切回登录 tab 预填手机号；**注册本身失败**（手机号/用户名占用、插入异常）仍照旧抛错。成功路径的响应字段集与既有错误码零变化）
+> 版本：3.9（2026-09-20 T14：**包层结构清扫**（R-03 已拍板，治池 U-07 + U-19 + N14）——① **分页信封统一**：新增 `com.itheima.common.model.dto.PageResult` 为全项目**唯一**信封，同形的 `content.model.dto.PageResult` 与 `follow.model.dto.FollowPageResult` 一并删除（JSON 字段名与推导公式逐字段不变，前端零改动）；② **`com.itheima.dao` 包删除**：原 `ResultMap` 的 6 个 ResultSet→对象映射方法按域下沉为各自 DAO 的 `private static` 方法（方法体逐行不变），基础包不再反向 import 业务域模型；③ **content↔comment 包层环按 R-03 口径①保留现状**（业务互依，纯搬移无法单向化）。对外行为零变化）
 > 最后更新：2026-09-20
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
@@ -88,7 +88,7 @@ com.itheima/
 ├── exception/              # 基建不动：异常体系
 ├── config/                 # 基建不动：AppConfig
 ├── controller/             # 仅保留跨域基建：BaseServlet/BaseServletUtil/RequestParser/AppShutDownListener
-├── dao/                    # 仅保留跨域基建：ResultMap
+├── common/                 # 跨域共享模型（T14 新增）：model/dto/PageResult —— 全项目唯一分页信封
 ├── cache/                  # 统一缓存基建：Redis 访问+熔断/JSON 序列化/统一 key 规范/单飞/三态空标记/写失败 DEL 降级/SetCache/ZSetCache
 │
 ├── user/                   # 用户/认证域
@@ -103,6 +103,7 @@ com.itheima/
 
 > 每域内部保留 `controller / service / dao / model` 分层子包，与既有技术层级命名一致（行数统计为 2026-09-12 快照，以实际代码为准）。
 > 跨域依赖允许：feature 包间可互相 import（Java 无包环限制）；任何域不反向依赖基建包。
+> **包层环实测（2026-09-20 T14）**：全仓 `src/main/java/com/itheima/**` 的双向包环在 **T14 改造前共 9 个**（`admin↔content`、`comment↔content`、`comment↔like`、`content↔dao`、`content↔like`、`content↔upload`、`content↔user`、`dao↔user`、`ioc↔util`）；T14 消除了其中 **2 个 dao 相关环**（`content↔dao`、`dao↔user`：`dao` 包删除，基础包不再 import 业务模型），**改造后剩 7 个**，且新增的 `common` 包**零出边**（未引入新环）。**`content↔comment` 按 R-03 口径①保留现状**（comment→content 由 10 条降至 9 条——信封上移所致）——其 15 条边中只有 5 条属"组件错位"，其余为真业务互依（内容删除级联软删评论、评论新增改 `comment_count` 并校验内容存在），纯搬移无法单向化，彻底解决需引入抽象层（属新能力，另行立项）。
 
 ### 4.2 基建包（保持原位不动）
 
@@ -178,13 +179,14 @@ com.itheima/
 | RequestParser | 69 | JSON 请求体解析 |
 | AppShutDownListener | 102 | 容器生命周期管理（@WebListener，统一关闭 IoC 容器） |
 
-#### dao 包（跨域基建，业务 DAO 已全部搬出）
+#### common 包 — 跨域共享模型（T14 新增）
 
 | 类 | 行数 | 职责 |
 |----|------|------|
-| ResultMap | 88 | ResultSet → 对象映射 |
+| model/dto/PageResult | 73 | 全项目**唯一**分页信封（`list / total / page / pageSize / totalPages`，`totalPages` 由 total 与 pageSize 推导、`pageSize <= 0` 时为 0）。T14 从 `content.model.dto` 上移，同一提交删除同形的 `follow.model.dto.FollowPageResult`（同形二分消除）；本包**零业务 import**，不引入新的包层环 |
 
 > 规范：所有 DAO 方法只接收 `Connection`，不自行获取/释放连接；连接与事务统一由 Service 通过 TransactionTemplate 管理。
+> **T14 起 `com.itheima.dao` 包已删除**：原 `ResultMap` 的 6 个 ResultSet→对象映射方法按域下沉为各自 DAO 的 `private static` 方法（`ContentDao` 2 / `ContentMediaDao` 1 / `CommentDao` 1 / `UserDao` 2），方法体逐行不变；基础包不再反向 import 业务域模型（原 5 条：content×3 / user×1 / admin×1）。
 
 #### cache 包 — 统一缓存基建
 
@@ -215,7 +217,7 @@ com.itheima/
 |----|------|------|
 | controller | LoginController（95，/user/*） | 登录、注册、修改密码/用户名 |
 | service | UserService（271） | 用户认证 + 管理员判定 + 改名后级联失效内容缓存（注入 ContentCache）；**`registerAndLogin`（T13，池 U-16 兜底）= 注册 + 自动登录编排**——自动登录失败不回抛，返回 `token=null` 的 LoginVO（注册已提交即算成功），注册本身失败仍抛错 |
-| dao | UserDao（258） | users 用户 CRUD + 角色查询（`findUsersByIds` T7 起带 `ORDER BY id`：关注/粉丝列表顺序由此保证，唯一调用方 FollowService） |
+| dao | UserDao（275） | users 用户 CRUD + 角色查询（`findUsersByIds` T7 起带 `ORDER BY id`：关注/粉丝列表顺序由此保证，唯一调用方 FollowService）；T14 起内含从 `dao.ResultMap` 下沉的 `buildUserForLogin` / `buildUserForProfile` 两个 `private static` 行映射方法 |
 | model | entity/User（89）、dto/LoginDTO（28）/RegisterDTO（41）/ChangePasswordDTO（35）/ChangeUserNameDTO（13）、command/LoginCommand（63）/RegisterCommand（44）/ChangePasswordCommand（44）/LoginType（7）、vo/LoginVO（40） | 用户实体与请求/命令/响应对象 |
 
 #### content 域 — `com.itheima.content`（含共享缓存组件）
@@ -224,20 +226,20 @@ com.itheima/
 |----|------|------|
 | controller | ContentController（182，/content/*）、StartController（49，/start）、SearchController（95，/search/*）、FeedController（57，/feed）、ProfileController（70，/profile） | 内容管理 + 首页推荐 + 搜索 + 关注流 + 用户主页 |
 | service | ContentService（497：内容/搜索业务 + 评论读路径编排——**T10-A/T10-B 起评论查询两键组 + 主楼窗口装载**（切片点在 `CommentCache.getRootPage`，楼中楼前 K=2 + `replyCount`），缺省重载仍全量数组；**T12 起 `search` 事务回调只做 DB 查询**，页内批量读 `getContentsBatch` + 点赞/关注状态填充在事务外）、ContentCache（710：Redis 内容缓存=三态 Cache-Aside+索引；loader 失败抛 DatabaseException 不污染空标记；`invalidateAuthorContentKeys` 改名级联失效；`getContentsBatch` miss/降级装载走 `loadContentsFromDb` 一趟事务两查）、CommentCache（716：Redis 评论缓存=三态 Cache-Aside+独立 TTL+空标记+显式失效+**两键组（主楼 List + 楼中楼 Hash）+ 主楼窗口/count**；loader 失败抛 DatabaseException）、ContentStatusFiller（81）、FeedService（107）、ProfileService（118） | 内容业务 + Redis 内容缓存 + Redis 评论缓存 + 状态填充 + 关注流 + 主页（Feed/Profile/Search 与关注·粉丝列表装载的缓存读在 DB 事务外执行） |
-| dao | ContentDao（384）、ContentMediaDao（168） | content/content_media 数据访问（ContentLikeDao 按 like 域归属）；`findContentsByIds` 批量 IN 查询（供批量缓存装载，列与 findContent 同源） |
-| model | entity/ContentMedia（63）、cache/ContentCacheDTO（136）/CommentCacheDTO（110）、vo/ContentVO（42）/ContentDetailVO（26）/CommentVO（22）/ProfileVO（43）、dto/PageResult（62）/SearchDTO（51）、command/CommandConverter（139）/ContentType（16） | 内容模型 + 共享缓存 DTO + 共享 VO/DTO/转换器 |
+| dao | ContentDao（446）、ContentMediaDao（202） | content/content_media 数据访问（ContentLikeDao 按 like 域归属）；`findContentsByIds` 批量 IN 查询（供批量缓存装载，列与 findContent 同源）；T14 起各自内含从 `dao.ResultMap` 下沉的 `private static` 行映射方法（2 / 1） |
+| model | entity/ContentMedia（63）、cache/ContentCacheDTO（136）/CommentCacheDTO（110）、vo/ContentVO（42）/ContentDetailVO（26）/CommentVO（22）/ProfileVO（43）、dto/SearchDTO（51）、command/CommandConverter（139）/ContentType（16） | 内容模型 + 共享缓存 DTO + 共享 VO/DTO/转换器（**`PageResult` 已随 T14 上移 `common.model.dto`**） |
 
-> **共享组件归属**：ContentCache / CommentCache / ContentStatusFiller / ContentCacheDTO / CommentCacheDTO / PageResult / CommandConverter / ContentVO / ContentDetailVO / CommentVO 归本域，其它域 controller/service 跨域 import。
+> **共享组件归属**：ContentCache / CommentCache / ContentStatusFiller / ContentCacheDTO / CommentCacheDTO / CommandConverter / ContentVO / ContentDetailVO / CommentVO 归本域，其它域 controller/service 跨域 import（**`PageResult` 已于 T14 上移 `common` 包，不再归本域**）。
 
 #### follow 域 — `com.itheima.follow`
 
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | FollowController（104，/follow/*） | 关注/取关/关注列表/粉丝列表（**T11-A：列表只有分页入口**——`page`/`pageSize` 均可选，缺省归一为 page 1 / `pageSize` 200；域级常量 `FOLLOW_PAGE_SIZE_MAX = 200` + 信封 `FOLLOW_PAGE_SIZE_DEFAULT = 200`，T7 的「缺省返回全量数组」分支已删除） |
-| service | FollowService（184） | 关注业务（读路径委托 FollowCache；关注/取关 DB 提交后缓存双写；**T7 新增分页读**——缓存窗口取该页 ids+total，仅对该页 ids 做 DB 装载与批量判重，信封在事务外组装；**T11-A 删除两个缺省全量重载**，分页读为唯一入口；**T12 起事务回调只做 DB 装载**（`findUsersByIds`），`batchIsFollowing` 与视图组装移事务外） |
+| service | FollowService（185） | 关注业务（读路径委托 FollowCache；关注/取关 DB 提交后缓存双写；**T7 新增分页读**——缓存窗口取该页 ids+total，仅对该页 ids 做 DB 装载与批量判重，信封在事务外组装；**T11-A 删除两个缺省全量重载**，分页读为唯一入口；**T12 起事务回调只做 DB 装载**（`findUsersByIds`），`batchIsFollowing` 与视图组装移事务外；**T14 起信封用公共 `common.model.dto.PageResult`**） |
 | service | FollowCache（539） | 关注关系 Redis 缓存（**双 ZSet（score=成员 id）+ 条件 MULTI 双写 + 失败双 DEL** + 三态读 + 单飞 + 降级单飞全量装载作答；读路径收口 **ZSetCache**——单成员三态/批量/全量/窗口走基建 + `sortIds` 归一升序，写路径 MULTI 双写语义保持；关注/粉丝计数 key 读写。**T11-C**：窗口 loader 换 DAO **窗口 SQL**（分页读不再全量装载）、新增部分态判定回落 `isFollowingInDb`（单行）、`probePair` 扩为六探针且**任一侧 `partial:` → 三件套双 DEL**（增量写分支与 Redis 异常分支同口径：异常分支走新增私有 `invalidatePairQuietly`，而 `CacheAside.invalidate` 只删数据 key + 空标记）、删除已无主代码调用方的 `getFollowerIds`（池 U-21）） |
 | dao | FollowDao（155） | follow 关注关系（仅 FollowService 业务校验与 FollowCache loader 使用；**T11-C-1 新增两个窗口查询**：`getFollowedUserIdsInWindow` / `getFollowerUserIdsInWindow`——`WHERE … ORDER BY … LIMIT ? OFFSET ?`，供前缀窗口装载；关注方向复用 `uk_user_follow`、粉丝方向走新增 `idx_followed_user_user`，EXPLAIN 均 `Using index`（覆盖索引）且无 filesort） |
-| model | FollowPageResult（79） | 关注/粉丝列表分页信封（T7 B2）：`list/total/page/pageSize/totalPages`，与 content 域 `PageResult` 同形但**归属 follow 域**——避免 follow 反向 import content 形成新包层环（content 已 import `follow.FollowCache`） |
+| model | —（T14 起无专属 model） | 关注/粉丝列表分页信封改用公共 `common.model.dto.PageResult`（T14）；原 `FollowPageResult`（T7 B2 为避开 follow→content 环而自建的同形类）已随 T14 删除，同形二分消除 |
 
 > 注：FeedService/ProfileService/ContentStatusFiller 跨域 import `follow.service.FollowCache`（服务层），不再直连 FollowDao。守关注读路径走缓存、写路径 DB 提交后双写。
 
@@ -257,9 +259,9 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | CommentController（160，/comment/*） | 评论发表/查询/删除（**T8/T11-B：`/show`、`/replies` 可选 `page`/`pageSize`**——`/show` 显式判"是否传分页参数"分支：缺省全量数组、传参走分页信封；`pageSize` 缺省取域级信封 **200**、上限 **500**） |
-| service | CommentService（197） | 评论业务（楼中楼：发表归一化主楼 + 软删除：用户自删/管理员删） |
-| dao | CommentDao（179） | comment 评论 CRUD + 软删除（整楼/单条）+ 楼内回复计数 + 评论所属内容定位 |
-| model | dto/CommentDTO（44）、command/CommentCommand（50） | 评论请求/命令（CommentVO 归 content 域） |
+| service | CommentService（299） | 评论业务（楼中楼：发表归一化主楼 + 软删除：用户自删/管理员删）；**T14 起分页信封改用公共 `common.model.dto.PageResult`**（原 import content 域信封） |
+| dao | CommentDao（368） | comment 评论 CRUD + 软删除（整楼/单条）+ 楼内回复计数 + 评论所属内容定位；T14 起内含从 `dao.ResultMap` 下沉的 `buildComment` `private static` 行映射方法 |
+| model | dto/CommentDTO（44）、command/CommentCommand（50） | 评论请求/命令（CommentVO 归 content 域；**T14 R-03 口径①：content↔comment 包层环保留现状**，未拆分共享组件——环的 15 条边中仅 5 条属组件错位，其余为业务互依） |
 
 #### coupon 域 — `com.itheima.coupon`
 
@@ -484,13 +486,13 @@ com.itheima/
 - **前缀窗口装载（T11-C，治池 U-18）**：装载量改与**页位置**相关、而非列表总量（场景锚：某博主 100 万粉丝时，任何一次粉丝列表分页都不得触发百万行装载）——`miss`（冷 key）只装载 `[0, offset+count)`；命中但带 `partial:` 标记时，页落在已知前缀 `[0, W)`（W=ZCARD）内直接 `ZRANGE`（**零 DB**），越过 `W` 则**只补** `[W, offset+count)`（DAO 窗口 SQL `ORDER BY … LIMIT ? OFFSET ?`），DB 返回不足即到底 → 清 `partial:` 转完整态（此后回到 ZCARD 口径）；**补齐上界不依赖 total**（DB 返回不足即到底，计数漂移不影响装载量）。**降级（Redis 异常）语义随之变化**：由"全量装载 + 内存切片"改为 **DB 窗口直查**（只查被看的那一段、单飞去重、不装载不写回）——第三期 T2"降级不放量"口径不变，首次在常青文档写明（不是遗漏）。
 - **部分态三处配套（T11-C）**：① **判定**——`isFollowing` 的 ZSCORE 未命中、`batchIsFollowing` 的未命中成员，在带 `partial:` 时**回落 DB**（前者单行 `isFollowingInDb`、后者复用既有批量 `dbAnswer`；前缀里查不到 ≠ 不是成员），且批量路径**跳过全量回填**（不把装载量重新放大）；② **全量读**——`getMembers` 遇 `partial:` **必须先补齐**再返回，且**返回 DB 装载结果本身、不回读缓存**（补齐的缓存写回是 best-effort，写失败时回读只能拿到前缀；`FeedService` 依赖全量关注 ids，返回前缀会静默漏关注者——本设计最危险点，JUnit 已覆盖含写失败路径）；③ **写路径**——`probePair` 扩为六探针，**任一侧 `partial:` → 三件套双 DEL**（取关会在前缀里留"洞"、关注会插入非前缀成员，两者都破坏 `ZRANGE offset` 的偏移语义），与既有"冷 key → 双 DEL"同构。**残留（不在本任务范围）**：`getFollowingIds` 的 feed 全量关注 ids 读路径本身（R-01 明确保留）。
 - **顺序保证**：分页切片的成员集合与顺序来自 ZSet 升序（score=成员 id）；**列表最终输出顺序由 `UserDao.findUsersByIds` 决定**，T7 已为该查询补 `ORDER BY id`（此前无 ORDER BY，输出序依赖存储引擎默认序——HEAD 既有脆弱点，唯一调用方为 FollowService），使"ZSet 升序切片"与"DB 返回序"同口径，分页顺序稳定**由构造保证**而非巧合。
-- **接口口径（T7 B2 → T11-A 契约变更，已获用户批准）**：`GET /follow/following|followers` **始终**返回 `data = {list,total,page,pageSize,totalPages}`（follow 域信封 `FollowPageResult`）。
+- **接口口径（T7 B2 → T11-A 契约变更，已获用户批准）**：`GET /follow/following|followers` **始终**返回 `data = {list,total,page,pageSize,totalPages}`（分页信封 `com.itheima.common.model.dto.PageResult`——**T14 起全项目唯一信封**，原 follow 域 `FollowPageResult` 已删除）。
   - `page` 缺省 1；`pageSize` 缺省 **200**（`FOLLOW_PAGE_SIZE_DEFAULT` = 域级信封）、上限 **200**（`FOLLOW_PAGE_SIZE_MAX`，原 50）。显式传 `pageSize` 仍生效（**不采纳"后端硬忽略参数"**：那会摧毁 pytest 用小信封逐页比对"页间不重不漏"的能力）。
   - **缺省（不传任何分页参数）= 第一页信封**，与显式 `page=1&pageSize=200` 响应**逐字节一致**；T7 的「两者都不传 → `data` 仍为全量数组」分支**已删除**——该分支同时是"一次拉全量"的攻击放大面。
   - 参数解析走 `BaseServletUtil.parsePageSize(req, max, defaultSize)` **三参重载（T11-A 新增）**：传了 → `min(s, max)`、未传 → `defaultSize`；两参重载委托 `(req, max, 10)`、无参重载经两参委托 → **其它域（feed/search/profile/content/coupon）语义零变化**。`page < 1` 归一为 1；越界页返回空数组但保留 total。
 - **total 口径（T11-C 双口径）**：**完整态**（无 `partial:` 标记）= 同一 ZSet 的 `ZCARD`（与页内容同源，与 T7 **逐字节一致**）；**部分态 / 降级态** = 本域**计数口径**（`FollowCache.getFollowCount` / `getFollowerCount` → `user:followCount`/`user:followerCount`，miss 回落 `users` 表计数列）——此时成员集只是前缀，ZCARD 会低估总数。完整态不用计数 key 顶替（两 key 可能瞬时不一致）。
 - **前端**：`static/js/views/user.js` 的关注/粉丝 sheet 接公共 **`chunkedList`** helper（`static/js/chunkedList.js`——T10-B 抽出，T11-A 为第二个消费方，T11-B 起的完整消费方清单见 6.19）：请求**只传 `page`**（信封大小由后端域常量决定，前端不再出现 pageSize 魔法数）、大 chunk 200 + 本地小批 10，本地余量足够时「加载更多」**0 请求**；每次 `openUserList` 重建实例（等价 reset，防 following/followers 本地余量串台）。
-- **包层边界**：分页信封落在 follow 域（**不 import content 域 `PageResult`**——content 已 import `follow.FollowCache`，反向引用会形成新的 follow↔content 包层环）；"PageResult 上移公共包供多域复用"登记留池（跨域重构不在本任务范围）。
+- **包层边界（T14 更新）**：分页信封**已上移公共包** `com.itheima.common.model.dto.PageResult`（T14 治池 U-19）——原 T7 的规避口径"信封落在 follow 域、不 import content 域 `PageResult`（会形成新的 follow↔content 包层环）"及其"登记留池待上移"的尾巴**随公共包落地而失效**；`common` 包零业务 import，`FollowService` 由 follow→common 单向引用，不新增包层环。
 
 ### 6.18 评论列表分页（T8 → T10-A/T10-B：两键组 + 主楼窗口装载 + 楼中楼前 K + 展开接口）
 

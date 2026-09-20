@@ -1,6 +1,5 @@
 package com.itheima.user.dao;
 
-import com.itheima.dao.ResultMap;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.user.model.entity.User;
 
@@ -47,7 +46,7 @@ public class UserDao {
             // 获取结果集
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
-                    return ResultMap.buildUserForLogin(rs);
+                    return buildUserForLogin(rs);
                 } else {
                     return null; // 用户不存在
                 }
@@ -62,7 +61,7 @@ public class UserDao {
             // 获取结果集
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
-                    return ResultMap.buildUserForLogin(rs);
+                    return buildUserForLogin(rs);
                 } else {
                     return null; // 用户不存在
                 }
@@ -78,7 +77,7 @@ public class UserDao {
             // 获取结果集
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
-                    return ResultMap.buildUserForProfile(rs);
+                    return buildUserForProfile(rs);
                 } else {
                     return null; // 用户不存在
                 }
@@ -251,6 +250,24 @@ public class UserDao {
                 return 0;
             }
         }
+    }
+
+    // ===== ResultSet → 对象映射（T14：由 com.itheima.dao.ResultMap 按域拆分下沉，方法体逐行不变）=====
+
+    private static User buildUserForProfile(ResultSet rs) throws SQLException {
+        long id = rs.getLong("id");
+        String userName = rs.getString("username");
+        int followerCount = rs.getInt("follower_count");
+        int followCount = rs.getInt("follow_count");
+        return new User(id, userName, followCount, followerCount);
+    }
+
+    private static User buildUserForLogin(ResultSet rs) throws SQLException {
+        long id = rs.getLong("id");
+        String username = rs.getString("username");
+        String hashedPassword = rs.getString("hashed_password");
+        String phone = rs.getString("phone");
+        return new User(id, hashedPassword, username, phone);
     }
 
 }

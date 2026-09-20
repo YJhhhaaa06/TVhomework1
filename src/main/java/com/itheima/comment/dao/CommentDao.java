@@ -1,6 +1,5 @@
 package com.itheima.comment.dao;
 
-import com.itheima.dao.ResultMap;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.content.model.cache.CommentCacheDTO;
 
@@ -49,7 +48,7 @@ public class CommentDao {
             ps.setLong(1, commentId);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
-                    return ResultMap.buildComment(rs);
+                    return buildComment(rs);
                 }
             }
         }
@@ -106,7 +105,7 @@ public class CommentDao {
             try(ResultSet rs = ps.executeQuery()){
 
             while (rs.next()) {
-                CommentCacheDTO c = ResultMap.buildComment(rs);
+                CommentCacheDTO c = buildComment(rs);
                 list.add(c);
             }
             }
@@ -136,7 +135,7 @@ public class CommentDao {
             ps.setInt(3, limit);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    list.add(ResultMap.buildComment(rs));
+                    list.add(buildComment(rs));
                 }
             }
         }
@@ -185,7 +184,7 @@ public class CommentDao {
             }
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    list.add(ResultMap.buildComment(rs));
+                    list.add(buildComment(rs));
                 }
             }
         }
@@ -245,7 +244,7 @@ public class CommentDao {
             ps.setInt(6, limit);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    list.add(ResultMap.buildComment(rs));
+                    list.add(buildComment(rs));
                 }
             }
         }
@@ -274,7 +273,7 @@ public class CommentDao {
             ps.setLong(1, commentId);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
-                    return ResultMap.buildComment(rs);
+                    return buildComment(rs);
                 }
             }
         }
@@ -336,6 +335,32 @@ public class CommentDao {
             ps.setLong(1, contentId);
             return ps.executeUpdate();
         }
+    }
+
+    // ===== ResultSet → 对象映射（T14：由 com.itheima.dao.ResultMap 按域拆分下沉，方法体逐行不变）=====
+
+    private static CommentCacheDTO buildComment(ResultSet rs) throws SQLException {
+        CommentCacheDTO cm = new CommentCacheDTO();
+        cm.setUsername(rs.getString("username"));
+        cm.setCommentId(rs.getLong("comment_id"));
+        cm.setContentId(rs.getLong("content_id"));
+        cm.setUserId(rs.getLong("user_id"));
+        cm.setContent(rs.getString("content"));
+        if (rs.getObject("parent_id") == null) {
+            cm.setParentId(null);
+        } else {
+            cm.setParentId(rs.getLong("parent_id"));
+        }
+        if (rs.getObject("reply_to_user_id") == null) {
+            cm.setReplyToUserId(null);
+        } else {
+            cm.setReplyToUserId(rs.getLong("reply_to_user_id"));
+        }
+        cm.setReplyToUsername(rs.getString("reply_to_username"));
+        cm.setLikeCount(rs.getInt("like_count"));
+        // T10-B：主楼回复总数（展开/信封 replyCount 字段来源；查询 SQL 带选出即可）
+        cm.setReplyCount(rs.getInt("reply_count"));
+        return cm;
     }
 
 

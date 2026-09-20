@@ -2,7 +2,7 @@ package com.itheima.follow.service;
 
 import com.itheima.cache.ZSetCache;
 import com.itheima.follow.dao.FollowDao;
-import com.itheima.follow.model.dto.FollowPageResult;
+import com.itheima.common.model.dto.PageResult;
 import com.itheima.user.dao.UserDao;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.ServerException;
@@ -169,7 +169,7 @@ class FollowServiceTest {
                 .thenReturn(List.of(user(9L, "carol"), user(10L, "dave")));
         when(followCache.batchIsFollowing(7L, List.of(9L, 10L))).thenReturn(Map.of(10L, true));
 
-        FollowPageResult<Map<String, Object>> page = service.getFollowingList(7L, 7L, 2, 2);
+        PageResult<Map<String, Object>> page = service.getFollowingList(7L, 7L, 2, 2);
 
         assertEquals(List.of(9L, 10L), idsOf(page.getList()));
         assertEquals(5, page.getTotal());
@@ -200,7 +200,7 @@ class FollowServiceTest {
         when(followCache.getFollowingWindow(7L, 20L, 10))
                 .thenReturn(new ZSetCache.Window(Collections.emptyList(), 5L));
 
-        FollowPageResult<Map<String, Object>> page = service.getFollowingList(7L, 7L, 3, 10);
+        PageResult<Map<String, Object>> page = service.getFollowingList(7L, 7L, 3, 10);
 
         assertTrue(page.getList().isEmpty());
         assertEquals(5, page.getTotal()); // 越界页仍回总数（前端据此判末页）
@@ -216,7 +216,7 @@ class FollowServiceTest {
         when(userDao.findUsersByIds(conn, List.of(8L))).thenReturn(List.of(user(8L, "bob")));
         when(followCache.batchIsFollowing(7L, List.of(8L))).thenReturn(Map.of(8L, true));
 
-        FollowPageResult<Map<String, Object>> page = service.getFollowerList(9L, 7L, 1, 10);
+        PageResult<Map<String, Object>> page = service.getFollowerList(9L, 7L, 1, 10);
 
         assertEquals(List.of(8L), idsOf(page.getList()));
         assertEquals(1, page.getTotal());
@@ -235,7 +235,7 @@ class FollowServiceTest {
         when(userDao.findUsersByIds(conn, List.of(7L))).thenReturn(List.of(user(7L, "alice")));
         when(followCache.batchIsFollowing(7L, List.of(7L))).thenReturn(Collections.emptyMap());
 
-        FollowPageResult<Map<String, Object>> page = service.getFollowingList(7L, 7L, 1, 10);
+        PageResult<Map<String, Object>> page = service.getFollowingList(7L, 7L, 1, 10);
 
         assertEquals(1, page.getList().size());
         // T11-A 评审补强：username 装箱也需有断言（此前随缺省用例一并删除）
@@ -251,7 +251,7 @@ class FollowServiceTest {
                 .thenReturn(new ZSetCache.Window(List.of(8L), 1L));
         when(userDao.findUsersByIds(conn, List.of(8L))).thenReturn(List.of(user(8L, "bob")));
 
-        FollowPageResult<Map<String, Object>> page = service.getFollowingList(7L, null, 1, 10);
+        PageResult<Map<String, Object>> page = service.getFollowingList(7L, null, 1, 10);
 
         assertEquals(1, page.getList().size());
         assertFalse((Boolean) page.getList().get(0).get("isFollowed"));
@@ -265,7 +265,7 @@ class FollowServiceTest {
         when(followCache.getFollowerWindow(9L, 0L, 10))
                 .thenReturn(new ZSetCache.Window(Collections.emptyList(), 0L));
 
-        FollowPageResult<Map<String, Object>> page = service.getFollowerList(9L, 7L, 1, 10);
+        PageResult<Map<String, Object>> page = service.getFollowerList(9L, 7L, 1, 10);
 
         assertTrue(page.getList().isEmpty());
         assertEquals(0, page.getTotal());
@@ -293,7 +293,7 @@ class FollowServiceTest {
         when(userDao.findUsersByIds(conn, List.of(8L, 9L))).thenReturn(Collections.emptyList());
         when(followCache.batchIsFollowing(7L, List.of(8L, 9L))).thenReturn(Map.of(8L, true));
 
-        FollowPageResult<Map<String, Object>> page = service.getFollowingList(7L, 7L, 1, 10);
+        PageResult<Map<String, Object>> page = service.getFollowingList(7L, 7L, 1, 10);
 
         assertTrue(page.getList().isEmpty());
         assertEquals(2, page.getTotal());
@@ -317,7 +317,7 @@ class FollowServiceTest {
             return Map.of(8L, true);
         });
 
-        FollowPageResult<Map<String, Object>> page = service.getFollowingList(7L, 7L, 1, 10);
+        PageResult<Map<String, Object>> page = service.getFollowingList(7L, 7L, 1, 10);
 
         assertEquals(1, page.getList().size());
         assertTrue((Boolean) page.getList().get(0).get("isFollowed"));
@@ -336,7 +336,7 @@ class FollowServiceTest {
             return List.of(user(8L, "bob"));
         });
 
-        FollowPageResult<Map<String, Object>> page = service.getFollowerList(9L, null, 1, 10);
+        PageResult<Map<String, Object>> page = service.getFollowerList(9L, null, 1, 10);
 
         assertEquals(1, page.getList().size());
         assertFalse((Boolean) page.getList().get(0).get("isFollowed"));

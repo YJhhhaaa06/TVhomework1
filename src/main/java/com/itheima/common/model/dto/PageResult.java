@@ -1,7 +1,18 @@
-package com.itheima.content.model.dto;
+package com.itheima.common.model.dto;
 
 import java.util.List;
 
+/**
+ * 分页信封（跨域共享，T14 从 {@code content.model.dto} 上移公共包）。
+ *
+ * <p>全项目**唯一**的分页信封：{@code list / total / page / pageSize / totalPages}。
+ * T14 前 follow 域另有一份同形的 {@code follow.model.dto.FollowPageResult}（当时为避开
+ * follow→content 包层环而自建），本类上移后该类已删除，两域统一复用本类——
+ * JSON 字段名与推导公式逐字段不变，前端按字段名消费、零改动。
+ *
+ * <p>{@code totalPages} 由 {@code total} 与 {@code pageSize} 推导（{@code pageSize <= 0}
+ * 时为 0）；缺省（不传分页参数）路径是否构造信封由各域 Controller 决定。
+ */
 public class PageResult<T> {
     private List<T> list;
     private int total;

@@ -1,7 +1,7 @@
 package com.itheima.follow.service;
 
 import com.itheima.follow.dao.FollowDao;
-import com.itheima.follow.model.dto.FollowPageResult;
+import com.itheima.common.model.dto.PageResult;
 import com.itheima.cache.ZSetCache;
 import com.itheima.user.dao.UserDao;
 import com.itheima.exception.ConflictException;
@@ -71,12 +71,13 @@ public class FollowService {
      * **不再全量回传**；DB 装载与判重也只针对该页 ids（事务内只做 DB 装载，缓存读见
      * {@link #loadUserList} 的 T12 说明——池 U-14②已随 T12 处置）。
      *
-     * <p>分页信封（{@code FollowPageResult}）在事务**外**组装，事务内语句集与改造前一致。
+     * <p>分页信封（{@code common.model.dto.PageResult}，T14 起为全项目唯一信封）在事务**外**组装，
+     * 事务内语句集与改造前一致。
      *
      * @param page     页码（≥1，已归一）
      * @param pageSize 页大小（1~200，已归一；缺省 200 = follow 域信封）
      */
-    public FollowPageResult<Map<String, Object>> getFollowingList(long userId, Long currentUserId,
+    public PageResult<Map<String, Object>> getFollowingList(long userId, Long currentUserId,
                                                                   int page, int pageSize) {
         long offset = (long) (page - 1) * pageSize;
         return buildPage(followCache.getFollowingWindow(userId, offset, pageSize),
@@ -86,7 +87,7 @@ public class FollowService {
     /**
      * 粉丝列表**分页**：逻辑同 {@link #getFollowingList(long, Long, int, int)}，缓存入口换粉丝集。
      */
-    public FollowPageResult<Map<String, Object>> getFollowerList(long userId, Long currentUserId,
+    public PageResult<Map<String, Object>> getFollowerList(long userId, Long currentUserId,
                                                                  int page, int pageSize) {
         long offset = (long) (page - 1) * pageSize;
         return buildPage(followCache.getFollowerWindow(userId, offset, pageSize),
@@ -151,12 +152,12 @@ public class FollowService {
      * 分页信封组装：该页 ids 走统一装载逻辑（{@link #loadUserList}），
      * 总数取缓存窗口的 total（同一 key 的 ZCARD，与页内容同源）。
      */
-    private FollowPageResult<Map<String, Object>> buildPage(ZSetCache.Window window,
+    private PageResult<Map<String, Object>> buildPage(ZSetCache.Window window,
                                                             Long currentUserId,
                                                             int page, int pageSize) {
         List<Map<String, Object>> users = loadUserList(window.getIds(), currentUserId);
         int total = (int) Math.min(window.getTotal(), Integer.MAX_VALUE);
-        return new FollowPageResult<>(users, total, page, pageSize);
+        return new PageResult<>(users, total, page, pageSize);
     }
 
     public void unfollow(long userId, long followedUserId) {

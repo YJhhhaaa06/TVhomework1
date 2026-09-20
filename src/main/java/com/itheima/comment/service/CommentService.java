@@ -5,7 +5,7 @@ import com.itheima.comment.dao.CommentDao;
 import com.itheima.content.service.CommentCache;
 import com.itheima.content.service.ContentCache;
 import com.itheima.content.dao.ContentDao;
-import com.itheima.content.model.dto.PageResult;
+import com.itheima.common.model.dto.PageResult;
 import com.itheima.exception.*;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;
