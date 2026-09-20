@@ -1,6 +1,6 @@
 # 下一周期任务清单
 
-> 状态：**第七期（2026-09-19 建清单；**T11 关注·粉丝列表分页**原为**预告条目**，已于 2026-09-20 T11 窗口完成范围拍板并**拆为 T11-A（follow 域上限 200 + 后端固定信封 + 缺省归一为第一页 + sheet 接 chunkedList，**契约变更**）/ T11-B（评论域固定信封 + 公共 helper 去重/自适应 + 内容列表前端迁移）/ T11-C（装载侧解耦，池 U-18 治本，拆 C-1/C-2 两个 commit）**，四要素已回写（见四节）；**T11-A（2026-09-20）、T11-B（2026-09-20）与 T11-C（2026-09-20）已完成**（执行回写见四节各自之后），另新增 **T19**（feed/search/profile 的后端大分页推后项）+ **T12~T18** 清理类（事务边界代码债 / 注册登录兜底 / 包层结构清扫 / 文档与代码一致性 / Controller 基建收敛 / IoC 注入可观测 / 配置卫生）。
+> 状态：**第七期（2026-09-19 建清单；**T11 关注·粉丝列表分页**原为**预告条目**，已于 2026-09-20 T11 窗口完成范围拍板并**拆为 T11-A（follow 域上限 200 + 后端固定信封 + 缺省归一为第一页 + sheet 接 chunkedList，**契约变更**）/ T11-B（评论域固定信封 + 公共 helper 去重/自适应 + 内容列表前端迁移）/ T11-C（装载侧解耦，池 U-18 治本，拆 C-1/C-2 两个 commit）**，四要素已回写（见四节）；**T11-A（2026-09-20）、T11-B（2026-09-20）与 T11-C（2026-09-20）已完成**（执行回写见四节各自之后），另新增 **T19**（feed/search/profile 的后端大分页推后项）+ **T12~T18** 清理类（**T12 事务边界同型未治点 ✅ 已完成 2026-09-20**（全链 exit 0 + JUnit 506/0/0/0 + pytest 145）/ 注册登录兜底 / 包层结构清扫 / 文档与代码一致性 / Controller 基建收敛 / IoC 注入可观测 / 配置卫生）。
 > 关联文档：`目标与任务/NEXT_CYCLE_NEEDS.md`（决策唯一源；本文档为执行细节）。
 > 来源：NEEDS **4.2** 的两个候选任务（用户 2026-09-19 点名"分为评论分页和关注/粉丝列表分页两个任务"）+ NEEDS 二节留池项 + `UNPLANNED_ISSUES.md` 的 **2026-09-19 第七期评估**（进 TASKS 项：U-14 / U-16 / U-07+U-19）。
 > 明确不做（本轮已定）：offset→游标（属 **feed 流方向**——该方向路线已预告为"读扩散查询 → 每人维护收件箱（写扩散）"）；日志体系改造相关（`U-15` 已移出池，随该方向立项盘点）；`R-01` 索引全量读（明确保留）；`U-11` 停机兜底推荐（留池，待产品决策）；评论热门排序（用户"另想对策"延后，登记 NEEDS 4.1 **N17**，**不占 T10 范围**）；NEEDS 4.1（N9~N16）中**已点单的已并入清单**：N9 文档部分→**T15**、N11→**T16**、N12 前半→**T17**、N13→**T18**、N14→**T14**、**N15→T10-B（2026-09-19 T10 窗口调整：公共"分块列表"helper 随 T10-B 前端改造抽，T11 直接复用）**、N16→**T15**；**未排的**：N9 的"声明式鉴权"、**N10**（admin 角色每请求查库）、N12 的"声明式事务"——属**新功能方向的能力建设**，待该方向立项时评估；**2026-09-20 T11 窗口新增推后项**：`/feed`·`/search`·`/profile` 的**后端**大分页（域级上限 + 域级信封）→ **新增 T19**（这三处内容列表的**前端**迁移仍在 T11-B 内完成）。
@@ -83,7 +83,7 @@
 | T11-A | 关注/粉丝列表：域级上限 200 + 后端固定信封（前端只传 `page`）+ 缺省归一为第一页 + sheet 接 `chunkedList` | NEEDS 4.2 ②（+ N15 复用） | 无 | **已完成（2026-09-20）**：`pageSize=51` 回显 51、`999`→200；缺省=第一页信封（与显式 `page=1&pageSize=200` 逐字节一致）；sheet「加载更多」走公共 helper；全链 exit 0 + JUnit 482/0/0/0 + pytest 145 | `refactor(cache-11a)` | **已完成** |
 | T11-B | 评论域固定信封（default 200 / max 500）+ 公共 helper 去重与 `chunkSize` 自适应 + 内容列表前端迁移（feed/search/profile，chunk=50） | NEEDS 4.2 ② + 4.1 **N15** | T11-A（helper 自适应形态） | **已完成（2026-09-20）**：评论域只传 `page` → `pageSize=200`（上限 500 保留）；`chunkedList` 具 `keyOf`/`seen` 去重（批内 + 跨 chunk）与 `chunkSize` 自适应；**后端「页间不重不漏」断言一条未改**（去重不掩盖后端 bug）；三处内容列表走公共 helper；全链 exit 0 + JUnit 482/0/0/0 + pytest 145 | `refactor(cache-11b)` | **已完成** |
 | T11-C | 关注/粉丝列表装载侧解耦（池 **U-18** 治本，P1 前缀窗口装载） | NEEDS 4.2 ② + 池 **U-18** | T11-A（信封/上限先行）；C-1 → C-2 顺序 | **已完成（2026-09-20）**：JUnit 断言"窗口装载只查 `[0, offset+count)` / 部分态只补 `[W, offset+count)`、不触发全量 loader"、"部分态判定未命中回落 DB"、"`getMembers` 部分态补齐"、"写路径遇 `partial` 三件套双 DEL"、"降级走 DB 窗口直查不装载"；DDL 闭环留证（改前/改后备份 + 3307 重建 + 两库索引核验 + EXPLAIN `Using index`）；全链 exit 0（JUnit 500/0/0/0、pytest 145） | `refactor(cache-11c)`（C-1 记为 `cache-11c1`） | **已完成** |
-| T12 | 事务边界同型未治点 2 处（缓存读移出回调） | 池 **U-14**（2026-09-19 评估：进 TASKS） | 无 | 两处缓存读不再在事务回调内；对外行为零变化；JUnit + pytest 全绿 | `refactor(content)` / `refactor(follow)` | 待执行 |
+| T12 | 事务边界同型未治点 2 处（缓存读移出回调） | 池 **U-14**（2026-09-19 评估：进 TASKS） | 无 | **已完成（2026-09-20）**：`search` 回调只留两次 DAO 查询（`SearchDbData` record 回传）、页内 `getContentsBatch` + 点赞/关注状态填充在事务外；列表装载回调只留 `findUsersByIds`、`batchIsFollowing` 与视图组装在事务外——结构可检（56 处 `transactionTemplate.execute` 全仓扫描：回调内零缓存读）；对外行为零变化（事务内语句集 / 返回集与顺序 / 跳过 null / 异常语义不变）；JUnit 506/0/0/0 + pytest 145 + 全链 exit 0 | `refactor(content)` / `refactor(follow)`（实际单 commit 取周期令牌 `refactor(cache-12)`） | **已完成** |
 | T13 | 注册后自动登录缺兜底 | 池 **U-16**（同上） | 无 | 自动登录失败 → 返回"注册成功 + 提示手动登录"，不再无 token 无提示；补用例 | `fix(user)` | 待执行 |
 | T14 | 包层结构清扫：content↔comment 环 + 分页信封上移公共包 + `ResultMap` 反向依赖 | NEEDS **R-02/R-03**（= 池 U-07）+ 池 **U-19** + NEEDS 4.1 **N14** | **R-03 拍板**（环处置口径） | 包依赖按拍板口径单向；`PageResult` 唯一源在公共包；基础包不再反向依赖业务模型；全量 JUnit/pytest 绿且行为零变化 | `refactor` | 待执行（待 R-03 拍板） |
 | T15 | 顺手清理：架构文档与代码一致性（目录树 / 鉴权名单 / URL 表） | NEEDS 4.1 **N16** + **N9**（文档部分） | 无 | 文档事实与代码一致（目录树、AuthFilter 精确名单、URL 表抽查）；`git diff` 只含事实修正 | `docs` | 待执行 |
@@ -112,6 +112,24 @@
 * **强制探索步骤**：动刀前先 (0) 复核池 U-14 证据（两处位置与形态）仍成立（G11——不成立 → L3 暂停登记质疑） (1) 确认 `search` 侧是否把逐 key `getContent` 换成批量读（与 T2 已做的批量装载合并同源），并确认批量读口径与既有降级语义一致 (2) 确认两处早退分支（无命中/空结果）与异常产生位置保持 (3) 若清单未覆盖 → 回写本文档再动手。
 * **验收**：两处在事务回调内不再触碰缓存（结构可检）；相关 JUnit + 相关端点 pytest 全绿；对外行为零变化。
 
+> **执行回写（2026-09-20，第七期 T12 窗口）**
+>
+> * **证据复核（G11 第 (0) 项）**：两处均成立——① `ContentService.search`（回调内逐 key `contentCache.getContent` + `fillLikeAndFollowBatch`，改造前 L77/L83）；② `FollowService` 经私有 `buildUserList` 在回调内调 `followCache.batchIsFollowing`（L105 → L126 → L131）。**事实修正（L1）**：四要素原文写②号点"在其分页读与缺省读路径"，缺省读路径已随 **T11-A** 删除，现只剩分页读（`loadUserList`）。
+> * **全仓同型点扫描（含"经私有方法间接调用"这一纯文本扫不到的形态）**：13 文件 / 56 处 `transactionTemplate.execute`，改造前命中 4 处 = 本任务目标 2 处 + **同族但不同判据** 1 处（`CommentService.addComment` 回调内 `contentCache.notifyCommentCountChanged`——缓存**失效写**、无嵌套装载、非 U-14 判据）+ 假阳性 1 处（`ContentCache:427` 仅 `CacheKeys` 构 key）。改造后同脚本只剩后 2 处。
+> * **落地**：① `ContentService`（475 → 497）——新增私有 record `SearchDbData(contentIds,total)`，回调只留 `countKeywordSearch` + `keywordSearchInBrief`（**两次 DAO 都不省略、顺序不变**），事务外走 `getContentsBatch`（逐 key `getContent` → 一趟批量读，对齐 Feed/Profile 的 T8 口径）+ `fillLikeAndFollowBatch` + 组装；顺带把 `getCommentsForContent` javadoc 的过时上限 `1~50` 修正为 `1~500 / 缺省 200`（T11-B 已改口径、注释滞后；**纯注释**）。② `FollowService`（173 → 184）——`loadUserList` 回调只留 `userDao.findUsersByIds`（`List<User>` 回传），新增**事务外** `buildUserViews` 承担 `batchIsFollowing` 判重 + 视图组装（判重仍按**该页 ids**、不因 users 为空而跳过），删旧 `buildUserList` 与不再使用的 `import java.sql.Connection`。**单 commit**（两域无内部依赖，未拆）。
+> * **否决/未采纳**：① 在 `search` 回调里加 `total == 0` 早退（Feed 的该分支是**既有**语义）——search 改造前不省略 `keywordSearchInBrief`，加早退会改"事务内语句集"，触红线；② 顺带把 `CommentService` 的缓存失效写移出回调 → 越界（非 U-14 判据 + 会改失效时序语义）→ 登记池 **U-22**。
+> * **验证（落盘证据）**：`python tools\tv.py test junit` **exit 0**、`latest.json` junit = **506 / 0 / 0 / 0**（`ContentServiceTest` 58 → **61**、`FollowServiceTest` 16 → **19**：+2 探针/边界 + 评审补 1 例；逐类 surefire 复核）；`python tools\tv.py test all` **exit 0**（`build_ok=True`、pytest **145 passed / 0 failed**、`port_18080_open_after=false`）。pytest **用例数不变**（无新增/改写：断言意图全部命中 C1）。
+> * **红线合规**：未改 `@WebServlet` URL / web.xml / IoC 扫描；无新依赖；未改缓存类签名/key/TTL/三态/降级/打点；未动 T7/T11 的分页口径与信封；无 DDL。
+> * **覆盖边界（如实记录）**：① pytest 侧为**回归**（`/search/keywordSearch` 的 S-05/E-04 + `/follow/following|followers` 12 条）——新增断言意图全命中 C1（结构可检）→ 按 §〇.2 归 JUnit，不重复入 pytest；关键词搜索的**结果集**不新增断言（DAO 全文索引分词不稳定，沿用 `test_delete_content.py` 既有口径）；② 探针口径与 T3 一致（DAO 回调内自检 + 缓存读断言 `inTransaction=false`），**不覆盖"连接池叠加"的运行时表现**（需压测，非本任务）。
+> * **G11 记录**：L1 ×3（① 缺省读路径已随 T11-A 消失；② `CommentService` 缓存失效写在回调内 → 新登记 **U-22**；③ content 域模块表行数/描述自 `260919/T8` 起长期滞后：`ContentService` 501→实测 475、`CommentCache` 176→716、`ContentCache` 656→710、`ContentStatusFiller` 90→81、`FeedService` 108→107——本任务已按实测重写该单元格，**评论域同表行数与其它未核章节的滞后仍在**，建议 T15 窗口一并扫）。L2/L3/L4 无。
+> * **文档（G4 同 commit）**：`常青/CURRENT_ARCHITECTURE.md`（头部 3.7 + 6.4 两处 + content/follow 模块表行数）、`常青/BUSINESS_FLOW.md`（3.1 要点一句 + 3.5 事务边界注）、本档三节/四节、`INDEX.md` 周期状态行、`UNPLANNED_ISSUES.md`（U-22）。**未写 NEEDS 4.0 决策段**——本任务无新决策（形态由 `260918/T3` 先例 + 四要素探索步骤既定），且用户已于 2026-09-20 把 T10/T11 的技术决策移出该节。
+> * **commit 主题口径**：四要素"期望 commit 主题"写 `refactor(content)` / `refactor(follow)`，实际为**单个**跨域 commit → 按 `COMMIT_CONVENTION` §三取周期令牌 `refactor(cache-12)`（对齐 T10/T11 先例）。
+> * **独立评审（subagent，只读）结论与处置（2026-09-20）**：**无 🔴 阻断项**，总体判定"可提交"；2 处 🟡：
+>   ① 🟡 "`currentUserId != null` 但 DB 装载结果为空（该页 ids 指向已删用户）时是否仍调 `batchIsFollowing`"只有代码审查、无用例 → **已采纳**：补 `getFollowingListPagedEmptyDbResultStillJudgesThatPage`（断言 users 为空仍按该页 ids 判重、total 仍取缓存窗口）；
+>   ② 🟡 `ContentService` 的 `pageSize` javadoc 由 `1~50` 修正为 `1~500 / 缺省 200` → **维持**（评审确认与 `CommentController` 的 `COMMENT_PAGE_SIZE_MAX = 500` / `DEFAULT = 200` 实际口径一致，属滞后注释修正、无行为变更）。
+>   评审另行核对通过：`CacheAside.getBatch` 对每个请求 key 都写结果映射（含 null 值）→ 与逐 key `getContent` 逐位等价；空 ids / 空结果 / 结果为空不调填充三个分支与改造前一致；异常文案与产生位置未变（`ContentService.java:94-95`、`FollowService.java:116-118`）；`import java.sql.Connection` 删除后无残留引用；文档被改行数经 `wc -l` 复核全部一致。
+> * **评审后复跑（2026-09-20，处置后同一工作树）**：`test junit` exit 0、**506 / 0 / 0 / 0**（`FollowServiceTest` 19）；`test all` exit 0、`build_ok=True`、pytest **145 passed / 0 failed**、`port_18080_open_after=false`。**pytest 数字与首次一致**（本轮只加 JUnit 用例、未动主代码）。
+
 ### T13 注册后自动登录缺兜底（池 U-16）
 
 * **入口线索**：`user/controller/LoginController.register`（注册成功后调用 `userService.login(id, password)`，其失败路径无兜底）。目标：自动登录失败时返回"**注册成功、请手动登录**"，而不是无 token、无提示。
@@ -128,7 +146,7 @@
 
 ### T15 顺手清理：架构文档与代码一致性（N16 + N9 文档部分）
 
-* **入口线索**：`常青/CURRENT_ARCHITECTURE.md:72` 目录树里的 `ssm_*` 实际不存在；同文件 `:135` 的 AuthFilter 精确名单只列 7 项、代码实为 10 项（缺 `/content/update`、`/content/mediaDelete`、`/content/delete`）。目标：把"文档 vs 代码"的事实差异**一次扫完并修正**。
+* **入口线索**：`常青/CURRENT_ARCHITECTURE.md:72` 目录树里的 `ssm_*` 实际不存在；同文件 `:135` 的 AuthFilter 精确名单只列 7 项、代码实为 10 项（缺 `/content/update`、`/content/mediaDelete`、`/content/delete`）。**（2026-09-20 T12 窗口补充）** 四.3 业务域包模块表的**行数大量滞后**（T12 已顺手修正 content 域 service 单元格，其余未动）：`comment` 域 `CommentService` 197→实测 **299**、`CommentDao` 179→**343**；`user` 域 `UserService` 241→**250**；`like` 域 `LikeService` 205→**215**、`LikeCacheService` 394→**393**——请按 `wc -l` 实测逐格核对（含职责描述是否已随 T10/T11 失效）。目标：把"文档 vs 代码"的事实差异**一次扫完并修正**。
 * **红线边界**：只修事实错误，不做章节重写/扩写（颗粒度纪律见该文件"维护说明"）；不改代码、不改业务语义。
 * **强制探索步骤**：动刀前先 (0) 复核 N16/N9 证据 (1) **交叉核对全量清单**：`@WebServlet` 全量 URL ↔ 架构文档七节 API 表 ↔ `AuthFilter` 两个名单（一次扫完，别只修这两处） (2) 发现其它滞后章节 → 能顺手修的修，超出范围的登记（池 / NEEDS） (3) 若清单未覆盖 → 回写本文档再动手。
 * **验收**：目录树、鉴权名单、URL 表与代码一致（全量 grep 对照 + 抽查）；`git diff` 只含事实修正；纯文档批（不跑测试）。

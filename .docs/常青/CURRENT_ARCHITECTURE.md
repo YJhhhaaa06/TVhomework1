@@ -1,6 +1,6 @@
 # 当前系统架构地图
 
-> 版本：3.6（2026-09-20 T11-C：**关注/粉丝列表装载侧解耦**（治池 U-18）——分页读由"全量装载"改为**前缀窗口装载**（miss 只查 `[0, offset+count)`、部分态只补 `[W, offset+count)`、降级改 **DB 窗口直查**不装载不写回）；集合完整性由**新增 `partial:{dataKey}` 标记**表达（无标记 ⇒ 完整，取代"数据 key 存在 ⇒ 完整"）；判定在部分态下**未命中回落 DB**、全量读遇部分态**先补齐**（feed 依赖全量关注 ids）、写路径任一侧部分态**双 DEL**；`follow` 表加 `idx_followed_user_user(followed_user_id, user_id)`（G9 闭环）；删除已无主代码调用方的 `FollowCache.getFollowerIds`（池 U-21 处置））
+> 版本：3.7（2026-09-20 T12：**事务边界同型未治点清零**（治池 U-14）——`ContentService.search` 与 `FollowService` 的关注/粉丝列表装载把**缓存读移出 DB 事务回调**：事务回调只留 DB 查询（`SearchDbData` 私有 record / `List<User>` 回传），提交归还连接后才在事务外做缓存批量读（`getContentsBatch` + `fillLikeAndFollowBatch` / `batchIsFollowing`）与视图组装；`search` 的逐 key `getContent` 一并换批量读（对齐 Feed/Profile 的 T8 口径）。对外行为零变化：事务内语句集与改造前一致、返回集与顺序/跳过 null 口径/异常语义一概不变）
 > 最后更新：2026-09-20
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
@@ -223,7 +223,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | ContentController（182，/content/*）、StartController（49，/start）、SearchController（95，/search/*）、FeedController（57，/feed）、ProfileController（70，/profile） | 内容管理 + 首页推荐 + 搜索 + 关注流 + 用户主页 |
-| service | ContentService（501：**T8 起评论查询支持主楼分页**——主楼分页 + 楼中楼整树，切片在展示层、缓存整树不动；缺省重载仍全量）、ContentCache（656：Redis 内容缓存=三态 Cache-Aside+索引；loader 失败抛 DatabaseException 不污染空标记；`invalidateAuthorContentKeys` 改名级联失效；`getContentsBatch` miss/降级装载走 `loadContentsFromDb` 一趟事务两查）、CommentCache（176：Redis 评论缓存=三态 Cache-Aside+独立 TTL+空标记+显式失效；loader 失败抛 DatabaseException）、ContentStatusFiller（90）、FeedService（108）、ProfileService（118） | 内容业务 + Redis 内容缓存 + Redis 评论树缓存 + 状态填充 + 关注流 + 主页（Feed/Profile 的缓存批量读在 DB 事务外执行） |
+| service | ContentService（497：内容/搜索业务 + 评论读路径编排——**T10-A/T10-B 起评论查询两键组 + 主楼窗口装载**（切片点在 `CommentCache.getRootPage`，楼中楼前 K=2 + `replyCount`），缺省重载仍全量数组；**T12 起 `search` 事务回调只做 DB 查询**，页内批量读 `getContentsBatch` + 点赞/关注状态填充在事务外）、ContentCache（710：Redis 内容缓存=三态 Cache-Aside+索引；loader 失败抛 DatabaseException 不污染空标记；`invalidateAuthorContentKeys` 改名级联失效；`getContentsBatch` miss/降级装载走 `loadContentsFromDb` 一趟事务两查）、CommentCache（716：Redis 评论缓存=三态 Cache-Aside+独立 TTL+空标记+显式失效+**两键组（主楼 List + 楼中楼 Hash）+ 主楼窗口/count**；loader 失败抛 DatabaseException）、ContentStatusFiller（81）、FeedService（107）、ProfileService（118） | 内容业务 + Redis 内容缓存 + Redis 评论缓存 + 状态填充 + 关注流 + 主页（Feed/Profile/Search 与关注·粉丝列表装载的缓存读在 DB 事务外执行） |
 | dao | ContentDao（384）、ContentMediaDao（168） | content/content_media 数据访问（ContentLikeDao 按 like 域归属）；`findContentsByIds` 批量 IN 查询（供批量缓存装载，列与 findContent 同源） |
 | model | entity/ContentMedia（63）、cache/ContentCacheDTO（136）/CommentCacheDTO（110）、vo/ContentVO（42）/ContentDetailVO（26）/CommentVO（22）/ProfileVO（43）、dto/PageResult（62）/SearchDTO（51）、command/CommandConverter（139）/ContentType（16） | 内容模型 + 共享缓存 DTO + 共享 VO/DTO/转换器 |
 
@@ -234,7 +234,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | FollowController（104，/follow/*） | 关注/取关/关注列表/粉丝列表（**T11-A：列表只有分页入口**——`page`/`pageSize` 均可选，缺省归一为 page 1 / `pageSize` 200；域级常量 `FOLLOW_PAGE_SIZE_MAX = 200` + 信封 `FOLLOW_PAGE_SIZE_DEFAULT = 200`，T7 的「缺省返回全量数组」分支已删除） |
-| service | FollowService（173） | 关注业务（读路径委托 FollowCache；关注/取关 DB 提交后缓存双写；**T7 新增分页读**——缓存窗口取该页 ids+total，仅对该页 ids 做 DB 装载与批量判重，信封在事务外组装；**T11-A 删除两个缺省全量重载**，分页读为唯一入口） |
+| service | FollowService（184） | 关注业务（读路径委托 FollowCache；关注/取关 DB 提交后缓存双写；**T7 新增分页读**——缓存窗口取该页 ids+total，仅对该页 ids 做 DB 装载与批量判重，信封在事务外组装；**T11-A 删除两个缺省全量重载**，分页读为唯一入口；**T12 起事务回调只做 DB 装载**（`findUsersByIds`），`batchIsFollowing` 与视图组装移事务外） |
 | service | FollowCache（539） | 关注关系 Redis 缓存（**双 ZSet（score=成员 id）+ 条件 MULTI 双写 + 失败双 DEL** + 三态读 + 单飞 + 降级单飞全量装载作答；读路径收口 **ZSetCache**——单成员三态/批量/全量/窗口走基建 + `sortIds` 归一升序，写路径 MULTI 双写语义保持；关注/粉丝计数 key 读写。**T11-C**：窗口 loader 换 DAO **窗口 SQL**（分页读不再全量装载）、新增部分态判定回落 `isFollowingInDb`（单行）、`probePair` 扩为六探针且**任一侧 `partial:` → 三件套双 DEL**（增量写分支与 Redis 异常分支同口径：异常分支走新增私有 `invalidatePairQuietly`，而 `CacheAside.invalidate` 只删数据 key + 空标记）、删除已无主代码调用方的 `getFollowerIds`（池 U-21）） |
 | dao | FollowDao（155） | follow 关注关系（仅 FollowService 业务校验与 FollowCache loader 使用；**T11-C-1 新增两个窗口查询**：`getFollowedUserIdsInWindow` / `getFollowerUserIdsInWindow`——`WHERE … ORDER BY … LIMIT ? OFFSET ?`，供前缀窗口装载；关注方向复用 `uk_user_follow`、粉丝方向走新增 `idx_followed_user_user`，EXPLAIN 均 `Using index`（覆盖索引）且无 filesort） |
 | model | FollowPageResult（79） | 关注/粉丝列表分页信封（T7 B2）：`list/total/page/pageSize/totalPages`，与 content 域 `PageResult` 同形但**归属 follow 域**——避免 follow 反向 import content 形成新包层环（content 已 import `follow.FollowCache`） |
@@ -382,9 +382,10 @@ com.itheima/
 
 - **单 key pipeline 化**：`CacheAside.read` / `getInternal` 由"EXISTS 空标记 + GET 数据 key 两趟往返"合并为**一趟 pipeline**（内部 `probe(dataKey)` 复用，三态/空标记/单飞/降级语义与统计不变）。
 - **批量读接口**：`CacheAside.getBatch`——一趟 pipeline 批量 EXISTS+GET，三态判断与单 key 完全一致（先空标记后数据 key），miss 项逐个单飞回填；**4 参重载**：脏 JSON 单 key / 整批 Redis 异常 → DEGRADE + 直接 loader 不写回；**5 参重载**（`BatchLoader`）：miss/整批降级子集经 `LoadMemo`/`LoadOutcome`（LOADED/EMPTY/FAILED）**一趟批量装载**，漏 key 按加载失败不写假空；逐 key 单飞去重、三态/续期/空标记/降级/打点口径不变。调用方保证 key 无重复。
-- **内容批量接入**：`ContentCache.getContentsBatch(List<Long>)`（id → DTO 映射，null 值=hit-empty/DB 无数据透传）；miss/降级装载走 `loadContentsFromDb` **一趟事务两查**（`ContentDao.findContentsByIds` + `ContentMediaDao.findMediaByContentIds`）；Feed/Profile 使用。
+- **内容批量接入**：`ContentCache.getContentsBatch(List<Long>)`（id → DTO 映射，null 值=hit-empty/DB 无数据透传）；miss/降级装载走 `loadContentsFromDb` **一趟事务两查**（`ContentDao.findContentsByIds` + `ContentMediaDao.findMediaByContentIds`）；Feed/Profile 使用，**Search 于 T12 接入**（原逐 key `getContent`）。
 - **推荐惰性探测**：`getRecommendByFilter` 按 shuffle 序**逐个 `getContent`、凑满 limit 即止**（探测量从"候选数 × 3 命令"收敛到 ≈3×(limit+跳过量)，与候选总量解耦）；shuffle 仍在全量去重 id 列表上一次性执行，返回集="shuffle 序前 limit 个非 null"，**推荐结果分布语义不变**。
 - **Feed/Profile 事务外读**：事务回调只做 DB 查询（`ProfileDbData(user, pageIds, total)` / `FeedDbData(pageIds, total)` 私有 record 回传），提交归还连接后**事务外**批量读缓存 + 填点赞状态 + 组装 VO；两个早退分支（无关注 / total==0）与改造前一致**零缓存调用**；404/500 异常仍只在事务回调内产生。
+- **Search/关注·粉丝列表事务外读（T12，治池 U-14，同型未治点清零）**：`ContentService.search` 的事务回调只留两次 DAO 查询（`SearchDbData(contentIds, total)` 私有 record 回传；命中总数与页内 id **都不省略**），`FollowService.loadUserList` 的事务回调只留 `userDao.findUsersByIds`（`List<User>` 直接回传）；两者提交归还连接后，才在**事务外**做缓存批量读（`getContentsBatch` + `fillLikeAndFollowBatch`（点赞/关注状态）／`batchIsFollowing`）并按原序组装结果。`FollowService` 的判重仍按**该页 ids** 批量查（不因 users 为空而跳过），`SQLException → ServerException("查询失败"/"搜索失败，请重试")` 仍只在回调内产生；空 ids 分支保持"不打事务、不触碰缓存"。全仓扫描（56 处 `transactionTemplate.execute`）确认回调内**无缓存读**残留（缓存类内部 loader 自身的事务除外）。
 - **索引遍历**：`forEachIndexKey` 用 **SCAN**（游标收敛于 "0"）替代 `KEYS "content:index:*"`（removeContent 的 LREM、重建的 DEL 两处；LREM/DEL 幂等，SCAN 重复 key 无害）。
 
 ### 6.5 TTL 与滑动续期

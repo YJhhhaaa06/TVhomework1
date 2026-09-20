@@ -412,7 +412,7 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-> 缓存读写语义要点：关注读路径（`isFollowing` 单成员 / `batchIsFollowing` 批量 / `getFollowingIds` 全量关注列表 / **`getFollowingWindow`/`getFollowerWindow` 分页窗口（T7）**）统一走基建 `ZSetCache`——成员 key 为 ZSet（score=成员 id），故 `ZRANGE` 天然升序，列表升序另由 `FollowCache.sortIds` 归一（写路径 MULTI 条件双写 + 失败双 DEL 保留在 FollowCache）；**关注/粉丝列表接口恒返回分页信封 `{list,total,page,pageSize,totalPages}`——缺省（不传参）= 第一页信封（page 1 / pageSize 200），与显式 `page=1&pageSize=200` 逐字节一致；`pageSize` 上限 200（T11-A 契约变更，T7 的"缺省返回全量数组"已删除）**；**T11-C 起分页读只装载"被看的那一段"**（冷 key 取 `[0, offset+count)`、前缀不足只补差量、Redis 降级改 DB 窗口直查）——集合完整性由 `partial:{数据key}` 标记表达，带标记时判定不命中回落 DB、全量读先补齐、写路径任一侧带标记则三件套双 DEL；关注/粉丝计数入独立 key（`user:followCount`/`user:followerCount`，Cache-Aside、0 合法、条件 INCRBY）；Feed/Profile 缓存批量读在 DB 事务外执行（防连接池互相等连接）；详情见 `CURRENT_ARCHITECTURE` 6.4/6.12/6.17。
+> 缓存读写语义要点：关注读路径（`isFollowing` 单成员 / `batchIsFollowing` 批量 / `getFollowingIds` 全量关注列表 / **`getFollowingWindow`/`getFollowerWindow` 分页窗口（T7）**）统一走基建 `ZSetCache`——成员 key 为 ZSet（score=成员 id），故 `ZRANGE` 天然升序，列表升序另由 `FollowCache.sortIds` 归一（写路径 MULTI 条件双写 + 失败双 DEL 保留在 FollowCache）；**关注/粉丝列表接口恒返回分页信封 `{list,total,page,pageSize,totalPages}`——缺省（不传参）= 第一页信封（page 1 / pageSize 200），与显式 `page=1&pageSize=200` 逐字节一致；`pageSize` 上限 200（T11-A 契约变更，T7 的"缺省返回全量数组"已删除）**；**T11-C 起分页读只装载"被看的那一段"**（冷 key 取 `[0, offset+count)`、前缀不足只补差量、Redis 降级改 DB 窗口直查）——集合完整性由 `partial:{数据key}` 标记表达，带标记时判定不命中回落 DB、全量读先补齐、写路径任一侧带标记则三件套双 DEL；关注/粉丝计数入独立 key（`user:followCount`/`user:followerCount`，Cache-Aside、0 合法、条件 INCRBY）；Feed/Profile/Search 的缓存批量读、以及关注·粉丝列表装载的关注态批量读（T12）都在 DB 事务外执行（防连接池互相等连接）；详情见 `CURRENT_ARCHITECTURE` 6.4/6.12/6.17。
 
 > 关键语义：内容与评论读/写**全部收敛 Redis**；**任何缓存失败降级走 DB、不导致业务失败**；计数（like_count/comment_count/comment_enabled）与评论树内容以 DB 为源真理，变更即失效让读自愈；类型分区索引启动 init 全量重建 + 索引 key 缺失时单飞懒重建（防 Redis 重启后 /start 空推荐）；评论树不再原地增删：评论增/删/点赞 = 失效 `content:comments:{id}` + 空标记，下次读 miss 单飞回填 DB 最新整树。
 >
@@ -616,6 +616,8 @@ GET /start?limit=10&token=xxx（可选）
 | 5 | 从缓存获取内容详情 | 缓存 miss 会回填 |
 | 6 | 批量填充点赞状态 | 如果已登录 |
 | 7 | 返回分页结果 | PageResult |
+
+> 事务边界（T12）：步骤 2~4 在 DB 事务回调内（命中总数 + 该页内容 id），步骤 5（`getContentsBatch` 批量读，原逐 key `getContent`）与步骤 6（点赞/关注状态缓存读）在事务提交、连接归还后执行；跳过 null 与"结果为空不调状态填充"两个既有分支不变，对外行为零变化。全文同类口径同见 `CURRENT_ARCHITECTURE` 6.4。
 
 #### 接口定义
 

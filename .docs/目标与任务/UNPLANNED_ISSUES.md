@@ -27,6 +27,7 @@
 
 | U-18 | 观察（装载量） | 关注/粉丝列表**装载路径仍为全量**：`ZSetCache` miss 单飞回填与 Redis 降级作答都走"DB 全量 loader + 全量 ZADD 回填"（`FollowDao.getAllFollowedUserIds`/`getFollowerUserIds` 无 LIMIT）；T7 只消除了**命中路径**的 `SMEMBERS` 全量回传与 String→Long 装箱（hit 为 `ZRANGE[start,stop]`+`ZCARD`，O(log n + N)）。与 R-01（索引全量读保留）同型：真解决需装载侧分页（DAO 分页 SQL / keyset）或分段回填，属独立改造 | `ZSetCache.getWindow`/`getMembers`（miss 与降级分支的 loader 全量）；`FollowCache.loadFollowingIds/loadFollowerIds`；`FollowDao`（无分页 SQL） | 第六期 T7 执行发现（2026-09-19，随 A1 落地显式登记） | **已处置 → T11-C**（2026-09-20 T11 窗口拍板）：形态 = **P1 前缀窗口装载**——ZSet 成员 = DB 按 id 升序的**前 W 个**（W = ZCARD）+ 新增 `partial:{数据key}` 标记（无标记 = 完整）；分页读按 `[W, offset+count)` 窗口装载、miss 走窗口装载、**降级改 DB 窗口直查不写回**（取代全量装载 + 内存切片）；`partial` 态下判定**未命中回落 DB**、`getMembers` 遇 `partial` **补齐**；写路径任一侧 `partial` → 双 DEL。**DDL**：`follow` 加 `idx_followed_user_user (followed_user_id, user_id)`（G9 闭环）。**边界（不在本项）**：`getFollowingIds` 的 feed 全量关注 ids 读路径（R-01 明确保留）；`follow`/`follower` 计数 key 口径不变。**✅ 已于 2026-09-20 T11-C 窗口落地**（拆 C-1 DDL + 窗口 DAO / C-2 前缀装载；`follow` 加 `idx_followed_user_user` 走 G9 闭环；JUnit 500/0/0/0 + pytest 145；残余竞态与两处实现层偏离见 `NEXT_CYCLE_TASKS.md` T11-C 执行回写） |
 | U-21 | 代码债 | **`FollowCache.getFollowerIds(long)` 成为死方法**：T11-A 删除 `FollowService` 的两个缺省全量重载后，**主代码已无调用方**（`src/main` 全量 grep 仅剩定义处；作对照 `getFollowingIds` 仍被 `FeedService:51` 使用）。**未随之删除属刻意克制**——本任务范围是 follow 域**接口口径**（删 Service 层缺省重载），连带删缓存层公共方法属越界；且 T11-C 要改的正是这批读路径方法，此时删除会与 C-2 的 `partial` 态改造打架 | `follow/service/FollowCache.java:154`；唯一引用 = `src/test/java/com/itheima/follow/service/FollowCacheTest.java:478`（`getFollowerIdsReturnsFollowersFromCacheOrDb`） | 第七期 T11-A 窗口（2026-09-20，执行回写 L1 记录） | **已关闭（2026-09-20 T11-C-2 执行，移出池）**：评估结论 = **删除**——C-2 引入 `partial` 态后它**仍无主代码调用方**（粉丝方向已无全量语义需求，分页读走窗口装载），故连同其唯一单测 `getFollowerIdsReturnsFollowersFromCacheOrDb` 一并删除；连带删除随之失去用途的私有 `loadFollowerIds`（粉丝方向全量 loader）。JUnit 用例数 43 → 50（该类 +8 新增 / −1 删除随本项）。编号不悬空 |
+| U-22 | 代码债 | **评论新增时缓存失效写在 DB 事务回调内**：`CommentService.addComment` 的 `transactionTemplate.execute` 回调体内直接调 `contentCache.notifyCommentCountChanged(contentId)`——是缓存 **DEL（失效写）**、无嵌套装载，与 U-14 的"缓存读"**判据不同**。现状影响：失效发生在提交前（"先失效后提交"，并发读者可能在窗口内回填刚更新的计数，但 DB 为源真理 + Cache-Aside 读自愈，表现为计数短暂陈旧、非缺陷）；治本需把失效移到**提交后**，属**时序语义变更**，须先拍板 | `comment/service/CommentService.java:175`（execute）→ `:200`（`notifyCommentCountChanged`）；T12 窗口全仓扫描（13 文件 / 56 处 execute、含"经私有方法间接调用"形态）命中的唯一"非读"形态 | 第七期 T12 窗口（2026-09-20）全仓扫描发现（未并入 T12，越界） | 待定（留池）：形态 = 将失效移到事务提交后（`addComment` 已在提交后做 `commentCache` 失效，可与之一并收口）；**不引入 MQ/新依赖** |
 
 > **2026-09-20 T11-A 窗口登记（本窗口仅登记一项）**——池内存量 **2 → 3 条**：
 > - **新登记 `U-21`**：`FollowCache.getFollowerIds` 死方法（T11-A 删除 Service 层两个缺省全量重载后无主代码调用方）。**去向 = T11-C 窗口一并评估**（编号不悬空，见本行）。
@@ -48,6 +49,13 @@
 > - **池内存量（2 条）**：`U-11` 停机 `/start` 空推荐（待人拍板）/ `U-17` 限流能力（已挂 T11 残余窗口引用）。
 > - **本窗口新登记（不占池）**：`N15` 残留未治部分 = `main.js` 路由注册硬编码（9 条 `register(...)` + import + 抽屉导航三处同改），记于 `NEXT_CYCLE_NEEDS.md` 4.1"候选去向"段，待前端结构改造同批处理。
 
+> **2026-09-20 T12 窗口处置（已执行）**——池内存量 **2 → 3 条**：
+> - **`U-14`（事务边界同型未治点 2 处）→ T12 ✅ 已完成**（2026-09-20）：`ContentService.search` 与 `FollowService.loadUserList` 的缓存读移出 DB 事务回调（前者逐 key `getContent` 一并换 `getContentsBatch`）；改造后用同一扫描脚本复查，回调内零缓存读。编号不悬空。
+> - **新登记 `U-22`**（见上表）：同一扫描发现 `CommentService.addComment` 回调内的缓存**失效写**（DEL、无嵌套装载）——与 U-14 判据不同（非读），故**不并入 T12**（越界），留池待人拍板"是否把失效移到提交后"（时序语义变更）。
+> - **`U-11` / `U-17` 维持留池**：口径不变（`U-17` 的 T11 残余窗口引用继续有效）。
+> - **`U-21`**：已于 T11-C-2 关闭（保留上表供追溯）。
+> - **池内存量（3 条）**：`U-11` 停机 `/start` 空推荐（待人拍板）/ `U-17` 限流能力 / `U-22` 评论新增的缓存失效写在事务回调内。
+>
 > **2026-09-20 T11-C 窗口处置（已执行）**——池内存量 **2 → 2 条**（`U-18` 与 `U-21` 双双**关闭**，无新登记）：
 > - **`U-18`（装载侧全量）→ T11-C ✅ 已完成**：P1 前缀窗口装载落地——miss 只装载 `[0, offset+count)`、部分态只补 `[W, offset+count)`、降级改 **DB 窗口直查**（不装载不写回）；集合完整性由新增 `partial:{数据key}` 标记表达（`partial:` 与数据 key 同步续期）；配套三处 = 部分态判定未命中回落 DB、`getMembers` 部分态先补齐、写路径任一侧部分态三件套双 DEL。DDL `idx_followed_user_user(followed_user_id, user_id)` 走 G9 闭环（改前/改后备份 + 3307 重建 + 两库索引核验 + EXPLAIN `Using index` 无 filesort）。验证：JUnit 500/0/0/0 + pytest 145 + 全链 exit 0（含评审 1 条 🔴 修复后的复跑）。
 > - **`U-21`（`FollowCache.getFollowerIds` 死方法）→ T11-C-2 删除关闭**：本项 2026-09-20 T11-A 窗口预留的"T11-C 窗口评估"已履行，结论 = **删除**（C-2 改造后仍无主代码调用方，粉丝方向已无全量语义需求），连带删除其唯一单测与私有的粉丝方向全量 loader（`loadFollowerIds`）。编号不悬空。

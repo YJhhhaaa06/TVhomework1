@@ -51,6 +51,8 @@ class ContentServiceTest {
     private TransactionTemplate tt;
     private Connection conn;
     private ContentService service;
+    /** 事务回调执行中标志（T12：断言缓存读发生在事务回调之外）。 */
+    private boolean[] inTransaction;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -65,12 +67,20 @@ class ContentServiceTest {
         filler = mock(ContentStatusFiller.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
+        inTransaction = new boolean[1];
         service = new ContentService(contentDao, contentMediaDao, commentDao,
                 contentLikeDao, commentService, likeService, contentCache, commentCache, filler, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
-            return action.execute(conn);
+            inTransaction[0] = true;
+            try {
+                return action.execute(conn);
+            } finally {
+                inTransaction[0] = false;
+            }
         });
+        // T12：search 页内改批量读；默认空映射，用例内自行覆盖
+        when(contentCache.getContentsBatch(anyList())).thenReturn(Collections.emptyMap());
     }
 
     private ContentCacheDTO dto(long id) {
@@ -89,8 +99,11 @@ class ContentServiceTest {
         ContentCacheDTO dto2 = dto(2L);
         when(contentDao.countKeywordSearch(conn, "java")).thenReturn(2);
         when(contentDao.keywordSearchInBrief(conn, "java", 1, 10)).thenReturn(List.of(1L, 2L));
-        when(contentCache.getContent(1L)).thenReturn(dto1);
-        when(contentCache.getContent(2L)).thenReturn(dto2);
+        // T12：逐 key getContent → 一趟批量读（Map 值可为 null = hit-empty/DB 无数据，按原序跳过）
+        Map<Long, ContentCacheDTO> batch = new LinkedHashMap<>();
+        batch.put(1L, dto1);
+        batch.put(2L, dto2);
+        when(contentCache.getContentsBatch(List.of(1L, 2L))).thenReturn(batch);
         ContentVO vo1 = new ContentVO();
         vo1.setId(1L);
         ContentVO vo2 = new ContentVO();
@@ -101,10 +114,80 @@ class ContentServiceTest {
         PageResult<ContentVO> result = service.search("java", 7L, 1, 10);
 
         assertEquals(2, result.getList().size());
+        // 顺序由 DB 返回的 id 序决定（批量读不重排）
+        assertEquals(List.of(1L, 2L), result.getList().stream().map(ContentVO::getId).toList());
         assertEquals(2, result.getTotal());
         assertEquals(1, result.getPage());
         assertEquals(10, result.getPageSize());
         verify(filler).fillLikeAndFollowBatch(result.getList(), 7L);
+    }
+
+    /** T12：批量读里命中空标记/无数据的 id（null 值）按原序跳过；total 仍取 DB 命中总数。 */
+    @Test
+    void searchSkipsCacheMissEntriesButKeepsDbTotal() throws SQLException {
+        when(contentDao.countKeywordSearch(conn, "java")).thenReturn(3);
+        when(contentDao.keywordSearchInBrief(conn, "java", 1, 10)).thenReturn(List.of(1L, 2L, 3L));
+        Map<Long, ContentCacheDTO> batch = new LinkedHashMap<>();
+        batch.put(1L, dto(1L));
+        batch.put(2L, null);
+        batch.put(3L, dto(3L));
+        when(contentCache.getContentsBatch(anyList())).thenReturn(batch);
+        when(contentCache.toContentVO(any())).thenAnswer(inv -> {
+            ContentVO vo = new ContentVO();
+            vo.setId(((ContentCacheDTO) inv.getArgument(0)).getId());
+            return vo;
+        });
+
+        PageResult<ContentVO> result = service.search("java", 7L, 1, 10);
+
+        assertEquals(List.of(1L, 3L), result.getList().stream().map(ContentVO::getId).toList());
+        assertEquals(3, result.getTotal(), "total 取 DB 命中总数，不因缓存 miss 减少");
+        verify(filler).fillLikeAndFollowBatch(result.getList(), 7L);
+    }
+
+    /** T12：整页缓存全 miss → 早退分支保持（不调状态填充，user 非空也一样）。 */
+    @Test
+    void searchAllCacheMissSkipsStatusFiller() throws SQLException {
+        when(contentDao.countKeywordSearch(conn, "java")).thenReturn(1);
+        when(contentDao.keywordSearchInBrief(conn, "java", 1, 10)).thenReturn(List.of(1L));
+
+        PageResult<ContentVO> result = service.search("java", 7L, 1, 10);
+
+        assertTrue(result.getList().isEmpty());
+        assertEquals(1, result.getTotal());
+        verifyNoInteractions(filler);
+    }
+
+    /**
+     * T12（治池 U-14①）：搜索的缓存读必须发生在 DB 事务回调**之外**——
+     * DAO 查询在回调内（探针自检，防断言空转），批量缓存读与点赞/关注状态填充在回调结束后才执行。
+     */
+    @Test
+    void searchReadsCachesOutsideDbTransaction() throws SQLException {
+        when(contentDao.countKeywordSearch(conn, "java")).thenAnswer(inv -> {
+            assertTrue(inTransaction[0], "命中总数查询应在事务回调内执行");
+            return 1;
+        });
+        when(contentDao.keywordSearchInBrief(conn, "java", 1, 10)).thenAnswer(inv -> {
+            assertTrue(inTransaction[0], "页内内容 id 查询应在事务回调内执行");
+            return List.of(1L);
+        });
+        ContentCacheDTO dto1 = dto(1L);
+        when(contentCache.getContentsBatch(anyList())).thenAnswer(inv -> {
+            assertFalse(inTransaction[0], "内容缓存批量读不应在事务回调内执行");
+            return Map.of(1L, dto1);
+        });
+        ContentVO vo1 = new ContentVO();
+        vo1.setId(1L);
+        when(contentCache.toContentVO(dto1)).thenReturn(vo1);
+        doAnswer(inv -> {
+            assertFalse(inTransaction[0], "点赞/关注状态缓存读不应在事务回调内执行");
+            return null;
+        }).when(filler).fillLikeAndFollowBatch(anyList(), eq(7L));
+
+        PageResult<ContentVO> result = service.search("java", 7L, 1, 10);
+
+        assertEquals(1, result.getList().size());
     }
 
     @Test

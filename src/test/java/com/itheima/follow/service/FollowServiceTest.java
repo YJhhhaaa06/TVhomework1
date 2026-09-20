@@ -30,6 +30,8 @@ class FollowServiceTest {
     private TransactionTemplate tt;
     private Connection conn;
     private FollowService service;
+    /** 事务回调执行中标志（T12：断言缓存读发生在事务回调之外）。 */
+    private boolean[] inTransaction;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -38,10 +40,16 @@ class FollowServiceTest {
         followCache = mock(FollowCache.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
+        inTransaction = new boolean[1];
         service = new FollowService(followDao, userDao, followCache, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
-            return action.execute(conn);
+            inTransaction[0] = true;
+            try {
+                return action.execute(conn);
+            } finally {
+                inTransaction[0] = false;
+            }
         });
     }
 
@@ -272,5 +280,66 @@ class FollowServiceTest {
         when(userDao.findUsersByIds(conn, List.of(8L))).thenThrow(new SQLException("db down"));
 
         assertThrows(ServerException.class, () -> service.getFollowingList(7L, 7L, 1, 2));
+    }
+
+    /**
+     * T12：DB 装载结果为空（该页 ids 指向已删用户）时，仍按**该页 ids** 批量判关注态
+     * ——判重口径与改造前逐条一致，不因结果为空而省略缓存读（评审建议补的边界用例）。
+     */
+    @Test
+    void getFollowingListPagedEmptyDbResultStillJudgesThatPage() throws SQLException {
+        when(followCache.getFollowingWindow(7L, 0L, 10))
+                .thenReturn(new ZSetCache.Window(List.of(8L, 9L), 2L));
+        when(userDao.findUsersByIds(conn, List.of(8L, 9L))).thenReturn(Collections.emptyList());
+        when(followCache.batchIsFollowing(7L, List.of(8L, 9L))).thenReturn(Map.of(8L, true));
+
+        FollowPageResult<Map<String, Object>> page = service.getFollowingList(7L, 7L, 1, 10);
+
+        assertTrue(page.getList().isEmpty());
+        assertEquals(2, page.getTotal());
+        verify(followCache, times(1)).batchIsFollowing(7L, List.of(8L, 9L));
+    }
+
+    /**
+     * T12（治池 U-14②）：列表装载的批量判关注态必须发生在 DB 事务回调**之外**——
+     * DAO 装载在回调内（探针自检，防断言空转），`followCache.batchIsFollowing` 在回调结束后才执行。
+     */
+    @Test
+    void getFollowingListReadsFollowCacheOutsideDbTransaction() throws SQLException {
+        when(followCache.getFollowingWindow(7L, 0L, 10))
+                .thenReturn(new ZSetCache.Window(List.of(8L), 1L));
+        when(userDao.findUsersByIds(conn, List.of(8L))).thenAnswer(inv -> {
+            assertTrue(inTransaction[0], "用户行装载应在事务回调内执行");
+            return List.of(user(8L, "bob"));
+        });
+        when(followCache.batchIsFollowing(7L, List.of(8L))).thenAnswer(inv -> {
+            assertFalse(inTransaction[0], "关注态缓存批量读不应在事务回调内执行");
+            return Map.of(8L, true);
+        });
+
+        FollowPageResult<Map<String, Object>> page = service.getFollowingList(7L, 7L, 1, 10);
+
+        assertEquals(1, page.getList().size());
+        assertTrue((Boolean) page.getList().get(0).get("isFollowed"));
+    }
+
+    /**
+     * T12：粉丝列表同路径（共用 {@code loadUserList}）——DB 装载仍在事务回调内，
+     * 而 `currentUserId == null` 时**完全不触碰关注态缓存**（早退分支与改造前一致）。
+     */
+    @Test
+    void getFollowerListWithoutCurrentUserLoadsDbInTransactionAndSkipsCache() throws SQLException {
+        when(followCache.getFollowerWindow(9L, 0L, 10))
+                .thenReturn(new ZSetCache.Window(List.of(8L), 1L));
+        when(userDao.findUsersByIds(conn, List.of(8L))).thenAnswer(inv -> {
+            assertTrue(inTransaction[0], "用户行装载应在事务回调内执行");
+            return List.of(user(8L, "bob"));
+        });
+
+        FollowPageResult<Map<String, Object>> page = service.getFollowerList(9L, null, 1, 10);
+
+        assertEquals(1, page.getList().size());
+        assertFalse((Boolean) page.getList().get(0).get("isFollowed"));
+        verify(followCache, never()).batchIsFollowing(anyLong(), anyList());
     }
 }
