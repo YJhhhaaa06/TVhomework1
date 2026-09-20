@@ -94,6 +94,16 @@ async function doRegister() {
   btn.disabled = true; btn.textContent = '注册中...';
   try {
     const data = await request('user/register', { jsonBody: { username, phone, password } });
+    // 注册已成功但后端自动登录失败时 token 为 null（池 U-16 兜底）：
+    // 不再带着空 token 跳首页，改为提示并在登录页预填手机号，用户手动登录即可。
+    // 请求期间视图若已被 unmount（state 为 null）则只提示、不再操作 DOM
+    if (!data || !data.token) {
+      showToast('注册成功，请手动登录');
+      if (!state) return;
+      switchTab('login');
+      c.querySelector('#loginAccount').value = phone;
+      return;
+    }
     setAuth(data.token, data.username, data.id);
     showToast('注册成功');
     navigate('/');

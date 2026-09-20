@@ -1,7 +1,7 @@
 # 业务流程文档
 
-> 版本：2.3
-> 最后更新：2026-09-20（T11-A：follow 关注/粉丝列表契约变更——列表恒为分页信封、缺省=第一页信封、`pageSize` 上限 50→200；T11-B：评论域分页**缺省 `pageSize` 10→200**（信封由后端域常量决定，前端只传 `page`），`feed`/`search`/`profile` 前端改走公共分块 helper；T11-C：关注/粉丝列表**装载侧解耦**（前缀窗口装载 + `partial:` 标记；降级改 DB 窗口直查，不装载不写回））
+> 版本：2.4
+> 最后更新：2026-09-20（T11-A：follow 关注/粉丝列表契约变更——列表恒为分页信封、缺省=第一页信封、`pageSize` 上限 50→200；T11-B：评论域分页**缺省 `pageSize` 10→200**（信封由后端域常量决定，前端只传 `page`），`feed`/`search`/`profile` 前端改走公共分块 helper；T11-C：关注/粉丝列表**装载侧解耦**（前缀窗口装载 + `partial:` 标记；降级改 DB 窗口直查，不装载不写回）；T13：注册后自动登录**兜底**——注册成功即成功，自动登录失败返回 `token=null` 的 LoginVO（前端提示「注册成功，请手动登录」））
 > 用途：保障重构时不破坏业务逻辑
 
 ---
@@ -178,7 +178,7 @@ Content-Type: application/json
 | 6 | 密码 BCrypt 哈希 | - |
 | 7 | 插入用户记录 | SQLException 回滚 |
 | 8 | 提交事务 | - |
-| 9 | 自动登录，返回 LoginVO | - |
+| 9 | 自动登录（`UserService.registerAndLogin`，T13）：查询用户 → BCrypt 校验 → 生成 JWT，返回 LoginVO | **自动登录失败（用户查不到/密码不匹配/登录期 DB 异常）不再抛错**：仍返回 200 + `token=null` 的 LoginVO（注册已提交即算成功），前端提示「注册成功，请手动登录」并切回登录 tab；**注册本身失败（步骤 4~7）照旧抛错** |
 
 #### 接口定义
 
@@ -209,6 +209,8 @@ Content-Type: application/json
     "message": "电话号码已被使用"
 }
 ```
+
+> **自动登录兜底（T13）**：注册已提交后自动登录失败时，**不是失败响应**，而是成功响应 + `"token": null`（`data.id`/`data.username` 为已注册用户）——`token` 是本接口唯一的"是否已登录"信号，前端据此提示「注册成功，请手动登录」并切回登录 tab 预填手机号（提示文案在前端，后端不新增字段）。
 
 ---
 
@@ -1329,7 +1331,7 @@ GET /feed?page=1&pageSize=10&token=xxx
 | 接口 | 方法 | 说明 |
 |------|------|------|
 | `/user/login` | POST | 登录 |
-| `/user/register` | POST | 注册 |
+| `/user/register` | POST | 注册（自动登录失败时仍 200、`data.token=null`：注册成功但需手动登录，T13） |
 | `/start` | GET | 首页推荐 |
 | `/search` | GET | 搜索 |
 | `/search/IdSearch` | GET | 内容详情（无 /detail 端点） |

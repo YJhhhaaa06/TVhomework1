@@ -1,6 +1,6 @@
 # 当前系统架构地图
 
-> 版本：3.7（2026-09-20 T12：**事务边界同型未治点清零**（治池 U-14）——`ContentService.search` 与 `FollowService` 的关注/粉丝列表装载把**缓存读移出 DB 事务回调**：事务回调只留 DB 查询（`SearchDbData` 私有 record / `List<User>` 回传），提交归还连接后才在事务外做缓存批量读（`getContentsBatch` + `fillLikeAndFollowBatch` / `batchIsFollowing`）与视图组装；`search` 的逐 key `getContent` 一并换批量读（对齐 Feed/Profile 的 T8 口径）。对外行为零变化：事务内语句集与改造前一致、返回集与顺序/跳过 null 口径/异常语义一概不变）
+> 版本：3.8（2026-09-20 T13：**注册后自动登录兜底**（治池 U-16）——`/user/register` 的「注册 + 自动登录」编排下沉到新增的 `UserService.registerAndLogin`：注册事务提交后自动登录失败（用户查不到 / 密码不匹配 / 登录期 DB 异常，理论上不应发生）**不再抛错**，改为返回 `token == null` 的 `LoginVO`（id/username 仍是刚注册的用户），前端据此提示「注册成功，请手动登录」并切回登录 tab 预填手机号；**注册本身失败**（手机号/用户名占用、插入异常）仍照旧抛错。成功路径的响应字段集与既有错误码零变化）
 > 最后更新：2026-09-20
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
@@ -213,8 +213,8 @@ com.itheima/
 
 | 层 | 类（行数） | 职责 |
 |----|------|------|
-| controller | LoginController（80，/user/*） | 登录、注册、修改密码/用户名 |
-| service | UserService（241） | 用户认证 + 管理员判定 + 改名后级联失效内容缓存（注入 ContentCache） |
+| controller | LoginController（95，/user/*） | 登录、注册、修改密码/用户名 |
+| service | UserService（271） | 用户认证 + 管理员判定 + 改名后级联失效内容缓存（注入 ContentCache）；**`registerAndLogin`（T13，池 U-16 兜底）= 注册 + 自动登录编排**——自动登录失败不回抛，返回 `token=null` 的 LoginVO（注册已提交即算成功），注册本身失败仍抛错 |
 | dao | UserDao（258） | users 用户 CRUD + 角色查询（`findUsersByIds` T7 起带 `ORDER BY id`：关注/粉丝列表顺序由此保证，唯一调用方 FollowService） |
 | model | entity/User（89）、dto/LoginDTO（28）/RegisterDTO（41）/ChangePasswordDTO（35）/ChangeUserNameDTO（13）、command/LoginCommand（63）/RegisterCommand（44）/ChangePasswordCommand（44）/LoginType（7）、vo/LoginVO（40） | 用户实体与请求/命令/响应对象 |
 
@@ -521,7 +521,7 @@ com.itheima/
 | 方法 | 路径 | 说明 | 需要登录 |
 |------|------|------|----------|
 | POST | /user/login | 登录 | ✗ |
-| POST | /user/register | 注册 | ✗ |
+| POST | /user/register | 注册（自动登录失败时仍 200，`data.token` 为 null —— 注册成功、请手动登录，T13） | ✗ |
 | POST | /user/changePassword | 修改密码 | ✓ |
 | POST | /user/changeUserName | 修改用户名（改名后级联失效该作者内容缓存 authorName） | ✓ |
 

@@ -87,6 +87,27 @@ public class UserService {
     }
 
 
+    /**
+     * 注册并自动登录（池 U-16 兜底）：**注册成功即视为成功**。
+     *
+     * <p>自动登录失败（用户查不到 / 密码不匹配 / 登录期 DB 异常——理论上不应发生）时不再向上抛异常
+     * （旧行为：前端收到错误响应，用户误以为注册失败，且无 token、无提示），而是返回
+     * {@code token == null} 的 {@link LoginVO}（id/username 仍为刚注册的用户），由调用方提示"注册成功，请手动登录"。
+     *
+     * <p>不重试、不补登：注册与自动登录仍是两个独立事务（注册事务先提交，再做登录查询），
+     * 语句集与改造前一致；**注册本身失败**（手机号/用户名占用、插入异常）仍照旧抛错，不被兜底吞掉。
+     */
+    public LoginVO registerAndLogin(RegisterCommand rc) {
+        long id = registerAsUser(rc);
+        try {
+            return login(id, rc.getPassword());
+        } catch (BusinessException e) {
+            // 注册已提交：不能把自动登录失败报成注册失败；留痕不静默
+            LOGGER.log(Level.WARNING, "注册后自动登录失败, userId=" + id + ", 改为提示手动登录", e);
+            return new LoginVO(id, rc.getUsername(), null);
+        }
+    }
+
     //    用户注册,返回Id
     public long registerAsUser(RegisterCommand rc){
         String username=rc.getUsername();
