@@ -1,6 +1,6 @@
 # 下一周期任务清单
 
-> 状态：**第七期（2026-09-19 建清单；**T11 关注·粉丝列表分页**原为**预告条目**，已于 2026-09-20 T11 窗口完成范围拍板并**拆为 T11-A（follow 域上限 200 + 后端固定信封 + 缺省归一为第一页 + sheet 接 chunkedList，**契约变更**）/ T11-B（评论域固定信封 + 公共 helper 去重/自适应 + 内容列表前端迁移）/ T11-C（装载侧解耦，池 U-18 治本，拆 C-1/C-2 两个 commit）**，四要素已回写（见四节）；**T11-A 已于 2026-09-20 完成**（执行回写见四节 T11-A 之后），另新增 **T19**（feed/search/profile 的后端大分页推后项）+ **T12~T18** 清理类（事务边界代码债 / 注册登录兜底 / 包层结构清扫 / 文档与代码一致性 / Controller 基建收敛 / IoC 注入可观测 / 配置卫生）。
+> 状态：**第七期（2026-09-19 建清单；**T11 关注·粉丝列表分页**原为**预告条目**，已于 2026-09-20 T11 窗口完成范围拍板并**拆为 T11-A（follow 域上限 200 + 后端固定信封 + 缺省归一为第一页 + sheet 接 chunkedList，**契约变更**）/ T11-B（评论域固定信封 + 公共 helper 去重/自适应 + 内容列表前端迁移）/ T11-C（装载侧解耦，池 U-18 治本，拆 C-1/C-2 两个 commit）**，四要素已回写（见四节）；**T11-A（2026-09-20）与 T11-B（2026-09-20）已完成**（执行回写见四节各自之后），另新增 **T19**（feed/search/profile 的后端大分页推后项）+ **T12~T18** 清理类（事务边界代码债 / 注册登录兜底 / 包层结构清扫 / 文档与代码一致性 / Controller 基建收敛 / IoC 注入可观测 / 配置卫生）。
 > 关联文档：`目标与任务/NEXT_CYCLE_NEEDS.md`（决策唯一源；本文档为执行细节）。
 > 来源：NEEDS **4.2** 的两个候选任务（用户 2026-09-19 点名"分为评论分页和关注/粉丝列表分页两个任务"）+ NEEDS 二节留池项 + `UNPLANNED_ISSUES.md` 的 **2026-09-19 第七期评估**（进 TASKS 项：U-14 / U-16 / U-07+U-19）。
 > 明确不做（本轮已定）：offset→游标（属 **feed 流方向**——该方向路线已预告为"读扩散查询 → 每人维护收件箱（写扩散）"）；日志体系改造相关（`U-15` 已移出池，随该方向立项盘点）；`R-01` 索引全量读（明确保留）；`U-11` 停机兜底推荐（留池，待产品决策）；评论热门排序（用户"另想对策"延后，登记 NEEDS 4.1 **N17**，**不占 T10 范围**）；NEEDS 4.1（N9~N16）中**已点单的已并入清单**：N9 文档部分→**T15**、N11→**T16**、N12 前半→**T17**、N13→**T18**、N14→**T14**、**N15→T10-B（2026-09-19 T10 窗口调整：公共"分块列表"helper 随 T10-B 前端改造抽，T11 直接复用）**、N16→**T15**；**未排的**：N9 的"声明式鉴权"、**N10**（admin 角色每请求查库）、N12 的"声明式事务"——属**新功能方向的能力建设**，待该方向立项时评估；**2026-09-20 T11 窗口新增推后项**：`/feed`·`/search`·`/profile` 的**后端**大分页（域级上限 + 域级信封）→ **新增 T19**（这三处内容列表的**前端**迁移仍在 T11-B 内完成）。
@@ -72,7 +72,7 @@
 
 ---
 
-## 三、任务总览（本周期 12 任务：T10-A/T10-B、T11-A/T11-B/T11-C、T12~T19）
+## 三、任务总览（本周期 13 任务：T10-A/T10-B、T11-A/T11-B/T11-C、T12~T19；**T10/T11 拆解后计数**——原"12 任务"是按 T10 未拆时写的，编号未变）
 
 > **DDL 标注（G9 要求）**：① **已完成**（2026-09-19 T10-A 窗口）——`comment` 加 `reply_count INT NOT NULL DEFAULT 0` + 复合索引 `(content_id, parent_id)`；② **新增（2026-09-20 T11 窗口定稿，T11-C-1 执行）**——`follow` 加 `idx_followed_user_user (followed_user_id, user_id)`（粉丝方向窗口查询同序；关注方向复用 `uk_user_follow`）。两次均走备份闭环（改前备份 → ALTER 3306 → 备份新结构 → 重建测试库 3307）并**向用户报备**。
 
@@ -81,7 +81,7 @@
 | T10-A | 评论分页①：缓存结构拆分（主楼 List + 楼中楼 Hash）+ 主楼窗口装载（后端基座） | NEEDS 4.2 ①（= 池 U-20，U-20 治本） | 用户 2026-09-19 放开 T8"不动缓存装载结构"红线（本任务正是要动它） | **已完成（2026-09-19/20）**：两键组 + 主楼窗口装载 + DDL（reply_count + idx），契约零变化（pytest 评论用例零改动）；全链绿 | `refactor(cache-10a)` | **已完成** |
 | T10-B | 评论分页②：楼中楼前 K=2 条装载 + replyCount 总数 + 展开加载回复接口 + 前端大 chunk/本地小批 + 公共"分块列表"helper（N15） | NEEDS 4.2 ① + N15 | T10-A 落地（已完成） | **已完成（2026-09-20）**：契约变更落地（children 前 2 + replyCount + `/comment/replies` 展开）；全链 JUnit 绿 + pytest 145 | `refactor(cache-10b)` | **已完成** |
 | T11-A | 关注/粉丝列表：域级上限 200 + 后端固定信封（前端只传 `page`）+ 缺省归一为第一页 + sheet 接 `chunkedList` | NEEDS 4.2 ②（+ N15 复用） | 无 | **已完成（2026-09-20）**：`pageSize=51` 回显 51、`999`→200；缺省=第一页信封（与显式 `page=1&pageSize=200` 逐字节一致）；sheet「加载更多」走公共 helper；全链 exit 0 + JUnit 482/0/0/0 + pytest 145 | `refactor(cache-11a)` | **已完成** |
-| T11-B | 评论域固定信封（default 200 / max 500）+ 公共 helper 去重与 `chunkSize` 自适应 + 内容列表前端迁移（feed/search/profile，chunk=50） | NEEDS 4.2 ② + 4.1 **N15** | T11-A（helper 自适应形态） | 评论域只传 `page` → `pageSize=200`；`chunkedList` 具 `keyOf`/`seen` 去重；**后端「页间不重不漏」断言一条未改**（去重不掩盖后端 bug）；三处内容列表走公共 helper | `refactor(cache-11b)` | **待执行** |
+| T11-B | 评论域固定信封（default 200 / max 500）+ 公共 helper 去重与 `chunkSize` 自适应 + 内容列表前端迁移（feed/search/profile，chunk=50） | NEEDS 4.2 ② + 4.1 **N15** | T11-A（helper 自适应形态） | **已完成（2026-09-20）**：评论域只传 `page` → `pageSize=200`（上限 500 保留）；`chunkedList` 具 `keyOf`/`seen` 去重（批内 + 跨 chunk）与 `chunkSize` 自适应；**后端「页间不重不漏」断言一条未改**（去重不掩盖后端 bug）；三处内容列表走公共 helper；全链 exit 0 + JUnit 482/0/0/0 + pytest 145 | `refactor(cache-11b)` | **已完成** |
 | T11-C | 关注/粉丝列表装载侧解耦（池 **U-18** 治本，P1 前缀窗口装载） | NEEDS 4.2 ② + 池 **U-18** | T11-A（信封/上限先行）；C-1 → C-2 顺序 | JUnit 断言"窗口装载只查 `[W, offset+count)`、不触发全量 loader"；`getMembers` 部分态补齐；写路径遇 `partial` 双 DEL；DDL 闭环留证；全链 exit 0 | `refactor(cache-11c)`（C-1 记为 `cache-11c1`） | **待执行** |
 | T12 | 事务边界同型未治点 2 处（缓存读移出回调） | 池 **U-14**（2026-09-19 评估：进 TASKS） | 无 | 两处缓存读不再在事务回调内；对外行为零变化；JUnit + pytest 全绿 | `refactor(content)` / `refactor(follow)` | 待执行 |
 | T13 | 注册后自动登录缺兜底 | 池 **U-16**（同上） | 无 | 自动登录失败 → 返回"注册成功 + 提示手动登录"，不再无 token 无提示；补用例 | `fix(user)` | 待执行 |
@@ -94,7 +94,7 @@
 
 > 状态取值：草稿 / **预告** / 待执行 / 执行中 / 已完成 / 搁置。搁置的 T# 必须注明其"对应候选"编号去向（转 `UNPLANNED_ISSUES.md` / 结转下周期 NEEDS 二节），不得悬空（G11）。
 
-> **顺序理由**：**T12~T19 互相独立、可任意穿插**——**T15（纯文档）可最先做**；T12 / T16 / T17 / T18 属小改动但都要跑测试回归；T14 需先拍板 **R-03**。**T10 已拆解拍板（T10-A → T10-B，均已完成）**：T10-A 先落地缓存结构拆分 + 主楼窗口装载 + DDL 闭环（对外契约零变化）；T10-B 依赖 T10-A，做楼中楼 K=2 + 展开接口 + 前端大 chunk/helper（契约变更）。**T11 已拆解拍板（2026-09-20 T11 窗口）**：**T11-A 先行**（follow 域上限 + 后端固定信封 + 缺省归一 + sheet 接 helper，契约变更，四要素已回写）；**T11-B** 依赖 A 的 helper 自适应形态（评论域信封 + helper 去重/自适应 + 三处内容列表前端迁移）；**T11-C** 依赖 A 的前端 chunk 落地（装载侧解耦，内部 C-1 → C-2 顺序：先 DDL + 窗口 DAO（行为零变化），再前缀装载）；**T19** 依赖 T11-B（三处前端已迁 helper，本任务补后端上限与信封）。三任务进窗口前无需再拍板（拍板结论已回写四要素）。
+> **顺序理由**：**T12~T19 互相独立、可任意穿插**——**T15（纯文档）可最先做**；T12 / T16 / T17 / T18 属小改动但都要跑测试回归；T14 需先拍板 **R-03**。**T10 已拆解拍板（T10-A → T10-B，均已完成）**：T10-A 先落地缓存结构拆分 + 主楼窗口装载 + DDL 闭环（对外契约零变化）；T10-B 依赖 T10-A，做楼中楼 K=2 + 展开接口 + 前端大 chunk/helper（契约变更）。**T11 已拆解拍板（2026-09-20 T11 窗口）**：**T11-A 先行**（follow 域上限 + 后端固定信封 + 缺省归一 + sheet 接 helper，契约变更，四要素已回写）；**T11-B 已完成（2026-09-20，依赖 A 的 helper 自适应形态）**：评论域固定信封 + helper 去重/自适应 + 三处内容列表前端迁移；**T11-C** 依赖 A 的前端 chunk 落地（装载侧解耦，内部 C-1 → C-2 顺序：先 DDL + 窗口 DAO（行为零变化），再前缀装载）；**T19** 依赖 T11-B（三处前端已迁 helper，本任务补后端上限与信封）。**T11-C 进窗口前无需再拍板**（拍板结论已回写四要素）。
 
 > **回填要求**：任务执行后在本节与"四、任务详情"同步状态与"执行回写"；拆/改任务必须在"对应候选"列保留 NEEDS/池编号，保持 Why→How 可追溯。
 
@@ -160,6 +160,27 @@
 * **红线边界**：**去重不得掩盖后端分页 bug**——pytest 直打 API 的「页间不重不漏」断言**一条都不动**（后端契约仍保证不重不漏；去重只兜"翻页期间集合变化导致的 offset 漂移"，不替代正确性）；**不改** `/feed`·`/search`·`/profile` 的后端上限与默认值（留 T19）；不动评论缓存结构（T10-A/T10-B 已定稿）；不改 `/comment/*` URL 与信封形状；不引入前端依赖或构建工具（保持原生 ESM）。
 * **强制探索步骤**：动刀前先 (0) 复核 `chunkedList` 现有契约与其在 `detail.js` 的使用形态、评论域两处分页解析点（G11） (1) 确认 `keyOf` 缺省顺序对 5 个列表都成立（评论主楼/回复 = `commentId`；用户 = `userId`；内容 = `id`） (2) 确认评论域 `defaultSize = 200` 不破坏 T10-B 既定口径（`max = 500` 保留） (3) 确认三处内容列表 `chunk = 50` 时 `loadedAll` 判定正确（`list.length < chunkSize` 语义） (4) 若清单未覆盖 → 回写本文档再动手。
 * **验收**：`comment/show` 只传 `page` → `pageSize = 200`（旧断言 10 改写）、`pageSize = 999` → 500 不变；`chunkedList` 具 `keyOf`/`seen` 去重与 `chunkSize` 自适应（代码可检）；**后端「页间不重不漏」断言未改且全绿**；三处内容列表走公共 helper（代码可检 import）；全链 exit 0。**覆盖缺口（如实记录）**：项目无 JS 测试层，前端改动只能靠代码审查 + 手工验证，无自动化断言。
+
+> **执行回写（2026-09-20，第七期 T11-B 窗口）**
+>
+> * **落地（代码）**：① `CommentController` 新增常量 `COMMENT_PAGE_SIZE_DEFAULT = 200`（150 → 160 行），`/show` 分页分支与 `/replies` 两处改走三参重载 `parsePageSize(req, 500, 200)`——**上限 500 不变、缺省信封 10 → 200**；`hasPagingParams` 分支（缺省全量数组）**保留**（评论域信封形状不动）。
+> * ② `static/js/chunkedList.js`（65 → 124 行）增：`keyOf`（缺省 `userId` → `commentId` → `id`，带类型前缀）+ 内部 `seen` 集合（**批内与跨 chunk 双向过滤**）、`nextBatch` 批不满时继续消费本地余量/续拉下一 chunk（按**未提交的消费位置**判定，`batchSize > chunkSize` 亦成立；单次最多 10 个 chunk，防"整页重复"死循环）、`reset()` 清 `seen`、**信封大小自适应**（首次响应回显 `pageSize` 覆盖 `chunkSize`，`chunkSize` 降级为初始/兜底值）；请求抛错时 `cursor`/`seen` **不提交**（不吞条目）。
+> * ③ `views/detail.js`（575 → 581）：评论主楼 `fetchChunk` **只传 `page`** + `keyOf: c => c.commentId`；展开回复 `/comment/replies` 同样只传 `page`（原硬传 50 → 后端 200）。
+> * ④ 三处内容列表迁移（`chunk = 50` 顶公共 cap、`keyOf: it => it.id`）：`views/follow.js`（`/feed`，小批 10，`loadFeed(page)` 拆为 `loadFirst` + `loadMoreFeed`，删 `setLoadMore`，132 → 144）、`views/search.js`（小批 12，类型筛选仍在"已展示集合"上做，`total` 由 `fetchChunk` 旁路捕获，219 → 226）、`views/publish.js`（我的投稿，小批 12，563 → 622）、`views/user.js`（创作网格 `/profile`，小批 10，352 → 386）。
+> * **前端重渲染口径（有意变更）**：`publish.js` 的"删除模式切换 / 删除卡片 / 编辑保存"由"重拉当前页"改为**本地条目集重渲染**（`state.myItems`；编辑走 `search/IdSearch` 定向刷新单条）——同时消除原实现"在第 N 页切换删除模式/删除后把第 N 页卡片再追加一遍"的既有缺陷；四处"加载更多"统一为按钮内联 loading + 失败复原并 toast（与 T11-A sheet 同构）。`user.js` 的头部信息（用户名/关注数/粉丝数/创作总数）改由 `fetchChunk` 旁路捕获的 `state.profile` 提供，仅在首批后渲染一次。
+> * **否决/未采纳**：① 不改 `/feed`·`/search`·`/profile` 的后端上限与缺省（红线；后端补齐归 **T19**）；② 不删评论域 `hasPagingParams`（"缺省全量数组"本轮不动，与 follow 域 T11-A 的反转不同——红线：不改信封形状）；③ 不改 `chunkedList` 缺省 `keyOf` 顺序（按拍板 `userId`→`commentId`→`id`），改用"调用点显式传 `keyOf`"兜住评论 VO 陷阱（见 G11 记录②）。
+> * **验证（落盘证据）**：`python tools/tv.py test junit` **exit 0**、`latest.json` = **482 / 0 / 0 / 0**；`python tools/tv.py test all` **exit 0**（`build_ok=True`、pytest **145 passed / 0 failed**、`port_18080_open_after=false`）。**用例数不变**（JUnit 482 → 482，无 Java 测试改动；pytest 145 → 145，仅断言改写与补断言，无新增/删除用例）。另做**一次性 Node 行为核验**（`node --check` 6 个改动 JS 文件 + `createChunkedList` 行为：130 条 / 3 请求、唯一性 130、整页重复不死循环、回显 `pageSize` 自适应、缺省 `keyOf` 在"同作者评论"上确实折叠（3 → 2，印证显式 `keyOf` 必要性）、抛错后重试不丢条目）——过程命令属窗口内临时核验，**未落库**（项目无 JS 测试层）。
+> * **pytest 改写清单（逐条）**：`test_comment_paging.py` ① 头部契约注记"pageSize 默认 10"→"信封 200 / 上限 500（T11-B）"；② `:181` `by_page["pageSize"] == 10` → `== 200`（补注释）；③ `test_replies_envelope_and_out_of_range` 补"只传 `page` → `pageSize == 200`"断言。**后端「页间主楼不重不漏」（`test_pages_cover_all_roots_without_overlap`）等契约断言一条未改**。
+> * **红线合规**：不改 `/feed`·`/search`·`/profile` 后端上限与缺省（三个 Controller 零改动）；不改 `/comment/*` URL 与信封形状（`/show` 缺省仍是全量数组）；不动评论缓存结构（T10-A/T10-B 定稿）；无新前端依赖、保持原生 ESM；去重只兜 offset 漂移、不替代后端正确性。
+> * **G11 记录**：① **L1**：`SearchController.search` 的 `pageSize` **不走** `BaseServletUtil`（缺省 12、**无上限**，直接进 `SearchDTO`）——与 `feed`/`profile` 的公共 cap 50 不同源，属既有事实；本任务按拍板统一取 `chunk = 50`（不放大），"三域上限归一"归 **T19** 一并参数化。② **L1**：`chunkedList` 缺省 `keyOf`（拍板 `userId` 优先）与**评论 VO 同时含 `userId`（作者）**冲突 → 缺省会把同一作者的评论折叠（Node 实测 3 → 2）；已在 helper 头部注释、常青 6.19、调用点显式 `keyOf` 三处兜住，**缺省顺序按拍板不动**。③ **L1（顺带事实修正）**：`BUSINESS_FLOW` 3.1 / 4.2.2 中"评论缓存仍是整树 JSON / 展示层切片"的表述**自 T10-A 起已失效**，本任务触及相关段落时一并改为现状（两键组 + 主楼窗口 + 前 K + 展开接口）并指向 6.18；架构文档 comment 域模块表的 `CommentController` 行数原记 124（改动前实测 150）已改为 160。
+> * **覆盖边界（如实记录）**：项目**无 JS 测试层** → `chunkedList` 的去重/自适应/防死循环、四处视图迁移与"本地余量内 0 请求"**无自动化断言**，仅代码审查 + 上述一次性 Node 核验；本轮未引入 JS 测试依赖（前端测试层缺口的归属待后续评估）。
+> * **文档（G4 同 commit）**：`常青/CURRENT_ARCHITECTURE.md`（头部 3.5 + comment 域模块表行数/职责 + 6.17 消费方措辞 + 6.18 接口口径与前端段 + **新增 6.19「前端列表分块与去重」** + 8.1 前端目录树 6 行 + API 表 `/comment/show`·`/comment/replies`）、`常青/BUSINESS_FLOW.md`（头部 2.2 + 3.1 评论分页口径与失效表述修正 + 4.2.2 分页段 + 前端交互注 + 接口清单行）、本档三节/四节、`NEXT_CYCLE_NEEDS.md` 4.0/4.2/4.3、`INDEX.md` 周期状态行。
+> * **待用户裁决**：无（本轮无 L3/L4 升级项）。
+> * **独立评审（subagent，只读）结论与处置（2026-09-20）**：**无 🔴 阻断项**，总体判定"可提交"（评审自报 3 条 🟡、实际逐条列出 2 条，按 2 条处置）：
+>   ① 🟡 `ensureChunk` 用**已提交**的 `cursor` 判定"本地是否还有余量"，而 `nextBatch` 用**未提交**的 `pos` 消费 → `batchSize > chunkSize` 时"批内续拉下一 chunk"静默失效（当前 5 处调用点均 `batchSize ≤ chunkSize`，未触发，属潜伏缺陷）→ **已采纳**：`ensureChunk(pos)` 改按未提交位置判定；Node 复验 `batchSize=120 / chunk=50` 单批取满 **120（3 请求）**、第二批 **80（＋1 请求）**，常规路径（130 条 / 3 请求）不变。
+>   ② 🟡 极端"整页皆重复"触发 guard 上限时返回空/短批，调用方 `if (!batch.length)` 可能提前收尾 → **维持**：首屏（page 1）不可能整页重复（此时 `seen` 为空）；中途出现时 `hasMore()` 仍为真、"加载更多"按钮仍在，再点即继续，不会永久丢数据；彻底消除需给 helper 扩"未取满"信号（语义扩张），收益不抵风险，如实记录。
+>   评审同时核对通过：helper `pending`/`seen` 提交时序、`keyOf` 在响应 `pageSize` 为 0/负/缺失时的兜底、四处视图空态/错误态/终止条件与悬空引用（`state.page`/`loadFeed`/`setLoadMore`/`loadProfile`/`renderProfile`/`myPage` 等零残留）、`CommentController` 两处三参重载与 `min(defaultSize,max)` 语义、`/search/keywordSearch` **不走**公共解析（缺省 12、无上限；前端显式传 50 故实际回 50，不会造成 `loadedAll` 误判）、测试非空转（"页间不重不漏"未改）、文档行数与实测一致、全库无"整树/全树"旧表述残留；红线逐条未违反（本次仅 `CommentController` 一个 Java 文件被改）。
+> * **评审后复跑复核（2026-09-20，处置后同一工作树）**：`test junit` exit 0、`{tests: 482, failures: 0, errors: 0, skipped: 0}`；`test all` exit 0、`build_ok=True`、pytest **145 passed / 0 failed**、`port_18080_open_after=false`。**与首次数字一致**（本轮处置仅 JS helper 一处判定改动，不动两层测试的用例集）。
 
 ### T11-C 关注/粉丝列表装载侧解耦（池 U-18 治本：P1 前缀窗口装载）
 
@@ -239,7 +260,7 @@
 > **来源（2026-09-20 T11 窗口推后项）**：T11 窗口拍板"固定信封只做 follow 与评论；feed 与 search（含 profile 创作网格）的后端改动忽略，只做前端顺手迁移"→ 后端侧补齐另立本条，编号不悬空。
 
 * **意图**：把三处内容列表的后端口径补齐——域级 `pageSize` 上限与域级信封大小，使前端可"只传 `page`"；T11-B 已把三处前端迁到公共 helper（`chunk=50` 受现有 cap 限制），本任务把 cap 提升后 chunk 可随之上调。
-* **入口线索**：`content/controller/FeedController.java:26`、`content/controller/ProfileController.java:26`（均 `BaseServletUtil.parsePageSize(req)`）、`content/controller/SearchController.java`（`keywordSearch` 分页解析处）、`views/follow.js:41`、`views/search.js:153,191`、`views/publish.js:115`、`views/user.js:125`（三处前端已在 T11-B 接入 helper）。
+* **入口线索**：`content/controller/FeedController.java:26`、`content/controller/ProfileController.java:26`（均 `BaseServletUtil.parsePageSize(req)`）、`content/controller/SearchController.java`（`keywordSearch` 分页解析处——**⚠️ T11-B 窗口实测：该处 `page`/`pageSize` 不走 `BaseServletUtil`，`pageSize` 默认 12 且无上限，直接进 `SearchDTO`；上限归一需连解析点一并参数化**）、`views/follow.js`、`views/search.js`、`views/publish.js`、`views/user.js`（三处前端已在 T11-B 接入 helper，`chunk = 50`）。
 * **红线边界**：只放开上限与信封口径 + 前端 chunk 上调；**不改分页语义 / 返回集 / 排序 / 跳过 null 口径**；`/profile` 的 `ProfileVO{contentPage}` 形状不变；不动 `/feed` 的关注 ids 全量读路径（R-01 保留）；不引入新依赖。
 * **强制探索步骤**：动刀前先 (0) 复核三处 Controller 上限现状（公共 50）与前端 chunk 现状（T11-B 后为 50） (1) 定各域限额（建议 `200/200`）与前端 `batch` 的匹配 (2) 确认 `publish.js` 与 `user.js` 共用 `/profile` 的一致性（一次改两处消费） (3) 若清单未覆盖 → 回写本文档再动手。
 * **验收**：三域 `pageSize` 上限 200 生效、只传 `page` 返回域级信封；前端三处改为只传 `page` 且 chunk 上调；相关 pytest 全绿（如有上限断言同步改写）；全链 exit 0。

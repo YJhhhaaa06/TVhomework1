@@ -10,7 +10,8 @@ test_comment_paging.py - 评论列表主楼分页 + 楼中楼前 K 条 + 展开�
 契约（缺省兼容，硬要求）：
 - **不传** page/pageSize → data 仍为全量数组（children 全量随行，另带 replyCount 字段），既有断言零破坏；
 - **传任一** → data = {list,total,page,pageSize,totalPages}，`total` = **主楼条数**；
-- 分页解析：page 默认 1、pageSize 默认 10，评论域上限 **500**（公共 cap 50 仅其它接口沿用）；
+- 分页解析：page 默认 1；评论域**信封 200**（T11-B：缺省 `pageSize` 由后端域级常量决定，
+  前端只传 `page`）、上限 **500**（显式传参仍生效；公共 cap 50 仅其它接口沿用）；
 - 分页信封每主楼：children ≤ 2 条 + `replyCount`（该主楼回复总数）；
 - 展开：`GET /comment/replies?rootId&page&pageSize` → 分页信封，`total` = 该主楼回复总数。
 
@@ -176,9 +177,9 @@ class TestCommentPaging:
         assert by_size["page"] == 1
         assert root_ids(by_size["list"]) == main_ids[:3]
 
-        by_page = show(base_url, cid, page=1)               # 只传 page（pageSize 缺省 10）
+        by_page = show(base_url, cid, page=1)               # 只传 page（信封取评论域缺省 200，T11-B）
         assert isinstance(by_page, dict), "只传 page 也算分页请求"
-        assert by_page["pageSize"] == 10
+        assert by_page["pageSize"] == 200, "T11-B：评论域缺省信封 200（前端只传 page）"
         assert root_ids(by_page["list"]) == main_ids
 
         beyond = show(base_url, cid, page=2)                # 只传 page 且越界
@@ -225,6 +226,11 @@ class TestCommentPaging:
         assert data["total"] == ROOT_REPLY_COUNT
         assert data["pageSize"] == 1
         assert len(data["list"]) == 1
+
+        # T11-B：展开接口同样"前端只传 page"——信封取评论域缺省 200（上限 500 不变）
+        by_page = show_replies(base_url, main_ids[0], page=1)
+        assert by_page["pageSize"] == 200, "T11-B：/comment/replies 缺省信封 200"
+        assert len(by_page["list"]) == ROOT_REPLY_COUNT
 
         beyond = show_replies(base_url, main_ids[0], page=99, pageSize=1)
         assert beyond["list"] == [], "越界页返回空列表"

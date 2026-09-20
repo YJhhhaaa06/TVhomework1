@@ -11,6 +11,8 @@ import { createChunkedList } from '../chunkedList.js';
 
 // T10-B：评论列表"大 chunk + 本地小批"——一次拉 CHUNK_SIZE 主楼，本地按 BATCH_SIZE 小批展示，
 // 本地余量用尽才发下一次 chunk 请求（公共 helper createChunkedList，T11 复用）。
+// T11-B：**请求只传 `page`**——信封大小由后端评论域常量（200）决定，CHUNK_SIZE 只作兜底值，
+// 首次响应后用响应回显的 pageSize 自适应覆盖（见 chunkedList.js）。
 const CHUNK_SIZE = 200;
 const BATCH_SIZE = 10;
 
@@ -270,10 +272,13 @@ function createSideItem(item) {
 function ensureCommentList() {
   if (!state.commentList) {
     state.commentList = createChunkedList({
+      // T11-B：只传 page（信封大小后端定，响应回显自适应）
       fetchChunk: async (page) => request(
-        `comment/show?contentId=${state.contentId}&page=${page}&pageSize=${CHUNK_SIZE}`),
+        `comment/show?contentId=${state.contentId}&page=${page}`),
       chunkSize: CHUNK_SIZE,
       batchSize: BATCH_SIZE,
+      // 评论 VO 同时含 userId（作者），必须显式按 commentId 去重（见 chunkedList.js keyOf 说明）
+      keyOf: (c) => c.commentId,
     });
   }
   return state.commentList;
@@ -452,7 +457,8 @@ async function ensureRootExpanded(comment, wrapper) {
   (comment.children || []).forEach((c) => known.set(c.commentId, c));
   let page = 1;
   for (;;) {
-    const data = await request(`comment/replies?rootId=${rootId}&page=${page}&pageSize=50`);
+    // T11-B：只传 page（信封大小后端定 200，比原先硬传 50 少 4 倍往返，取齐结果不变）
+    const data = await request(`comment/replies?rootId=${rootId}&page=${page}`);
     (data.list || []).forEach((r) => { known.set(r.commentId, r); });
     if (page >= (data.totalPages || 1)) break;
     page += 1;

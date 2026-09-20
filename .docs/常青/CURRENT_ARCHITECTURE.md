@@ -1,6 +1,6 @@
 # 当前系统架构地图
 
-> 版本：3.4（2026-09-20 T11-A：follow 域关注/粉丝列表**接口口径**改造——`pageSize` 上限 50→200、信封大小改由**后端域级常量**决定（前端只传 `page`）、缺省（不传参）由「全量数组」**反转为「第一页信封」**；前端 sheet 接公共 `chunkedList`。评论分页见 6.18）
+> 版本：3.5（2026-09-20 T11-B：**评论域固定信封**（缺省 `pageSize` 由后端域级常量 200 决定，上限 500 不变；`/comment/show`、`/comment/replies` 前端只传 `page`）；公共 `chunkedList` 增**去重**（`keyOf` + `seen`）与**信封大小自适应**（以响应回显 `pageSize` 为准）；`feed`/`search`/`profile` 三处内容列表**仅前端**迁移到该 helper（`chunk = 50`，后端上限/信封归 T19））
 > 最后更新：2026-09-20
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
@@ -256,7 +256,7 @@ com.itheima/
 
 | 层 | 类（行数） | 职责 |
 |----|------|------|
-| controller | CommentController（124，/comment/*） | 评论发表/查询/删除（**T8：`/show` 支持可选 `page`/`pageSize`**——显式判"是否传分页参数"分支：缺省全量数组、传参走分页信封） |
+| controller | CommentController（160，/comment/*） | 评论发表/查询/删除（**T8/T11-B：`/show`、`/replies` 可选 `page`/`pageSize`**——`/show` 显式判"是否传分页参数"分支：缺省全量数组、传参走分页信封；`pageSize` 缺省取域级信封 **200**、上限 **500**） |
 | service | CommentService（197） | 评论业务（楼中楼：发表归一化主楼 + 软删除：用户自删/管理员删） |
 | dao | CommentDao（179） | comment 评论 CRUD + 软删除（整楼/单条）+ 楼内回复计数 + 评论所属内容定位 |
 | model | dto/CommentDTO（44）、command/CommentCommand（50） | 评论请求/命令（CommentVO 归 content 域） |
@@ -484,7 +484,7 @@ com.itheima/
   - **缺省（不传任何分页参数）= 第一页信封**，与显式 `page=1&pageSize=200` 响应**逐字节一致**；T7 的「两者都不传 → `data` 仍为全量数组」分支**已删除**——该分支同时是"一次拉全量"的攻击放大面。
   - 参数解析走 `BaseServletUtil.parsePageSize(req, max, defaultSize)` **三参重载（T11-A 新增）**：传了 → `min(s, max)`、未传 → `defaultSize`；两参重载委托 `(req, max, 10)`、无参重载经两参委托 → **其它域（feed/search/profile/content/coupon）语义零变化**。`page < 1` 归一为 1；越界页返回空数组但保留 total。
 - **total 口径**：同一 ZSet 的 `ZCARD`（与页内容同源）；不用独立计数 key `user:followCount`（两 key 可能瞬时不一致）。
-- **前端**：`static/js/views/user.js` 的关注/粉丝 sheet 接公共 **`chunkedList`** helper（`static/js/chunkedList.js`——T10-B 抽出，T11-A 为第二个消费方）：请求**只传 `page`**（信封大小由后端域常量决定，前端不再出现 pageSize 魔法数）、大 chunk 200 + 本地小批 10，本地余量足够时「加载更多」**0 请求**；每次 `openUserList` 重建实例（等价 reset，防 following/followers 本地余量串台）。
+- **前端**：`static/js/views/user.js` 的关注/粉丝 sheet 接公共 **`chunkedList`** helper（`static/js/chunkedList.js`——T10-B 抽出，T11-A 为第二个消费方，T11-B 起的完整消费方清单见 6.19）：请求**只传 `page`**（信封大小由后端域常量决定，前端不再出现 pageSize 魔法数）、大 chunk 200 + 本地小批 10，本地余量足够时「加载更多」**0 请求**；每次 `openUserList` 重建实例（等价 reset，防 following/followers 本地余量串台）。
 - **包层边界**：分页信封落在 follow 域（**不 import content 域 `PageResult`**——content 已 import `follow.FollowCache`，反向引用会形成新的 follow↔content 包层环）；"PageResult 上移公共包供多域复用"登记留池（跨域重构不在本任务范围）。
 
 ### 6.18 评论列表分页（T8 → T10-A/T10-B：两键组 + 主楼窗口装载 + 楼中楼前 K + 展开接口）
@@ -494,10 +494,18 @@ com.itheima/
 - **展开接口 `/comment/replies`**（T10-B）：`rootId&page&pageSize` → 分页信封；`total` = 该主楼 `reply_count`（与 children 前 K 口径一致）；list = 直接回复 + 间接二级回复（keyset 升序，与建树上溯口径一致——新数据 parent 归一挂主楼、seed 存量最多二级间接），点赞态仅该页批量。
 - **切片点**：原 `ContentService.sliceRoots` 已删除（T10-A）；切片由 `CommentCache.getRootPage`（LRANGE 窗口取数）承担；越界页空列表但 `total` 真实。
 - **失效重映射（DB 源真理 + 失效自愈）**：增主楼 → `invalidateRoots`（roots+count，读懒重建）；**增回复/删回复/点赞** → `reply_count` 增量维护（+1/−1 防负守卫，删主楼不扣）+ 定向 HDEL 该主楼 replies field（懒载刷新前 K）；`notifyCommentLikeChanged` 经 `getRootIdByCommentId` 上溯主楼后定向失效。
-- **接口口径**：`GET /comment/show` 传任一 → 信封；不传 → 全量数组。分页解析：page 默认 1、pageSize 默认 10，评论域上限 **500**（`BaseServletUtil.parsePageSize(req, max)` 重载，公共 cap 50 仅其它接口沿用）。
+- **接口口径**：`GET /comment/show` 传任一 → 信封；不传 → 全量数组。分页解析：page 默认 1；`pageSize` **缺省 = 评论域信封 200**（`CommentController.COMMENT_PAGE_SIZE_DEFAULT`，T11-B——前端只传 `page`）、上限 **500**（`parsePageSize(req, max, defaultSize)` 三参重载，显式传参仍生效；公共 cap 50 仅其它接口沿用）。
 - **total 口径**：主楼 `total` = `:count` key（首装惰性 COUNT）；`replyCount` = DB `comment.reply_count`；与详情接口 `commentCount`（含楼中楼的总评论数）口径不同，前端头部计数仍取 `commentCount`。
 - **顺序**：主楼/展开回复均 `ORDER BY c.comment_id`（键集升序），页间不重不漏由构造保证。
-- **前端**：`static/js/views/detail.js` 评论列表走公共 **`chunkedList`** helper（`static/js/chunkedList.js`，T10-B 抽出、T11 复用）——大 chunk 200 + 本地小批 10，本地余量用尽才发下一个 chunk 请求；每条主楼首次只显示前 2 条回复 + "共 N 条回复"，展开时按需拉 `/comment/replies`；发/删评论后重置回第 1 页。
+- **前端**：`static/js/views/detail.js` 评论列表走公共 **`chunkedList`** helper（`static/js/chunkedList.js`，T10-B 抽出、T11 复用）——**只传 `page`**（T11-B：信封大小由后端域常量决定），本地小批 10，本地余量用尽才发下一个 chunk 请求；每条主楼首次只显示前 2 条回复 + "共 N 条回复"，展开时按需拉 `/comment/replies`（同样只传 `page`）；发/删评论后重置回第 1 页。
+
+### 6.19 前端列表分块与去重（T10-B 抽出 → T11-A/T11-B 消费）
+
+- **helper 语义**（`static/js/chunkedList.js`）：`createChunkedList({fetchChunk, chunkSize, batchSize, keyOf})` → `nextBatch()/hasMore()/reset()`。"大 chunk 拉取 + 本地小批展示"：本地余量足够时不发请求，用尽才拉下一页。
+- **去重（T11-B）**：内部 `seen` 集合按 `keyOf` 过滤已展示条目——只兜"翻页期间集合变化导致的 offset 漂移"，**不替代后端契约**（后端"页间不重不漏"仍由 pytest 直打 API 验证，去重不得掩盖后端分页 bug）。`keyOf` 缺省依次取 `item.userId`/`item.commentId`/`item.id`；**评论 VO 同时含 `userId`（作者）与 `commentId`，评论类列表必须显式传 `keyOf: c => c.commentId`**，否则同一作者的多条评论会被折叠；`keyOf` 返回 `null` 的条目不参与去重（不吞条目）。单次 `nextBatch` 内最多再拉 10 个 chunk（防"整页重复"死循环）。
+- **信封大小自适应（T11-B）**：`chunkSize` 只作初始/兜底值，首次成功响应后用响应回显的 `pageSize` 覆盖——信封大小由**后端域级常量**决定，前端可只传 `page`。
+- **消费方（5 处）**：`views/detail.js`（评论主楼，chunk 兜底 200 / 小批 10）、`views/user.js`（关注/粉丝 sheet，只传 `page`，小批 10；创作网格 `/profile`，chunk 50 / 小批 10）、`views/follow.js`（`/feed`，chunk 50 / 小批 10）、`views/search.js`（结果，chunk 50 / 小批 12）、`views/publish.js`（我的投稿 `/profile`，chunk 50 / 小批 12）。后三处的**后端**上限与域级信封尚未参数化（现顶公共 cap 50）→ 推后 **T19**。
+- **本地重渲染口径（T11-B）**：`publish.js` 的"删除模式切换 / 删除卡片 / 编辑保存"从"重拉当前页"改为**本地条目集重渲染**（`state.myItems`；编辑走 `search/IdSearch` 定向刷新单条）——原实现在第 N 页会重复追加第 N 页卡片。
 
 ---
 
@@ -540,8 +548,8 @@ com.itheima/
 | GET | /like/comment/status | 点赞状态 | ✓ |
 | GET | /like/comment/count | 点赞数 | ✓ |
 | POST | /comment/add | 发表评论 | ✓ |
-| GET | /comment/show | 查看评论（可选 `page`/`pageSize`：传任一参数返回 `{list,total,page,pageSize,totalPages}`，`total`=主楼条数，**每主楼只带前 2 条楼中楼 + `replyCount` 总数**；缺省仍全量数组；pageSize 域级上限 **500**） | ✗ |
-| GET | /comment/replies | **T10-B**：展开某主楼全部回复（`rootId&page&pageSize` → 分页信封，`total`=该主楼回复总数） | ✗ |
+| GET | /comment/show | 查看评论（可选 `page`/`pageSize`：传任一参数返回 `{list,total,page,pageSize,totalPages}`，`total`=主楼条数，**每主楼只带前 2 条楼中楼 + `replyCount` 总数**；缺省仍全量数组；pageSize 缺省域级信封 **200**、上限 **500**） | ✗ |
+| GET | /comment/replies | **T10-B**：展开某主楼全部回复（`rootId&page&pageSize` → 分页信封，`total`=该主楼回复总数；pageSize 缺省 **200**、上限 500，T11-B） | ✗ |
 | POST | /comment/delete | 删除评论（软删除，仅自己） | ✓ |
 | POST | /content/commentEnabled | 作者开关自己作品的评论区（0=关/1=开） | ✓ |
 | POST | /follow/add | 关注 | ✓ |
@@ -596,14 +604,14 @@ src/main/webapp/
         ├── auth.js            # token/username/userId 存取、JWT sub 解码
         ├── utils.js           # 工具 + createVideoCard（字段降级收敛）
         ├── editWork.js        # 编辑作品弹层（作者改标题/简介 + 替换/删除媒体，创作中心与详情共用）
-        ├── chunkedList.js     # 公共「分块列表」helper（大 chunk 拉取 + 本地小批展示；消费方：detail 评论主楼、user 关注/粉丝 sheet）
+        ├── chunkedList.js     # 公共「分块列表」helper（大 chunk 拉取 + 本地小批展示 + keyOf 去重 + 信封大小自适应；消费方：detail 评论、user 关注/粉丝 sheet 与创作网格、follow、search、publish）
         └── views/
             ├── home.js        # #/            首页（推荐流 + 换一换）
-            ├── follow.js      # #/follow      关注流（/feed 分页）
-            ├── detail.js      # #/video/:id   详情（播放器 + 楼中楼评论 + 相关推荐）
-            ├── search.js      # #/search?kw=  搜索
-            ├── user.js        # #/user/:id    个人主页（本人/他人合一；关注/粉丝 sheet 走公共 chunkedList，T11-A 起只传 page）
-            ├── publish.js     # #/publish     创作中心（我的投稿 + 投稿上传）
+            ├── follow.js      # #/follow      关注流（/feed 分块：chunk 50 / 小批 10，T11-B）
+            ├── detail.js      # #/video/:id   详情（播放器 + 楼中楼评论 + 相关推荐；评论只传 page，T11-B）
+            ├── search.js      # #/search?kw=  搜索（结果分块：chunk 50 / 小批 12，T11-B）
+            ├── user.js        # #/user/:id    个人主页（本人/他人合一；关注/粉丝 sheet 只传 page（T11-A）、创作网格走公共 chunkedList（T11-B））
+            ├── publish.js     # #/publish     创作中心（我的投稿 + 投稿上传；我的投稿走公共 chunkedList，T11-B）
             ├── login.js       # #/login       登录/注册
             ├── coupon.js      # #/coupon      优惠券中心
             └── admin.js       # #/admin       媒体运维 + 删评论工具 + 内容下架管理（仅管理员）

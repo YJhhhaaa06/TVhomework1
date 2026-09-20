@@ -9,8 +9,10 @@ import { createVideoCard, showToast, escapeHtml, initialChar, avatarColor } from
 import { navigate } from '../router.js';
 import { createChunkedList } from '../chunkedList.js';
 
-// 创作网格（/profile）分页大小（后端公共上限 50；后端改动归 T19）。
-const PAGE_SIZE = 10;
+// 创作网格（/profile）分块：一次拉 PROFILE_CHUNK_SIZE（顶后端公共上限 50，域级信封归 T19），
+// 本地按 PROFILE_BATCH_SIZE 小批展示（T11-B 接入公共 chunkedList，N15 收敛点）。
+const PROFILE_CHUNK_SIZE = 50;
+const PROFILE_BATCH_SIZE = 10;
 // 关注/粉丝 sheet（T11-A）：信封大小由**后端 follow 域常量**决定（200），前端**只传 `page`**；
 // chunkSize 仅用于「本 chunk 是否已到末页」的本地判定，与后端信封保持一致。
 const SHEET_CHUNK_SIZE = 200;
@@ -36,14 +38,14 @@ export function mount(container, params) {
     profileUserId,
     currentUserId: isLoggedIn() ? meId : null,
     isFollowed: null,
-    page: 1,
-    totalPages: 0,
+    profile: null,      // T11-B：最近一次 /profile 响应（头部信息随任一页返回）
     listType: 'following',
-    sheetList: null,   // T11-A：createChunkedList 实例（关注/粉丝 sheet 大 chunk + 本地小批）
+    contentList: null,  // T11-B：创作网格 createChunkedList 实例（大 chunk + 本地小批）
+    sheetList: null,    // T11-A：关注/粉丝 sheet 实例
   };
   state.isSelf = state.currentUserId != null && state.currentUserId === profileUserId;
   render();
-  loadProfile(1);
+  loadContent();
 }
 
 export function unmount() {
@@ -121,22 +123,58 @@ function renderSelfMenu() {
   box.querySelector('#menuLogout').addEventListener('click', () => { clearAuth(); navigate('/'); });
 }
 
-async function loadProfile(page) {
-  const grid = state.container.querySelector('#contentGrid');
-  if (page === 1) {
-    grid.innerHTML = '<div class="grid">' + '<div class="v-card"><div class="v-card-cover skeleton"></div></div>'.repeat(6) + '</div>';
+// ---------- 创作网格（/profile，T11-B 接公共 chunkedList） ----------
+function ensureContentList() {
+  if (!state.contentList) {
+    state.contentList = createChunkedList({
+      fetchChunk: async (page) => {
+        const res = await request(`profile?userId=${state.profileUserId}&page=${page}&pageSize=${PROFILE_CHUNK_SIZE}`);
+        state.profile = res; // 头部信息（用户名/关注数/粉丝数/创作总数）随任一页返回
+        return res.contentPage || { list: [], page, pageSize: PROFILE_CHUNK_SIZE, totalPages: 0 };
+      },
+      chunkSize: PROFILE_CHUNK_SIZE,
+      batchSize: PROFILE_BATCH_SIZE,
+      keyOf: (it) => it.id,
+    });
   }
+  return state.contentList;
+}
+
+// 首次加载：重置分块列表并取首批（本地小批展示）
+async function loadContent() {
+  const grid = state.container.querySelector('#contentGrid');
+  grid.innerHTML = '<div class="grid">' + '<div class="v-card"><div class="v-card-cover skeleton"></div></div>'.repeat(6) + '</div>';
+  const list = ensureContentList();
+  list.reset();
   try {
-    const data = await request(`profile?userId=${state.profileUserId}&page=${page}&pageSize=${PAGE_SIZE}`);
-    renderProfile(data, page);
+    const batch = await list.nextBatch();
+    renderProfileHead();
+    renderContentGrid(batch);
+    renderContentLoadMore();
   } catch (e) {
     if (e.code === 401 || e.code === 403) return;
-    if (page === 1) grid.innerHTML = '<div class="empty"><div class="empty-msg">加载失败，请刷新重试</div></div>';
+    grid.innerHTML = '<div class="empty"><div class="empty-msg">加载失败，请刷新重试</div></div>';
   }
 }
 
-function renderProfile(profile, page) {
+// 「加载更多」：本地余量足够则不发请求；不足才由 helper 拉下一个 chunk
+async function loadMoreContent(btn) {
+  btn.disabled = true;
+  btn.textContent = '加载中...';
+  try {
+    const batch = await ensureContentList().nextBatch();
+    appendContentGrid(batch);
+    renderContentLoadMore();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '加载更多';
+    showToast('加载失败，请重试');
+  }
+}
+
+function renderProfileHead() {
   const c = state.container;
+  const profile = state.profile || {};
   const contentPage = profile.contentPage;
 
   c.querySelector('#displayName').textContent = profile.username || '未知用户';
@@ -149,27 +187,24 @@ function renderProfile(profile, page) {
 
   state.isFollowed = profile.isFollowed;
   renderFollowBtn();
+}
 
-  state.totalPages = contentPage ? contentPage.totalPages : 0;
-  const list = contentPage ? (contentPage.list || []) : [];
-  if (page === 1) {
-    const grid = c.querySelector('#contentGrid');
-    grid.innerHTML = '';
-    if (!list.length) {
-      grid.innerHTML = '<div class="empty"><div class="empty-msg">暂无创作内容</div></div>';
-    } else {
-      const g = document.createElement('div');
-      g.className = 'grid';
-      list.forEach((item, i) => g.appendChild(createVideoCard(item, { index: i })));
-      grid.appendChild(g);
-    }
-  } else {
-    const g = c.querySelector('#contentGrid .grid');
-    if (g) list.forEach((item) => g.appendChild(createVideoCard(item)));
+function renderContentGrid(list) {
+  const grid = state.container.querySelector('#contentGrid');
+  grid.innerHTML = '';
+  if (!list.length) {
+    grid.innerHTML = '<div class="empty"><div class="empty-msg">暂无创作内容</div></div>';
+    return;
   }
+  const g = document.createElement('div');
+  g.className = 'grid';
+  list.forEach((item, i) => g.appendChild(createVideoCard(item, { index: i })));
+  grid.appendChild(g);
+}
 
-  renderLoadMore();
-  state.page = page;
+function appendContentGrid(list) {
+  const g = state.container.querySelector('#contentGrid .grid');
+  if (g) list.forEach((item) => g.appendChild(createVideoCard(item)));
 }
 
 function renderFollowBtn() {
@@ -184,17 +219,15 @@ function renderFollowBtn() {
   wrap.appendChild(btn);
 }
 
-function renderLoadMore() {
+function renderContentLoadMore() {
   const box = state.container.querySelector('#loadMore');
-  if (state.page < state.totalPages) {
+  box.innerHTML = '';
+  if (state.contentList && state.contentList.hasMore()) {
     const btn = document.createElement('button');
     btn.className = 'load-more-btn';
     btn.textContent = '加载更多';
-    btn.addEventListener('click', () => loadProfile(state.page + 1));
-    box.innerHTML = '';
+    btn.addEventListener('click', () => loadMoreContent(btn));
     box.appendChild(btn);
-  } else {
-    box.innerHTML = '';
   }
 }
 
@@ -237,6 +270,7 @@ async function openUserList(type) {
       `follow/${state.listType}?userId=${state.profileUserId}&page=${page}`),
     chunkSize: SHEET_CHUNK_SIZE,
     batchSize: SHEET_BATCH_SIZE,
+    keyOf: (u) => u.userId,
   });
   try {
     const batch = await state.sheetList.nextBatch();

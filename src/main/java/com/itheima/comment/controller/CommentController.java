@@ -21,6 +21,12 @@ import java.util.List;
 public class CommentController extends BaseServlet {
     /** T10-B：评论域 pageSize 上限（大 chunk 前端承载；公共 parsePageSize cap 50 不动）。 */
     private static final int COMMENT_PAGE_SIZE_MAX = 500;
+    /**
+     * T11-B：评论域**信封大小**（缺省值）——由后端域级常量决定，前端只传 {@code page}；
+     * 镜像 follow 域 {@code FOLLOW_PAGE_SIZE_DEFAULT} 先例（取值沿用 T10-B 前端原本显式传的 200，
+     * 故前端行为不变，只是"要多少条"的决定权从请求参数挪到后端）。
+     */
+    private static final int COMMENT_PAGE_SIZE_DEFAULT = 200;
 
     @Inject
     private CommentService commentService;
@@ -86,11 +92,14 @@ public class CommentController extends BaseServlet {
         Long userId = (Long) req.getAttribute("userId");
         // T8：显式区分"是否传了分页参数"——**缺省（都不传）维持全量数组返回**，与改造前逐字节一致
         // （既有调用方与 pytest 用例零破坏；不能用"默认 page=1&pageSize=50"代替，上限 50 会截断全量）；
-        // 传任一分页参数 → 分页信封（主楼分页 + 楼中楼整树）。分页解析复用 T5 公共方法（默认 1/10、上限 50）。
+        // 传任一分页参数 → 分页信封（主楼分页 + 楼中楼前 K 条）。
+        // T11-B：分页解析 = 公共 parsePage + 域级「上限 500 / 信封 200」——前端传 page 即可，
+        // 不再由前端决定"要多少条"（显式传 pageSize 仍生效，上限 500）。
         if (hasPagingParams(req)) {
             BaseServletUtil.writeSuccess(resp, contentService.getCommentsForContent(contentId, userId,
                     BaseServletUtil.parsePage(req),
-                    BaseServletUtil.parsePageSize(req, COMMENT_PAGE_SIZE_MAX))); // T10-B 域级上限 500（大 chunk）
+                    // T10-B 域级上限 500；T11-B 域级信封 200（未传 pageSize 时用 200）
+                    BaseServletUtil.parsePageSize(req, COMMENT_PAGE_SIZE_MAX, COMMENT_PAGE_SIZE_DEFAULT)));
         } else {
             List<?> comments = contentService.getCommentsForContent(contentId, userId);
             BaseServletUtil.writeSuccess(resp, comments);
@@ -114,7 +123,8 @@ public class CommentController extends BaseServlet {
         Long userId = (Long) req.getAttribute("userId");
         BaseServletUtil.writeSuccess(resp, commentService.getRepliesForRoot(rootId, userId,
                 BaseServletUtil.parsePage(req),
-                BaseServletUtil.parsePageSize(req, COMMENT_PAGE_SIZE_MAX)));
+                // T11-B：展开回复同样按域级信封 200 取页（前端只传 page）
+                BaseServletUtil.parsePageSize(req, COMMENT_PAGE_SIZE_MAX, COMMENT_PAGE_SIZE_DEFAULT)));
     }
 
     /**

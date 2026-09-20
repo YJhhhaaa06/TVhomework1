@@ -7,14 +7,18 @@ import { request } from '../api.js';
 import { isLoggedIn } from '../auth.js';
 import { skeletonFeed, emptyBox, initialChar, avatarColor, formatDuration, formatTime, showToast } from '../utils.js';
 import { navigate } from '../router.js';
+import { createChunkedList } from '../chunkedList.js';
 
-const PAGE_SIZE = 10;
+// T11-B：/feed 分块——一次拉 CHUNK_SIZE（顶现有公共 cap 50，后端改动归 T19），本地按 BATCH_SIZE
+// 小批展示：请求数降到约 1/5，本地余量足够时「加载更多」0 请求。顺带获得跨 chunk 去重。
+const CHUNK_SIZE = 50;
+const BATCH_SIZE = 10;
 let state = null;
 
 export function mount(container) {
-  state = { container, page: 1, totalPages: 0 };
+  state = { container, list: null };
   container.innerHTML = '<div class="home"></div>';
-  if (isLoggedIn()) loadFeed(1);
+  if (isLoggedIn()) loadFirst();
   else setLock();
 }
 
@@ -32,33 +36,48 @@ function setLock() {
     + '<a class="btn-primary" href="#/login">去登录</a></div>';
 }
 
-async function loadFeed(page) {
+// 首次加载（与 reset 等价）：新建分块列表实例并取首批
+async function loadFirst() {
   const b = box();
-  if (page === 1) b.innerHTML = '<div class="feed-list">' + skeletonFeed(4) + '</div>';
-  else setLoadMore('loading');
+  b.innerHTML = '<div class="feed-list">' + skeletonFeed(4) + '</div>';
+
+  state.list = createChunkedList({
+    fetchChunk: async (page) => request(`feed?page=${page}&pageSize=${CHUNK_SIZE}`),
+    chunkSize: CHUNK_SIZE,
+    batchSize: BATCH_SIZE,
+    keyOf: (it) => it.id,
+  });
 
   try {
-    const data = await request(`feed?page=${page}&pageSize=${PAGE_SIZE}`);
-    state.page = data.page;
-    state.totalPages = data.totalPages;
-    const list = data.list || [];
-
-    if (page === 1) {
-      if (!list.length) { b.innerHTML = emptyBox('暂无关注动态', '📭'); return; }
-      const feedList = document.createElement('div');
-      feedList.className = 'feed-list';
-      list.forEach((it, i) => feedList.appendChild(createFeedItem(it, i)));
-      b.innerHTML = '';
-      b.appendChild(feedList);
-    } else {
-      const feedList = b.querySelector('.feed-list');
-      if (feedList) list.forEach((it) => feedList.appendChild(createFeedItem(it)));
-    }
+    const batch = await state.list.nextBatch();
+    if (!batch.length) { b.innerHTML = emptyBox('暂无关注动态', '📭'); return; }
+    const feedList = document.createElement('div');
+    feedList.className = 'feed-list';
+    batch.forEach((it, i) => feedList.appendChild(createFeedItem(it, i)));
+    b.innerHTML = '';
+    b.appendChild(feedList);
     renderLoadMore();
   } catch (e) {
     if (e.code === 401 || e.code === 403) { setLock(); return; }
-    if (page === 1) b.innerHTML = emptyBox('加载失败，请刷新重试');
-    else { setLoadMore('retry'); showToast('加载失败，请重试'); }
+    b.innerHTML = emptyBox('加载失败，请刷新重试');
+  }
+}
+
+// 「加载更多」：本地余量足够则不发请求；不足才由 helper 拉下一个 chunk
+async function loadMoreFeed(btn) {
+  btn.disabled = true;
+  btn.textContent = '加载中...';
+  try {
+    const batch = await state.list.nextBatch();
+    if (batch.length) {
+      const feedList = box().querySelector('.feed-list');
+      if (feedList) batch.forEach((it) => feedList.appendChild(createFeedItem(it)));
+    }
+    renderLoadMore();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '加载更多';
+    showToast('加载失败，请重试');
   }
 }
 
@@ -66,23 +85,16 @@ function renderLoadMore() {
   const b = box();
   const old = b.querySelector('.load-more');
   if (old) old.remove();
-  if (state.page < state.totalPages) {
+  if (state.list && state.list.hasMore()) {
     const wrap = document.createElement('div');
     wrap.className = 'load-more';
     const btn = document.createElement('button');
     btn.className = 'load-more-btn';
     btn.textContent = '加载更多';
-    btn.addEventListener('click', () => loadFeed(state.page + 1));
+    btn.addEventListener('click', () => loadMoreFeed(btn));
     wrap.appendChild(btn);
     b.appendChild(wrap);
   }
-}
-
-function setLoadMore(mode) {
-  const btn = box().querySelector('.load-more-btn');
-  if (!btn) return;
-  if (mode === 'loading') { btn.disabled = true; btn.textContent = '加载中...'; }
-  else { btn.disabled = false; btn.textContent = '加载更多'; }
 }
 
 function createFeedItem(item, index) {

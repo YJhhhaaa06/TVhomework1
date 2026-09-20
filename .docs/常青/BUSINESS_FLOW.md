@@ -1,7 +1,7 @@
 # 业务流程文档
 
-> 版本：2.1
-> 最后更新：2026-09-20（T11-A：follow 关注/粉丝列表契约变更——列表恒为分页信封、缺省=第一页信封、`pageSize` 上限 50→200）
+> 版本：2.2
+> 最后更新：2026-09-20（T11-A：follow 关注/粉丝列表契约变更——列表恒为分页信封、缺省=第一页信封、`pageSize` 上限 50→200；T11-B：评论域分页**缺省 `pageSize` 10→200**（信封由后端域常量决定，前端只传 `page`），`feed`/`search`/`profile` 前端改走公共分块 helper）
 > 用途：保障重构时不破坏业务逻辑
 
 ---
@@ -416,7 +416,7 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 
 > 关键语义：内容与评论读/写**全部收敛 Redis**；**任何缓存失败降级走 DB、不导致业务失败**；计数（like_count/comment_count/comment_enabled）与评论树内容以 DB 为源真理，变更即失效让读自愈；类型分区索引启动 init 全量重建 + 索引 key 缺失时单飞懒重建（防 Redis 重启后 /start 空推荐）；评论树不再原地增删：评论增/删/点赞 = 失效 `content:comments:{id}` + 空标记，下次读 miss 单飞回填 DB 最新整树。
 >
-> **评论查询分页（T8）**：`/comment/show` 传 `page`/`pageSize` **任一** → 返回分页信封 `{list,total,page,pageSize,totalPages}`（`total`=**主楼条数**），每页 N 条**主楼**、每条主楼携带其**完整楼中楼**；**两者都不传 → 仍返回全量数组**（零破坏）。评论缓存仍是**整树 JSON、结构不变**，分页是**展示层按主楼切片**（不撕裂楼中楼、不改 `buildCommentTree` 语义）；成本边界与后续治本方向见 `CURRENT_ARCHITECTURE` 6.18。
+> **评论查询分页（T8 → T11-B）**：`/comment/show` 传 `page`/`pageSize` **任一** → 返回分页信封 `{list,total,page,pageSize,totalPages}`（`total`=**主楼条数**）；**两者都不传 → 仍返回全量数组**（零破坏）。`pageSize` **缺省 = 评论域信封 200**（T11-B：前端只传 `page`，决定权在后端域常量）、上限 **500**（显式传参仍生效）。命中路径与装载形态（两键组 / 主楼窗口装载 / 楼中楼前 K + 展开接口）见 `CURRENT_ARCHITECTURE` 6.18；前端分块与去重见 6.19。
 >
 > 启动与索引维护：启动全量重建拆两段（DB 事务内只读、事务外写 Redis，Redis 往返 ≈3 次与内容量解耦）；索引 key 生成/解析/匹配同源（`CacheKeys.contentIndex`）；读命中滑动续期（分域 TTL：content 30min / comment 10min / like 15min / follow 30min，空标记不续）；推荐读惰性探测（凑满 limit 即止，分布语义不变）+ 索引重建失败冷却退避 + 索引长尾无系统性漂移；详情见 `CURRENT_ARCHITECTURE` 6.5/6.10/6.11。
 
@@ -521,7 +521,7 @@ Content-Type: multipart/form-data
 
 ### 3.4 首页推荐流程
 
-> **前端交互（2026-08-14 重构后）**：首页为 SPA 视图 `#/`；分区（推荐/游戏/音乐…）收纳在顶部导航「分类」下拉（选中跳 `#/?cat=<id>`）；类型筛选（全部/视频/图文）在首页内容区；「换一换」重新拉 `/start` 并在客户端打乱顺序以获得「新一批」观感；关注流独立为 `#/follow`（`/feed` 分页）。
+> **前端交互（2026-08-14 重构后；2026-09-20 T11-B 分块化）**：首页为 SPA 视图 `#/`；分区（推荐/游戏/音乐…）收纳在顶部导航「分类」下拉（选中跳 `#/?cat=<id>`）；类型筛选（全部/视频/图文）在首页内容区；「换一换」重新拉 `/start` 并在客户端打乱顺序以获得「新一批」观感；关注流独立为 `#/follow`（`/feed` 分页）。**分页列表统一走公共 `chunkedList`**（大 chunk 一次拉取 + 本地小批展示 + 跨 chunk 去重）：`/feed` 与 `/profile` 创作网格每次拉 50 条、本地按 10 条展示，`/search` 拉 50 条、本地按 12 条展示，评论主楼与跟随关系 sheet 由后端域常量决定信封大小——「加载更多」在本地余量内**不发请求**（详见 `CURRENT_ARCHITECTURE` 6.19）。
 
 ```
 ┌──────────┐   GET /start   ┌────────────────┐
@@ -924,11 +924,14 @@ GET /comment/show?contentId=123&page=2&pageSize=10（可选分页，T8）
 4. 转换为 CommentVO 树
 5. 返回评论列表
 
-分页（T8）：
-- 传 page/pageSize 任一 → 第 2 步取到整树后按**主楼**切片（**楼中楼整树随行**，不切不撕裂），
-  返回信封 {list,total,page,pageSize,totalPages}（total=主楼条数）；第 3 步的点赞批量查询只针对该页评论 id
-- 两者都不传 → 仍返回全量数组（与改造前逐字节一致）；分页解析复用公共方法（默认 1/10、pageSize 上限 50）
-- 缓存侧无变化：仍是整树 JSON（`content:comments:{id}`），分页属展示层切片
+分页（T8 → T10-A/T10-B → T11-B）：
+- 传 page/pageSize 任一 → 返回分页信封 {list,total,page,pageSize,totalPages}（total=主楼条数）；
+  第 3 步的点赞批量查询只针对该页评论 id。页内容形态（主楼窗口 + 每主楼 children 前 K=2 +
+  replyCount，展开走 /comment/replies）见 CURRENT_ARCHITECTURE 6.18
+- 两者都不传 → 仍返回全量数组（与改造前逐字节一致）
+- 分页解析（T11-B）：page 缺省 1；pageSize **缺省 = 评论域信封 200**（由后端域常量决定，
+  前端只传 page）、上限 **500**（公共 cap 50 仅其它接口沿用）
+- 缓存侧：两键组（主楼 LIST + 楼中楼 HASH + count），不是整树 JSON（T10-A 起）
 
 CommentVO 结构：
 {
@@ -1319,7 +1322,7 @@ GET /feed?page=1&pageSize=10&token=xxx
 | `/start` | GET | 首页推荐 |
 | `/search` | GET | 搜索 |
 | `/search/IdSearch` | GET | 内容详情（无 /detail 端点） |
-| `/comment/show` | GET | 查看评论（T8 起可选 `page`/`pageSize`：传任一返回分页信封 `{list,total,...}`，`total`=主楼条数；缺省仍全量数组） |
+| `/comment/show` | GET | 查看评论（T8 起可选 `page`/`pageSize`：传任一返回分页信封 `{list,total,...}`，`total`=主楼条数；缺省仍全量数组；`pageSize` 缺省 200（域级信封，T11-B）、上限 500） |
 | `/coupon/list` | GET | 优惠券列表 |
 | `/profile` | GET | 用户主页 |
 
