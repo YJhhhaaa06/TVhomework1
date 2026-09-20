@@ -1,6 +1,5 @@
 package com.itheima.user.controller;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.itheima.controller.BaseServlet;
 import com.itheima.controller.BaseServletUtil;
 import com.itheima.controller.RequestParser;
@@ -25,10 +24,9 @@ import java.io.IOException;
 
 @WebServlet("/user/*")
 public class LoginController extends BaseServlet {
-    private RequestParser requestParser=new RequestParser();
     @Inject
     private UserService userService;
-    private ObjectMapper mapper=new ObjectMapper();
+
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
         String action=req.getPathInfo();//path去掉了/user的结果

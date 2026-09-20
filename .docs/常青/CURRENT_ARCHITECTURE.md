@@ -176,9 +176,9 @@ com.itheima/
 
 | 类 | 行数 | 职责 |
 |----|------|------|
-| BaseServlet | 40 | 基类，IoC 注入 + JSON 响应 |
-| BaseServletUtil | 101 | 静态工具，writeSuccess/writeError + 分页参数解析（`parsePage`；`parsePageSize` 三档重载：无参=公共 50/10、`(req,max)`=域级上限、`(req,max,defaultSize)`=域级上限 + **域级信封**，T11-A） |
-| RequestParser | 28 | JSON 请求体解析 |
+| BaseServlet | 15 | 基类，`extends HttpServlet` + `init()` 做 IoC 注入（T16 起不再持有 JSON 响应/mapper，响应统一走 BaseServletUtil） |
+| BaseServletUtil | 97 | 静态工具（T16 起不再 `extends HttpServlet`），HTTP 请求/响应侧**唯一 ObjectMapper**（`mapper`，public）+ writeSuccess/writeError + 分页参数解析（`parsePage`；`parsePageSize` 三档重载：无参=公共 50/10、`(req,max)`=域级上限、`(req,max,defaultSize)`=域级上限 + **域级信封**，T11-A）；RequestParser 复用同一 mapper |
+| RequestParser | 24 | JSON 请求体解析（`BaseServletUtil.mapper` 复用唯一 mapper） |
 | AppShutDownListener | 102 | 容器生命周期管理（@WebListener，统一关闭 IoC 容器） |
 
 #### common 包 — 跨域共享模型（T14 新增）
