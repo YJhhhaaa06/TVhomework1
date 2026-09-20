@@ -1,5 +1,6 @@
 package com.itheima.ioc;
 
+import com.itheima.config.AppConfig;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.Inject;
 import com.itheima.ioc.annotation.InjectConstructor;
@@ -20,9 +21,27 @@ public class IocContainer {
     private static final IocContainer INSTANCE = new IocContainer();
 
     private final Map<Class<?>, Object> beans = new ConcurrentHashMap<>();
+    /** 注入解析失败是否 fail-fast（T17：由 app.properties 的 ioc.failFast 决定，测试可受控覆盖）。 */
+    private final boolean failFast;
     private boolean initialized;
 
-    private IocContainer() {}
+    private IocContainer() {
+        this.failFast = AppConfig.getIocFailFast();
+    }
+
+    /** 测试专用（包内可见）：注入失败是否 fail-fast 由测试受控，避免依赖全局配置。 */
+    static IocContainer createForTest(boolean failFast) {
+        return new IocContainer(failFast);
+    }
+
+    /** 测试专用（包内可见）：向容器注册 Bean，供 IocContainerTest 构造受控实例。 */
+    void registerForTest(Class<?> type, Object bean) {
+        beans.put(type, bean);
+    }
+
+    private IocContainer(boolean failFast) {
+        this.failFast = failFast;
+    }
 
     public static IocContainer getInstance() { return INSTANCE; }
 
@@ -38,9 +57,11 @@ public class IocContainer {
             beans.put(clazz, createInstance(clazz));
         }
 
+        List<MissingDependency> allMissing = new ArrayList<>();
         for (Object bean : beans.values()) {
-            injectFields(bean);
+            allMissing.addAll(injectFields(bean));
         }
+        reportMissing("容器 Bean 注入", allMissing);
 
         for (Object bean : beans.values()) {
             invokePostConstruct(bean);
@@ -63,7 +84,7 @@ public class IocContainer {
     // ==================== 外部注入（Controller 用）====================
 
     public void injectInto(Object target) {
-        injectFields(target);
+        reportMissing(target.getClass().getSimpleName() + " 注入", injectFields(target));
     }
 
     // ==================== 关闭 ====================
@@ -89,6 +110,17 @@ public class IocContainer {
     }
 
     // ==================== 内部实现 ====================
+
+    /**
+     * 一条未注入依赖（@Inject 字段在容器中取不到对应 Bean）。
+     * 包内可见：供容器内部上报与 IocContainerTest 断言使用。
+     */
+    record MissingDependency(String targetClass, String fieldName, String fieldType) {
+        @Override
+        public String toString() {
+            return targetClass + "." + fieldName + " -> " + fieldType;
+        }
+    }
 
     private Object createInstance(Class<?> clazz) {
         Constructor<?> injectCtor = findInjectConstructor(clazz);
@@ -132,25 +164,48 @@ public class IocContainer {
         return found;
     }
 
-    private void injectFields(Object target) {
+    private List<MissingDependency> injectFields(Object target) {
+        List<MissingDependency> missing = new ArrayList<>();
         Class<?> clazz = target.getClass();
         while (clazz != null && clazz != Object.class) {
             for (Field field : clazz.getDeclaredFields()) {
                 if (field.isAnnotationPresent(Inject.class)) {
                     Object dependency = beans.get(field.getType());
-                    if (dependency != null) {
-                        field.setAccessible(true);
-                        try {
-                            field.set(target, dependency);
-                        } catch (IllegalAccessException e) {
-                            throw new RuntimeException("依赖注入失败: "
-                                    + target.getClass().getSimpleName() + "."
-                                    + field.getName(), e);
-                        }
+                    if (dependency == null) {
+                        // T17：不再静默跳过，收集后统一上报（WARNING + 汇总；fail-fast 开启时抛错）
+                        missing.add(new MissingDependency(
+                                target.getClass().getName(), field.getName(), field.getType().getName()));
+                        continue;
+                    }
+                    field.setAccessible(true);
+                    try {
+                        field.set(target, dependency);
+                    } catch (IllegalAccessException e) {
+                        throw new RuntimeException("依赖注入失败: "
+                                + target.getClass().getSimpleName() + "."
+                                + field.getName(), e);
                     }
                 }
             }
             clazz = clazz.getSuperclass();
+        }
+        return missing;
+    }
+
+    /**
+     * 上报注入解析失败（T17，N12 前半）：逐条 WARNING + 未注入清单汇总；
+     * fail-fast 开启时在注入点直接抛错，杜绝"取不到就跳过"的静默语义。
+     */
+    private void reportMissing(String phase, List<MissingDependency> missing) {
+        if (missing.isEmpty()) {
+            return;
+        }
+        for (MissingDependency m : missing) {
+            LOGGER.warning("IoC 注入解析失败: " + m);
+        }
+        LOGGER.warning("IoC 未注入清单汇总（" + phase + "，共 " + missing.size() + " 处）: " + missing);
+        if (failFast) {
+            throw new IllegalStateException("IoC 注入失败（fail-fast）: " + missing);
         }
     }
 

@@ -78,6 +78,9 @@
 **T16（`refactor`，2026-09-20 拍板并落地——Controller 基建收敛的统一源落点）**：
 唯一 mapper 落点 = **`BaseServletUtil.mapper`**（全站静态调用的既成事实类；`RequestParser` 同包/跨类复用需提可见性 `protected→public`）；删除 `BaseServlet` 上 mapper 与 3 个 `write*`（**全仓 109 处 write* 调用点逐行核对全为 `BaseServletUtil.` 限定，`BaseServlet` 继承方法零调用者**，仅保留 `extends HttpServlet` + `init()` IoC 注入）；`BaseServletUtil` 去 `extends HttpServlet`（web.xml 仅 4 Filter、无 Servlet 注册、无 `getServletConfig` 类调用背书）；**实测第四处 mapper = `LoginController` 私有死字段**（`new ObjectMapper()` + `new RequestParser()` 全类零引用，删除）；零调用 3 参 `writeSuccess(resp,data,username)` 重载两份全删。**RequestParser 归并等价性**：7 个请求 DTO 全无 `java.time`/日期字段（`SearchDTO`/`CommentDTO`/`GrabCouponRequest`/`LoginDTO`/`RegisterDTO`/`ChangePasswordDTO`/`ChangeUserNameDTO`）→ 带 JavaTimeModule 的 mapper `readValue` 行为等价。**范围排除**：`cache/JacksonCodec.MAPPER` 属 cache 层序列化器（非 HTTP 基建）。响应 JSON 形状**逐字节不变**（写出口 mapper 配置原样保留）。落点：`controller/BaseServletUtil`、`controller/BaseServlet`、`controller/RequestParser`、`user/controller/LoginController`（验证 JUnit 511/0/0/0 + pytest 145 + 全链 exit 0 + subagent 独立 review APPROVE 见 `NEXT_CYCLE_TASKS.md` T16 执行回写）。
 
+**T17（`fix(ioc)`，2026-09-20 拍板并落地——IoC 注入解析失败可观测的形态）**：
+形态 = **逐条 WARNING + 未注入清单汇总（恒有）+ 可配置 fail-fast，`ioc.failFast` 默认 true**（用户裁决：`@Inject` 为强依赖契约——容器无 optional 语义——缺依赖必运行期 NPE，注入点早失败优于请求路径深处爆炸；静态核对 14 个 Controller 共 18 个 `@Inject` 字段全部对得上 `@Component` 注册 Bean、**无存量静默未注入实例** → 默认 fail-fast 不破坏现有启动）。实现点：`injectFields` 收集 `MissingDependency` 返回 → `reportMissing` 逐条 WARNING + 汇总，fail-fast 时注入点抛 `IllegalStateException`；Bean 注入在 context 启动（失败 = 启动失败），Controller **懒加载**在首请求 servlet init（失败 = 该路径加载失败，servlet 生命周期决定、T17 不改）；`@InjectConstructor` 路径已 fail-fast（`IocContainer.java:100-103`）未动；`AppConfig.getIocFailFast` + `app.properties ioc.failFast=true`（环境变量 `IOC_FAILFAST` 覆盖）；新增 `IocContainerTest` 3 用例（fail-fast 开/关/成功路径）支撑"可复现验证"验收。落点：`ioc/IocContainer`、`config/AppConfig`、`resources/app.properties`（详见 `常青/CURRENT_ARCHITECTURE.md` 4.2；验证 JUnit 514 + pytest 145 + 启动日志无新增失败 + subagent 独立 review APPROVE 见 `NEXT_CYCLE_TASKS.md` T17 执行回写）。
+
 ### 4.1 候选痛点（跨方向通用前置，**待评审纳入，尚未拍板**）
 
 > **本次探查目的（2026-09-19）**：本分支（`prep/next-phase`）既有工作是为 **日志体系改造 / feed 流改造 / 新功能加入** 三大方向腾地基。
@@ -100,7 +103,7 @@
 > **本次探查已排除项（防下次重复探查）**：① 主代码无 `System.out`/`System.err`/`printStackTrace` 残留（仅测试工具 `src/test/java/com/itheima/tools/CouponAdmin.java:51`）；② feed 页内点赞状态已是批量查询（`FeedService.java:92`），非 N+1；③ 敏感信息已脱敏（`UserService.java:106` `maskPhone`），无密码/token 明文日志；④ `LogUtil` 文件不可写时有降级日志；⑤ 无绕过 IoC 容器的 `new *Service(`/`new *Dao(`。
 
 > **候选去向（2026-09-19 建 TASKS 后）**：
-> **已排进清单**（清单"对应候选"列保留 N 编号，Why→How 可追溯）——`N9`（文档名单部分）→ **T15**（✅ 已完成 2026-09-20）；`N11` → **T16**（✅ 已完成 2026-09-20）；`N12`（前半：注入静默失败）→ **T17**；`N13` → **T18**（注：**分页上限参数化已随 T10-B/T11-A 落地**，本任务不含该部分）；`N14` → **T14**（✅ 已完成 2026-09-20）；**`N15` → T10-B（首步：抽公共 helper）+ T11-A/T11-B（接入与增强：关注/粉丝 sheet、评论列表、feed/search/profile 内容列表）**（✅ 已完成 2026-09-19/20）；`N16` → **T15**（✅ 已完成 2026-09-20）。**`N15` 残留未治部分**：`main.js` 路由注册硬编码（9 条 `register(...)` + import + 抽屉导航三处同改）——不在 T11 范围，留待后续（与前端结构改造同批）。
+> **已排进清单**（清单"对应候选"列保留 N 编号，Why→How 可追溯）——`N9`（文档名单部分）→ **T15**（✅ 已完成 2026-09-20）；`N11` → **T16**（✅ 已完成 2026-09-20）；`N12`（前半：注入静默失败）→ **T17**（✅ 已完成 2026-09-20）；`N13` → **T18**（注：**分页上限参数化已随 T10-B/T11-A 落地**，本任务不含该部分）；`N14` → **T14**（✅ 已完成 2026-09-20）；**`N15` → T10-B（首步：抽公共 helper）+ T11-A/T11-B（接入与增强：关注/粉丝 sheet、评论列表、feed/search/profile 内容列表）**（✅ 已完成 2026-09-19/20）；`N16` → **T15**（✅ 已完成 2026-09-20）。**`N15` 残留未治部分**：`main.js` 路由注册硬编码（9 条 `register(...)` + import + 抽屉导航三处同改）——不在 T11 范围，留待后续（与前端结构改造同批）。
 > **未排**（属**新功能方向的能力建设**，待该方向立项时评估）：`N9` 的"声明式鉴权"（注解/路由表）、`N10`（admin 角色每请求查库）、`N12` 的"声明式事务 / AOP"。
 > **待你点单调整**：以上归组如与预期不符（例如希望 `N10` 也本期做、或某条改期），直接在评审时点名即可——清单与本节同步改。
 
@@ -116,7 +119,7 @@
 
 ### 4.3 本周期范围（方向拍板结果）
 
-**主题**：待拍板（T10-A/T10-B 已完成；**T11-A/T11-B/T11-C 已于 2026-09-20 完成**；**T12 事务边界同型未治点 2 处已于 2026-09-20 完成**；**T13 注册后自动登录兜底已于 2026-09-20 完成**；**T14 包层结构清扫（R-03 拍板 + 池 U-07/U-19 + N14）已于 2026-09-20 完成**；**T15 文档与代码一致性清理（N16 + N9 文档部分）已于 2026-09-20 完成**（纯文档批，不跑测试）；**T16 Controller 基建收敛（N11）已于 2026-09-20 完成**（全链 exit 0 + JUnit 511/0/0/0 + pytest 145 + subagent review APPROVE）；T17~T19 待执行）。
+**主题**：待拍板（T10-A/T10-B 已完成；**T11-A/T11-B/T11-C 已于 2026-09-20 完成**；**T12 事务边界同型未治点 2 处已于 2026-09-20 完成**；**T13 注册后自动登录兜底已于 2026-09-20 完成**；**T14 包层结构清扫（R-03 拍板 + 池 U-07/U-19 + N14）已于 2026-09-20 完成**；**T15 文档与代码一致性清理（N16 + N9 文档部分）已于 2026-09-20 完成**（纯文档批，不跑测试）；**T16 Controller 基建收敛（N11）已于 2026-09-20 完成**（全链 exit 0 + JUnit 511/0/0/0 + pytest 145 + subagent review APPROVE）；**T17 IoC 注入可观测（N12 前半）已于 2026-09-20 完成**（全链 exit 0 + JUnit 514/0/0/0 + pytest 145 + subagent review APPROVE）；T18~T19 待执行）。
 
 | 纳入 | 对应编号 | 落到任务 | 一句话 |
 | ---- | ---- | ---- | ---- |

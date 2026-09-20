@@ -170,6 +170,14 @@ public final class AppConfig {
         return getLong("cache.content.indexRebuildCooldownMillis");
     }
 
+    // ===== IoC =====
+
+    // T17：@Inject 字段取不到 Bean 时是否 fail-fast（键缺失时 get() 返回空串 → 解析为 false；
+    // 默认 true 由 app.properties 的 ioc.failFast=true 保证）
+    public static boolean getIocFailFast() {
+        return Boolean.parseBoolean(get("ioc.failFast"));
+    }
+
     // ===== 日志 =====
 
     public static String getLogFile() {

@@ -111,7 +111,7 @@ com.itheima/
 
 | 类 | 行数 | 职责 |
 |----|------|------|
-| IocContainer | 258 | 单例容器：构造器注入优先、字段注入兼容，管理 Bean 生命周期（@PostConstruct → Initializable.init；关闭时 Disposable.destroy / 反射 shutdown） |
+| IocContainer | 313 | 单例容器：构造器注入优先、字段注入兼容，管理 Bean 生命周期（@PostConstruct → Initializable.init；关闭时 Disposable.destroy / 反射 shutdown）。**注入失败可观测（T17）**：`@Inject` 取不到 Bean 逐条 WARNING + 未注入清单汇总；`ioc.failFast` 可配置（默认 true）注入点即抛 |
 | ClassScanner | 47 | 扫描 @Component 注解的类（`scan("com.itheima")` 整根递归，子包增减不影响 Bean 发现） |
 | @Component | 10 | 标记为受管 Bean |
 | @Inject | 10 | 字段依赖注入 |
