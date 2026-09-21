@@ -1,7 +1,7 @@
 # 当前系统架构地图
 
-> 版本：3.10（2026-09-20 T15：文档与代码事实一致性清理——目录树、AuthFilter 两个名单、API 表、§4.2/§4.3 全部行数为 `wc -l` 实测复核；§5.2/§5.3 表结构按 3306 实际 DDL 复核）
-> 最后更新：2026-09-20
+> 版本：3.11（2026-09-21 T19：四域分页口径统一——feed / search / profile / follow 均为「域级上限 100 + 域级信封 100」，前端只传 `page`；`BaseServletUtil` 归一逻辑下沉为 request 无关纯函数 `normalizePage`/`normalizePageSize`，无参 / 两参重载与公共 cap 50/10 已删）
+> 最后更新：2026-09-21
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
 ---
@@ -177,7 +177,7 @@ com.itheima/
 | 类 | 行数 | 职责 |
 |----|------|------|
 | BaseServlet | 15 | 基类，`extends HttpServlet` + `init()` 做 IoC 注入（T16 起不再持有 JSON 响应/mapper，响应统一走 BaseServletUtil） |
-| BaseServletUtil | 97 | 静态工具（T16 起不再 `extends HttpServlet`），HTTP 请求/响应侧**唯一 ObjectMapper**（`mapper`，public）+ writeSuccess/writeError + 分页参数解析（`parsePage`；`parsePageSize` 三档重载：无参=公共 50/10、`(req,max)`=域级上限、`(req,max,defaultSize)`=域级上限 + **域级信封**，T11-A）；RequestParser 复用同一 mapper |
+| BaseServletUtil | 98 | 静态工具（T16 起不再 `extends HttpServlet`），HTTP 请求/响应侧**唯一 ObjectMapper**（`mapper`，public）+ writeSuccess/writeError + 分页参数解析。**T19 起归一逻辑下沉为 request 无关纯函数** `normalizePage(Integer)` / `normalizePageSize(Integer,max,defaultSize)`（供 JSON body 形态的接口复用同一口径），`parsePage` 与三参 `parsePageSize(req,max,defaultSize)` 委托二者；**无参 / 两参重载与 `DEFAULT_PAGE_SIZE_MAX`/`DEFAULT_PAGE_SIZE` 已删**（三域改用三参后成为死代码，两参重载自 T11-B 起即零调用）——新域一律显式声明自己的 `XXX_PAGE_SIZE_MAX/DEFAULT`；RequestParser 复用同一 mapper |
 | RequestParser | 24 | JSON 请求体解析（`BaseServletUtil.mapper` 复用唯一 mapper） |
 | AppShutDownListener | 102 | 容器生命周期管理（@WebListener，统一关闭 IoC 容器） |
 
@@ -226,7 +226,7 @@ com.itheima/
 
 | 层 | 类（行数） | 职责 |
 |----|------|------|
-| controller | ContentController（181，/content/*）、StartController（49，/start）、SearchController（95，/search/*）、FeedController（31，/feed）、ProfileController（44，/profile） | 内容管理 + 首页推荐 + 搜索 + 关注流 + 用户主页 |
+| controller | ContentController（181，/content/*）、StartController（49，/start）、SearchController（101，/search/*）、FeedController（37，/feed）、ProfileController（50，/profile） | 内容管理 + 首页推荐 + 搜索 + 关注流 + 用户主页；**T19：三域统一为「域级上限 100 + 域级信封 100」**（各 Controller 自持 `XXX_PAGE_SIZE_MAX/DEFAULT`；`/search/keywordSearch` 的 GET 与 JSON body 两条分支共用 `BaseServletUtil.normalize*`，前端只传 `page`） |
 | service | ContentService（497）、ContentCache（710）、CommentCache（716）、ContentStatusFiller（81）、FeedService（107）、ProfileService（118） | 内容业务（内容/搜索 + 评论读路径编排）+ Redis 内容缓存（三态 Cache-Aside + 索引 + `invalidateAuthorContentKeys` 改名级联失效 + `getContentsBatch` 批量装载）+ Redis 评论缓存（两键组 主楼 List + 楼中楼 Hash + 主楼窗口/count）+ 点赞/关注状态填充 + 关注流 + 主页；**Feed/Profile/Search 与关注·粉丝列表的缓存读一律在 DB 事务外**（见 6.4） |
 | dao | ContentDao（446）、ContentMediaDao（202） | content/content_media 数据访问（ContentLikeDao 按 like 域归属）；`findContentsByIds` 批量 IN 查询（供批量缓存装载，列与 findContent 同源）；T14 起各自内含从 `dao.ResultMap` 下沉的 `private static` 行映射方法（2 / 1） |
 | model | entity/ContentMedia（63）、cache/ContentCacheDTO（135）/CommentCacheDTO（119）、vo/ContentVO（42）/ContentDetailVO（25）/CommentVO（21）/ProfileVO（43）、dto/SearchDTO（51）、command/CommandConverter（139）/ContentType（16） | 内容模型 + 共享缓存 DTO + 共享 VO/DTO/转换器（`PageResult` 归 `common.model.dto`） |
@@ -237,7 +237,7 @@ com.itheima/
 
 | 层 | 类（行数） | 职责 |
 |----|------|------|
-| controller | FollowController（104，/follow/*） | 关注/取关/关注列表/粉丝列表（**T11-A：列表只有分页入口**——`page`/`pageSize` 均可选，缺省归一为 page 1 / `pageSize` 200；域级常量 `FOLLOW_PAGE_SIZE_MAX = 200` + 信封 `FOLLOW_PAGE_SIZE_DEFAULT = 200`，T7 的「缺省返回全量数组」分支已删除） |
+| controller | FollowController（104，/follow/*） | 关注/取关/关注列表/粉丝列表（**T11-A：列表只有分页入口**——`page`/`pageSize` 均可选，缺省归一为 page 1 / 信封 100；域级常量 `FOLLOW_PAGE_SIZE_MAX = 100` + 信封 `FOLLOW_PAGE_SIZE_DEFAULT = 100`（**T19 由 200 调整为 100**，与 feed/search/profile 同口径），T7 的「缺省返回全量数组」分支已删除） |
 | service | FollowService（185） | 关注业务（读路径委托 FollowCache；关注/取关 DB 提交后缓存双写；**T7 新增分页读**——缓存窗口取该页 ids+total，仅对该页 ids 做 DB 装载与批量判重，信封在事务外组装；**T11-A 删除两个缺省全量重载**，分页读为唯一入口；**T12 起事务回调只做 DB 装载**（`findUsersByIds`），`batchIsFollowing` 与视图组装移事务外；**T14 起信封用公共 `common.model.dto.PageResult`**） |
 | service | FollowCache（539） | 关注关系 Redis 缓存（**双 ZSet（score=成员 id）+ 条件 MULTI 双写 + 失败双 DEL** + 三态读 + 单飞 + 降级单飞全量装载作答；读路径收口 **ZSetCache**——单成员三态/批量/全量/窗口走基建 + `sortIds` 归一升序，写路径 MULTI 双写语义保持；关注/粉丝计数 key 读写。**T11-C**：窗口 loader 换 DAO **窗口 SQL**（分页读不再全量装载）、新增部分态判定回落 `isFollowingInDb`（单行）、`probePair` 扩为六探针且**任一侧 `partial:` → 三件套双 DEL**（增量写分支与 Redis 异常分支同口径：异常分支走新增私有 `invalidatePairQuietly`，而 `CacheAside.invalidate` 只删数据 key + 空标记）、删除已无主代码调用方的 `getFollowerIds`（池 U-21）） |
 | dao | FollowDao（155） | follow 关注关系（仅 FollowService 业务校验与 FollowCache loader 使用；**T11-C-1 新增两个窗口查询**：`getFollowedUserIdsInWindow` / `getFollowerUserIdsInWindow`——`WHERE … ORDER BY … LIMIT ? OFFSET ?`，供前缀窗口装载；关注方向复用 `uk_user_follow`、粉丝方向走新增 `idx_followed_user_user`，EXPLAIN 均 `Using index`（覆盖索引）且无 filesort） |
@@ -496,7 +496,7 @@ com.itheima/
 - **场景**：内容缓存 DTO 的 `authorName` 是 `findContent`/`findAllContent` `JOIN users` 时的反规范化副本，只存在于内容数据 key——`content:index:*` 只存 id、评论/点赞缓存不含 authorName，故改名只需失效内容数据 key，索引无需失效。
 - **落地**：`POST /user/changeUserName`（LoginController `/user/*` switch + AuthFilter 精确保护）；`UserService.changeUserName` DB 提交后调 `ContentCache.invalidateAuthorContentKeys(userId)`（事务内 `findContentIdsByUser` 查该作者全部内容 id → 事务外逐个失效内容 key + 空标记）；**读自愈**重新 JOIN users 回填新名；DB/Redis 失败仅记日志跳过、TTL 自愈，不影响改名成功语义。UserService 注入 ContentCache（user→content 跨域，对齐 like/comment 先例无环）。
 
-### 6.17 关注关系有序化与分页窗口（T7 → T11-A 域级信封/缺省反转 → T11-C 前缀窗口装载）
+### 6.17 关注关系有序化与分页窗口（T7 → T11-A 域级信封/缺省反转 → T11-C 前缀窗口装载 → T19 信封 100）
 
 - **Set→ZSet 有序化**：`user:following:{userId}` / `user:follower:{userId}` 由 Set 升级为 ZSet（score = 成员自身 id）；写路径 `SADD/SREM → ZADD/ZREM`（MULTI 条件双写 / 双 key 探针 / 空标记 / TTL 骨架不变），读路径收口**新建的 `ZSetCache`**（与 SetCache 平行，命令层 ZSCORE/ZRANGE/ZADD）。like 域成员 key 仍为 Set、仍走 SetCache（不受影响）。
 - **等价性依据**：score = 成员数值 ⇒ `ZRANGE` 遍历序 = 成员数值升序 = 改造前 `sortIds` 升序口径，全量读/单项判定/批量判定的对外结果与顺序**逐条不变**。
@@ -505,11 +505,11 @@ com.itheima/
 - **部分态三处配套（T11-C）**：① **判定**——`isFollowing` 的 ZSCORE 未命中、`batchIsFollowing` 的未命中成员，在带 `partial:` 时**回落 DB**（前者单行 `isFollowingInDb`、后者复用既有批量 `dbAnswer`；前缀里查不到 ≠ 不是成员），且批量路径**跳过全量回填**（不把装载量重新放大）；② **全量读**——`getMembers` 遇 `partial:` **必须先补齐**再返回，且**返回 DB 装载结果本身、不回读缓存**（补齐的缓存写回是 best-effort，写失败时回读只能拿到前缀；`FeedService` 依赖全量关注 ids，返回前缀会静默漏关注者——本设计最危险点，JUnit 已覆盖含写失败路径）；③ **写路径**——`probePair` 扩为六探针，**任一侧 `partial:` → 三件套双 DEL**（取关会在前缀里留"洞"、关注会插入非前缀成员，两者都破坏 `ZRANGE offset` 的偏移语义），与既有"冷 key → 双 DEL"同构。**残留（不在本任务范围）**：`getFollowingIds` 的 feed 全量关注 ids 读路径本身（R-01 明确保留）。
 - **顺序保证**：分页切片的成员集合与顺序来自 ZSet 升序（score=成员 id）；**列表最终输出顺序由 `UserDao.findUsersByIds` 决定**，T7 已为该查询补 `ORDER BY id`（此前无 ORDER BY，输出序依赖存储引擎默认序——HEAD 既有脆弱点，唯一调用方为 FollowService），使"ZSet 升序切片"与"DB 返回序"同口径，分页顺序稳定**由构造保证**而非巧合。
 - **接口口径（T7 B2 → T11-A 契约变更，已获用户批准）**：`GET /follow/following|followers` **始终**返回 `data = {list,total,page,pageSize,totalPages}`（分页信封 `com.itheima.common.model.dto.PageResult`——**T14 起全项目唯一信封**，原 follow 域 `FollowPageResult` 已删除）。
-  - `page` 缺省 1；`pageSize` 缺省 **200**（`FOLLOW_PAGE_SIZE_DEFAULT` = 域级信封）、上限 **200**（`FOLLOW_PAGE_SIZE_MAX`，原 50）。显式传 `pageSize` 仍生效（**不采纳"后端硬忽略参数"**：那会摧毁 pytest 用小信封逐页比对"页间不重不漏"的能力）。
-  - **缺省（不传任何分页参数）= 第一页信封**，与显式 `page=1&pageSize=200` 响应**逐字节一致**；T7 的「两者都不传 → `data` 仍为全量数组」分支**已删除**——该分支同时是"一次拉全量"的攻击放大面。
-  - 参数解析走 `BaseServletUtil.parsePageSize(req, max, defaultSize)` **三参重载（T11-A 新增）**：传了 → `min(s, max)`、未传 → `defaultSize`；两参重载委托 `(req, max, 10)`、无参重载经两参委托 → **其它域（feed/search/profile/content/coupon）语义零变化**。`page < 1` 归一为 1；越界页返回空数组但保留 total。
+  - `page` 缺省 1；`pageSize` 缺省 **100**（`FOLLOW_PAGE_SIZE_DEFAULT` = 域级信封）、上限 **100**（`FOLLOW_PAGE_SIZE_MAX`；T11-A 原 50 → 200，**T19 调整为 100**）。显式传 `pageSize` 仍生效（**不采纳"后端硬忽略参数"**：T19 窗口复核——该能力对 follow/comment 是**既有用例依赖**，对 feed/search/profile 是**未来唯一低成本验证手段**，硬忽略只会封死验证路径而不带来收益）。
+  - **缺省（不传任何分页参数）= 第一页信封**，与显式 `page=1&pageSize=100` 响应**逐字节一致**；T7 的「两者都不传 → `data` 仍为全量数组」分支**已删除**——该分支同时是"一次拉全量"的攻击放大面。
+  - 参数解析走 `BaseServletUtil.parsePageSize(req, max, defaultSize)` **三参重载**（T11-A 新增，**T19 起为唯一的 request 形态重载**）：传了 → `min(s, max)`、未传 → `defaultSize`；超上限/非法/≤0 一律回落域级信封。`page < 1` 归一为 1；越界页返回空数组但保留 total。
 - **total 口径（T11-C 双口径）**：**完整态**（无 `partial:` 标记）= 同一 ZSet 的 `ZCARD`（与页内容同源，与 T7 **逐字节一致**）；**部分态 / 降级态** = 本域**计数口径**（`FollowCache.getFollowCount` / `getFollowerCount` → `user:followCount`/`user:followerCount`，miss 回落 `users` 表计数列）——此时成员集只是前缀，ZCARD 会低估总数。完整态不用计数 key 顶替（两 key 可能瞬时不一致）。
-- **前端**：`static/js/views/user.js` 的关注/粉丝 sheet 接公共 **`chunkedList`** helper（`static/js/chunkedList.js`——T10-B 抽出，T11-A 为第二个消费方，T11-B 起的完整消费方清单见 6.19）：请求**只传 `page`**（信封大小由后端域常量决定，前端不再出现 pageSize 魔法数）、大 chunk 200 + 本地小批 10，本地余量足够时「加载更多」**0 请求**；每次 `openUserList` 重建实例（等价 reset，防 following/followers 本地余量串台）。
+- **前端**：`static/js/views/user.js` 的关注/粉丝 sheet 接公共 **`chunkedList`** helper（`static/js/chunkedList.js`——T10-B 抽出，T11-A 为第二个消费方，T11-B 起的完整消费方清单见 6.19）：请求**只传 `page`**（信封大小由后端域常量决定，前端不再出现 pageSize 魔法数）、大 chunk 100（**T19 由 200 调整为 100**）+ 本地小批 10，本地余量足够时「加载更多」**0 请求**；每次 `openUserList` 重建实例（等价 reset，防 following/followers 本地余量串台）。
 - **包层边界（T14 更新）**：分页信封**已上移公共包** `com.itheima.common.model.dto.PageResult`（T14 治池 U-19）——原 T7 的规避口径"信封落在 follow 域、不 import content 域 `PageResult`（会形成新的 follow↔content 包层环）"及其"登记留池待上移"的尾巴**随公共包落地而失效**；`common` 包零业务 import，`FollowService` 由 follow→common 单向引用，不新增包层环。
 
 ### 6.18 评论列表分页（T8 → T10-A/T10-B：两键组 + 主楼窗口装载 + 楼中楼前 K + 展开接口）
@@ -519,7 +519,7 @@ com.itheima/
 - **展开接口 `/comment/replies`**（T10-B）：`rootId&page&pageSize` → 分页信封；`total` = 该主楼 `reply_count`（与 children 前 K 口径一致）；list = 直接回复 + 间接二级回复（keyset 升序，与建树上溯口径一致——新数据 parent 归一挂主楼、seed 存量最多二级间接），点赞态仅该页批量。
 - **切片点**：原 `ContentService.sliceRoots` 已删除（T10-A）；切片由 `CommentCache.getRootPage`（LRANGE 窗口取数）承担；越界页空列表但 `total` 真实。
 - **失效重映射（DB 源真理 + 失效自愈）**：增主楼 → `invalidateRoots`（roots+count，读懒重建）；**增回复/删回复/点赞** → `reply_count` 增量维护（+1/−1 防负守卫，删主楼不扣）+ 定向 HDEL 该主楼 replies field（懒载刷新前 K）；`notifyCommentLikeChanged` 经 `getRootIdByCommentId` 上溯主楼后定向失效。
-- **接口口径**：`GET /comment/show` 传任一 → 信封；不传 → 全量数组。分页解析：page 默认 1；`pageSize` **缺省 = 评论域信封 200**（`CommentController.COMMENT_PAGE_SIZE_DEFAULT`，T11-B——前端只传 `page`）、上限 **500**（`parsePageSize(req, max, defaultSize)` 三参重载，显式传参仍生效；公共 cap 50 仅其它接口沿用）。
+- **接口口径**：`GET /comment/show` 传任一 → 信封；不传 → 全量数组。分页解析：page 默认 1；`pageSize` **缺省 = 评论域信封 200**（`CommentController.COMMENT_PAGE_SIZE_DEFAULT`，T11-B——前端只传 `page`）、上限 **500**（`parsePageSize(req, max, defaultSize)` 三参重载，显式传参仍生效）。**评论域 T19 不动**：上限/信封保持 500/200，是四域中唯一未收敛到 100 的域（后续域级改造另立任务评估，可能含热度排序）。
 - **total 口径**：主楼 `total` = `:count` key（首装惰性 COUNT）；`replyCount` = DB `comment.reply_count`；与详情接口 `commentCount`（含楼中楼的总评论数）口径不同，前端头部计数仍取 `commentCount`。
 - **顺序**：主楼/展开回复均 `ORDER BY c.comment_id`（键集升序），页间不重不漏由构造保证。
 - **前端**：`static/js/views/detail.js` 评论列表走公共 **`chunkedList`** helper（`static/js/chunkedList.js`，T10-B 抽出、T11 复用）——**只传 `page`**（T11-B：信封大小由后端域常量决定），本地小批 10，本地余量用尽才发下一个 chunk 请求；每条主楼首次只显示前 2 条回复 + "共 N 条回复"，展开时按需拉 `/comment/replies`（同样只传 `page`）；发/删评论后重置回第 1 页。
@@ -529,7 +529,7 @@ com.itheima/
 - **helper 语义**（`static/js/chunkedList.js`）：`createChunkedList({fetchChunk, chunkSize, batchSize, keyOf})` → `nextBatch()/hasMore()/reset()`。"大 chunk 拉取 + 本地小批展示"：本地余量足够时不发请求，用尽才拉下一页。
 - **去重（T11-B）**：内部 `seen` 集合按 `keyOf` 过滤已展示条目——只兜"翻页期间集合变化导致的 offset 漂移"，**不替代后端契约**（后端"页间不重不漏"仍由 pytest 直打 API 验证，去重不得掩盖后端分页 bug）。`keyOf` 缺省依次取 `item.userId`/`item.commentId`/`item.id`；**评论 VO 同时含 `userId`（作者）与 `commentId`，评论类列表必须显式传 `keyOf: c => c.commentId`**，否则同一作者的多条评论会被折叠；`keyOf` 返回 `null` 的条目不参与去重（不吞条目）。单次 `nextBatch` 内最多再拉 10 个 chunk（防"整页重复"死循环）。
 - **信封大小自适应（T11-B）**：`chunkSize` 只作初始/兜底值，首次成功响应后用响应回显的 `pageSize` 覆盖——信封大小由**后端域级常量**决定，前端可只传 `page`。
-- **消费方（5 处）**：`views/detail.js`（评论主楼，chunk 兜底 200 / 小批 10）、`views/user.js`（关注/粉丝 sheet，只传 `page`，小批 10；创作网格 `/profile`，chunk 50 / 小批 10）、`views/follow.js`（`/feed`，chunk 50 / 小批 10）、`views/search.js`（结果，chunk 50 / 小批 12）、`views/publish.js`（我的投稿 `/profile`，chunk 50 / 小批 12）。后三处的**后端**上限与域级信封尚未参数化（现顶公共 cap 50）→ 推后 **T19**。
+- **消费方（5 处；T19 起全部只传 `page`）**：`views/detail.js`（评论主楼，chunk 兜底 200 / 小批 10）、`views/user.js`（关注/粉丝 sheet 与创作网格 `/profile`，chunk 100 / 小批 10）、`views/follow.js`（`/feed`，chunk 100 / 小批 10）、`views/search.js`（结果，chunk 100 / 小批 12）、`views/publish.js`（我的投稿 `/profile`，chunk 100 / 小批 12）。**信封大小一律由后端域常量决定**（feed/search/profile/follow = 100，评论 = 200），消费方不再传 `pageSize`；chunk 常量仅作"首次请求失败时判末页"的兜底（T19 前 `follow`/`search`/`profile` 三处的后端上限未参数化、被公共 cap 50 顶住）。
 - **本地重渲染口径（T11-B）**：`publish.js` 的"删除模式切换 / 删除卡片 / 编辑保存"从"重拉当前页"改为**本地条目集重渲染**（`state.myItems`；编辑走 `search/IdSearch` 定向刷新单条）——原实现在第 N 页会重复追加第 N 页卡片。
 
 ---
@@ -550,9 +550,9 @@ com.itheima/
 | 方法 | 路径 | 说明 | 需要登录 |
 |------|------|------|----------|
 | GET | /start | 首页推荐 | ✗ |
-| GET | /search/keywordSearch | 关键词搜索（`SearchController` 无裸 `/search` 分支，`/search` 命中默认分支返回"未识别功能"） | ✗ |
+| GET | /search/keywordSearch | 关键词搜索（`SearchController` 无裸 `/search` 分支，`/search` 命中默认分支返回"未识别功能"；**T19：`pageSize` 缺省/上限均 100**，前端只传 `page`，非法值回落缺省而非 500） | ✗ |
 | GET | /search/IdSearch | 内容详情（无 /detail 端点） | ✗ |
-| GET | /feed | 关注动态流 | ✓ |
+| GET | /feed | 关注动态流（**T19：`pageSize` 缺省/上限均 100**，前端只传 `page`） | ✓ |
 | POST | /api/upload/video | 上传视频 | ✓ |
 | POST | /api/upload/post | 上传动态 | ✓ |
 | POST | /api/upload/replace | 作者换源（替换媒体，含单图替换） | ✓ |
@@ -579,9 +579,9 @@ com.itheima/
 | POST | /content/commentEnabled | 作者开关自己作品的评论区（0=关/1=开） | ✓ |
 | POST | /follow/add | 关注 | ✓ |
 | POST | /follow/remove | 取关 | ✓ |
-| GET | /follow/following | 关注列表（**始终分页信封** `{list,total,page,pageSize,totalPages}`；T11-A：缺省=第一页，`pageSize` 缺省/上限均 200） | ✓ |
+| GET | /follow/following | 关注列表（**始终分页信封** `{list,total,page,pageSize,totalPages}`；T11-A：缺省=第一页，`pageSize` 缺省/上限均 **100**——T19 由 200 调整为 100） | ✓ |
 | GET | /follow/followers | 粉丝列表（分页口径同 /follow/following） | ✓ |
-| GET | /profile | 用户主页 | ✗ |
+| GET | /profile | 用户主页（**T19：`contentPage` 的 `pageSize` 缺省/上限均 100**，前端只传 `page`；`ProfileVO` 形状不变） | ✗ |
 
 ### 7.4 优惠券模块
 
@@ -632,11 +632,11 @@ src/main/webapp/
         ├── chunkedList.js     # 公共「分块列表」helper（大 chunk 拉取 + 本地小批展示 + keyOf 去重 + 信封大小自适应；消费方：detail 评论、user 关注/粉丝 sheet 与创作网格、follow、search、publish）
         └── views/
             ├── home.js        # #/            首页（推荐流 + 换一换）
-            ├── follow.js      # #/follow      关注流（/feed 分块：chunk 50 / 小批 10，T11-B）
+            ├── follow.js      # #/follow      关注流（/feed 分块：只传 page，信封 100 / 小批 10，T19）
             ├── detail.js      # #/video/:id   详情（播放器 + 楼中楼评论 + 相关推荐；评论只传 page，T11-B）
-            ├── search.js      # #/search?kw=  搜索（结果分块：chunk 50 / 小批 12，T11-B）
-            ├── user.js        # #/user/:id    个人主页（本人/他人合一；关注/粉丝 sheet 只传 page（T11-A）、创作网格走公共 chunkedList（T11-B））
-            ├── publish.js     # #/publish     创作中心（我的投稿 + 投稿上传；我的投稿走公共 chunkedList，T11-B）
+            ├── search.js      # #/search?kw=  搜索（结果分块：只传 page，信封 100 / 小批 12，T19）
+            ├── user.js        # #/user/:id    个人主页（本人/他人合一；关注/粉丝 sheet 只传 page（T11-A，信封 100，T19）、创作网格走公共 chunkedList（只传 page，信封 100，T19））
+            ├── publish.js     # #/publish     创作中心（我的投稿 + 投稿上传；我的投稿走公共 chunkedList，只传 page，信封 100，T19）
             ├── login.js       # #/login       登录/注册
             ├── coupon.js      # #/coupon      优惠券中心
             └── admin.js       # #/admin       媒体运维 + 删评论工具 + 内容下架管理（仅管理员）

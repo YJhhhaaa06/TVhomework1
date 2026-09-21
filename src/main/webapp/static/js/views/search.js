@@ -9,9 +9,9 @@ import { createChunkedList } from '../chunkedList.js';
 
 const HISTORY_KEY = 'searchHistory';
 const MAX_HISTORY = 10;
-// T11-B：结果分块——一次拉 CHUNK_SIZE（顶现有公共 cap 50；搜索后端 pageSize 无上限、默认 12，
-// 归一为域级上限归 T19），本地按 BATCH_SIZE 小批展示 + 跨 chunk 去重。
-const CHUNK_SIZE = 50;
+// T19：结果分块——信封大小由**后端 search 域常量**（100）决定，请求**只传 `page`**；
+// 本地按 BATCH_SIZE 小批展示 + 跨 chunk 去重。
+const CHUNK_SIZE = 100;
 const BATCH_SIZE = 12;
 
 // 热门搜索占位（后端暂无接口，前端预留）
@@ -155,7 +155,8 @@ async function doSearch(keyword) {
 
   state.list = createChunkedList({
     fetchChunk: async (page) => {
-      const data = await request(`search/keywordSearch?keyword=${encodeURIComponent(keyword)}&page=${page}&pageSize=${CHUNK_SIZE}`);
+      // T19：只传 `page`——信封大小（100）由后端 search 域常量决定
+      const data = await request(`search/keywordSearch?keyword=${encodeURIComponent(keyword)}&page=${page}`);
       state.total = data.total || 0; // 「共 N 条结果」用后端 total（与页内容同源）
       return data;
     },

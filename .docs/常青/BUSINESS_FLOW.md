@@ -415,7 +415,7 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-> 缓存读写语义要点：关注读路径（`isFollowing` 单成员 / `batchIsFollowing` 批量 / `getFollowingIds` 全量关注列表 / **`getFollowingWindow`/`getFollowerWindow` 分页窗口（T7）**）统一走基建 `ZSetCache`——成员 key 为 ZSet（score=成员 id），故 `ZRANGE` 天然升序，列表升序另由 `FollowCache.sortIds` 归一（写路径 MULTI 条件双写 + 失败双 DEL 保留在 FollowCache）；**关注/粉丝列表接口恒返回分页信封 `{list,total,page,pageSize,totalPages}`——缺省（不传参）= 第一页信封（page 1 / pageSize 200），与显式 `page=1&pageSize=200` 逐字节一致；`pageSize` 上限 200（T11-A 契约变更，T7 的"缺省返回全量数组"已删除）**；**T11-C 起分页读只装载"被看的那一段"**（冷 key 取 `[0, offset+count)`、前缀不足只补差量、Redis 降级改 DB 窗口直查）——集合完整性由 `partial:{数据key}` 标记表达，带标记时判定不命中回落 DB、全量读先补齐、写路径任一侧带标记则三件套双 DEL；关注/粉丝计数入独立 key（`user:followCount`/`user:followerCount`，Cache-Aside、0 合法、条件 INCRBY）；Feed/Profile/Search 的缓存批量读、以及关注·粉丝列表装载的关注态批量读（T12）都在 DB 事务外执行（防连接池互相等连接）；详情见 `CURRENT_ARCHITECTURE` 6.4/6.12/6.17。
+> 缓存读写语义要点：关注读路径（`isFollowing` 单成员 / `batchIsFollowing` 批量 / `getFollowingIds` 全量关注列表 / **`getFollowingWindow`/`getFollowerWindow` 分页窗口（T7）**）统一走基建 `ZSetCache`——成员 key 为 ZSet（score=成员 id），故 `ZRANGE` 天然升序，列表升序另由 `FollowCache.sortIds` 归一（写路径 MULTI 条件双写 + 失败双 DEL 保留在 FollowCache）；**关注/粉丝列表接口恒返回分页信封 `{list,total,page,pageSize,totalPages}`——缺省（不传参）= 第一页信封（page 1 / pageSize 100），与显式 `page=1&pageSize=100` 逐字节一致；`pageSize` 上限 100（T11-A 契约变更、**T19 由 200 调整为 100**，T7 的"缺省返回全量数组"已删除）**；**T11-C 起分页读只装载"被看的那一段"**（冷 key 取 `[0, offset+count)`、前缀不足只补差量、Redis 降级改 DB 窗口直查）——集合完整性由 `partial:{数据key}` 标记表达，带标记时判定不命中回落 DB、全量读先补齐、写路径任一侧带标记则三件套双 DEL；关注/粉丝计数入独立 key（`user:followCount`/`user:followerCount`，Cache-Aside、0 合法、条件 INCRBY）；Feed/Profile/Search 的缓存批量读、以及关注·粉丝列表装载的关注态批量读（T12）都在 DB 事务外执行（防连接池互相等连接）；详情见 `CURRENT_ARCHITECTURE` 6.4/6.12/6.17。
 
 > 关键语义：内容与评论读/写**全部收敛 Redis**；**任何缓存失败降级走 DB、不导致业务失败**；计数（like_count/comment_count/comment_enabled）与评论树内容以 DB 为源真理，变更即失效让读自愈；类型分区索引启动 init 全量重建 + 索引 key 缺失时单飞懒重建（防 Redis 重启后 /start 空推荐）；评论树不再原地增删：评论增/删/点赞 = 失效 `content:comments:{id}` + 空标记，下次读 miss 单飞回填 DB 最新整树。
 >
@@ -524,7 +524,7 @@ Content-Type: multipart/form-data
 
 ### 3.4 首页推荐流程
 
-> **前端交互（2026-08-14 重构后；2026-09-20 T11-B 分块化）**：首页为 SPA 视图 `#/`；分区（推荐/游戏/音乐…）收纳在顶部导航「分类」下拉（选中跳 `#/?cat=<id>`）；类型筛选（全部/视频/图文）在首页内容区；「换一换」重新拉 `/start` 并在客户端打乱顺序以获得「新一批」观感；关注流独立为 `#/follow`（`/feed` 分页）。**分页列表统一走公共 `chunkedList`**（大 chunk 一次拉取 + 本地小批展示 + 跨 chunk 去重）：`/feed` 与 `/profile` 创作网格每次拉 50 条、本地按 10 条展示，`/search` 拉 50 条、本地按 12 条展示，评论主楼与跟随关系 sheet 由后端域常量决定信封大小——「加载更多」在本地余量内**不发请求**（详见 `CURRENT_ARCHITECTURE` 6.19）。
+> **前端交互（2026-08-14 重构后；2026-09-20 T11-B 分块化）**：首页为 SPA 视图 `#/`；分区（推荐/游戏/音乐…）收纳在顶部导航「分类」下拉（选中跳 `#/?cat=<id>`）；类型筛选（全部/视频/图文）在首页内容区；「换一换」重新拉 `/start` 并在客户端打乱顺序以获得「新一批」观感；关注流独立为 `#/follow`（`/feed` 分页）。**分页列表统一走公共 `chunkedList`**（大 chunk 一次拉取 + 本地小批展示 + 跨 chunk 去重）：`/feed` 与 `/profile` 创作网格每次拉 100 条、本地按 10 条展示，`/search` 拉 100 条、本地按 12 条展示，评论主楼与跟随关系 sheet 由后端域常量决定信封大小（T19：五处列表的请求一律**只传 `page`**，信封大小全部由后端域常量决定）——「加载更多」在本地余量内**不发请求**（详见 `CURRENT_ARCHITECTURE` 6.19）。
 
 ```
 ┌──────────┐   GET /start   ┌────────────────┐
@@ -625,16 +625,16 @@ GET /start?limit=10&token=xxx（可选）
 #### 接口定义
 
 ```
-GET /search/keywordSearch?keyword=关键词&page=1&pageSize=10&token=xxx（可选）
+GET /search/keywordSearch?keyword=关键词&page=1&token=xxx（可选）
 
-成功响应：
+成功响应（**T19：信封大小由后端 search 域常量决定 = 100，前端只传 page**；缺省/上限均 100）：
 {
     "code": 200,
     "data": {
         "list": [...],
         "total": 100,
         "page": 1,
-        "pageSize": 10
+        "pageSize": 100
     }
 }
 ```
@@ -934,8 +934,9 @@ GET /comment/show?contentId=123&page=2&pageSize=10（可选分页，T8）
   第 3 步的点赞批量查询只针对该页评论 id。页内容形态（主楼窗口 + 每主楼 children 前 K=2 +
   replyCount，展开走 /comment/replies）见 CURRENT_ARCHITECTURE 6.18
 - 两者都不传 → 仍返回全量数组（与改造前逐字节一致）
-- 分页解析（T11-B）：page 缺省 1；pageSize **缺省 = 评论域信封 200**（由后端域常量决定，
-  前端只传 page）、上限 **500**（公共 cap 50 仅其它接口沿用）
+- 分页解析（T11-B；**T19 起公共 cap 50 已删除**）：page 缺省 1；pageSize **缺省 = 评论域信封 200**
+  （由后端域常量决定，前端只传 page）、上限 **500**（评论域本轮不动；feed / search / profile / follow
+  四域 T19 已统一为缺省/上限 **100**）
 - 缓存侧：两键组（主楼 LIST + 楼中楼 HASH + count），不是整树 JSON（T10-A 起）
 
 CommentVO 结构：
@@ -1109,7 +1110,7 @@ GET /follow/following?userId=123&token=xxx（必填：/follow/* 前缀守卫需�
 3. 如果已登录，查询当前用户对这些用户的关注状态
 4. 返回用户列表
 
-返回结构（列表恒为分页信封，2026-09-20 T11-A）：
+返回结构（列表恒为分页信封，2026-09-20 T11-A；**2026-09-21 T19 信封 200 → 100**）：
 {
     "list": [
         {
@@ -1120,15 +1121,16 @@ GET /follow/following?userId=123&token=xxx（必填：/follow/* 前缀守卫需�
         },
         ...
     ],
-    "total": N, "page": 1, "pageSize": 200, "totalPages": t
+    "total": N, "page": 1, "pageSize": 100, "totalPages": t
 }
 
-分页（2026-09-19 T7 → 2026-09-20 T11-A 契约变更，已获用户批准）：
+分页（2026-09-19 T7 → 2026-09-20 T11-A 契约变更，已获用户批准 → **2026-09-21 T19 域级信封调整**）：
   - **列表恒为信封** {"list": [...], "total": N, "page": p, "pageSize": s, "totalPages": t}
     （T7 的"缺省不传参 → 返回全量数组"分支已**删除**）
-  - **缺省（不传任何分页参数）= 第一页信封**（page 1 / pageSize 200），与显式
-    page=1&pageSize=200 响应**逐字节一致**（信封大小由后端 follow 域常量决定，前端只传 page）
-  - page 缺省 1、page<1 归一为 1；pageSize 缺省 **200**、上限 **200**（原 50）；显式传 pageSize 仍生效
+  - **缺省（不传任何分页参数）= 第一页信封**（page 1 / pageSize 100），与显式
+    page=1&pageSize=100 响应**逐字节一致**（信封大小由后端 follow 域常量决定，前端只传 page）
+  - page 缺省 1、page<1 归一为 1；pageSize 缺省 **100**、上限 **100**（T11-A 曾为 200，T19 调整为 100）；
+    显式传 pageSize 仍生效（保留 pytest 用小信封逐页比对"页间不重不漏"的能力）
   - 越界页（offset ≥ total）→ list 为空数组，total 照常返回（前端据此判末页）
 
 装载与 total 口径（2026-09-20 T11-C，对外契约不变、仅内部装载形态变化）：
@@ -1154,9 +1156,9 @@ GET /follow/followers?userId=123&token=xxx（必填：/follow/* 前缀守卫需�
 3. 如果已登录，查询当前用户对这些用户的关注状态
 4. 返回用户列表
 
-分页（2026-09-19 T7 → 2026-09-20 T11-A）：口径与 4.3.3 完全一致（列表恒为
-{"list","total","page","pageSize","totalPages"} 信封；缺省=第一页信封；pageSize 缺省/上限均 200；
-越界页空 list + total 照常）
+分页（2026-09-19 T7 → 2026-09-20 T11-A → **2026-09-21 T19**）：口径与 4.3.3 完全一致（列表恒为
+{"list","total","page","pageSize","totalPages"} 信封；缺省=第一页信封；pageSize 缺省/上限均 **100**
+（T19 由 200 调整为 100）；越界页空 list + total 照常）
 ```
 
 ---
@@ -1259,7 +1261,7 @@ GET /coupon/my?token=xxx
 ┌──────────┐   GET /feed   ┌─────────────────┐
 │  客户端   │ ────────────► │ FeedController    │
 └──────────┘   ?page=1     └─────────────────┘
-               &pageSize=10         │
+               (pageSize=100)      │
                                     ▼
                             ┌──────────────────┐
                             │   FeedService     │
@@ -1292,16 +1294,16 @@ GET /coupon/my?token=xxx
 #### 接口定义
 
 ```
-GET /feed?page=1&pageSize=10&token=xxx
+GET /feed?page=1&token=xxx
 
-成功响应：
+成功响应（**T19：信封大小由后端 feed 域常量决定 = 100，前端只传 page**）：
 {
     "code": 200,
     "data": {
         "list": [...],
         "total": 50,
         "page": 1,
-        "pageSize": 10
+        "pageSize": 100
     }
 }
 ```

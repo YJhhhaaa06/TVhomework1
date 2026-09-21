@@ -9,13 +9,13 @@ import { createVideoCard, showToast, escapeHtml, initialChar, avatarColor } from
 import { navigate } from '../router.js';
 import { createChunkedList } from '../chunkedList.js';
 
-// 创作网格（/profile）分块：一次拉 PROFILE_CHUNK_SIZE（顶后端公共上限 50，域级信封归 T19），
+// T19：创作网格（/profile）分块——信封大小由**后端 profile 域常量**（100）决定，请求**只传 `page`**；
 // 本地按 PROFILE_BATCH_SIZE 小批展示（T11-B 接入公共 chunkedList，N15 收敛点）。
-const PROFILE_CHUNK_SIZE = 50;
+const PROFILE_CHUNK_SIZE = 100;
 const PROFILE_BATCH_SIZE = 10;
-// 关注/粉丝 sheet（T11-A）：信封大小由**后端 follow 域常量**决定（200），前端**只传 `page`**；
+// 关注/粉丝 sheet（T11-A；**T19 信封 200 → 100**）：信封大小由**后端 follow 域常量**决定，前端**只传 `page`**；
 // chunkSize 仅用于「本 chunk 是否已到末页」的本地判定，与后端信封保持一致。
-const SHEET_CHUNK_SIZE = 200;
+const SHEET_CHUNK_SIZE = 100;
 const SHEET_BATCH_SIZE = 10;
 let state = null;
 
@@ -128,7 +128,8 @@ function ensureContentList() {
   if (!state.contentList) {
     state.contentList = createChunkedList({
       fetchChunk: async (page) => {
-        const res = await request(`profile?userId=${state.profileUserId}&page=${page}&pageSize=${PROFILE_CHUNK_SIZE}`);
+        // T19：只传 `page`——信封大小（100）由后端 profile 域常量决定
+        const res = await request(`profile?userId=${state.profileUserId}&page=${page}`);
         state.profile = res; // 头部信息（用户名/关注数/粉丝数/创作总数）随任一页返回
         return res.contentPage || { list: [], page, pageSize: PROFILE_CHUNK_SIZE, totalPages: 0 };
       },

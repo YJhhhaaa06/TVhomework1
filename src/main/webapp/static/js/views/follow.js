@@ -9,9 +9,10 @@ import { skeletonFeed, emptyBox, initialChar, avatarColor, formatDuration, forma
 import { navigate } from '../router.js';
 import { createChunkedList } from '../chunkedList.js';
 
-// T11-B：/feed 分块——一次拉 CHUNK_SIZE（顶现有公共 cap 50，后端改动归 T19），本地按 BATCH_SIZE
-// 小批展示：请求数降到约 1/5，本地余量足够时「加载更多」0 请求。顺带获得跨 chunk 去重。
-const CHUNK_SIZE = 50;
+// T19：/feed 分块——信封大小由**后端 feed 域常量**（100）决定，请求**只传 `page`**；
+// 本地按 BATCH_SIZE 小批展示：本地余量足够时「加载更多」0 请求（较逐页 10 条请求数降约 1/10）。
+// 顺带获得跨 chunk 去重。
+const CHUNK_SIZE = 100;
 const BATCH_SIZE = 10;
 let state = null;
 
@@ -42,7 +43,8 @@ async function loadFirst() {
   b.innerHTML = '<div class="feed-list">' + skeletonFeed(4) + '</div>';
 
   state.list = createChunkedList({
-    fetchChunk: async (page) => request(`feed?page=${page}&pageSize=${CHUNK_SIZE}`),
+    // T19：只传 `page`——信封大小（100）由后端 feed 域常量决定，前端不再出现 pageSize 魔法数
+    fetchChunk: async (page) => request(`feed?page=${page}`),
     chunkSize: CHUNK_SIZE,
     batchSize: BATCH_SIZE,
     keyOf: (it) => it.id,

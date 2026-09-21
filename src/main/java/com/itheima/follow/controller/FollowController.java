@@ -16,11 +16,11 @@ import java.io.IOException;
 
 @WebServlet("/follow/*")
 public class FollowController extends BaseServlet {
-    /** T11-A：follow 域 pageSize 上限（大 chunk 前端承载；公共 cap 50 不动，镜像评论域 500 先例）。 */
-    private static final int FOLLOW_PAGE_SIZE_MAX = 200;
+    /** T11-A 引入；**T19 由 200 调整为 100**（用户拍板：200 单次成本过高；与 feed/search/profile 三域同口径）。 */
+    private static final int FOLLOW_PAGE_SIZE_MAX = 100;
 
-    /** T11-A：follow 域信封大小——前端只传 `page` 时后端返回的条数（不再落公共默认 10）。 */
-    private static final int FOLLOW_PAGE_SIZE_DEFAULT = 200;
+    /** T11-A 引入；**T19 由 200 调整为 100**——前端只传 `page` 时后端返回的条数。 */
+    private static final int FOLLOW_PAGE_SIZE_DEFAULT = 100;
 
     @Inject
     private FollowService followService;

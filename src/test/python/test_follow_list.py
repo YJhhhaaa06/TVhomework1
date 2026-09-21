@@ -19,9 +19,13 @@ T7（第六期，A1 有序缓存 + B2 分页信封）追加：分页用例类见
 参数归一（page<1→1、pageSize 上限）。
 
 **T11-A（第七期）契约变更（已获用户批准）**：删除 T7「缺省不传参 → 全量数组」分支，
-缺省**归一为第一页信封**（page=1 / pageSize=200，与显式 `page=1&pageSize=200` 逐字节一致）；
-follow 域 pageSize 上限 **50 → 200**。本文件随该变更改写受影响断言（空列表/列表两态、
-半参数、上限、缺省反转），**不删用例、不放松断言**。
+缺省**归一为第一页信封**（当时 page=1 / pageSize=200），follow 域 pageSize 上限 **50 → 200**。
+本文件随该变更改写受影响断言（空列表/列表两态、半参数、上限、缺省反转），**不删用例、不放松断言**。
+
+**T19（第七期）域级信封调整**：follow 域 `pageSize` 上限与信封 **200 → 100**（用户拍板：200 单次
+成本过高，与 feed/search/profile 三域统一）。本文件随该变更把 200 相关断言改为 100（含显式
+`page_size=200` 的比对改为 100）；小信封跨页（`page_size=1`）、`page_size=51` 原样回显等用例
+**不受影响**，另三域的同类断言见新增的 `test_content_paging.py`。
 """
 
 import json
@@ -194,9 +198,9 @@ class TestFollowListPagination:
 
     def test_default_path_equals_explicit_first_page(self, base_url, token_a, token_b,
                                                      user_a_id, user_b_id):
-        """T11-A 契约反转：缺省（不传分页参数）与显式 `page=1&pageSize=200` 响应**逐字节一致**。
+        """缺省（不传分页参数）与显式 `page=1&pageSize=100` 响应**逐字节一致**（T19 起信封为 100）。
 
-        缺省不再是「全量数组」；信封大小由后端 follow 域常量决定（200，不再落公共默认 10）。
+        缺省不再是「全量数组」；信封大小由后端 follow 域常量决定（T19：200 → 100，不再落公共默认 10）。
         **刻意用非空列表比对**（b 关注 a 后查 a 的粉丝列表）——否则两侧都是空信封，比对退化为
         「解析路径相同」的近乎恒真断言，`list` 条目的字段与顺序也进不了比对范围。
         """
@@ -204,16 +208,16 @@ class TestFollowListPagination:
         assert add_body.get("code") == 200, f"follow/add failed: {add_body}"
         try:
             default_body = _get_list(base_url, token_a, "followers", user_a_id)
-            explicit_body = _get_list(base_url, token_a, "followers", user_a_id, page=1, page_size=200)
+            explicit_body = _get_list(base_url, token_a, "followers", user_a_id, page=1, page_size=100)
             assert default_body.get("code") == 200, f"default followers failed: {default_body}"
             assert explicit_body.get("code") == 200, f"explicit followers failed: {explicit_body}"
 
             default_data = default_body.get("data")
             assert isinstance(default_data, dict), f"缺省应返回分页信封（不再是数组）: {default_data}"
             assert set(default_data.keys()) == {"list", "total", "page", "pageSize", "totalPages"}, default_data
-            assert default_data["page"] == 1 and default_data["pageSize"] == 200, \
-                f"缺省应归一为第一页 + follow 域信封 200: {default_data}"
-            assert default_data["totalPages"] == (default_data["total"] + 199) // 200
+            assert default_data["page"] == 1 and default_data["pageSize"] == 100, \
+                f"缺省应归一为第一页 + follow 域信封 100（T19：原 200）: {default_data}"
+            assert default_data["totalPages"] == (default_data["total"] + 99) // 100
             assert default_data["list"], \
                 f"本用例需非空列表才能让逐字节比对具备判别力: {default_data}"
             assert json.dumps(default_data, sort_keys=True, ensure_ascii=False) == \
@@ -232,25 +236,25 @@ class TestFollowListPagination:
         assert resp.json().get("code") == 401, f"paged without token should be 401: {resp.json()}"
 
     def test_paging_triggered_by_either_param_alone(self, base_url, token_a, user_a_id):
-        """半参数：只传 page 或只传 pageSize 亦返回信封（未传的一侧取归一值）。"""
+        """半参数：只传 page 或只传 pageSize 亦返回信封（未传的一侧取域级归一值）。"""
         only_page = _get_list(base_url, token_a, "following", user_a_id, page=2)["data"]
         assert isinstance(only_page, dict), f"只传 page 也应返回信封: {only_page}"
-        assert only_page["page"] == 2 and only_page["pageSize"] == 200, \
-            f"T11-A：只传 page 时信封大小取 follow 域常量 200（原公共默认 10）: {only_page}"
+        assert only_page["page"] == 2 and only_page["pageSize"] == 100, \
+            f"只传 page 时信封大小取 follow 域常量 100（T19 起，原 200）: {only_page}"
 
         only_size = _get_list(base_url, token_a, "following", user_a_id, page_size=5)["data"]
         assert isinstance(only_size, dict), f"只传 pageSize 也应返回信封: {only_size}"
         assert only_size["page"] == 1 and only_size["pageSize"] == 5
 
     def test_params_normalized_and_out_of_range_page_keeps_total(self, base_url, token_a, user_a_id):
-        """参数归一：page<1 -> 1、pageSize 超上限 -> 200（T11-A 上限 50→200）；越界页空数组但保留 total。"""
+        """参数归一：page<1 -> 1、pageSize 超上限 -> 100（T19 上限/信封 200→100）；越界页空数组但保留 total。"""
         norm = _get_list(base_url, token_a, "following", user_a_id, page=-1, page_size=999)["data"]
         assert norm["page"] == 1, f"page<1 应归一为 1: {norm}"
-        assert norm["pageSize"] == 200, f"pageSize 超上限应归一为 follow 域上限 200（原 50）: {norm}"
+        assert norm["pageSize"] == 100, f"pageSize 超上限应归一为 follow 域上限 100（T19：原 200）: {norm}"
 
-        # T11-A 验收：51 不再被截到 50（上限放开到 200 后原样回显）
+        # 51 仍原样回显（上限 100 > 51；T11-A 上限 200 时同理）
         mid = _get_list(base_url, token_a, "following", user_a_id, page_size=51)["data"]
-        assert mid["pageSize"] == 51, f"pageSize=51 应原样回显（上限 200）: {mid}"
+        assert mid["pageSize"] == 51, f"pageSize=51 应原样回显（T19 上限 100）: {mid}"
 
         beyond = _get_list(base_url, token_a, "following", user_a_id, page=9999, page_size=10)["data"]
         assert beyond["list"] == [], f"越界页应为空数组: {beyond}"

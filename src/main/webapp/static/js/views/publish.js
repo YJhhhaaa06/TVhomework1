@@ -11,9 +11,9 @@ import { createChunkedList } from '../chunkedList.js';
 
 const CATEGORIES = ['其他', '游戏', '音乐', '资讯', '动画', '娱乐', '动物', '体育', '鬼畜', '绘画'];
 
-// T11-B：我的投稿（/profile）分块——一次拉 PROFILE_CHUNK_SIZE（顶现有公共 cap 50，后端改动归 T19），
+// T19：我的投稿（/profile）分块——信封大小由**后端 profile 域常量**（100）决定，请求**只传 `page`**；
 // 本地按 PROFILE_BATCH_SIZE 小批展示 + 跨 chunk 去重（翻页不再出现重复卡片）。
-const PROFILE_CHUNK_SIZE = 50;
+const PROFILE_CHUNK_SIZE = 100;
 const PROFILE_BATCH_SIZE = 12;
 
 let state = null;
@@ -120,7 +120,8 @@ function ensureMyList() {
   if (!state.myList) {
     state.myList = createChunkedList({
       fetchChunk: async (page) => {
-        const data = await request(`profile?userId=${getUserId()}&page=${page}&pageSize=${PROFILE_CHUNK_SIZE}`);
+        // T19：只传 `page`——信封大小（100）由后端 profile 域常量决定
+        const data = await request(`profile?userId=${getUserId()}&page=${page}`);
         return data.contentPage || { list: [], page, pageSize: PROFILE_CHUNK_SIZE, totalPages: 0 };
       },
       chunkSize: PROFILE_CHUNK_SIZE,

@@ -40,13 +40,25 @@ public class BaseServletUtil {
         writeError(resp, code.getCode(), code.getMessage());
     }
 
-    // 分页参数解析（T5 收敛公共；默认 page=1 / pageSize=10；T10-B 版本上限参数化，原语义不变）
+    // 分页参数解析（T5 收敛公共；T10-B 上限参数化；T11-A 域级信封；T19 归一化下沉为 request 无关方法 + 删死重载）
 
-    /** 公共上限 50（原 Feed/Profile 语义，其它分页接口沿用）。 */
-    public static final int DEFAULT_PAGE_SIZE_MAX = 50;
+    /**
+     * 页码归一（T19：从 {@link #parsePage} 下沉为**不依赖 request** 的形态，供 JSON body 形态的接口复用）：
+     * 缺省 / ≤0 → 1。语义与 T5 起的 {@code parsePage} 逐字节一致。
+     */
+    public static int normalizePage(Integer raw) {
+        return (raw == null || raw <= 0) ? 1 : raw;
+    }
 
-    /** 公共缺省信封大小 10（原语义；域级信封见三参重载，T11-A）。 */
-    public static final int DEFAULT_PAGE_SIZE = 10;
+    /**
+     * 信封大小归一（T19：从三参 {@link #parsePageSize} 下沉，同样不依赖 request）：缺省（{@code null}/≤0）
+     * → {@code min(defaultSize, max)}；传了 → {@code min(raw, max)}。**返回值恒 ≤ max**——把"信封不会
+     * 超过上限"这一不变量收进方法内，防某域把 {@code defaultSize} 配得比 {@code max} 大而悄悄越界。
+     */
+    public static int normalizePageSize(Integer raw, int max, int defaultSize) {
+        int fallback = Math.min(defaultSize, max);
+        return (raw == null || raw <= 0) ? fallback : Math.min(raw, max);
+    }
 
     public static int parsePage(HttpServletRequest req) {
         String param = req.getParameter("page");
@@ -54,44 +66,33 @@ public class BaseServletUtil {
             return 1;
         }
         try {
-            int p = Integer.parseInt(param);
-            return p > 0 ? p : 1;
+            return normalizePage(Integer.parseInt(param));
         } catch (NumberFormatException e) {
             return 1;
         }
     }
 
-    /** 默认解析：上限 50、缺省 10（T10-B 起委托带 max 重载，公共语义零变化）。 */
-    public static int parsePageSize(HttpServletRequest req) {
-        return parsePageSize(req, DEFAULT_PAGE_SIZE_MAX);
-    }
-
     /**
-     * 域级上限版（T10-B）：上限 {@code max}、缺省仍为公共默认 10（如评论域 500）；语义同原公共解析。
-     */
-    public static int parsePageSize(HttpServletRequest req, int max) {
-        return parsePageSize(req, max, DEFAULT_PAGE_SIZE);
-    }
-
-    /**
-     * 域级「上限 + 信封大小」版（T11-A）：信封大小改由**后端域级常量**决定，前端只传 {@code page} 即可。
+     * 域级「上限 + 信封大小」版（T11-A；**T19 起为唯一的 request 形态重载**）：信封大小由**后端域级常量**
+     * 决定，前端只传 {@code page} 即可。
      *
-     * <p>传了 {@code pageSize} → {@code min(s, max)}（**上限与 pytest 小信封跨页验证能力同时保留**）；
-     * 未传 / 非法 / ≤0 → {@code min(defaultSize, max)}（域级信封）。**返回值恒 ≤ max**——把"信封不会
-     * 超过上限"这一不变量收进方法内，防某域把 {@code defaultSize} 配得比 {@code max} 大而悄悄越界。
-     * 公共语义零变化——两参重载委托本方法并传 {@link #DEFAULT_PAGE_SIZE}（10），与改造前逐字节一致。
+     * <p>传了 {@code pageSize} → {@code min(s, max)}（**上限与 pytest 小信封跨页验证能力同时保留**——
+     * T19 拍板"不采纳后端硬忽略 pageSize"：否则 feed/search/profile 的"页间不重不漏"将失去唯一
+     * 低成本验证手段）；未传 / 非法 / ≤0 → {@code min(defaultSize, max)}（域级信封）。
+     *
+     * <p><b>T19 删除</b>：无参重载（公共 50/10）与两参重载（域级上限 + 公共缺省 10）——三域改用本重载后
+     * 二者成为零调用死代码（两参重载自 T11-B 起即已零调用），`DEFAULT_PAGE_SIZE_MAX` /
+     * `DEFAULT_PAGE_SIZE` 随之删除。新域一律显式声明自己的 `XXX_PAGE_SIZE_MAX/DEFAULT`。
      */
     public static int parsePageSize(HttpServletRequest req, int max, int defaultSize) {
-        int fallback = Math.min(defaultSize, max);
         String param = req.getParameter("pageSize");
         if (param == null || param.isBlank()) {
-            return fallback;
+            return normalizePageSize(null, max, defaultSize);
         }
         try {
-            int s = Integer.parseInt(param);
-            return s > 0 ? Math.min(s, max) : fallback;
+            return normalizePageSize(Integer.parseInt(param), max, defaultSize);
         } catch (NumberFormatException e) {
-            return fallback;
+            return normalizePageSize(null, max, defaultSize);
         }
     }
 }

@@ -19,7 +19,7 @@ import java.util.List;
 
 @WebServlet("/comment/*")
 public class CommentController extends BaseServlet {
-    /** T10-B：评论域 pageSize 上限（大 chunk 前端承载；公共 parsePageSize cap 50 不动）。 */
+    /** T10-B：评论域 pageSize 上限（大 chunk 前端承载；**T19 起各域自持常量**——公共 cap 50 已删除，评论域本轮不动）。 */
     private static final int COMMENT_PAGE_SIZE_MAX = 500;
     /**
      * T11-B：评论域**信封大小**（缺省值）——由后端域级常量决定，前端只传 {@code page}；
