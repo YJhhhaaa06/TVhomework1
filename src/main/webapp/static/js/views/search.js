@@ -5,10 +5,14 @@
 
 import { request } from '../api.js';
 import { createVideoCard, emptyBox, escapeHtml, showToast } from '../utils.js';
+import { createChunkedList } from '../chunkedList.js';
 
 const HISTORY_KEY = 'searchHistory';
 const MAX_HISTORY = 10;
-const PAGE_SIZE = 12;
+// T19：结果分块——信封大小由**后端 search 域常量**（100）决定，请求**只传 `page`**；
+// 本地按 BATCH_SIZE 小批展示 + 跨 chunk 去重。
+const CHUNK_SIZE = 100;
+const BATCH_SIZE = 12;
 
 // 热门搜索占位（后端暂无接口，前端预留）
 const HOT_SEARCHES = [
@@ -28,12 +32,11 @@ export function mount(container, params) {
   state = {
     container,
     keyword: '',
-    results: [],
+    results: [],   // 已展示（已消费）结果，类型筛选在此集合上做
     filter: 0,
-    page: 1,
-    totalPages: 1,
     total: 0,
     searching: false,
+    list: null,    // T11-B：createChunkedList 实例（结果大 chunk + 本地小批）
   };
   const kw = params.query.kw;
   if (kw) doSearch(kw);
@@ -141,7 +144,8 @@ async function doSearch(keyword) {
   state.searching = true;
   state.keyword = keyword;
   state.filter = 0;
-  state.page = 1;
+  state.results = [];
+  state.total = 0;
   setGlobalInput(keyword);
   addHistory(keyword);
   renderResult();
@@ -149,12 +153,21 @@ async function doSearch(keyword) {
   const grid = state.container.querySelector('#resultGrid');
   grid.innerHTML = '<div class="grid">' + '<div class="v-card"><div class="v-card-cover skeleton"></div></div>'.repeat(8) + '</div>';
 
+  state.list = createChunkedList({
+    fetchChunk: async (page) => {
+      // T19：只传 `page`——信封大小（100）由后端 search 域常量决定
+      const data = await request(`search/keywordSearch?keyword=${encodeURIComponent(keyword)}&page=${page}`);
+      state.total = data.total || 0; // 「共 N 条结果」用后端 total（与页内容同源）
+      return data;
+    },
+    chunkSize: CHUNK_SIZE,
+    batchSize: BATCH_SIZE,
+    keyOf: (it) => it.id,
+  });
+
   try {
-    const data = await request(`search/keywordSearch?keyword=${encodeURIComponent(keyword)}&page=1&pageSize=${PAGE_SIZE}`);
-    state.results = data.list || [];
-    state.total = data.total || 0;
-    state.totalPages = data.totalPages || 1;
-    state.page = 1;
+    const batch = await state.list.nextBatch();
+    state.results = batch;
     renderResults();
     renderLoadMore();
   } catch (e) {
@@ -169,31 +182,26 @@ function renderLoadMore() {
   const c = state.container;
   const old = c.querySelector('.load-more');
   if (old) old.remove();
-  if (state.page < state.totalPages) {
+  if (state.list && state.list.hasMore()) {
     const wrap = document.createElement('div');
     wrap.className = 'load-more';
     const btn = document.createElement('button');
     btn.className = 'load-more-btn';
     btn.textContent = '加载更多';
-    btn.addEventListener('click', loadMore);
+    btn.addEventListener('click', () => loadMore(btn));
     wrap.appendChild(btn);
     c.querySelector('#resultGrid').appendChild(wrap);
   }
 }
 
-async function loadMore() {
-  if (state.searching || state.page >= state.totalPages) return;
+async function loadMore(btn) {
+  if (state.searching || !state.list) return;
   state.searching = true;
-  const c = state.container;
-  const btn = c.querySelector('.load-more-btn');
-  if (btn) { btn.disabled = true; btn.textContent = '加载中...'; }
+  btn.disabled = true;
+  btn.textContent = '加载中...';
   try {
-    const data = await request(`search/keywordSearch?keyword=${encodeURIComponent(state.keyword)}&page=${state.page + 1}&pageSize=${PAGE_SIZE}`);
-    const list = data.list || [];
-    state.results = state.results.concat(list);
-    state.total = data.total || state.total;
-    state.totalPages = data.totalPages || state.totalPages;
-    state.page += 1;
+    const batch = await state.list.nextBatch();
+    if (batch.length) state.results = state.results.concat(batch);
     renderResults();
   } catch (e) {
     showToast('加载失败，请重试');

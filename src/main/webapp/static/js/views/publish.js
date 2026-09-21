@@ -7,8 +7,14 @@ import { request } from '../api.js';
 import { isLoggedIn, getUserId } from '../auth.js';
 import { showToast, formatSize, createVideoCard, emptyBox, skeletonCards } from '../utils.js';
 import { openEditWorkModal } from '../editWork.js';
+import { createChunkedList } from '../chunkedList.js';
 
 const CATEGORIES = ['其他', '游戏', '音乐', '资讯', '动画', '娱乐', '动物', '体育', '鬼畜', '绘画'];
+
+// T19：我的投稿（/profile）分块——信封大小由**后端 profile 域常量**（100）决定，请求**只传 `page`**；
+// 本地按 PROFILE_BATCH_SIZE 小批展示 + 跨 chunk 去重（翻页不再出现重复卡片）。
+const PROFILE_CHUNK_SIZE = 100;
+const PROFILE_BATCH_SIZE = 12;
 
 let state = null;
 let crop = null;
@@ -22,11 +28,13 @@ export function mount(container) {
   state = {
     container, locked: false, tab: 'mine',
     type: 1, category: 0, videoFile: null, coverFile: null, imageFiles: [],
-    myPage: 1, myTotalPages: 0, deleteMode: false,
+    myList: null,   // createChunkedList 实例
+    myItems: [],    // 已展示条目（删除模式切换 / 删除后按此本地重渲染）
+    deleteMode: false,
   };
   crop = { scale: 1, offX: 0, offY: 0, natW: 0, natH: 0, originalName: 'cover.jpg' };
   render();
-  loadMyContent(1);
+  loadMyContent();
 }
 
 export function unmount() {
@@ -104,25 +112,59 @@ function switchTab(tab) {
   c.querySelectorAll('#ccTabs .type-tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   c.querySelector('#minePane').style.display = tab === 'mine' ? '' : 'none';
   c.querySelector('#uploadPane').style.display = tab === 'upload' ? '' : 'none';
-  if (tab === 'mine') loadMyContent(1);
+  if (tab === 'mine') loadMyContent();
 }
 
 // ---------- 我的投稿 ----------
-async function loadMyContent(page) {
+function ensureMyList() {
+  if (!state.myList) {
+    state.myList = createChunkedList({
+      fetchChunk: async (page) => {
+        // T19：只传 `page`——信封大小（100）由后端 profile 域常量决定
+        const data = await request(`profile?userId=${getUserId()}&page=${page}`);
+        return data.contentPage || { list: [], page, pageSize: PROFILE_CHUNK_SIZE, totalPages: 0 };
+      },
+      chunkSize: PROFILE_CHUNK_SIZE,
+      batchSize: PROFILE_BATCH_SIZE,
+      keyOf: (it) => it.id,
+    });
+  }
+  return state.myList;
+}
+
+// 首次/刷新：重置分块列表并取首批（清空已展示集）
+async function loadMyContent() {
   const grid = state.container.querySelector('#myGrid');
-  if (page === 1) grid.innerHTML = '<div class="grid">' + skeletonCards(6) + '</div>';
+  grid.innerHTML = '<div class="grid">' + skeletonCards(6) + '</div>';
+  const list = ensureMyList();
+  list.reset();
+  state.myItems = [];
   try {
-    const data = await request(`profile?userId=${getUserId()}&page=${page}&pageSize=12`);
-    const cp = data.contentPage;
-    const list = cp ? (cp.list || []) : [];
-    state.myTotalPages = cp ? cp.totalPages : 0;
-    state.myPage = page;
-    if (page === 1) renderMyList(list);
-    else appendMyList(list);
+    const batch = await list.nextBatch();
+    state.myItems = batch;
+    renderMyList(state.myItems);
     renderMyLoadMore();
   } catch (e) {
     if (e.code === 401 || e.code === 403) return;
-    if (page === 1) grid.innerHTML = emptyBox('加载失败，请刷新重试');
+    grid.innerHTML = emptyBox('加载失败，请刷新重试');
+  }
+}
+
+// 「加载更多」：本地余量足够则不发请求；不足才由 helper 拉下一个 chunk
+async function loadMoreMyContent(btn) {
+  btn.disabled = true;
+  btn.textContent = '加载中...';
+  try {
+    const batch = await ensureMyList().nextBatch();
+    if (batch.length) {
+      state.myItems = state.myItems.concat(batch);
+      appendMyList(batch);
+    }
+    renderMyLoadMore();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '加载更多';
+    showToast('加载失败，请重试');
   }
 }
 
@@ -165,7 +207,9 @@ function toggleDeleteMode() {
   const btn = state.container.querySelector('#myDeleteModeBtn');
   btn.textContent = state.deleteMode ? '完成' : '删除';
   btn.classList.toggle('active', state.deleteMode);
-  loadMyContent(state.myPage); // 重渲染以显示/隐藏卡片删除按钮
+  // T11-B：按已展示条目**本地重渲染**（原实现重拉"当前页"再追加，在第 N 页会重复追加第 N 页卡片）
+  renderMyList(state.myItems);
+  renderMyLoadMore();
 }
 
 /** 删除模式下卡片右上角的删除按钮：确认后删除该投稿 */
@@ -180,7 +224,10 @@ function addDeleteEntry(card, item) {
     try {
       await request(`content/delete?contentId=${item.id}`, { method: 'POST' });
       showToast('删除成功');
-      loadMyContent(state.myPage); // 保持删除模式，便于连续删除
+      // T11-B：本地摘除该卡片（不重置分块窗口），保持删除模式便于连续删除
+      state.myItems = state.myItems.filter((it) => it.id !== item.id);
+      renderMyList(state.myItems);
+      renderMyLoadMore();
     } catch (err) {
       showToast(err.message || '删除失败');
     }
@@ -219,7 +266,8 @@ function addEditEntry(card, item) {
       // ContentVO 不含 videoUrl/imageUrls，需拉全量内容
       const full = await request(`search/IdSearch?contentId=${item.id}`);
       if (!full) { showToast('内容不存在'); return; }
-      openEditWorkModal(full, () => loadMyContent(state.myPage));
+      // T11-B：编辑完成后按 id 定向刷新该卡片（原实现重拉当前页，在第 N 页会重复追加第 N 页）
+      openEditWorkModal(full, () => refreshMyCard(item.id));
     } catch (err) {
       showToast(err.message || '加载失败');
     }
@@ -227,14 +275,26 @@ function addEditEntry(card, item) {
   card.appendChild(edit);
 }
 
+/** 编辑/换源后：按 id 重拉该内容并就地替换卡片数据（拉取失败则保留原卡片，不打断页面） */
+async function refreshMyCard(contentId) {
+  try {
+    const fresh = await request(`search/IdSearch?contentId=${contentId}`);
+    if (!fresh) return;
+    state.myItems = state.myItems.map((it) => (it.id === contentId ? fresh : it));
+    renderMyList(state.myItems);
+  } catch (e) {
+    /* 刷新失败不阻塞：保留原卡片 */
+  }
+}
+
 function renderMyLoadMore() {
   const box = state.container.querySelector('#myLoadMore');
   box.innerHTML = '';
-  if (state.myPage < state.myTotalPages) {
+  if (state.myList && state.myList.hasMore()) {
     const btn = document.createElement('button');
     btn.className = 'load-more-btn';
     btn.textContent = '加载更多';
-    btn.addEventListener('click', () => loadMyContent(state.myPage + 1));
+    btn.addEventListener('click', () => loadMoreMyContent(btn));
     box.appendChild(btn);
   }
 }

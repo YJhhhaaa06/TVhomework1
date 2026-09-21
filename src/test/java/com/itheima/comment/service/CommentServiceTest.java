@@ -12,6 +12,7 @@ import com.itheima.content.model.cache.CommentCacheDTO;
 import com.itheima.content.model.cache.ContentCacheDTO;
 import com.itheima.comment.model.command.CommentCommand;
 import com.itheima.content.model.vo.CommentVO;
+import com.itheima.like.service.LikeService;
 import com.itheima.util.TransactionTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -33,6 +34,7 @@ class CommentServiceTest {
     private ContentDao contentDao;
     private ContentCache contentCache;
     private CommentCache commentCache;
+    private LikeService likeService;
     private TransactionTemplate tt;
     private Connection conn;
     private CommentService service;
@@ -43,9 +45,10 @@ class CommentServiceTest {
         contentDao = mock(ContentDao.class);
         contentCache = mock(ContentCache.class);
         commentCache = mock(CommentCache.class);
+        likeService = mock(LikeService.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
-        service = new CommentService(commentDao, contentDao, contentCache, commentCache, tt);
+        service = new CommentService(commentDao, contentDao, contentCache, commentCache, likeService, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);
@@ -68,7 +71,9 @@ class CommentServiceTest {
 
         verify(contentDao).updateCommentCount(conn, 3L, 1);
         verify(contentCache).notifyCommentCountChanged(3L);
-        verify(commentCache).invalidateComments(3L);
+        // T10-A/B：增主楼 → 失效 roots+count（不维护 reply_count）
+        verify(commentCache).invalidateRoots(3L);
+        verify(commentDao, never()).updateReplyCount(any(), anyLong(), anyInt());
     }
 
     @Test
@@ -115,7 +120,9 @@ class CommentServiceTest {
         service.addComment(command);
 
         verify(commentDao).addComment(conn, 3L, 7L, "hello", 5L, 8L);
-        verify(commentCache).invalidateComments(3L);
+        // T10-A/B：增回复 → 主楼 reply_count +1 + 定向 HDEL 该主楼 replies field
+        verify(commentDao).updateReplyCount(conn, 5L, 1);
+        verify(commentCache).invalidateReplyUnder(3L, 5L);
     }
 
     @Test
@@ -136,11 +143,12 @@ class CommentServiceTest {
         service.addComment(command);
 
         verify(commentDao).addComment(conn, 3L, 7L, "hello", 5L, 8L);
-        // 楼中楼归一化结果保留在 DB 写入与 DAO 返回的评论上，缓存侧统一失效评论树
+        // 楼中楼归一化结果保留在 DB 写入与 DAO 返回的评论上，缓存侧定向失效所在主楼 field
         assertEquals(5L, saved.getParentId());
         assertEquals(8L, saved.getReplyToUserId());
         assertEquals("bob", saved.getReplyToUsername());
-        verify(commentCache).invalidateComments(3L);
+        verify(commentDao).updateReplyCount(conn, 5L, 1);
+        verify(commentCache).invalidateReplyUnder(3L, 5L);
     }
 
     @Test
@@ -167,7 +175,10 @@ class CommentServiceTest {
         verify(commentDao).softDeleteFloor(conn, 9L);
         verify(contentDao).updateCommentCount(conn, 3L, -4);
         verify(contentCache).notifyCommentCountChanged(3L);
-        verify(commentCache).invalidateComments(3L);
+        // T10-A/B：删主楼 → 失效 roots+count + 清该主楼 replies field（不扣 reply_count）
+        verify(commentCache).invalidateRoots(3L);
+        verify(commentCache).invalidateReplyUnder(3L, 9L);
+        verify(commentDao, never()).updateReplyCount(any(), anyLong(), anyInt());
     }
 
     @Test
@@ -189,12 +200,16 @@ class CommentServiceTest {
         when(commentDao.isCommentExist(conn, 10L)).thenReturn(true);
         CommentCacheDTO reply = new CommentCacheDTO("bob", 10L, 3L, 7L, "reply", 9L, 0);
         when(commentDao.findCommentById(conn, 10L)).thenReturn(reply);
+        when(commentDao.getRootIdByCommentId(conn, 10L)).thenReturn(9L); // T10-A：上溯主楼
 
         service.deleteCommentByUser(10L, 7L);
 
         verify(commentDao).softDeleteOne(conn, 10L);
         verify(contentCache).notifyCommentCountChanged(3L);
-        verify(commentCache).invalidateComments(3L);
+        // T10-A/B：删回复 → 主楼 reply_count −1 + 定向 HDEL 所在主楼 field
+        verify(commentDao).updateReplyCount(conn, 9L, -1);
+        verify(commentCache).invalidateReplyUnder(3L, 9L);
+        verify(commentCache, never()).invalidateRoots(anyLong());
     }
 
     @Test
@@ -226,7 +241,8 @@ class CommentServiceTest {
 
         verify(commentDao).softDeleteFloor(conn, 9L);
         verify(contentCache).notifyCommentCountChanged(3L);
-        verify(commentCache).invalidateComments(3L);
+        verify(commentCache).invalidateRoots(3L);
+        verify(commentCache).invalidateReplyUnder(3L, 9L);
     }
 
     @Test
@@ -249,6 +265,7 @@ class CommentServiceTest {
     @Test
     void convertToCommentVOListBuildsTreeWithLikedFlags() {
         CommentCacheDTO root = new CommentCacheDTO("alice", 1L, 3L, 7L, "root", null, 5);
+        root.setReplyCount(4); // T10-B：主楼回复总数需透传到 VO
         CommentCacheDTO child = new CommentCacheDTO("bob", 2L, 3L, 8L, "child", 1L, 2);
         child.setReplyToUserId(8L);
         child.setReplyToUsername("bob");
@@ -259,6 +276,7 @@ class CommentServiceTest {
 
         assertEquals(1, result.size());
         assertTrue(result.get(0).getIsLiked());
+        assertEquals(4, result.get(0).getReplyCount(), "replyCount 透传到 VO（不被构造器清零）");
         assertEquals(1, result.get(0).getChildren().size());
         CommentVO childVO = (CommentVO) result.get(0).getChildren().get(0);
         assertFalse(childVO.getIsLiked());

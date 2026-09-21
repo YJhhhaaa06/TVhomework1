@@ -8,7 +8,7 @@
 
 设计约定:
     * 纯标准库；不改动 tools/run_tests.py 的任何安全逻辑。
-    * 完整输出写入 D:\\data\\projects\\VideoPlatform\\stone\\temp\\test-reports\\run-<时间戳>.log。
+    * 完整输出写入项目内 .stage8-target\test-reports\run-<时间戳>.log（T9 本地化，沙箱可写区）。
     * 机器可读结果写入同目录 latest.json（exit_code/pytest 计数/构建状态/端口状态/log 路径）。
     * stdout 只打印几行摘要，避免测试输出灌入主会话上下文。
 """
@@ -37,7 +37,7 @@ from run_tests import (
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RUN_TESTS_SCRIPT = PROJECT_ROOT / "tools" / "run_tests.py"
-REPORT_DIR = Path(os.environ.get("TV_TEST_REPORT_DIR", r"D:\data\projects\VideoPlatform\stone\temp\test-reports"))
+REPORT_DIR = Path(os.environ.get("TV_TEST_REPORT_DIR", str(PROJECT_ROOT / ".stage8-target" / "test-reports")))
 VALID_PHASES = ("build", "start", "test", "stop", "all", "junit")
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)

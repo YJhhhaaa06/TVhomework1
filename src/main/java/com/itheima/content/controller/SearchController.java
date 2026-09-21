@@ -3,7 +3,7 @@ package com.itheima.content.controller;
 import com.itheima.controller.BaseServlet;
 import com.itheima.controller.BaseServletUtil;
 import com.itheima.controller.RequestParser;
-import com.itheima.content.model.dto.PageResult;
+import com.itheima.common.model.dto.PageResult;
 import com.itheima.content.model.dto.SearchDTO;
 import com.itheima.exception.ErrorCode;
 import com.itheima.ioc.annotation.Inject;
@@ -19,6 +19,12 @@ import java.io.IOException;
 
 @WebServlet("/search/*")
 public class SearchController extends BaseServlet {
+    /** T19：search 域 pageSize 上限（原为该域"无上限"的唯一分页入口，公共归一未覆盖）。 */
+    private static final int SEARCH_PAGE_SIZE_MAX = 100;
+
+    /** T19：search 域**信封大小**——前端只传 `page` 时后端返回的条数（原为硬编码缺省 12）。 */
+    private static final int SEARCH_PAGE_SIZE_DEFAULT = 100;
+
     @Inject
     private ContentService contentService;
 
@@ -70,14 +76,10 @@ public class SearchController extends BaseServlet {
         if (req.getContentLength() <= 0) {
             dto = new SearchDTO();
             dto.setKeyword(req.getParameter("keyword"));
-            String pageStr = req.getParameter("page");
-            String pageSizeStr = req.getParameter("pageSize");
-            if (pageStr != null && !pageStr.isEmpty()) {
-                dto.setPage(Integer.parseInt(pageStr));
-            }
-            if (pageSizeStr != null && !pageSizeStr.isEmpty()) {
-                dto.setPageSize(Integer.parseInt(pageSizeStr));
-            }
+            // T19：GET 分支不再手写 Integer.parseInt（非法值会抛 NumberFormatException → 500），
+            // 统一走公共归一（域级上限 + 域级信封；非法/缺省一律回落域级缺省）
+            dto.setPage(BaseServletUtil.parsePage(req));
+            dto.setPageSize(BaseServletUtil.parsePageSize(req, SEARCH_PAGE_SIZE_MAX, SEARCH_PAGE_SIZE_DEFAULT));
         } else {
             dto = RequestParser.parse(req, SearchDTO.class);
         }
@@ -86,8 +88,12 @@ public class SearchController extends BaseServlet {
             BaseServletUtil.writeError(resp, ErrorCode.PARAM_ERROR, "输入不能为空");
             return;
         }
-        int page = dto.getPage() != null ? dto.getPage() : 1;
-        int pageSize = dto.getPageSize() != null ? dto.getPageSize() : 12;
+        // T19：两条分支同一口径——JSON body 分支拿不到 request parameter，走 request 无关的 normalize*
+        // （唯一源仍是 BaseServletUtil）；原"缺省 12 / 无上限"改由域级常量决定。
+        // （GET 分支的值已经归一过，normalize* 幂等，再走一遍只为两条分支共享同一出口）
+        int page = BaseServletUtil.normalizePage(dto.getPage());
+        int pageSize = BaseServletUtil.normalizePageSize(dto.getPageSize(),
+                SEARCH_PAGE_SIZE_MAX, SEARCH_PAGE_SIZE_DEFAULT);
         Long userId = (Long) req.getAttribute("userId");
         PageResult<ContentVO> result = contentService.search(dto.getKeyword().trim(), userId, page, pageSize);
         BaseServletUtil.writeSuccess(resp, result);

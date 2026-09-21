@@ -13,7 +13,7 @@ import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.content.model.cache.CommentCacheDTO;
 import com.itheima.content.model.cache.ContentCacheDTO;
 import com.itheima.upload.model.command.UploadCommand;
-import com.itheima.content.model.dto.PageResult;
+import com.itheima.common.model.dto.PageResult;
 import com.itheima.content.model.entity.ContentMedia;
 import com.itheima.admin.model.vo.AdminContentVO;
 import com.itheima.content.model.vo.CommentVO;
@@ -67,28 +67,49 @@ public class ContentService {
 
     // ===== 搜索 =====
 
+    /**
+     * 搜索。T12（治池 U-14①）：**DB 查询与缓存读分离**——事务回调只承载 DB 查询
+     * （命中总数 + 该页内容 id，经私有 record 回传），提交归还连接后，再在**事务外**做
+     * 批量读 {@code contentCache.getContentsBatch}（含 miss 装载；逐 key {@code getContent}
+     * 一并换批量读，对齐 Feed/Profile 的 T8 口径）与 {@code contentStatusFiller.fillLikeAndFollowBatch}
+     * （点赞/关注缓存批量读）——消除"外层事务持连接 + miss 装载再取新连接"的叠加
+     * （自研 {@link TransactionTemplate} 无传播语义，嵌套读各自取新连接）。
+     *
+     * <p>对外行为零变化：分页口径/返回集与顺序/跳过 null 口径/异常语义一概不变
+     * （{@code SQLException → ServerException("搜索失败，请重试")} 仍在回调内产生），
+     * 事务内语句集与改造前一致（命中总数与页内 id 两次 DAO 查询都不省略、顺序不变）。
+     */
     public PageResult<ContentVO> search(String keyword, Long userId, int page, int pageSize) {
-        return transactionTemplate.execute(conn -> {
+        // T12：事务回调只做 DB 查询，不触碰任何缓存（缓存读见下方事务外段）
+        SearchDbData db = transactionTemplate.execute(conn -> {
             try {
                 int total = contentDao.countKeywordSearch(conn, keyword);
                 List<Long> contentIdList = contentDao.keywordSearchInBrief(conn, keyword, page, pageSize);
-                List<ContentVO> result = new ArrayList<>();
-                for (Long contentId : contentIdList) {
-                    ContentCacheDTO cacheDTO = contentCache.getContent(contentId);
-                    if (cacheDTO == null) continue;
-                    result.add(contentCache.toContentVO(cacheDTO));
-                }
-
-                if (userId != null && !result.isEmpty()) {
-                    contentStatusFiller.fillLikeAndFollowBatch(result, userId);
-                }
-
-                return new PageResult<>(result, total, page, pageSize);
+                return new SearchDbData(contentIdList, total);
             } catch (SQLException e) {
                 LOGGER.log(Level.SEVERE, "搜索内容失败, keyword=" + keyword, e);
                 throw new ServerException("搜索失败，请重试");
             }
         });
+
+        // 事务外：该页批量读（一趟 pipeline，语义与逐条 getContent 一致），按原序跳过 null
+        List<ContentVO> result = new ArrayList<>();
+        Map<Long, ContentCacheDTO> byId = contentCache.getContentsBatch(db.contentIds());
+        for (Long contentId : db.contentIds()) {
+            ContentCacheDTO cacheDTO = byId.get(contentId);
+            if (cacheDTO == null) continue;
+            result.add(contentCache.toContentVO(cacheDTO));
+        }
+
+        if (userId != null && !result.isEmpty()) {
+            contentStatusFiller.fillLikeAndFollowBatch(result, userId);
+        }
+
+        return new PageResult<>(result, db.total(), page, pageSize);
+    }
+
+    /** 事务内 DB 查询结果（T12：事务回调的返回值载体，缓存读在事务外进行）。 */
+    private record SearchDbData(List<Long> contentIds, int total) {
     }
 
     // ===== 组装响应 VO =====
@@ -118,8 +139,9 @@ public class ContentService {
         if (dto == null || !dto.isCommentEnabled()) {
             return new ArrayList<>();
         }
-        // 评论树走新 Redis 评论缓存（T3：三态 Cache-Aside + 独立 TTL + 空标记）
-        List<CommentCacheDTO> commentTree = commentCache.getCommentTree(contentId);
+        // T10-A：缺省全量数组 = 从评论缓存两键组全量拼装等价整树（缺省语义即全量；
+        // T10-B 前端改传参后自然缓解全量装载）
+        List<CommentCacheDTO> commentTree = commentCache.getFullTree(contentId);
         if (commentTree == null || commentTree.isEmpty()) {
             return new ArrayList<>();
         }
@@ -132,6 +154,41 @@ public class ContentService {
         } else {
             return commentService.convertToCommentVOList(commentTree, new HashMap<>());
         }
+    }
+
+    /**
+     * 评论列表**分页**（T10-A：两键组 + 主楼窗口装载，命中路径成本 ∝ 该页）。
+     *
+     * <p>主楼 List LRANGE 窗口取该页主楼 + 楼中楼 HMGET 该页（children 全量随行，T8 契约保持）；
+     * DB 窗口装载只发生在 List 水位不足时（keyset），不再一次性查全库；
+     * {@code total} = 真实主楼总数（count key，与"每页 N 条主楼"同源）。
+     *
+     * <p>缺省路径 {@link #getCommentsForContent(long, Long)} 不受影响：不传分页参数时仍返回
+     * 全量数组、与改造前逐字节一致（是否传参由 Controller 显式判定）。
+     *
+     * @param page     页码（≥1，Controller 经 {@code BaseServletUtil.parsePage} 归一）
+     * @param pageSize 每页主楼条数（1~500，经 {@code BaseServletUtil.parsePageSize(req,500,200)} 归一；
+     *                 缺省 = 评论域级信封 200）
+     * @return 分页信封 {@code {list,total,page,pageSize,totalPages}}，{@code total} = **主楼条数**
+     */
+    public PageResult<CommentVO> getCommentsForContent(long contentId, Long userId, int page, int pageSize) {
+        ContentCacheDTO dto = contentCache.getContent(contentId);
+        // 评论区开关 / 内容不存在或隐藏：与缺省路径同一前置判断，分页下返回空页（total=0）
+        if (dto == null || !dto.isCommentEnabled()) {
+            return new PageResult<>(new ArrayList<>(), 0, page, pageSize);
+        }
+        CommentCache.PageWindow window = commentCache.getRootPage(contentId, page, pageSize);
+        List<CommentCacheDTO> pageRoots = window.getRoots();
+
+        // 点赞态只对该页评论批量查询（含该页主楼的楼中楼）
+        Map<Long, Boolean> likedMap = new HashMap<>();
+        if (userId != null && !pageRoots.isEmpty()) {
+            List<Long> pageCommentIds = commentCache.collectCommentIds(pageRoots);
+            likedMap = likeService.batchIsCommentLiked(userId, pageCommentIds);
+            if (likedMap == null) likedMap = new HashMap<>();
+        }
+        return new PageResult<>(commentService.convertToCommentVOList(pageRoots, likedMap),
+                window.getRootTotal(), page, pageSize);
     }
 
     // ===== 管理 =====

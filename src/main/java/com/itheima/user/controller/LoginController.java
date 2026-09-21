@@ -1,6 +1,5 @@
 package com.itheima.user.controller;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.itheima.controller.BaseServlet;
 import com.itheima.controller.BaseServletUtil;
 import com.itheima.controller.RequestParser;
@@ -25,10 +24,9 @@ import java.io.IOException;
 
 @WebServlet("/user/*")
 public class LoginController extends BaseServlet {
-    private RequestParser requestParser=new RequestParser();
     @Inject
     private UserService userService;
-    private ObjectMapper mapper=new ObjectMapper();
+
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
         String action=req.getPathInfo();//path去掉了/user的结果
@@ -65,8 +63,8 @@ public class LoginController extends BaseServlet {
     protected void register(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         RegisterDTO dto = RequestParser.parse(req, RegisterDTO.class);
         RegisterCommand rc = CommandConverter.registerToCommand(dto);
-        long id = userService.registerAsUser(rc);
-        LoginVO ls = userService.login(id, rc.getPassword());
+        // 自动登录失败时 token 为 null（注册仍成功，池 U-16 兜底）——前端据此提示"请手动登录"
+        LoginVO ls = userService.registerAndLogin(rc);
         BaseServletUtil.writeSuccess(resp, ls);
     }
 

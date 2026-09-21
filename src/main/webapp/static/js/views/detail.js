@@ -7,6 +7,14 @@ import { isLoggedIn, getUserId } from '../auth.js';
 import { showToast, formatTime, formatNumber, emptyBox, initialChar, avatarColor } from '../utils.js';
 import { navigate } from '../router.js';
 import { openEditWorkModal } from '../editWork.js';
+import { createChunkedList } from '../chunkedList.js';
+
+// T10-B：评论列表"大 chunk + 本地小批"——一次拉 CHUNK_SIZE 主楼，本地按 BATCH_SIZE 小批展示，
+// 本地余量用尽才发下一次 chunk 请求（公共 helper createChunkedList，T11 复用）。
+// T11-B：**请求只传 `page`**——信封大小由后端评论域常量（200）决定，CHUNK_SIZE 只作兜底值，
+// 首次响应后用响应回显的 pageSize 自适应覆盖（见 chunkedList.js）。
+const CHUNK_SIZE = 200;
+const BATCH_SIZE = 10;
 
 let state = null;
 
@@ -15,7 +23,9 @@ export function mount(container, params) {
     container,
     contentId: params.id,
     content: null,
-    comments: [],
+    commentList: null,      // T10-B：createChunkedList 实例（评论主楼大 chunk + 本地小批）
+    displayedComments: 0,   // 已展示条数（本地小批累积）
+    expandedRoots: {},      // T10-B：rootId → { replies, page, totalPages }（展开的楼中楼）
     related: [],
     parentId: null,
   };
@@ -57,6 +67,7 @@ function render() {
             <button class="btn-primary" id="sendBtn">发送</button>
           </div>
           <div class="comment-list" id="commentList"></div>
+          <div class="load-more" id="commentMore"></div>
         </div>
       </div>
       <div class="detail-side">
@@ -76,12 +87,11 @@ function render() {
 
 async function init() {
   try {
-    const [content, comments] = await Promise.all([
+    const [content] = await Promise.all([
       request(`search/IdSearch?contentId=${state.contentId}`),
-      request(`comment/show?contentId=${state.contentId}`),
+      loadInitialComments(),
     ]);
     state.content = content;
-    state.comments = comments || [];
     renderContent();
     loadRelated();
   } catch (e) {
@@ -185,6 +195,7 @@ function renderContent() {
     c.querySelector('#commentInputRow').style.display = 'none';
     c.querySelector('#commentHeader').textContent = '评论区已关闭';
     c.querySelector('#commentList').innerHTML = '<div class="empty-comments">作者已关闭评论区</div>';
+    c.querySelector('#commentMore').innerHTML = '';
   } else {
     // 评论输入（登录后显示）
     if (isLoggedIn()) c.querySelector('#commentInputRow').style.display = '';
@@ -257,18 +268,80 @@ function createSideItem(item) {
   return el;
 }
 
-// ---------- 评论渲染（楼中楼：主楼 + 楼内回复平铺，回复仅一级） ----------
+// ---------- 评论分页加载（T10-B：大 chunk + 本地小批，公共 chunkedList helper；N15 复用点） ----------
+function ensureCommentList() {
+  if (!state.commentList) {
+    state.commentList = createChunkedList({
+      // T11-B：只传 page（信封大小后端定，响应回显自适应）
+      fetchChunk: async (page) => request(
+        `comment/show?contentId=${state.contentId}&page=${page}`),
+      chunkSize: CHUNK_SIZE,
+      batchSize: BATCH_SIZE,
+      // 评论 VO 同时含 userId（作者），必须显式按 commentId 去重（见 chunkedList.js keyOf 说明）
+      keyOf: (c) => c.commentId,
+    });
+  }
+  return state.commentList;
+}
+
+// 首次打开 / 发删评论后：重置列表并拉首批（本地小批展示）
+async function loadInitialComments() {
+  ensureCommentList().reset();
+  state.comments = [];
+  state.expandedRoots = {};
+  await extendComments();
+  renderComments();
+}
+
+// 拉下一小批：本地余量足够直接用，不足才发下一个 big chunk 请求
+async function extendComments() {
+  const list = ensureCommentList();
+  const batch = await list.nextBatch();
+  state.comments = state.comments.concat(batch);
+  return batch;
+}
+
+async function loadMoreComments(btn) {
+  btn.disabled = true;
+  btn.textContent = '加载中...';
+  try {
+    await extendComments();
+    renderComments();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '加载更多评论';
+    showToast(e.message || '加载失败');
+  }
+}
+
+function renderCommentLoadMore() {
+  const box = state.container.querySelector('#commentMore');
+  box.innerHTML = '';
+  if (!ensureCommentList().hasMore()) return;
+  const btn = document.createElement('button');
+  btn.className = 'load-more-btn';
+  btn.textContent = '加载更多评论';
+  btn.addEventListener('click', () => loadMoreComments(btn));
+  box.appendChild(btn);
+}
+
+// ---------- 评论渲染（T10-B：主楼 children 只带前 K 条 + replyCount 总数；展开时拉 /comment/replies） ----------
 function renderComments() {
   const c = state.container;
   const list = c.querySelector('#commentList');
-  const count = countTotal(state.comments);
+  // 计数用详情接口的 commentCount（含楼中楼的总评论数）：分页后只加载了部分主楼，
+  // 不能再按"已加载条数"显示，否则数字会随加载页数增长、与详情统计不一致
+  const count = (state.content && state.content.commentCount != null)
+    ? state.content.commentCount : countTotal(state.comments);
   c.querySelector('#commentHeader').textContent = '评论 (' + count + ')';
   list.innerHTML = '';
   if (!state.comments.length) {
     list.innerHTML = '<div class="empty-comments">暂无评论，快来抢沙发吧</div>';
+    renderCommentLoadMore();
     return;
   }
   state.comments.forEach((cm) => list.appendChild(createCommentItem(cm, false)));
+  renderCommentLoadMore();
 }
 
 function countTotal(list) {
@@ -335,27 +408,65 @@ function createCommentItem(comment, isReply) {
   body.appendChild(meta);
   wrapper.appendChild(body);
 
-  // 主楼下方：楼内回复折叠列表
-  if (!isReply && comment.children && comment.children.length) {
+  // 主楼下方：楼内回复折叠列表（T10-B：children 只带前 K 条 + replyCount 总数；展开按需拉全）
+  if (!isReply && (comment.children || []).length) {
+    const total = Math.max(comment.replyCount || 0, (comment.children || []).length);
+    const expanded = state.expandedRoots[comment.commentId]; // 已在展开：render 重建后按缓存数据重灌（L2）
     const toggle = document.createElement('div');
     toggle.className = 'comment-replies-toggle';
-    toggle.textContent = '共 ' + comment.children.length + ' 条回复 ▾';
-    toggle.addEventListener('click', () => {
+    toggle.textContent = '共 ' + total + ' 条回复 ' + (expanded ? '▾' : '▾');
+    toggle.addEventListener('click', async () => {
       const box = wrapper.querySelector('.comment-replies');
-      const expanded = box.style.display !== 'none';
-      box.style.display = expanded ? 'none' : 'block';
-      toggle.textContent = '共 ' + comment.children.length + ' 条回复 ' + (expanded ? '▸' : '▾');
+      if (box.style.display !== 'none') { // 收起
+        box.style.display = 'none';
+        toggle.textContent = '共 ' + total + ' 条回复 ▸';
+        return;
+      }
+      box.style.display = 'block';
+      toggle.textContent = '共 ' + total + ' 条回复 ▾';
+      // 首屏只带前 K 条：不足 total 且未拉过 → 点击展开拉取剩余（/comment/replies）
+      if (state.expandedRoots[comment.commentId] || (comment.children || []).length >= total) return;
+      toggle.textContent = '加载中...';
+      try {
+        await ensureRootExpanded(comment, wrapper);
+        toggle.textContent = '共 ' + total + ' 条回复 ▾';
+      } catch (e) {
+        toggle.textContent = '共 ' + total + ' 条回复 ▾';
+        showToast(e.message || '展开失败');
+      }
     });
 
     const repliesBox = document.createElement('div');
     repliesBox.className = 'comment-replies';
-    repliesBox.style.display = 'none';
-    comment.children.forEach((child) => repliesBox.appendChild(createCommentItem(child, true)));
+    repliesBox.style.display = expanded ? 'block' : 'none';
+    const seed = expanded ? (expanded.replies || []) : (comment.children || []);
+    seed.forEach((child) => repliesBox.appendChild(createCommentItem(child, true)));
 
     wrapper.appendChild(toggle);
     wrapper.appendChild(repliesBox);
   }
   return wrapper;
+}
+
+// 展开主楼全部回复：分页拉 /comment/replies（页间与 children 前 K 重叠去重）并增量渲染；
+// 结果存入 state.expandedRoots[rootId]={replies:[...]}，供 render 重建后重灌（review L2）
+async function ensureRootExpanded(comment, wrapper) {
+  const rootId = comment.commentId;
+  const box = wrapper.querySelector('.comment-replies');
+  const known = new Map();
+  (comment.children || []).forEach((c) => known.set(c.commentId, c));
+  let page = 1;
+  for (;;) {
+    // T11-B：只传 page（信封大小后端定 200，比原先硬传 50 少 4 倍往返，取齐结果不变）
+    const data = await request(`comment/replies?rootId=${rootId}&page=${page}`);
+    (data.list || []).forEach((r) => { known.set(r.commentId, r); });
+    if (page >= (data.totalPages || 1)) break;
+    page += 1;
+  }
+  if (!known.has(rootId) && known.size === 0) return; // 无任何行
+  state.expandedRoots[rootId] = { replies: Array.from(known.values()) };
+  box.innerHTML = '';
+  state.expandedRoots[rootId].replies.forEach((c) => box.appendChild(createCommentItem(c, true)));
 }
 
 // ---------- 交互 ----------
@@ -370,13 +481,13 @@ async function deleteComment(comment) {
   try {
     await request(`comment/delete?commentId=${comment.commentId}`, { method: 'POST' });
     showToast('删除成功');
-    state.comments = await request(`comment/show?contentId=${state.contentId}`);
+    // 删除后回到第 1 页重新累积（避免页码与已加载内容错位）
+    await loadInitialComments();
     if (state.content) {
       state.content.commentCount = Math.max(0, (state.content.commentCount || 0) - removed);
       state.container.querySelector('#stats').textContent =
         `❤ ${formatNumber(state.content.likeCount || 0)} · 💬 ${formatNumber(state.content.commentCount || 0)} · ${formatTime(state.content.createTime)}`;
     }
-    renderComments();
   } catch (e) {
     showToast(e.message || '删除失败');
   }
@@ -462,8 +573,8 @@ async function sendComment() {
     input.placeholder = '发一条友善的评论';
     state.parentId = null;
     showToast('评论成功');
-    state.comments = await request(`comment/show?contentId=${state.contentId}`);
-    renderComments();
+    // 新评论进入主楼升序末位，回到第 1 页重新累积（与删除后同一处置）
+    await loadInitialComments();
   } catch (e) {
     showToast(e.message || '评论失败');
   }

@@ -16,6 +16,12 @@ import java.io.IOException;
 
 @WebServlet("/follow/*")
 public class FollowController extends BaseServlet {
+    /** T11-A 引入；**T19 由 200 调整为 100**（用户拍板：200 单次成本过高；与 feed/search/profile 三域同口径）。 */
+    private static final int FOLLOW_PAGE_SIZE_MAX = 100;
+
+    /** T11-A 引入；**T19 由 200 调整为 100**——前端只传 `page` 时后端返回的条数。 */
+    private static final int FOLLOW_PAGE_SIZE_DEFAULT = 100;
+
     @Inject
     private FollowService followService;
 
@@ -29,12 +35,19 @@ public class FollowController extends BaseServlet {
         Long currentUserId = (Long) req.getAttribute("userId");
         long userId = parseUserId(req);
 
+        // T11-A（契约变更，已获用户批准）：删除 T7 的「缺省不传参 → 全量数组」分支，缺省**归一为第一页信封**
+        // ——不传参 = page 1 / pageSize 200，与显式 `page=1&pageSize=200` 响应逐字节一致；
+        // 信封大小由本域常量决定，前端只传 `page`；显式 pageSize 仍受上限 200 约束（保留小信封跨页验证能力）。
         switch (action) {
             case "/following":
-                BaseServletUtil.writeSuccess(resp, followService.getFollowingList(userId, currentUserId));
+                BaseServletUtil.writeSuccess(resp, followService.getFollowingList(userId, currentUserId,
+                        BaseServletUtil.parsePage(req),
+                        BaseServletUtil.parsePageSize(req, FOLLOW_PAGE_SIZE_MAX, FOLLOW_PAGE_SIZE_DEFAULT)));
                 break;
             case "/followers":
-                BaseServletUtil.writeSuccess(resp, followService.getFollowerList(userId, currentUserId));
+                BaseServletUtil.writeSuccess(resp, followService.getFollowerList(userId, currentUserId,
+                        BaseServletUtil.parsePage(req),
+                        BaseServletUtil.parsePageSize(req, FOLLOW_PAGE_SIZE_MAX, FOLLOW_PAGE_SIZE_DEFAULT)));
                 break;
             default:
                 BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "未识别操作");

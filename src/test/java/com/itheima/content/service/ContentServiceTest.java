@@ -14,7 +14,7 @@ import com.itheima.exception.ServerException;
 import com.itheima.content.model.cache.ContentCacheDTO;
 import com.itheima.content.model.cache.CommentCacheDTO;
 import com.itheima.upload.model.command.UploadCommand;
-import com.itheima.content.model.dto.PageResult;
+import com.itheima.common.model.dto.PageResult;
 import com.itheima.content.model.entity.ContentMedia;
 import com.itheima.admin.model.vo.AdminContentVO;
 import com.itheima.content.model.vo.ContentDetailVO;
@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -50,6 +51,8 @@ class ContentServiceTest {
     private TransactionTemplate tt;
     private Connection conn;
     private ContentService service;
+    /** 事务回调执行中标志（T12：断言缓存读发生在事务回调之外）。 */
+    private boolean[] inTransaction;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -64,12 +67,20 @@ class ContentServiceTest {
         filler = mock(ContentStatusFiller.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
+        inTransaction = new boolean[1];
         service = new ContentService(contentDao, contentMediaDao, commentDao,
                 contentLikeDao, commentService, likeService, contentCache, commentCache, filler, tt);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
-            return action.execute(conn);
+            inTransaction[0] = true;
+            try {
+                return action.execute(conn);
+            } finally {
+                inTransaction[0] = false;
+            }
         });
+        // T12：search 页内改批量读；默认空映射，用例内自行覆盖
+        when(contentCache.getContentsBatch(anyList())).thenReturn(Collections.emptyMap());
     }
 
     private ContentCacheDTO dto(long id) {
@@ -88,8 +99,11 @@ class ContentServiceTest {
         ContentCacheDTO dto2 = dto(2L);
         when(contentDao.countKeywordSearch(conn, "java")).thenReturn(2);
         when(contentDao.keywordSearchInBrief(conn, "java", 1, 10)).thenReturn(List.of(1L, 2L));
-        when(contentCache.getContent(1L)).thenReturn(dto1);
-        when(contentCache.getContent(2L)).thenReturn(dto2);
+        // T12：逐 key getContent → 一趟批量读（Map 值可为 null = hit-empty/DB 无数据，按原序跳过）
+        Map<Long, ContentCacheDTO> batch = new LinkedHashMap<>();
+        batch.put(1L, dto1);
+        batch.put(2L, dto2);
+        when(contentCache.getContentsBatch(List.of(1L, 2L))).thenReturn(batch);
         ContentVO vo1 = new ContentVO();
         vo1.setId(1L);
         ContentVO vo2 = new ContentVO();
@@ -100,10 +114,80 @@ class ContentServiceTest {
         PageResult<ContentVO> result = service.search("java", 7L, 1, 10);
 
         assertEquals(2, result.getList().size());
+        // 顺序由 DB 返回的 id 序决定（批量读不重排）
+        assertEquals(List.of(1L, 2L), result.getList().stream().map(ContentVO::getId).toList());
         assertEquals(2, result.getTotal());
         assertEquals(1, result.getPage());
         assertEquals(10, result.getPageSize());
         verify(filler).fillLikeAndFollowBatch(result.getList(), 7L);
+    }
+
+    /** T12：批量读里命中空标记/无数据的 id（null 值）按原序跳过；total 仍取 DB 命中总数。 */
+    @Test
+    void searchSkipsCacheMissEntriesButKeepsDbTotal() throws SQLException {
+        when(contentDao.countKeywordSearch(conn, "java")).thenReturn(3);
+        when(contentDao.keywordSearchInBrief(conn, "java", 1, 10)).thenReturn(List.of(1L, 2L, 3L));
+        Map<Long, ContentCacheDTO> batch = new LinkedHashMap<>();
+        batch.put(1L, dto(1L));
+        batch.put(2L, null);
+        batch.put(3L, dto(3L));
+        when(contentCache.getContentsBatch(anyList())).thenReturn(batch);
+        when(contentCache.toContentVO(any())).thenAnswer(inv -> {
+            ContentVO vo = new ContentVO();
+            vo.setId(((ContentCacheDTO) inv.getArgument(0)).getId());
+            return vo;
+        });
+
+        PageResult<ContentVO> result = service.search("java", 7L, 1, 10);
+
+        assertEquals(List.of(1L, 3L), result.getList().stream().map(ContentVO::getId).toList());
+        assertEquals(3, result.getTotal(), "total 取 DB 命中总数，不因缓存 miss 减少");
+        verify(filler).fillLikeAndFollowBatch(result.getList(), 7L);
+    }
+
+    /** T12：整页缓存全 miss → 早退分支保持（不调状态填充，user 非空也一样）。 */
+    @Test
+    void searchAllCacheMissSkipsStatusFiller() throws SQLException {
+        when(contentDao.countKeywordSearch(conn, "java")).thenReturn(1);
+        when(contentDao.keywordSearchInBrief(conn, "java", 1, 10)).thenReturn(List.of(1L));
+
+        PageResult<ContentVO> result = service.search("java", 7L, 1, 10);
+
+        assertTrue(result.getList().isEmpty());
+        assertEquals(1, result.getTotal());
+        verifyNoInteractions(filler);
+    }
+
+    /**
+     * T12（治池 U-14①）：搜索的缓存读必须发生在 DB 事务回调**之外**——
+     * DAO 查询在回调内（探针自检，防断言空转），批量缓存读与点赞/关注状态填充在回调结束后才执行。
+     */
+    @Test
+    void searchReadsCachesOutsideDbTransaction() throws SQLException {
+        when(contentDao.countKeywordSearch(conn, "java")).thenAnswer(inv -> {
+            assertTrue(inTransaction[0], "命中总数查询应在事务回调内执行");
+            return 1;
+        });
+        when(contentDao.keywordSearchInBrief(conn, "java", 1, 10)).thenAnswer(inv -> {
+            assertTrue(inTransaction[0], "页内内容 id 查询应在事务回调内执行");
+            return List.of(1L);
+        });
+        ContentCacheDTO dto1 = dto(1L);
+        when(contentCache.getContentsBatch(anyList())).thenAnswer(inv -> {
+            assertFalse(inTransaction[0], "内容缓存批量读不应在事务回调内执行");
+            return Map.of(1L, dto1);
+        });
+        ContentVO vo1 = new ContentVO();
+        vo1.setId(1L);
+        when(contentCache.toContentVO(dto1)).thenReturn(vo1);
+        doAnswer(inv -> {
+            assertFalse(inTransaction[0], "点赞/关注状态缓存读不应在事务回调内执行");
+            return null;
+        }).when(filler).fillLikeAndFollowBatch(anyList(), eq(7L));
+
+        PageResult<ContentVO> result = service.search("java", 7L, 1, 10);
+
+        assertEquals(1, result.getList().size());
     }
 
     @Test
@@ -140,7 +224,7 @@ class ContentServiceTest {
     void getCommentsForContentWithoutUserSkipsLikeQuery() {
         CommentCacheDTO root = new CommentCacheDTO("alice", 1L, 3L, 7L, "hi", null, 0);
         when(contentCache.getContent(3L)).thenReturn(dto(3L));
-        when(commentCache.getCommentTree(3L)).thenReturn(List.of(root));
+        when(commentCache.getFullTree(3L)).thenReturn(List.of(root));
         when(commentService.convertToCommentVOList(anyList(), anyMap()))
                 .thenReturn(List.of(new CommentVO()));
 
@@ -154,7 +238,7 @@ class ContentServiceTest {
     void getCommentsForContentWithUserQueriesLikedMap() {
         CommentCacheDTO root = new CommentCacheDTO("alice", 1L, 3L, 7L, "hi", null, 0);
         when(contentCache.getContent(3L)).thenReturn(dto(3L));
-        when(commentCache.getCommentTree(3L)).thenReturn(List.of(root));
+        when(commentCache.getFullTree(3L)).thenReturn(List.of(root));
         when(commentCache.collectCommentIds(List.of(root))).thenReturn(List.of(1L));
         when(likeService.batchIsCommentLiked(7L, List.of(1L))).thenReturn(Map.of(1L, true));
         when(commentService.convertToCommentVOList(anyList(), anyMap()))
@@ -169,11 +253,206 @@ class ContentServiceTest {
     @Test
     void getCommentsForContentEmptyTreeReturnsEmpty() {
         when(contentCache.getContent(4L)).thenReturn(dto(4L));
-        when(commentCache.getCommentTree(4L)).thenReturn(null);
+        when(commentCache.getFullTree(4L)).thenReturn(null);
 
         List<CommentVO> result = service.getCommentsForContent(4L, null);
 
         assertTrue(result.isEmpty());
+    }
+
+    // ===== T10-A 评论列表分页（两键组窗口读：stubRootPage 模拟"页窗口 + 真实 total"，切片在 CommentCache） =====
+
+    @Test
+    void getCommentsForContentPagedFirstPageReturnsWindowAndEnvelope() {
+        when(contentCache.getContent(3L)).thenReturn(dto(3L));
+        stubRootPage(3L, roots(5));
+        when(commentService.convertToCommentVOList(anyList(), anyMap()))
+                .thenAnswer(inv -> voOf(inv.getArgument(0)));
+
+        PageResult<CommentVO> result = service.getCommentsForContent(3L, null, 1, 2);
+
+        assertEquals(5, result.getTotal(), "total = 主楼条数（真实 total）");
+        assertEquals(1, result.getPage());
+        assertEquals(2, result.getPageSize());
+        assertEquals(3, result.getTotalPages());
+        assertEquals(List.of(1L, 2L), ids(result.getList()));
+    }
+
+    @Test
+    void getCommentsForContentPagedLastPageReturnsRemainder() {
+        when(contentCache.getContent(3L)).thenReturn(dto(3L));
+        stubRootPage(3L, roots(5));
+        when(commentService.convertToCommentVOList(anyList(), anyMap()))
+                .thenAnswer(inv -> voOf(inv.getArgument(0)));
+
+        PageResult<CommentVO> result = service.getCommentsForContent(3L, null, 3, 2);
+
+        assertEquals(5, result.getTotal());
+        assertEquals(List.of(5L), ids(result.getList()));
+    }
+
+    @Test
+    void getCommentsForContentPagedOutOfRangeReturnsEmptyButKeepsTotal() {
+        when(contentCache.getContent(3L)).thenReturn(dto(3L));
+        stubRootPage(3L, roots(5));
+        when(commentService.convertToCommentVOList(anyList(), anyMap()))
+                .thenAnswer(inv -> voOf(inv.getArgument(0)));
+
+        PageResult<CommentVO> result = service.getCommentsForContent(3L, null, 4, 2);
+
+        assertTrue(result.getList().isEmpty(), "越界页返回空列表");
+        assertEquals(5, result.getTotal(), "越界页仍返回真实 total");
+    }
+
+    @Test
+    void getCommentsForContentPagedPagesCoverTreeWithoutOverlap() {
+        when(contentCache.getContent(3L)).thenReturn(dto(3L));
+        stubRootPage(3L, roots(5));
+        when(commentService.convertToCommentVOList(anyList(), anyMap()))
+                .thenAnswer(inv -> voOf(inv.getArgument(0)));
+
+        List<Long> collected = new ArrayList<>();
+        for (int page = 1; page <= 3; page++) {
+            collected.addAll(ids(service.getCommentsForContent(3L, null, page, 2).getList()));
+        }
+
+        assertEquals(List.of(1L, 2L, 3L, 4L, 5L), collected, "页间主楼不重不漏且顺序稳定");
+    }
+
+    @Test
+    void getCommentsForContentPagedKeepsRepliesWholeWithRoot() {
+        CommentCacheDTO root = new CommentCacheDTO("u1", 1L, 3L, 11L, "c1", null, 0);
+        CommentCacheDTO reply = new CommentCacheDTO("u2", 2L, 3L, 12L, "r1", 1L, 0);
+        root.setChildren(new ArrayList<>(List.of(reply)));
+        when(contentCache.getContent(3L)).thenReturn(dto(3L));
+        stubRootPage(3L, new ArrayList<>(List.of(root)));
+        when(commentService.convertToCommentVOList(anyList(), anyMap()))
+                .thenAnswer(inv -> voOf(inv.getArgument(0)));
+
+        PageResult<CommentVO> result = service.getCommentsForContent(3L, null, 1, 1);
+
+        assertEquals(1, result.getList().size());
+        assertEquals(1, result.getList().get(0).getChildren().size(), "楼中楼随主楼整体返回、不被切");
+        assertEquals(2L, result.getList().get(0).getChildren().get(0).getCommentId());
+    }
+
+    @Test
+    void getCommentsForContentPagedEmptyTreeReturnsEmptyEnvelope() {
+        when(contentCache.getContent(4L)).thenReturn(dto(4L));
+        stubRootPage(4L, new ArrayList<>());
+
+        PageResult<CommentVO> result = service.getCommentsForContent(4L, null, 1, 10);
+
+        assertTrue(result.getList().isEmpty());
+        assertEquals(0, result.getTotal());
+        assertEquals(0, result.getTotalPages());
+    }
+
+    @Test
+    void getCommentsForContentPagedDisabledReturnsEmptyEnvelope() {
+        ContentCacheDTO disabled = dto(3L);
+        disabled.setCommentEnabled(false);
+        when(contentCache.getContent(3L)).thenReturn(disabled);
+
+        PageResult<CommentVO> result = service.getCommentsForContent(3L, null, 1, 10);
+
+        assertTrue(result.getList().isEmpty());
+        assertEquals(0, result.getTotal());
+        verify(commentCache, never()).getRootPage(anyLong(), anyInt(), anyInt());
+    }
+
+    @Test
+    void getCommentsForContentPagedQueriesLikedOnlyForPageComments() {
+        when(contentCache.getContent(3L)).thenReturn(dto(3L));
+        stubRootPage(3L, roots(3));
+        when(commentCache.collectCommentIds(anyList())).thenAnswer(inv -> {
+            List<CommentCacheDTO> given = inv.getArgument(0);
+            return ids(given);
+        });
+        when(likeService.batchIsCommentLiked(eq(7L), anyList())).thenReturn(Map.of(2L, true));
+        when(commentService.convertToCommentVOList(anyList(), anyMap()))
+                .thenAnswer(inv -> voOf(inv.getArgument(0)));
+
+        PageResult<CommentVO> result = service.getCommentsForContent(3L, 7L, 2, 1);
+
+        // 第 2 页只有主楼 2：点赞批量查询只针对该页，不再全树展开
+        verify(likeService).batchIsCommentLiked(7L, List.of(2L));
+        assertEquals(List.of(2L), ids(result.getList()));
+    }
+
+    @Test
+    void getCommentsForContentPagedWithoutUserSkipsLikeQuery() {
+        when(contentCache.getContent(3L)).thenReturn(dto(3L));
+        stubRootPage(3L, roots(2));
+        when(commentService.convertToCommentVOList(anyList(), anyMap()))
+                .thenAnswer(inv -> voOf(inv.getArgument(0)));
+
+        service.getCommentsForContent(3L, null, 1, 10);
+
+        verify(likeService, never()).batchIsCommentLiked(anyLong(), anyList());
+        verify(commentCache, never()).collectCommentIds(anyList());
+    }
+
+    @Test
+    void getCommentsForContentPagedInvalidParamsReturnEmptyInsteadOfThrowing() {
+        when(contentCache.getContent(3L)).thenReturn(dto(3L));
+        stubRootPage(3L, roots(3));
+        when(commentService.convertToCommentVOList(anyList(), anyMap()))
+                .thenAnswer(inv -> voOf(inv.getArgument(0)));
+
+        // Controller 已归一（page≥1、pageSize 1~50）；此处是 Service 层兜底，不应抛 IndexOutOfBounds
+        PageResult<CommentVO> zeroPage = service.getCommentsForContent(3L, null, 0, 10);
+        assertTrue(zeroPage.getList().isEmpty(), "page=0 应给空页而非抛异常");
+        assertEquals(3, zeroPage.getTotal(), "兜底路径仍返回真实 total");
+
+        PageResult<CommentVO> zeroSize = service.getCommentsForContent(3L, null, 1, 0);
+        assertTrue(zeroSize.getList().isEmpty(), "pageSize=0 应给空页而非抛异常");
+    }
+
+    /**
+     * T10-A：stub CommentCache.getRootPage 为"内存切片 + 真实 total"（对齐旧 sliceRoots 语义——
+     * Service 层只观察到页窗口与 total，切片细节由 CommentCache 承担）。
+     */
+    private void stubRootPage(long contentId, List<CommentCacheDTO> allRoots) {
+        when(commentCache.getRootPage(eq(contentId), anyInt(), anyInt())).thenAnswer(inv -> {
+            int page = inv.getArgument(1);
+            int pageSize = inv.getArgument(2);
+            if (page < 1 || pageSize < 1) {
+                return new CommentCache.PageWindow(new ArrayList<>(), allRoots.size());
+            }
+            int from = Math.max(0, Math.min((int) ((long) (page - 1) * pageSize), allRoots.size()));
+            int to = Math.max(from, Math.min(from + pageSize, allRoots.size()));
+            return new CommentCache.PageWindow(new ArrayList<>(allRoots.subList(from, to)), allRoots.size());
+        });
+    }
+
+    private static List<CommentCacheDTO> roots(int n) {
+        List<CommentCacheDTO> list = new ArrayList<>();
+        for (int i = 1; i <= n; i++) {
+            list.add(new CommentCacheDTO("u" + i, i, 3L, 100L + i, "c" + i, null, 0));
+        }
+        return list;
+    }
+
+    private static List<Long> ids(List<? extends CommentCacheDTO> dtos) {
+        List<Long> out = new ArrayList<>();
+        for (CommentCacheDTO d : dtos) {
+            out.add(d.getCommentId());
+        }
+        return out;
+    }
+
+    private static List<CommentVO> voOf(List<CommentCacheDTO> dtos) {
+        List<CommentVO> vos = new ArrayList<>();
+        for (CommentCacheDTO d : dtos) {
+            CommentVO vo = new CommentVO();
+            vo.setCommentId(d.getCommentId());
+            if (d.getChildren() != null) {
+                vo.setChildren(new ArrayList<>(d.getChildren()));
+            }
+            vos.add(vo);
+        }
+        return vos;
     }
 
     @Test
@@ -273,7 +552,7 @@ class ContentServiceTest {
         List<CommentVO> result = service.getCommentsForContent(3L, null);
 
         assertTrue(result.isEmpty());
-        verify(commentCache, never()).getCommentTree(anyLong());
+        verify(commentCache, never()).getFullTree(anyLong());
         verify(commentService, never()).convertToCommentVOList(anyList(), anyMap());
     }
 
@@ -286,7 +565,7 @@ class ContentServiceTest {
         List<CommentVO> result = service.getCommentsForContent(3L, null);
 
         assertTrue(result.isEmpty());
-        verify(commentCache, never()).getCommentTree(anyLong());
+        verify(commentCache, never()).getFullTree(anyLong());
         verify(commentService, never()).convertToCommentVOList(anyList(), anyMap());
     }
 

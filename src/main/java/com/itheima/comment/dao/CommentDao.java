@@ -1,6 +1,5 @@
 package com.itheima.comment.dao;
 
-import com.itheima.dao.ResultMap;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.content.model.cache.CommentCacheDTO;
 
@@ -49,7 +48,7 @@ public class CommentDao {
             ps.setLong(1, commentId);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
-                    return ResultMap.buildComment(rs);
+                    return buildComment(rs);
                 }
             }
         }
@@ -106,7 +105,7 @@ public class CommentDao {
             try(ResultSet rs = ps.executeQuery()){
 
             while (rs.next()) {
-                CommentCacheDTO c = ResultMap.buildComment(rs);
+                CommentCacheDTO c = buildComment(rs);
                 list.add(c);
             }
             }
@@ -115,7 +114,171 @@ public class CommentDao {
         return list;
     }
 
+    //查（T10-A 两键组 + 主楼窗口装载：keyset 窗口 / 主楼计数 / 楼中楼按主楼分组 / 评论→主楼定位）
 
+    /**
+     * 主楼窗口查询（keyset）：{@code comment_id > afterCommentId} 升序取前 limit 条主楼。
+     *
+     * <p>{@code afterCommentId=0} 表示从头取（首个窗口）。对应主楼 List 缓存的水位不足追加装载；
+     * {@code (content_id, parent_id)} 索引（T10-A DDL）服务本查询（等同扫描 icon AS 主楼区间）。
+     */
+    public List<CommentCacheDTO> getMainCommentsAfter(Connection conn, long contentId, long afterCommentId, int limit) throws SQLException {
+        String sql = "SELECT c.*, u.username, r.username AS reply_to_username " +
+                "FROM comment c LEFT JOIN users u ON c.user_id = u.id " +
+                "LEFT JOIN users r ON c.reply_to_user_id = r.id " +
+                "WHERE c.content_id=? AND c.parent_id IS NULL AND c.is_deleted=0 " +
+                "  AND c.comment_id > ? ORDER BY c.comment_id LIMIT ?";
+        List<CommentCacheDTO> list = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, contentId);
+            ps.setLong(2, afterCommentId);
+            ps.setInt(3, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    list.add(buildComment(rs));
+                }
+            }
+        }
+        return list;
+    }
+
+    /** 主楼条数（T10-A 真实 total 来源：窗口装载首装时惰性 COUNT 一次写 count key）。 */
+    public int countMainComments(Connection conn, long contentId) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM comment WHERE content_id=? AND parent_id IS NULL AND is_deleted=0";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, contentId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1);
+                }
+            }
+        }
+        return 0;
+    }
+
+    /**
+     * 楼中楼按主楼批量取：{@code parent_id IN (rootIds)} 升序（含 JOIN username/reply_to_username）。
+     * 返回全量行（含多个主楼），调用方按 {@code parent_id} 分组。
+     */
+    public List<CommentCacheDTO> getRepliesByRootIds(Connection conn, long contentId, List<Long> rootIds) throws SQLException {
+        if (rootIds == null || rootIds.isEmpty()) {
+            return new ArrayList<>();
+        }
+        StringBuilder sql = new StringBuilder(
+                "SELECT c.*, u.username, r.username AS reply_to_username " +
+                "FROM comment c LEFT JOIN users u ON c.user_id = u.id " +
+                "LEFT JOIN users r ON c.reply_to_user_id = r.id " +
+                "WHERE c.content_id=? AND c.parent_id IN (");
+        for (int i = 0; i < rootIds.size(); i++) {
+            if (i > 0) {
+                sql.append(',');
+            }
+            sql.append('?');
+        }
+        sql.append(") AND c.is_deleted=0 ORDER BY c.comment_id");
+        List<CommentCacheDTO> list = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            ps.setLong(1, contentId);
+            for (int i = 0; i < rootIds.size(); i++) {
+                ps.setLong(i + 2, rootIds.get(i));
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    list.add(buildComment(rs));
+                }
+            }
+        }
+        return list;
+    }
+
+    /**
+     * 评论 → 所属主楼 id：沿 {@code parent_id} 链上溯到顶（防御存量多级链 seed）。
+     * 主楼自身返回自身 id；链断（父已软删/不存在）返回 null（调用方按"无法定位"整组失效兜底）。
+     */
+    public Long getRootIdByCommentId(Connection conn, long commentId) throws SQLException {
+        long cursor = commentId;
+        int hops = 0;
+        while (hops++ < 32) { // 防御异常长链（理论上层深极小，32 封顶防环）
+            String sql = "SELECT parent_id FROM comment WHERE comment_id=?";
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setLong(1, cursor);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        return null; // 该评论已不存在（含软删）→ 链断
+                    }
+                    long parentId = rs.getLong("parent_id");
+                    if (rs.wasNull() || parentId == 0) {
+                        return cursor; // 已到主楼
+                    }
+                    cursor = parentId;
+                }
+            }
+        }
+        return null; // 异常长链/环，放弃（调用方整组失效兜底）
+    }
+
+
+
+    /**
+     * 按主楼展开全部回复的分页查询（T10-B 展开接口）：直接回复 + 间接二级回复（与建树上溯口径一致，
+     * 新数据 addComment 归一化 parent 直接挂主楼，seed 存量最多二级间接），comment_id 升序 keyset。
+     */
+    public List<CommentCacheDTO> getRepliesInTreeByRoot(Connection conn, long contentId, long rootId,
+                                                        long afterCommentId, int limit) throws SQLException {
+        String sql =
+                "SELECT c.*, u.username, r.username AS reply_to_username " +
+                "FROM comment c LEFT JOIN users u ON c.user_id = u.id " +
+                "LEFT JOIN users r ON c.reply_to_user_id = r.id " +
+                "WHERE c.content_id=? AND c.is_deleted=0 AND c.comment_id > ? AND (" +
+                "  c.parent_id=? OR c.parent_id IN (" +
+                "    SELECT s.comment_id FROM comment s " +
+                "    WHERE s.content_id=? AND s.parent_id=? AND s.is_deleted=0)) " +
+                "ORDER BY c.comment_id LIMIT ?";
+        List<CommentCacheDTO> list = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, contentId);
+            ps.setLong(2, afterCommentId);
+            ps.setLong(3, rootId);
+            ps.setLong(4, contentId);
+            ps.setLong(5, rootId);
+            ps.setInt(6, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    list.add(buildComment(rs));
+                }
+            }
+        }
+        return list;
+    }
+
+    /** 主楼 reply_count 增减（T10-B：增回复 +1、删回复 −1；防负守卫，删主楼不调用）。返回受影响行数。 */
+    public int updateReplyCount(Connection conn, long rootId, int delta) throws SQLException {
+        String sql = "UPDATE comment SET reply_count = reply_count + ? " +
+                "WHERE comment_id = ? AND reply_count + ? >= 0";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, delta);
+            ps.setLong(2, rootId);
+            ps.setInt(3, delta);
+            return ps.executeUpdate();
+        }
+    }
+
+    /** 定位未删除主楼（T10-B 展开接口前置校验）：主楼被删/非主楼 → null。 */
+    public CommentCacheDTO findMainById(Connection conn, long commentId) throws SQLException {
+        String sql = "SELECT c.*, u.username, r.username AS reply_to_username " +
+                "FROM comment c LEFT JOIN users u ON c.user_id = u.id " +
+                "LEFT JOIN users r ON c.reply_to_user_id = r.id " +
+                "WHERE c.comment_id=? AND c.is_deleted=0 AND (c.parent_id IS NULL OR c.parent_id = 0)";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, commentId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return buildComment(rs);
+                }
+            }
+        }
+        return null;
+    }
 
     //改
 
@@ -172,6 +335,32 @@ public class CommentDao {
             ps.setLong(1, contentId);
             return ps.executeUpdate();
         }
+    }
+
+    // ===== ResultSet → 对象映射（T14：由 com.itheima.dao.ResultMap 按域拆分下沉，方法体逐行不变）=====
+
+    private static CommentCacheDTO buildComment(ResultSet rs) throws SQLException {
+        CommentCacheDTO cm = new CommentCacheDTO();
+        cm.setUsername(rs.getString("username"));
+        cm.setCommentId(rs.getLong("comment_id"));
+        cm.setContentId(rs.getLong("content_id"));
+        cm.setUserId(rs.getLong("user_id"));
+        cm.setContent(rs.getString("content"));
+        if (rs.getObject("parent_id") == null) {
+            cm.setParentId(null);
+        } else {
+            cm.setParentId(rs.getLong("parent_id"));
+        }
+        if (rs.getObject("reply_to_user_id") == null) {
+            cm.setReplyToUserId(null);
+        } else {
+            cm.setReplyToUserId(rs.getLong("reply_to_user_id"));
+        }
+        cm.setReplyToUsername(rs.getString("reply_to_username"));
+        cm.setLikeCount(rs.getInt("like_count"));
+        // T10-B：主楼回复总数（展开/信封 replyCount 字段来源；查询 SQL 带选出即可）
+        cm.setReplyCount(rs.getInt("reply_count"));
+        return cm;
     }
 
 

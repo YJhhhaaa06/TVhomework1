@@ -7,7 +7,7 @@ import com.itheima.user.dao.UserDao;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
 import com.itheima.content.model.cache.ContentCacheDTO;
-import com.itheima.content.model.dto.PageResult;
+import com.itheima.common.model.dto.PageResult;
 import com.itheima.user.model.entity.User;
 import com.itheima.content.model.vo.ContentVO;
 import com.itheima.content.model.vo.ProfileVO;

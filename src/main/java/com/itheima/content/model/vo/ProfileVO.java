@@ -1,6 +1,6 @@
 package com.itheima.content.model.vo;
 
-import com.itheima.content.model.dto.PageResult;
+import com.itheima.common.model.dto.PageResult;
 
 public class ProfileVO {
     private long userId;

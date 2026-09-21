@@ -56,6 +56,13 @@ class UserServiceTest {
         return new User(7L, PasswordUtil.hashPassword(rawPassword), "alice", "13800000001");
     }
 
+    /** 注册成功路径的公共打桩：手机号/用户名均未占用，插入返回 id=42（T13）。 */
+    private void stubRegisterSuccess() throws SQLException {
+        when(userDao.isPhoneUsed(conn, "13800000001")).thenReturn(false);
+        when(userDao.isUsernameUsed(conn, "bob")).thenReturn(false);
+        when(userDao.addUser(eq(conn), eq("bob"), anyString(), eq("13800000001"))).thenReturn(42L);
+    }
+
     @Test
     void loginByPhoneSuccessReturnsLoginVO() throws SQLException {
         User dbUser = loginUser("abc123");
@@ -131,9 +138,7 @@ class UserServiceTest {
 
     @Test
     void registerSuccessHashesPasswordAndReturnsId() throws SQLException {
-        when(userDao.isPhoneUsed(conn, "13800000001")).thenReturn(false);
-        when(userDao.isUsernameUsed(conn, "bob")).thenReturn(false);
-        when(userDao.addUser(eq(conn), eq("bob"), anyString(), eq("13800000001"))).thenReturn(42L);
+        stubRegisterSuccess();
 
         long id = service.registerAsUser(
                 RegisterCommand.getInstance("13800000001", "abc123", "bob"));
@@ -143,6 +148,76 @@ class UserServiceTest {
         verify(userDao).addUser(eq(conn), eq("bob"), hashedCaptor.capture(), eq("13800000001"));
         assertNotEquals("abc123", hashedCaptor.getValue());
         assertTrue(PasswordUtil.isPasswordCorrect("abc123", hashedCaptor.getValue()));
+    }
+
+    // ------------------------------------------------------------------
+    // T13：注册后自动登录兜底（池 U-16）——注册成功即成功，自动登录失败
+    // 返回 token=null 的 LoginVO（调用方提示"请手动登录"），不抛异常
+    // ------------------------------------------------------------------
+
+    @Test
+    void registerAndLoginSuccessReturnsTokenAndRegisteredIdentity() throws SQLException {
+        stubRegisterSuccess();
+        when(userDao.getUserForLoginById(conn, 42L))
+                .thenReturn(new User(42L, PasswordUtil.hashPassword("abc123"), "bob", "13800000001"));
+
+        LoginVO vo = service.registerAndLogin(
+                RegisterCommand.getInstance("13800000001", "abc123", "bob"));
+
+        assertEquals(42L, vo.getId());
+        assertEquals("bob", vo.getUsername());
+        assertNotNull(vo.getToken());
+        assertFalse(vo.getToken().isBlank());
+    }
+
+    @Test
+    void registerAndLoginAutoLoginUserMissingFallsBackToManualLogin() throws SQLException {
+        stubRegisterSuccess();
+        when(userDao.getUserForLoginById(conn, 42L)).thenReturn(null);
+
+        LoginVO vo = service.registerAndLogin(
+                RegisterCommand.getInstance("13800000001", "abc123", "bob"));
+
+        assertNull(vo.getToken());
+        assertEquals(42L, vo.getId());
+        assertEquals("bob", vo.getUsername());
+        // 注册已提交：兜底不改写"用户已落库"这一事实
+        verify(userDao).addUser(eq(conn), eq("bob"), anyString(), eq("13800000001"));
+    }
+
+    @Test
+    void registerAndLoginAutoLoginWrongPasswordFallsBackToManualLogin() throws SQLException {
+        stubRegisterSuccess();
+        when(userDao.getUserForLoginById(conn, 42L))
+                .thenReturn(new User(42L, PasswordUtil.hashPassword("other"), "bob", "13800000001"));
+
+        LoginVO vo = service.registerAndLogin(
+                RegisterCommand.getInstance("13800000001", "abc123", "bob"));
+
+        assertNull(vo.getToken());
+        assertEquals(42L, vo.getId());
+    }
+
+    @Test
+    void registerAndLoginAutoLoginSqlErrorFallsBackToManualLogin() throws SQLException {
+        stubRegisterSuccess();
+        when(userDao.getUserForLoginById(conn, 42L)).thenThrow(new SQLException("db down"));
+
+        LoginVO vo = service.registerAndLogin(
+                RegisterCommand.getInstance("13800000001", "abc123", "bob"));
+
+        assertNull(vo.getToken());
+        assertEquals(42L, vo.getId());
+    }
+
+    @Test
+    void registerAndLoginRegisterFailureStillThrows() throws SQLException {
+        when(userDao.isPhoneUsed(conn, "13800000001")).thenReturn(true);
+
+        assertThrows(DuplicatePhoneException.class, () -> service.registerAndLogin(
+                RegisterCommand.getInstance("13800000001", "abc123", "bob")));
+        // 注册本身失败 → 不进入自动登录（兜底只覆盖登录失败，不吞注册失败）
+        verify(userDao, never()).getUserForLoginById(any(Connection.class), anyLong());
     }
 
     @Test

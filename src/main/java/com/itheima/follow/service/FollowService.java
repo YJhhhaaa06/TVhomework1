@@ -1,6 +1,8 @@
 package com.itheima.follow.service;
 
 import com.itheima.follow.dao.FollowDao;
+import com.itheima.common.model.dto.PageResult;
+import com.itheima.cache.ZSetCache;
 import com.itheima.user.dao.UserDao;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.ServerException;
@@ -9,7 +11,6 @@ import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.user.model.entity.User;
 import com.itheima.util.TransactionTemplate;
 
-import java.sql.Connection;
 import java.sql.SQLException;
 import com.itheima.util.LogUtil;
 import java.util.HashMap;
@@ -63,37 +64,68 @@ public class FollowService {
         followCache.cacheFollow(userId, followedUserId);
     }
 
-    public List<Map<String, Object>> getFollowingList(long userId, Long currentUserId) {
-        List<Long> ids = followCache.getFollowingIds(userId);
+    /**
+     * 关注列表**分页**（T7 B2：page/pageSize 由 Controller 解析归一后传入；T11-A 起为**唯一读入口**
+     * ——缺省（不传参）由 Controller 归一为 page 1 / pageSize 200，不再有"缺省全量数组"分支）：
+     * 缓存侧经 A1 有序窗口读（ZRANGE[start,stop] + ZCARD，一趟 pipeline）只取该页 ids 与总数，
+     * **不再全量回传**；DB 装载与判重也只针对该页 ids（事务内只做 DB 装载，缓存读见
+     * {@link #loadUserList} 的 T12 说明——池 U-14②已随 T12 处置）。
+     *
+     * <p>分页信封（{@code common.model.dto.PageResult}，T14 起为全项目唯一信封）在事务**外**组装，
+     * 事务内语句集与改造前一致。
+     *
+     * @param page     页码（≥1，已归一）
+     * @param pageSize 页大小（1~200，已归一；缺省 200 = follow 域信封）
+     */
+    public PageResult<Map<String, Object>> getFollowingList(long userId, Long currentUserId,
+                                                                  int page, int pageSize) {
+        long offset = (long) (page - 1) * pageSize;
+        return buildPage(followCache.getFollowingWindow(userId, offset, pageSize),
+                currentUserId, page, pageSize);
+    }
+
+    /**
+     * 粉丝列表**分页**：逻辑同 {@link #getFollowingList(long, Long, int, int)}，缓存入口换粉丝集。
+     */
+    public PageResult<Map<String, Object>> getFollowerList(long userId, Long currentUserId,
+                                                                 int page, int pageSize) {
+        long offset = (long) (page - 1) * pageSize;
+        return buildPage(followCache.getFollowerWindow(userId, offset, pageSize),
+                currentUserId, page, pageSize);
+    }
+
+    /**
+     * 该页 ids → 用户视图列表（分页信封组装共用）：空 ids 直接返回空列表（不打事务、不触碰缓存）；
+     * 非空走**事务内 DB 装载 + 事务外判关注态**。
+     *
+     * <p>T12（治池 U-14②）：**DB 查询与缓存读分离**——事务回调只承载 DB 装载
+     * （{@code userDao.findUsersByIds}），提交归还连接后，再在**事务外**批量判关注态
+     * （{@code followCache.batchIsFollowing}，内部三态读 + miss 回填 + Redis 挂降级 DB）
+     * 并组装视图——消除"外层事务持连接 + 缓存 miss 装载再取新连接"的叠加（自研
+     * {@link TransactionTemplate} 无传播语义，嵌套读各自取新连接）。对外行为零变化：
+     * 事务内语句集与改造前一致（{@code SQLException → ServerException("查询失败")} 仍在回调内产生）、
+     * 返回集/顺序/isFollowed/isSelf 口径一概不变。
+     */
+    private List<Map<String, Object>> loadUserList(List<Long> ids, Long currentUserId) {
         if (ids.isEmpty()) {
             return java.util.Collections.emptyList();
         }
-        return transactionTemplate.execute(conn -> {
+        // T12：事务回调只做 DB 装载，不触碰任何缓存（缓存读见下方事务外段）
+        List<User> users = transactionTemplate.execute(conn -> {
             try {
-                return buildUserList(conn, ids, currentUserId);
+                return userDao.findUsersByIds(conn, ids);
             } catch (SQLException e) {
                 throw new ServerException("查询失败");
             }
         });
+        return buildUserViews(users, ids, currentUserId);
     }
 
-    public List<Map<String, Object>> getFollowerList(long userId, Long currentUserId) {
-        List<Long> ids = followCache.getFollowerIds(userId);
-        if (ids.isEmpty()) {
-            return java.util.Collections.emptyList();
-        }
-        return transactionTemplate.execute(conn -> {
-            try {
-                return buildUserList(conn, ids, currentUserId);
-            } catch (SQLException e) {
-                throw new ServerException("查询失败");
-            }
-        });
-    }
-
-    private List<Map<String, Object>> buildUserList(Connection conn, List<Long> ids, Long currentUserId) throws SQLException {
-        if (ids.isEmpty()) return java.util.Collections.emptyList();
-        List<User> users = userDao.findUsersByIds(conn, ids);
+    /**
+     * 事务外：批量判关注态（仅 {@code currentUserId} 非空时）后按 DB 返回序组装用户视图。
+     * 判重口径与改造前一致——仍按传入的**该页 ids** 批量查缓存（不因 users 为空而跳过）。
+     */
+    private List<Map<String, Object>> buildUserViews(List<User> users, List<Long> ids, Long currentUserId) {
         Set<Long> followedSet = new HashSet<>();
         if (currentUserId != null) {
             Map<Long, Boolean> followedMap = followCache.batchIsFollowing(currentUserId, ids);
@@ -114,6 +146,18 @@ public class FollowService {
             result.add(map);
         }
         return result;
+    }
+
+    /**
+     * 分页信封组装：该页 ids 走统一装载逻辑（{@link #loadUserList}），
+     * 总数取缓存窗口的 total（同一 key 的 ZCARD，与页内容同源）。
+     */
+    private PageResult<Map<String, Object>> buildPage(ZSetCache.Window window,
+                                                            Long currentUserId,
+                                                            int page, int pageSize) {
+        List<Map<String, Object>> users = loadUserList(window.getIds(), currentUserId);
+        int total = (int) Math.min(window.getTotal(), Integer.MAX_VALUE);
+        return new PageResult<>(users, total, page, pageSize);
     }
 
     public void unfollow(long userId, long followedUserId) {

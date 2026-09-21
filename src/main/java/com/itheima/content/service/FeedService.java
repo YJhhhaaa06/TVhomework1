@@ -1,6 +1,6 @@
 package com.itheima.content.service;
 
-import com.itheima.content.model.dto.PageResult;
+import com.itheima.common.model.dto.PageResult;
 import com.itheima.content.dao.ContentDao;
 import com.itheima.follow.service.FollowCache;
 import com.itheima.like.service.LikeService;

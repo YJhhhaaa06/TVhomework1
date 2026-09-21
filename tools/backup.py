@@ -2,14 +2,16 @@
 """数据库一键备份脚本（Python，符合 AGENTS.md 脚本约定）。
 
 用途：
-    仅备份 MySQL 数据库 tvdatabase 到 D:\\dev\\WorkSpace\\VideoPlatform\\auto_backup\\<时间戳>\\。
+    仅备份 MySQL 数据库 tvdatabase 到 输出目录/<时间戳>/（默认 D:\\dev\\WorkSpace\\VideoPlatform\\auto_backup，
+    可用 --out 指定输出目录——沙箱会话内备份请 --out 项目内路径，如 .docs\\DBbackups）。
 
 约定（2026-08-09 用户决策）：
-    * 数据库备份由脚本自动完成；备份完成后由用户手动迁移到工作区外。
+    * 数据库备份由脚本自动完成；备份完成后由用户手动迁移到工作区外（--out 指定目录时无需再迁移）。
     * 媒体资源（stone/video、image、cover）由用户手动打包备份，脚本不做。
 
 用法：
-    python tools/backup.py
+    python tools/backup.py                             # 默认输出 auto_backup
+    python tools/backup.py --out .docs\\DBbackups      # 输出到项目内目录（G9 DDL 备份闭环 / 测试库重建源）
 
 退出码：
     0  成功
@@ -24,6 +26,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import db_config
 import shutil
@@ -80,21 +83,29 @@ def write_manifest(backup_dir: Path, dump_path: Path, started_at: str) -> None:
         f"size_bytes={size}",
         f"sha256={digest}",
         "",
-        "说明：数据库备份请由用户手动迁移到工作区外；媒体资源由用户手动打包备份。",
+        "说明：备份文件供归档与测试库重建（init-test-db 读取 .docs/archive/DBbackups）使用；"
+        "媒体资源请自行打包备份。",
     ]
     (backup_dir / "manifest.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="数据库一键备份（默认输出 auto_backup；--out 指定输出目录）")
+    parser.add_argument("--out", metavar="DIR", default=None,
+                        help="备份输出目录（默认 %(default)s）")
+    args = parser.parse_args()
+
     mysqldump = find_mysqldump()
     if mysqldump is None:
         print("错误: 未找到 mysqldump，请确认 MySQL 已安装或将 mysqldump 加入 PATH")
         return 2
 
-    AUTO_BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
+    base_dir = Path(args.out) if args.out else AUTO_BACKUP_ROOT
+    base_dir.mkdir(parents=True, exist_ok=True)
     started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_dir = AUTO_BACKUP_ROOT / stamp
+    backup_dir = base_dir / stamp
     backup_dir.mkdir(parents=True, exist_ok=False)
     dump_path = backup_dir / "db.sql"
 
@@ -134,7 +145,11 @@ def main() -> int:
     write_manifest(backup_dir, dump_path, started_at)
     print(f"备份成功: {dump_path} ({dump_path.stat().st_size} bytes)")
     print(f"清单: {backup_dir / 'manifest.txt'}")
-    print("提醒: 请手动把该备份迁移到工作区外；媒体资源请自行打包备份。")
+    if args.out is None:
+        print("提醒: 默认输出到 auto_backup（工作区外）；如需 G9 备份闭环/测试库重建源，请 --out 项目内路径。")
+    else:
+        print("提醒: 输出目录由 --out 指定；如需作为 init-test-db 重建源，请归档到 .docs/archive/DBbackups/。")
+    print("媒体资源请自行打包备份。")
     return 0
 
 

@@ -7,8 +7,16 @@ import { request } from '../api.js';
 import { isLoggedIn, getUserId, clearAuth } from '../auth.js';
 import { createVideoCard, showToast, escapeHtml, initialChar, avatarColor } from '../utils.js';
 import { navigate } from '../router.js';
+import { createChunkedList } from '../chunkedList.js';
 
-const PAGE_SIZE = 10;
+// T19：创作网格（/profile）分块——信封大小由**后端 profile 域常量**（100）决定，请求**只传 `page`**；
+// 本地按 PROFILE_BATCH_SIZE 小批展示（T11-B 接入公共 chunkedList，N15 收敛点）。
+const PROFILE_CHUNK_SIZE = 100;
+const PROFILE_BATCH_SIZE = 10;
+// 关注/粉丝 sheet（T11-A；**T19 信封 200 → 100**）：信封大小由**后端 follow 域常量**决定，前端**只传 `page`**；
+// chunkSize 仅用于「本 chunk 是否已到末页」的本地判定，与后端信封保持一致。
+const SHEET_CHUNK_SIZE = 100;
+const SHEET_BATCH_SIZE = 10;
 let state = null;
 
 export function mount(container, params) {
@@ -30,13 +38,14 @@ export function mount(container, params) {
     profileUserId,
     currentUserId: isLoggedIn() ? meId : null,
     isFollowed: null,
-    page: 1,
-    totalPages: 0,
+    profile: null,      // T11-B：最近一次 /profile 响应（头部信息随任一页返回）
     listType: 'following',
+    contentList: null,  // T11-B：创作网格 createChunkedList 实例（大 chunk + 本地小批）
+    sheetList: null,    // T11-A：关注/粉丝 sheet 实例
   };
   state.isSelf = state.currentUserId != null && state.currentUserId === profileUserId;
   render();
-  loadProfile(1);
+  loadContent();
 }
 
 export function unmount() {
@@ -71,6 +80,7 @@ function render() {
       <div class="sheet">
         <div class="sheet-header"><span class="sheet-title" id="sheetTitle">关注</span><button class="sheet-close" id="sheetClose">✕</button></div>
         <div class="sheet-list" id="sheetList"></div>
+        <div class="load-more" id="sheetMore"></div>
       </div>
     </div>
 
@@ -113,22 +123,59 @@ function renderSelfMenu() {
   box.querySelector('#menuLogout').addEventListener('click', () => { clearAuth(); navigate('/'); });
 }
 
-async function loadProfile(page) {
-  const grid = state.container.querySelector('#contentGrid');
-  if (page === 1) {
-    grid.innerHTML = '<div class="grid">' + '<div class="v-card"><div class="v-card-cover skeleton"></div></div>'.repeat(6) + '</div>';
+// ---------- 创作网格（/profile，T11-B 接公共 chunkedList） ----------
+function ensureContentList() {
+  if (!state.contentList) {
+    state.contentList = createChunkedList({
+      fetchChunk: async (page) => {
+        // T19：只传 `page`——信封大小（100）由后端 profile 域常量决定
+        const res = await request(`profile?userId=${state.profileUserId}&page=${page}`);
+        state.profile = res; // 头部信息（用户名/关注数/粉丝数/创作总数）随任一页返回
+        return res.contentPage || { list: [], page, pageSize: PROFILE_CHUNK_SIZE, totalPages: 0 };
+      },
+      chunkSize: PROFILE_CHUNK_SIZE,
+      batchSize: PROFILE_BATCH_SIZE,
+      keyOf: (it) => it.id,
+    });
   }
+  return state.contentList;
+}
+
+// 首次加载：重置分块列表并取首批（本地小批展示）
+async function loadContent() {
+  const grid = state.container.querySelector('#contentGrid');
+  grid.innerHTML = '<div class="grid">' + '<div class="v-card"><div class="v-card-cover skeleton"></div></div>'.repeat(6) + '</div>';
+  const list = ensureContentList();
+  list.reset();
   try {
-    const data = await request(`profile?userId=${state.profileUserId}&page=${page}&pageSize=${PAGE_SIZE}`);
-    renderProfile(data, page);
+    const batch = await list.nextBatch();
+    renderProfileHead();
+    renderContentGrid(batch);
+    renderContentLoadMore();
   } catch (e) {
     if (e.code === 401 || e.code === 403) return;
-    if (page === 1) grid.innerHTML = '<div class="empty"><div class="empty-msg">加载失败，请刷新重试</div></div>';
+    grid.innerHTML = '<div class="empty"><div class="empty-msg">加载失败，请刷新重试</div></div>';
   }
 }
 
-function renderProfile(profile, page) {
+// 「加载更多」：本地余量足够则不发请求；不足才由 helper 拉下一个 chunk
+async function loadMoreContent(btn) {
+  btn.disabled = true;
+  btn.textContent = '加载中...';
+  try {
+    const batch = await ensureContentList().nextBatch();
+    appendContentGrid(batch);
+    renderContentLoadMore();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '加载更多';
+    showToast('加载失败，请重试');
+  }
+}
+
+function renderProfileHead() {
   const c = state.container;
+  const profile = state.profile || {};
   const contentPage = profile.contentPage;
 
   c.querySelector('#displayName').textContent = profile.username || '未知用户';
@@ -141,27 +188,24 @@ function renderProfile(profile, page) {
 
   state.isFollowed = profile.isFollowed;
   renderFollowBtn();
+}
 
-  state.totalPages = contentPage ? contentPage.totalPages : 0;
-  const list = contentPage ? (contentPage.list || []) : [];
-  if (page === 1) {
-    const grid = c.querySelector('#contentGrid');
-    grid.innerHTML = '';
-    if (!list.length) {
-      grid.innerHTML = '<div class="empty"><div class="empty-msg">暂无创作内容</div></div>';
-    } else {
-      const g = document.createElement('div');
-      g.className = 'grid';
-      list.forEach((item, i) => g.appendChild(createVideoCard(item, { index: i })));
-      grid.appendChild(g);
-    }
-  } else {
-    const g = c.querySelector('#contentGrid .grid');
-    if (g) list.forEach((item) => g.appendChild(createVideoCard(item)));
+function renderContentGrid(list) {
+  const grid = state.container.querySelector('#contentGrid');
+  grid.innerHTML = '';
+  if (!list.length) {
+    grid.innerHTML = '<div class="empty"><div class="empty-msg">暂无创作内容</div></div>';
+    return;
   }
+  const g = document.createElement('div');
+  g.className = 'grid';
+  list.forEach((item, i) => g.appendChild(createVideoCard(item, { index: i })));
+  grid.appendChild(g);
+}
 
-  renderLoadMore();
-  state.page = page;
+function appendContentGrid(list) {
+  const g = state.container.querySelector('#contentGrid .grid');
+  if (g) list.forEach((item) => g.appendChild(createVideoCard(item)));
 }
 
 function renderFollowBtn() {
@@ -176,17 +220,15 @@ function renderFollowBtn() {
   wrap.appendChild(btn);
 }
 
-function renderLoadMore() {
+function renderContentLoadMore() {
   const box = state.container.querySelector('#loadMore');
-  if (state.page < state.totalPages) {
+  box.innerHTML = '';
+  if (state.contentList && state.contentList.hasMore()) {
     const btn = document.createElement('button');
     btn.className = 'load-more-btn';
     btn.textContent = '加载更多';
-    btn.addEventListener('click', () => loadProfile(state.page + 1));
-    box.innerHTML = '';
+    btn.addEventListener('click', () => loadMoreContent(btn));
     box.appendChild(btn);
-  } else {
-    box.innerHTML = '';
   }
 }
 
@@ -212,19 +254,47 @@ function updateFollowerCount(delta) {
   if (!Number.isNaN(cur)) el.textContent = cur + delta;
 }
 
-// ---------- 关注/粉丝列表 ----------
+// ---------- 关注/粉丝列表（T7 后端有序分页 → T11-A 接公共 chunkedList） ----------
+// 信封大小由后端 follow 域常量决定（200），请求**只传 `page`**；本地按 10 条小批消费，
+// 本地余量足够时「加载更多」0 请求（N15 收敛点，helper 见 js/chunkedList.js）。
 async function openUserList(type) {
   if (!state.profileUserId) return;
   state.listType = type;
   const c = state.container;
   c.querySelector('#sheetTitle').textContent = type === 'following' ? '关注' : '粉丝';
   c.querySelector('#sheetList').innerHTML = '<div class="sheet-empty">加载中...</div>';
+  c.querySelector('#sheetMore').innerHTML = '';
   c.querySelector('#sheetOverlay').classList.remove('hidden');
+  // 每次打开重建实例（等价 reset）：本地余量与已展示集清空，防 following/followers 串台
+  state.sheetList = createChunkedList({
+    fetchChunk: async (page) => request(
+      `follow/${state.listType}?userId=${state.profileUserId}&page=${page}`),
+    chunkSize: SHEET_CHUNK_SIZE,
+    batchSize: SHEET_BATCH_SIZE,
+    keyOf: (u) => u.userId,
+  });
   try {
-    const data = await request(`follow/${type}?userId=${state.profileUserId}`);
-    renderUserList(data || []);
+    const batch = await state.sheetList.nextBatch();
+    renderUserList(batch, false);
+    renderSheetMore();
   } catch (e) {
     c.querySelector('#sheetList').innerHTML = '<div class="sheet-empty">加载失败</div>';
+    c.querySelector('#sheetMore').innerHTML = '';
+  }
+}
+
+// 「加载更多」：本地余量足够则不发请求；不足才由 helper 拉下一个 chunk
+async function loadMoreUserList(btn) {
+  btn.disabled = true;
+  btn.textContent = '加载中...';
+  try {
+    const batch = await state.sheetList.nextBatch();
+    renderUserList(batch, true);
+    renderSheetMore();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '加载更多';
+    showToast('加载失败，请重试');
   }
 }
 
@@ -232,10 +302,23 @@ function closeUserList() {
   state.container.querySelector('#sheetOverlay').classList.add('hidden');
 }
 
-function renderUserList(users) {
-  const box = state.container.querySelector('#sheetList');
-  if (!users.length) { box.innerHTML = '<div class="sheet-empty">暂无数据</div>'; return; }
+function renderSheetMore() {
+  const box = state.container.querySelector('#sheetMore');
   box.innerHTML = '';
+  if (!state.sheetList || !state.sheetList.hasMore()) return; // 本地余量与服务器均耗尽
+  const btn = document.createElement('button');
+  btn.className = 'load-more-btn';
+  btn.textContent = '加载更多';
+  btn.addEventListener('click', () => loadMoreUserList(btn));
+  box.appendChild(btn);
+}
+
+function renderUserList(users, append) {
+  const box = state.container.querySelector('#sheetList');
+  if (!append) {
+    if (!users.length) { box.innerHTML = '<div class="sheet-empty">暂无数据</div>'; return; }
+    box.innerHTML = '';
+  }
   users.forEach((u) => {
     const item = document.createElement('div');
     item.className = 'user-list-item';

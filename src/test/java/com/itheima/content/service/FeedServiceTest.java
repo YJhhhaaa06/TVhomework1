@@ -5,7 +5,7 @@ import com.itheima.follow.service.FollowCache;
 import com.itheima.like.service.LikeService;
 import com.itheima.exception.ServerException;
 import com.itheima.content.model.cache.ContentCacheDTO;
-import com.itheima.content.model.dto.PageResult;
+import com.itheima.common.model.dto.PageResult;
 import com.itheima.content.model.vo.ContentVO;
 import com.itheima.util.TransactionTemplate;
 import org.junit.jupiter.api.BeforeEach;

@@ -53,7 +53,8 @@ USER_B = {
 # T2 媒体隔离：默认指向测试实例落盘/挂载的独立媒体目录（与生产 stone 隔离）。
 # 与 tools/run_tests.py 的 TEST_MEDIA_ROOT、tools/media_paths.py 的
 # TEST_MEDIA_ROOT_DEFAULT 默认值保持一致（三处需同步修改）。
-STONE_DIR = os.environ.get("TV_STONE_DIR", "D:/data/projects/VideoPlatform/media-test")
+# T9 本地化：默认值改用项目内 .stage8-target（沙箱可写区），与 run_tests/media_paths 同步
+STONE_DIR = os.environ.get("TV_STONE_DIR", "D:/javaproject/VideoPlatform/TVhomework1/.stage8-target/media-test")
 
 # Real media files for upload tests (configurable via TV_TEST_RESOURCE_DIR)
 TEST_RESOURCE_DIR = os.environ.get(

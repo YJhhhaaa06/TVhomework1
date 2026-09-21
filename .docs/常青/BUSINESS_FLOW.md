@@ -1,7 +1,7 @@
 # 业务流程文档
 
-> 版本：1.0
-> 生成日期：2026-07-23
+> 版本：2.5
+> 最后更新：2026-09-20（T15 文档与代码一致性清理：Filter 链补 `ExceptionFilter`、AuthFilter 精确名单补 `/content/update`·`/content/mediaDelete`·`/content/delete`、搜索端点更正为 `GET /search/keywordSearch`、公开接口补 `/comment/replies`。历史变更见 git 提交历史与 `NEXT_CYCLE_TASKS.md` 执行回写）
 > 用途：保障重构时不破坏业务逻辑
 
 ---
@@ -15,7 +15,6 @@
 - [五、优惠券模块](#五优惠券模块)
 - [六、Feed 流模块](#六feed-流模块)
 - [七、权限控制矩阵](#七权限控制矩阵)
-- [八、已发现的问题](#八已发现的问题)
 
 ---
 
@@ -29,8 +28,9 @@
     ▼
 ┌─────────────────────────────────────────────────────────┐
 │                    Filter 链                             │
-│  EncodingFilter → LoginFilter → AuthFilter              │
-│  (UTF-8编码)      (解析Token)    (权限校验)               │
+│  ExceptionFilter → EncodingFilter → LoginFilter          │
+│  (全局异常)        (UTF-8编码)      (解析Token)            │
+│  → AuthFilter（权限校验）                                  │
 └─────────────────────────────────────────────────────────┘
     │
     ▼
@@ -179,7 +179,7 @@ Content-Type: application/json
 | 6 | 密码 BCrypt 哈希 | - |
 | 7 | 插入用户记录 | SQLException 回滚 |
 | 8 | 提交事务 | - |
-| 9 | 自动登录，返回 LoginVO | - |
+| 9 | 自动登录（`UserService.registerAndLogin`，T13）：查询用户 → BCrypt 校验 → 生成 JWT，返回 LoginVO | **自动登录失败（用户查不到/密码不匹配/登录期 DB 异常）不再抛错**：仍返回 200 + `token=null` 的 LoginVO（注册已提交即算成功），前端提示「注册成功，请手动登录」并切回登录 tab；**注册本身失败（步骤 4~7）照旧抛错** |
 
 #### 接口定义
 
@@ -210,6 +210,8 @@ Content-Type: application/json
     "message": "电话号码已被使用"
 }
 ```
+
+> **自动登录兜底（T13）**：注册已提交后自动登录失败时，**不是失败响应**，而是成功响应 + `"token": null`（`data.id`/`data.username` 为已注册用户）——`token` 是本接口唯一的"是否已登录"信号，前端据此提示「注册成功，请手动登录」并切回登录 tab 预填手机号（提示文案在前端，后端不新增字段）。
 
 ---
 
@@ -272,7 +274,7 @@ Content-Type: application/json
 
 ---
 
-### 2.4 修改用户名流程（第五期 T1 cache-01：新增接口 + 级联失效内容缓存）
+### 2.4 修改用户名流程
 
 ```
 ┌──────────┐  POST /user/changeUserName  ┌──────────────┐
@@ -354,13 +356,9 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 
 ## 三、内容管理模块
 
-### 3.1 内容与评论缓存机制（C 周期 T2/T3 重制为统一 Redis，2026-09-12）
+### 3.1 内容与评论缓存机制
 
-> **三期 T1（cache-01）熔断注记（2026-09-13）**：所有 Redis 访问经 `RedisAccess` 全局熔断器——Redis 不可用时连续失败 5 次即熔断开启，后续缓存请求**立即快速失败并降级走 DB**（不再逐请求等连接超时）；冷却 10s 后单探针探测，Redis 恢复自动回到正常缓存路径。三态/空标记/降级语义不变（详见 CURRENT_ARCHITECTURE 6.6）。
->
-> **三期 T2（cache-02）降级不放量注记（2026-09-13）**：Redis 异常的降级读（单 key / 批量 / 脏 JSON，覆盖内容/评论/点赞/关注四域共 10 处分支）**统一接入单飞组件**——同一 key 的并发降级读只打一次 DB（与 miss 回填共用同一单飞），降级仅装载、**不写回**（D4 不变）；loader 失败以异常收场、不缓存失败结果，下一请求全新重试。降级 LOAD 计数随之从"每请求记一次"变为"实际去重后记一次（leader 记）"。详见 CURRENT_ARCHITECTURE 6.7。
->
-> **三期 T3（cache-03）负缓存治理注记（2026-09-14）**：内容/评论 loader 的"确认无数据"与"加载失败"已可区分——`loadContentFromDb`/`loadCommentTree` 遇 SQLException 抛 `DatabaseException`（事务模板包装），**不再返回 null 伪装"无数据"**；CacheAside 在所有装载点捕获 DatabaseException 转 null：**不写 60s 空标记、不 DEL 既有数据 key**（DB 瞬时抖动不会把热门内容固化成假 404）。对外行为与现状一致（内容 404 / 评论空 / 批量逐 key 跳过），仅不固化瞬时故障；`addContent`/`refreshContent` 提交后缓存同步遇 DB 失败静默跳过（refresh 保留旧缓存读自愈）。详见 CURRENT_ARCHITECTURE 6.8。
+> 缓存机制细节（Key 设计/三态语义/超时熔断/降级单飞/负缓存/空标记守卫/Lua 条件写/TTL 与滑动续期/读路径优化/启动加载/索引维护/SetCache 基建/成员反转/计数入缓存/JSON 兼容/authorName 同步）统一见 `CURRENT_ARCHITECTURE` 六节；本文档只表达"业务写路径触发什么缓存动作"，不重复机制描述、不记录变更历史（变更以 git 提交历史为准）。
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -399,16 +397,17 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 │  feed 关注列表）                                                  │
 │    ↓  FollowCache（com.itheima.follow.service，T5）               │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │ user:following:{userId} / user:follower:{userId} 双 Set    │   │
-│  │ 三态：empty 空标记（60s）=确认真无；set 存在=SISMEMBER/SMEMBERS│   │
-│  │  miss=单飞回填 DB 全量（非空 SADD+EXPIRE 10min；空集→空标记，│   │
-│  │  空标记写入带 set 存在守卫防并发覆盖新写）；Redis 挂=降级 DB  │   │
+│  │ user:following / user:follower 双 ZSet（score=id）           │   │
+│  │ 三态：empty 空标记（60s）=确认真无；key 存在=ZSCORE/ZRANGE     │   │
+│  │  miss=单飞回填 DB全量（非空 ZADD+EXPIRE 30min；空集→空标记， │   │
+│  │  分页=窗口读 ZRANGE[offset, offset+N) + ZCARD（hit O(log n+N)）  │   │
+│  │  空标记写入带 key 存在守卫防并发覆盖新写）；Redis 挂=降级 DB  │   │
 │  │ user:followCount:{userId} / user:followerCount:{userId}     │   │
 │  │  （String int，T6 计数入缓存 R-01：Cache-Aside、0 合法、     │   │
 │  │   miss/降级走 DB 单列计数 loader，与 content:likeCount 同构）│   │
 │  └──────────────────────────────────────────────────────────┘   │
 │  关注/取关写路径（FollowService DB 提交后）：                     │
-│    两 key 均"已加载"（set 或空标记存在）→ MULTI 原子 SADD/SREM 双写+续 TTL │
+│    两 key 均"已加载"（key 或空标记存在）→ MULTI 原子 ZADD/ZREM 双写+续 TTL │
 │    （新关注时解除空标记）；任一侧冷 key 或空标记命中 → 双双 DEL 失效让读自愈 │
 │    ；Redis 异常 → 双 DEL（4.10 失败双 DEL），不抛出、不影响业务     │
 │    + 计数条件增量（T6）：EVAL"计数 key 存在才 INCRBY±1"，冷 key   │
@@ -416,56 +415,13 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-> **第四期 T3（cache-03）FollowCache 收口注记（2026-09-15）**：关注**读路径**（`isFollowing` 单成员三态 /
-> `batchIsFollowing` 单 set 批量 / `getFollowingIds`/`getFollowerIds` 全量列表）已全部改走基建组件 `cache/SetCache`
-> （U-09/N3 收敛落点，与 like 域 T2 同模式）；**写路径（MULTI 条件双写 + 失败双 DEL）仍由 `FollowCache` 保有**
-> （follow 特有双 key 原子语义，不在收口面）。行为零变化——key/三态/空标记 TTL/降级语义/打点口径不变；
-> 全量列表升序由 `FollowCache.sortIds` 唯一包装点统一（详情见 CURRENT_ARCHITECTURE 6.15）。
->
-> **第四期 T6（cache-06）计数入缓存注记（2026-09-16）**：关注/粉丝**计数**入独立 key（`user:followCount:{userId}` /
-> `user:followerCount:{userId}`，String int，与 `content:likeCount` 同构）——Profile 主页读路径在事务外经
-> `FollowCache.getFollowCount/getFollowerCount` 走缓存（miss 回填 DB 单列计数、0 合法、DB 仍为最终真理），
-> 不再消费 user 行内计数字段；关注/取关 DB 提交后追加**条件增量 INCRBY±1**（`followCountKey`/`followerCountKey`
-> exists 才写，冷 key no-op 由读回填；失败只失效两计数 key 读自愈）。SCARD 现算成员 set 方案因冷 set 返 0 坑
-> 被否决（详情见 CURRENT_ARCHITECTURE 6.18）。对外行为零变化（计数数值/API 不变）。
->
-> **第五期 T3（cache-03）事务边界口径统一注记（2026-09-18，治 N2）**：Feed/Profile 读路径的**缓存批量读**
-> （`ContentCache.getContentsBatch`（含 miss 装载）+ `LikeService.batchIsContentLiked`）由 DB 事务回调**内**
-> 上提到**事务外**——事务回调只做 DB 查询（关注者内容总数与页内 id、主页用户行与作者内容 id），提交归还连接后
-> 再读缓存、填点赞状态并组装 VO，与「关注/粉丝计数读在事务外」（第四期 T6）口径一致；消除"外层事务持连接 +
-> miss 装载经嵌套事务再取新连接"在 `db.pool.maxSize=20` 下的互相等连接（超时表现为该 key 内容间歇缺失）。
-> 分页/返回集/顺序/跳过 null 与 401/404 语义零变化（详情见 CURRENT_ARCHITECTURE 6.22）。
+> 缓存读写语义要点：关注读路径（`isFollowing` 单成员 / `batchIsFollowing` 批量 / `getFollowingIds` 全量关注列表 / **`getFollowingWindow`/`getFollowerWindow` 分页窗口（T7）**）统一走基建 `ZSetCache`——成员 key 为 ZSet（score=成员 id），故 `ZRANGE` 天然升序，列表升序另由 `FollowCache.sortIds` 归一（写路径 MULTI 条件双写 + 失败双 DEL 保留在 FollowCache）；**关注/粉丝列表接口恒返回分页信封 `{list,total,page,pageSize,totalPages}`——缺省（不传参）= 第一页信封（page 1 / pageSize 100），与显式 `page=1&pageSize=100` 逐字节一致；`pageSize` 上限 100（T11-A 契约变更、**T19 由 200 调整为 100**，T7 的"缺省返回全量数组"已删除）**；**T11-C 起分页读只装载"被看的那一段"**（冷 key 取 `[0, offset+count)`、前缀不足只补差量、Redis 降级改 DB 窗口直查）——集合完整性由 `partial:{数据key}` 标记表达，带标记时判定不命中回落 DB、全量读先补齐、写路径任一侧带标记则三件套双 DEL；关注/粉丝计数入独立 key（`user:followCount`/`user:followerCount`，Cache-Aside、0 合法、条件 INCRBY）；Feed/Profile/Search 的缓存批量读、以及关注·粉丝列表装载的关注态批量读（T12）都在 DB 事务外执行（防连接池互相等连接）；详情见 `CURRENT_ARCHITECTURE` 6.4/6.12/6.17。
 
-> 关键语义（NEEDS 4.2~4.5/4.12）：内容与评论读/写**全部收敛 Redis**（旧内存 HashMap 版
-> ContentCacheManager 已随 T6 整体移除，职责由 ContentCache/CommentCache 承接）；
-> **任何缓存失败降级走 DB、不导致业务失败**；
-> 计数（like_count/comment_count/comment_enabled）与评论树内容以 DB 为源真理，变更即失效让读自愈；
-> 类型分区索引启动 init 全量重建 + 索引 key 缺失时单飞懒重建（防 Redis 重启后 /start 空推荐）。
-> 评论树不再原地增删（消除 H1 并发竞态）：评论增/删/点赞 = 失效 `content:comments:{id}` + 空标记，
-> 下次读 miss 单飞回填 DB 最新整树。
+> 关键语义：内容与评论读/写**全部收敛 Redis**；**任何缓存失败降级走 DB、不导致业务失败**；计数（like_count/comment_count/comment_enabled）与评论树内容以 DB 为源真理，变更即失效让读自愈；类型分区索引启动 init 全量重建 + 索引 key 缺失时单飞懒重建（防 Redis 重启后 /start 空推荐）；评论树不再原地增删：评论增/删/点赞 = 失效 `content:comments:{id}` + 空标记，下次读 miss 单飞回填 DB 最新整树。
 >
-> **T5 启动加载治理注记（2026-09-14，三期 N5/R-01/R-04，R-01 拍板=全量+工程化优化）**：
-> `ContentCache.init()` 启动全量重建拆两段——DB 阶段在事务内**只读**（findAllContent + `findMediaByContentIds`
-> 批量媒体装载，DB N+1 消除），**Redis 写入移出 DB 事务**（事务提交后 `rebuildRedis`）；内容 key 批量写走
-> `CacheAside.writeBatch`（一趟 pipeline SETEX+DEL 空标记），索引重建 pipeline 化（一遍 SCAN 收集旧 key +
-> 一趟 pipeline DEL+全部 LREM/LPUSH）；启动 Redis 往返从 ≈12N（内容 2 + 索引 8 每内容）降到 ≈3 次、
-> DB 查询恒 2 次，均与内容量解耦。索引缺失懒重建（getRecommendByFilter 首访触发）同步收益 pipeline 化，
-> 对外读语义零变化。
+> **评论查询分页（T8 → T11-B）**：`/comment/show` 传 `page`/`pageSize` **任一** → 返回分页信封 `{list,total,page,pageSize,totalPages}`（`total`=**主楼条数**）；**两者都不传 → 仍返回全量数组**（零破坏）。`pageSize` **缺省 = 评论域信封 200**（T11-B：前端只传 `page`，决定权在后端域常量）、上限 **500**（显式传参仍生效）。命中路径与装载形态（两键组 / 主楼窗口装载 / 楼中楼前 K + 展开接口）见 `CURRENT_ARCHITECTURE` 6.18；前端分块与去重见 6.19。
 >
-> **T6 收尾注记（2026-09-14，三期 U-08 归一 + 全周期闭环）**：`content:index:{type}:{category}` 索引 key
-> **生成与解析同源**——生成唯一源 = `CacheKeys.contentIndex(type, categoryId)`（前缀常量
-> `CONTENT_INDEX_PREFIX`），`domainOf` 统计归域解析与索引 SCAN 匹配模式引用同一前缀；业务包不再自行拼接
-> key（原 `ContentCache.indexKey` 私有方法移除）。CacheStats 的 DEGRADE 口径确认仍准确：=本次读未命中缓存、
-> 走 DB 兜底次数（含 T1 熔断开启的快速失败，两者语义一致）。
->
-> **T9 滑动续期注记（2026-09-13，NEEDS 4.14）**：所有缓存读路径**命中数据 key 顺带续期**——内容/评论/点赞计数（CacheAside get/getBatch，续期值=原 TTL ±10% 抖动，同 pipeline 追加 EXPIRE）与点赞成员/关注关系 Set（scanLikeSet/scanSet/getSetMembers/batchIsFollowing/batchIsContentLiked/batchIsCommentLiked，续期值=域 TTL 精确值）在命中时延长生命周期，热点常驻由续期自然达成、不设永不过期 key；**空标记（`empty:`）一律不续期**（防"假空"窗口延长，执行定稿）；续期失败（Redis 异常）走既有降级读，不影响业务。分域 TTL 已按双轮压测观测取值：content 30min / comment 10min / like 15min / follow 30min（详见 CURRENT_ARCHITECTURE 6.5 与 NEEDS 4.14 T9 执行定稿）。
->
-> **T8 读路径加固（2026-09-12，治 H12/H13）**：内容读路径（单 key 与批量）均 pipeline 化——EXISTS 空标记 + GET 数据 key 一趟往返（`CacheAside.read`/`getInternal`/`getBatch`）；推荐（/start）、Feed、Profile 页内改 `ContentCache.getContentsBatch` 批量读（结果集/顺序/空跳语义不变）；索引遍历由 `KEYS "content:index:*"` 改为 **SCAN**（`forEachIndexKey`，removeContent LREM 与重建 DEL 两处，LREM/DEL 幂等、SCAN 重复 key 无害）。
->
-> **第四期 T5（cache-05）推荐读路径优化 + 索引重建退避注记（2026-09-16，N1/N2/R-07）**：
-> ① **推荐读惰性探测（治 N2）**：`/start`（`ContentCache.getRecommendByFilter`）从"对全部候选一趟 pipeline 批量探测"改为**按 shuffle 序逐个惰性探测、凑满 limit 即止**（探测量从"候选数 × 3 命令"收敛到"~limit+跳过量"，与候选总量解耦）；shuffle 仍在全量去重 id 列表上一次性执行，返回集 = "shuffle 序前 limit 个非 null"，**推荐结果分布语义不变**（惰性探测只改"探测多少"不改"取哪些"）；`getContentsBatch` 批量读仅剩 Feed/Profile 使用。
-> ② **索引懒重建失败冷却退避（治 N1）**：`ensureIndex` 重建失败（Redis 写失败）进入进程内冷却窗口（`cache.content.indexRebuildCooldownMillis=10000`，对齐熔断冷却先例），窗口内跳过探测与重建——**Redis 停机期间 `/start` 从"逐请求触发 DB 全表查询"收敛到"每冷却窗口 1 次"**；冷却过期后下一请求自然重试，重建成功即恢复正常，**"停机空推荐"对外语义不变（U-11 本体不做）**。
-> ③ **R-07 索引长尾漂移评估结论**：LREM(count=0) 删全部出现 + LPUSH 写即去重、`removeContent` 对全部索引 key 幂等 LREM → **正常操作无系统性漂移、无需定期重建**；仅删除 LREM 失败（停机窗口）残留有界脏 id，惰性探测后每条至多消耗 1 个探测位，索引 key 缺失/启动全量重建即全量收敛。详情见 CURRENT_ARCHITECTURE 6.17。
+> 启动与索引维护：启动全量重建拆两段（DB 事务内只读、事务外写 Redis，Redis 往返 ≈3 次与内容量解耦）；索引 key 生成/解析/匹配同源（`CacheKeys.contentIndex`）；读命中滑动续期（分域 TTL：content 30min / comment 10min / like 15min / follow 30min，空标记不续）；推荐读惰性探测（凑满 limit 即止，分布语义不变）+ 索引重建失败冷却退避 + 索引长尾无系统性漂移；详情见 `CURRENT_ARCHITECTURE` 6.5/6.10/6.11。
 
 ### 3.2 发布视频流程
 
@@ -479,7 +435,7 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
                                       │ FileUploadService │
                                       │ 1. 校验文件类型   │
                                       │ 2. 生成UUID文件名 │
-                                      │ 3. 保存到 D:/stone│
+                                      │ 3. 保存到上传根目录│
                                       └──────────────────┘
                                               │
                                               ▼
@@ -568,7 +524,7 @@ Content-Type: multipart/form-data
 
 ### 3.4 首页推荐流程
 
-> **前端交互（2026-08-14 重构后）**：首页为 SPA 视图 `#/`；分区（推荐/游戏/音乐…）收纳在顶部导航「分类」下拉（选中跳 `#/?cat=<id>`）；类型筛选（全部/视频/图文）在首页内容区；「换一换」重新拉 `/start` 并在客户端打乱顺序以获得「新一批」观感；关注流独立为 `#/follow`（`/feed` 分页）。
+> **前端交互（2026-08-14 重构后；2026-09-20 T11-B 分块化）**：首页为 SPA 视图 `#/`；分区（推荐/游戏/音乐…）收纳在顶部导航「分类」下拉（选中跳 `#/?cat=<id>`）；类型筛选（全部/视频/图文）在首页内容区；「换一换」重新拉 `/start` 并在客户端打乱顺序以获得「新一批」观感；关注流独立为 `#/follow`（`/feed` 分页）。**分页列表统一走公共 `chunkedList`**（大 chunk 一次拉取 + 本地小批展示 + 跨 chunk 去重）：`/feed` 与 `/profile` 创作网格每次拉 100 条、本地按 10 条展示，`/search` 拉 100 条、本地按 12 条展示，评论主楼与跟随关系 sheet 由后端域常量决定信封大小（T19：五处列表的请求一律**只传 `page`**，信封大小全部由后端域常量决定）——「加载更多」在本地余量内**不发请求**（详见 `CURRENT_ARCHITECTURE` 6.19）。
 
 ```
 ┌──────────┐   GET /start   ┌────────────────┐
@@ -632,7 +588,7 @@ GET /start?limit=10&token=xxx（可选）
 ### 3.5 搜索流程
 
 ```
-┌──────────┐  GET /search?keyword=xxx  ┌─────────────────┐
+┌──────────┐  GET /search/keywordSearch?keyword=xxx  ┌─────────────────┐
 │  客户端   │ ────────────────────────► │ SearchController │
 └──────────┘                            └─────────────────┘
                                               │
@@ -664,19 +620,21 @@ GET /start?limit=10&token=xxx（可选）
 | 6 | 批量填充点赞状态 | 如果已登录 |
 | 7 | 返回分页结果 | PageResult |
 
+> 事务边界（T12）：步骤 2~4 在 DB 事务回调内（命中总数 + 该页内容 id），步骤 5（`getContentsBatch` 批量读，原逐 key `getContent`）与步骤 6（点赞/关注状态缓存读）在事务提交、连接归还后执行；跳过 null 与"结果为空不调状态填充"两个既有分支不变，对外行为零变化。全文同类口径同见 `CURRENT_ARCHITECTURE` 6.4。
+
 #### 接口定义
 
 ```
-GET /search?keyword=关键词&page=1&pageSize=10&token=xxx（可选）
+GET /search/keywordSearch?keyword=关键词&page=1&token=xxx（可选）
 
-成功响应：
+成功响应（**T19：信封大小由后端 search 域常量决定 = 100，前端只传 page**；缺省/上限均 100）：
 {
     "code": 200,
     "data": {
         "list": [...],
         "total": 100,
         "page": 1,
-        "pageSize": 10
+        "pageSize": 100
     }
 }
 ```
@@ -776,7 +734,7 @@ ContentDetailVO 包含：
     → 事务提交后缓存同步（4.5 显式失效）:
       ContentCache.removeContent（失效 content:{id} + 索引剔除，读自愈 404）
       + CommentCache.invalidateComments（级联失效 content:comments:{id} + 空标记）
-      + LikeService.deleteContentLike（失效 content:likeCount 计数 key；T6 迁入；**T4 反转后成员 key 为用户维度，删除不清理**——残留成员指向已删除内容，id 不复用/UI 无查询路径，永不外显）
+      + LikeService.deleteContentLike（失效 content:likeCount 计数 key；成员 key 为用户维度，删除不清理——残留成员指向已删除内容，id 不复用/UI 无查询路径，永不外显）
     → Controller 逐个 FileUploadService.deleteFileByUrl 删物理文件（尽力而为）
 ```
 
@@ -796,7 +754,7 @@ ContentDetailVO 包含：
 
 1. `ContentService.hideContent`：`getContentStatus` 校验内容存在（404）→ 未被作者删除（409「内容已删除，无法下架」）→ 未处于下架态（409「内容已下架」）→ `updateContentDeletedState(conn, id, 2)`。
 2. 仅改 `content.is_deleted=2` 一个字段；**不动**评论/点赞/媒体记录/物理文件（隐藏≠删除）。
-3. 事务提交后缓存同步：ContentCache.removeContent（失效 content:{id} + 索引剔除）+ CommentCache.invalidateComments（级联失效评论树）+ LikeService.deleteContentLike（失效点赞计数 key；**T4 反转后成员 key 为用户维度不清理**，隐藏时点赞记录保留 DB，残留成员=DB 真理，恢复后读自愈对齐），前台即时不可见。
+3. 事务提交后缓存同步：ContentCache.removeContent（失效 content:{id} + 索引剔除）+ CommentCache.invalidateComments（级联失效评论树）+ LikeService.deleteContentLike（失效点赞计数 key；成员 key 为用户维度不清理，隐藏时点赞记录保留 DB，残留成员=DB 真理，恢复后读自愈对齐），前台即时不可见。
 
 **恢复**：`POST /api/admin/content/unhide?contentId=X`
 
@@ -858,10 +816,10 @@ ContentDetailVO 包含：
 | 4 | 插入 content_like 表 | SQLException 回滚 |
 | 5 | 更新 content 表 like_count +1 | SQLException 回滚 |
 | 6 | 提交事务 | - |
-| 7 | 点赞缓存写：计数/成员分离条件写（`content:likeCount:{id}` 存在才 INCR + `user:likeSet:{userId}` 存在才 SADD contentId + 清空 `empty:user:likeSet:{userId}` 标记；T4 重制，**第四期 T4 成员反转用户维度**） | 写失败→失效 count key 让读自愈（4.2），不阻塞主流程 |
+| 7 | 点赞缓存写：计数/成员分离条件写（`content:likeCount:{id}` 存在才 INCR + `user:likeSet:{userId}` 存在才 SADD contentId + 清空 `empty:user:likeSet:{userId}` 标记；成员 key 为用户维度） | 写失败→失效 count key 让读自愈（4.2），不阻塞主流程 |
 | 8 | 失效内容 key `content:{id}`（`contentCache.notifyLikeCountChanged`，DB like_count 列为源真理，读自愈回填） | 失败只记录日志 |
 
-> 说明（T4）：内存计数残留（旧 updateContentLikeCount 死代码）已删除；count/用户维度成员 key 均带 TTL（cache.like.ttlMinutes=15）自愈，Redis 挂时读写路径降级走 DB，点赞接口不会 500（H5）。
+> 说明：内存计数残留（旧 updateContentLikeCount 死代码）已删除；count/用户维度成员 key 均带 TTL（cache.like.ttlMinutes=15）自愈，Redis 挂时读写路径降级走 DB，点赞接口不会 500（H5）。
 
 #### 取消点赞流程
 
@@ -875,7 +833,7 @@ POST /like/content/remove?contentId=123
 4. 删除 content_like 记录
 5. 更新 content 表 like_count -1
 6. 提交事务
-7. 更新 Redis 缓存（条件 DECR/SREM，同 T4 计数/成员分离；**T4 反转后 SREM 作用于 user:likeSet:{userId}**）
+7. 更新 Redis 缓存（条件 DECR/SREM，计数/成员分离；SREM 作用于用户维度 `user:likeSet:{userId}`）
 8. 失效内容 key 读自愈回填 DB 最新计数
 ```
 
@@ -891,7 +849,7 @@ POST /like/comment/add?commentId=456
 2. 检查是否已点赞
 3. 插入 comment_like 记录
 4. 更新 comment 表 like_count +1
-5. 更新 Redis 点赞缓存（LikeCacheService，T4 重制）
+5. 更新 Redis 点赞缓存（LikeCacheService）
 6. 失效评论所属内容评论树 key（commentCache.notifyCommentLikeChanged，读自愈回填最新 likeCount）
 ```
 
@@ -962,6 +920,7 @@ Content-Type: application/json
 
 ```
 GET /comment/show?contentId=123&token=xxx（可选）
+GET /comment/show?contentId=123&page=2&pageSize=10（可选分页，T8）
 
 步骤：
 1. 先确认内容存在且评论区开启（contentCache.getContent：内容不存在/隐藏/删除或作者关闭 → 直接返回空）
@@ -969,6 +928,16 @@ GET /comment/show?contentId=123&token=xxx（可选）
 3. 如果已登录，批量查询点赞状态
 4. 转换为 CommentVO 树
 5. 返回评论列表
+
+分页（T8 → T10-A/T10-B → T11-B）：
+- 传 page/pageSize 任一 → 返回分页信封 {list,total,page,pageSize,totalPages}（total=主楼条数）；
+  第 3 步的点赞批量查询只针对该页评论 id。页内容形态（主楼窗口 + 每主楼 children 前 K=2 +
+  replyCount，展开走 /comment/replies）见 CURRENT_ARCHITECTURE 6.18
+- 两者都不传 → 仍返回全量数组（与改造前逐字节一致）
+- 分页解析（T11-B；**T19 起公共 cap 50 已删除**）：page 缺省 1；pageSize **缺省 = 评论域信封 200**
+  （由后端域常量决定，前端只传 page）、上限 **500**（评论域本轮不动；feed / search / profile / follow
+  四域 T19 已统一为缺省/上限 **100**）
+- 缓存侧：两键组（主楼 LIST + 楼中楼 HASH + count），不是整树 JSON（T10-A 起）
 
 CommentVO 结构：
 {
@@ -1092,7 +1061,7 @@ CommentVO 结构：
 | 4 | 更新关注者 follow_count +1 | - |
 | 5 | 更新被关注者 follower_count +1 | - |
 | 6 | 提交事务 | - |
-| 7 （T5） | 提交后缓存双写 FollowCache.cacheFollow：两 key 已加载 → MULTI SADD 双写；冷 key/空标记 → 双 DEL 失效 | 缓存失败降级（双 DEL），不影响业务 |
+| 7 | 提交后缓存双写 FollowCache.cacheFollow：两 key 已加载且**均非部分装载态** → MULTI ZADD 双写（score=成员 id，2026-09-19 T7 起成员 key 为 ZSet）；冷 key/空标记/任一侧带 `partial:` 标记（T11-C：插入非前缀成员会破坏 `ZRANGE offset` 语义）→ 三件套双 DEL（数据 key + 空标记 + `partial:` 标记）失效 | 缓存失败降级（双 DEL），不影响业务 |
 
 #### 接口定义
 
@@ -1136,21 +1105,42 @@ POST /follow/remove?followedUserId=456&token=xxx
 GET /follow/following?userId=123&token=xxx（必填：/follow/* 前缀守卫需登录，2026-09-09 按代码修正"可选"标注）
 
 步骤：
-1. 查询用户的所有关注 ID
+1. 取该页关注 ID（缓存**窗口读**；冷 key / 前缀不足时只装载该页所需的那一段，T11-C）
 2. 批量查询用户信息
 3. 如果已登录，查询当前用户对这些用户的关注状态
 4. 返回用户列表
 
-返回结构：
-[
-    {
-        "userId": 456,
-        "username": "李四",
-        "isFollowed": true,   // 当前用户是否关注
-        "isSelf": false       // 是否是自己
-    },
-    ...
-]
+返回结构（列表恒为分页信封，2026-09-20 T11-A；**2026-09-21 T19 信封 200 → 100**）：
+{
+    "list": [
+        {
+            "userId": 456,
+            "username": "李四",
+            "isFollowed": true,   // 当前用户是否关注
+            "isSelf": false       // 是否是自己
+        },
+        ...
+    ],
+    "total": N, "page": 1, "pageSize": 100, "totalPages": t
+}
+
+分页（2026-09-19 T7 → 2026-09-20 T11-A 契约变更，已获用户批准 → **2026-09-21 T19 域级信封调整**）：
+  - **列表恒为信封** {"list": [...], "total": N, "page": p, "pageSize": s, "totalPages": t}
+    （T7 的"缺省不传参 → 返回全量数组"分支已**删除**）
+  - **缺省（不传任何分页参数）= 第一页信封**（page 1 / pageSize 100），与显式
+    page=1&pageSize=100 响应**逐字节一致**（信封大小由后端 follow 域常量决定，前端只传 page）
+  - page 缺省 1、page<1 归一为 1；pageSize 缺省 **100**、上限 **100**（T11-A 曾为 200，T19 调整为 100）；
+    显式传 pageSize 仍生效（保留 pytest 用小信封逐页比对"页间不重不漏"的能力）
+  - 越界页（offset ≥ total）→ list 为空数组，total 照常返回（前端据此判末页）
+
+装载与 total 口径（2026-09-20 T11-C，对外契约不变、仅内部装载形态变化）：
+  - 装载量与**页位置**相关：冷 key 只装载 [0, offset+count)、已知前缀不足只补差量；
+    集合可能处于"前缀"态（带 partial: 标记），完全装载后自动退化为完整 ZSet
+  - total：**完整态 = ZCARD**（与页内容同源，与 T7 一致）；**部分态 / Redis 降级态 = 域级计数 key**
+    （user:followCount / user:followerCount，miss 回落 users 表计数列）——此时 ZCARD 只是已知前缀大小
+  - Redis 降级：DB **窗口直查**（只查被看的那一段）、不装载不写回（第三期 T2"降级不放量"口径保持）
+  - 内部实现与不变量（partial: 标记 / 判定回落 DB / 全量读补齐 / 写路径双 DEL）见
+    CURRENT_ARCHITECTURE 6.17
 ```
 
 ---
@@ -1165,6 +1155,10 @@ GET /follow/followers?userId=123&token=xxx（必填：/follow/* 前缀守卫需�
 2. 批量查询用户信息
 3. 如果已登录，查询当前用户对这些用户的关注状态
 4. 返回用户列表
+
+分页（2026-09-19 T7 → 2026-09-20 T11-A → **2026-09-21 T19**）：口径与 4.3.3 完全一致（列表恒为
+{"list","total","page","pageSize","totalPages"} 信封；缺省=第一页信封；pageSize 缺省/上限均 **100**
+（T19 由 200 调整为 100）；越界页空 list + total 照常）
 ```
 
 ---
@@ -1267,7 +1261,7 @@ GET /coupon/my?token=xxx
 ┌──────────┐   GET /feed   ┌─────────────────┐
 │  客户端   │ ────────────► │ FeedController    │
 └──────────┘   ?page=1     └─────────────────┘
-               &pageSize=10         │
+               (pageSize=100)      │
                                     ▼
                             ┌──────────────────┐
                             │   FeedService     │
@@ -1300,16 +1294,16 @@ GET /coupon/my?token=xxx
 #### 接口定义
 
 ```
-GET /feed?page=1&pageSize=10&token=xxx
+GET /feed?page=1&token=xxx
 
-成功响应：
+成功响应（**T19：信封大小由后端 feed 域常量决定 = 100，前端只传 page**）：
 {
     "code": 200,
     "data": {
         "list": [...],
         "total": 50,
         "page": 1,
-        "pageSize": 10
+        "pageSize": 100
     }
 }
 ```
@@ -1330,6 +1324,9 @@ GET /feed?page=1&pageSize=10&token=xxx
 | `/comment/add` | 精确 | ✓ |
 | `/comment/delete` | 精确 | ✓ |
 | `/content/commentEnabled` | 精确 | ✓ |
+| `/content/update` | 精确 | ✓ |
+| `/content/mediaDelete` | 精确 | ✓ |
+| `/content/delete` | 精确 | ✓ |
 | `/user/changePassword` | 精确 | ✓ |
 | `/user/changeUserName` | 精确 | ✓ |
 | `/coupon/grab` | 精确 | ✓ |
@@ -1340,11 +1337,12 @@ GET /feed?page=1&pageSize=10&token=xxx
 | 接口 | 方法 | 说明 |
 |------|------|------|
 | `/user/login` | POST | 登录 |
-| `/user/register` | POST | 注册 |
+| `/user/register` | POST | 注册（自动登录失败时仍 200、`data.token=null`：注册成功但需手动登录，T13） |
 | `/start` | GET | 首页推荐 |
-| `/search` | GET | 搜索 |
-| `/detail` | GET | 内容详情 |
-| `/comment/show` | GET | 查看评论 |
+| `/search/keywordSearch` | GET | 搜索 |
+| `/search/IdSearch` | GET | 内容详情（无 /detail 端点） |
+| `/comment/show` | GET | 查看评论（T8 起可选 `page`/`pageSize`：传任一返回分页信封 `{list,total,...}`，`total`=主楼条数；缺省仍全量数组；`pageSize` 缺省 200（域级信封，T11-B）、上限 500） |
+| `/comment/replies` | GET | 展开某主楼全部回复（`rootId&page&pageSize`；`pageSize` 缺省 200、上限 500） |
 | `/coupon/list` | GET | 优惠券列表 |
 | `/profile` | GET | 用户主页 |
 
@@ -1360,279 +1358,3 @@ GET /feed?page=1&pageSize=10&token=xxx
 | 修改用户名 | userId == targetUserId | ✓ 已校验（通过 token） |
 
 ---
-
-## 八、已发现的问题
-
-### 8.1 业务逻辑问题
-
-#### 问题1：异常类型不统一 ✅ 已解决
-
----
-
-#### 问题2：注册后自动登录缺少异常处理
-
-**位置**: `LoginController.register()`
-
-```java
-protected void register(HttpServletRequest req, HttpServletResponse resp) throws Exception {
-    RegisterDTO dto = RequestParser.parse(req, RegisterDTO.class);
-    RegisterCommand rc = CommandConverter.registerToCommand(dto);
-    long id = userService.registerAsUser(rc);
-    LogInVO ls = userService.login(id, rc.getPassword());  // ⚠️ 如果登录失败？
-    BaseServletUtil.writeSuccess(resp, ls);
-}
-```
-
-**风险**: 注册成功但登录失败（理论上不应发生），会导致未返回 token
-
-**建议**: 登录失败时返回注册成功但提示手动登录
-
----
-
-#### 问题3：评论添加后缓存更新时机
-
-**位置**: `CommentService.addComment()`
-
-```java
-conn.commit();
-// 即时更新评论缓存
-CommentCacheDTO newComment = commentDao.findCommentById(conn, commentId);  // ⚠️ 使用已提交的连接
-```
-
-**风险**: 事务已提交，但后续查询使用同一个连接，如果连接状态异常可能失败
-
-**建议**: 缓存更新应该在独立的连接中进行，或者只依赖定时刷新
-
----
-
-#### 问题4：点赞计数与缓存一致性
-
-**位置**: `LikeService.likeContent()`
-
-```java
-contentDao.updateLikeCount(conn, contentId, 1);
-conn.commit();
-
-// 缓存更新在事务外
-cache.likeContent(userId, contentId);
-ContentService.updateContentLikeCount(contentId, 1);
-```
-
-**风险**: 如果缓存更新失败，数据库与缓存不一致
-
-**缓解**: 有定时刷新机制，最终会一致
-
-**建议**: 考虑使用消息队列保证最终一致性
-
-**状态（2026-09-02 T4）**: 计数漂移已提供统一校验与修复入口——`tools/check_integrity.py`
-默认 dry-run 校验 content.like_count / comment.like_count / content.comment_count /
-users.follow_count / users.follower_count，显式 `--fix` 单事务重算漂移行（改的只是冗余计数列，
-不触碰业务数据，逻辑与 CountRepairTool 一致）。应用层"事务内 ±1 + 事务外缓存 + 定时刷新兜底"
-的业务实现本次未改（P5 缓存一致性仍按既有定时刷新兜底，缓存改造属后续周期）。
-
-**状态（2026-09-12 P5 已消化）**: 本周期 C 缓存改造消化 P5——点赞/评论计数写路径改为"DB 提交后
-有条件写 + 写失败=DEL 失效"（NEEDS 4.2/4.6），读走三态 Cache-Aside 自愈（miss 单飞回填 DB 源真理）；
-时间戳侧"定时刷新兜底"已失效且随旧 ContentCacheManager 整体移除（O-6，T6）。计数仍以 DB 列为源
-真理，check_integrity --fix 作为最终兜底保留。
-
----
-
-#### 问题5：优惠券抢购无用户限流
-
-**位置**: `CouponService.grabCoupon()`
-
-```java
-int rows = couponDao.deductStock(conn, couponId);
-if (rows == 0) {
-    throw new ConflictException("库存不足或活动未开始/已结束");
-}
-```
-
-**风险**: 高并发下，大量请求同时通过库存检查，可能导致超卖
-
-**当前缓解**: 依赖数据库行锁 + 唯一索引
-
-**建议**: 可增加 Redis 预扣减或令牌桶限流
-
----
-
-### 8.2 数据一致性问题
-
-#### 问题6：关注数/粉丝数更新非原子
-
-**位置**: `FollowService.follow()`
-
-```java
-userDao.updateFollowCount(conn, userId, 1);
-userDao.updateFollowerCount(conn, followedUserId, 1);
-```
-
-**风险**: 如果第二步失败，关注数和粉丝数不一致
-
-**当前缓解**: 在同一事务中，会回滚
-
----
-
-#### 问题7：内容删除未清理关联数据
-
-> ✅ **2026-08-29 已关闭**
-
----
-
-### 8.3 安全问题
-
-#### 问题8：缺少资源所有权校验
-
-**位置**: 所有删除/修改操作
-
-**风险**: 用户 A 可以删除用户 B 的内容/评论
-
-**建议**: 在 Service 层添加所有权校验
-
----
-
-#### 问题9：JWT 密钥硬编码
-
-**位置**: `JwtUtil.java`
-
-**风险**: 密钥泄露
-
-**建议**: 从配置文件读取，生产环境使用环境变量
-
----
-
-### 8.4 性能问题
-
-#### 问题10：关注列表 N+1 查询
-
-**位置**: `FollowService.getFollowingList()`
-
-```java
-List<Long> ids = followDao.getAllFollowedUserIds(conn, userId);
-return buildUserList(conn, ids, currentUserId);
-```
-
-**当前优化**: 已使用批量查询 `findUsersByIds`
-
----
-
-#### 问题11：缓存全量刷新开销大
-
-**位置**: `ContentService.refresh()`
-
-**风险**: 每 10 分钟全量刷新，如果数据量大，可能造成数据库压力
-
-**建议**: 增量刷新或使用 Redis 作为主缓存
-
----
-
-## 九、重构保护检查清单
-
-在进行任何重构时，必须验证以下流程不受影响：
-
-### 核心流程验证
-
-| 测试项 | 验证方法 |
-|--------|----------|
-| 用户注册 | 注册新用户，返回 token |
-| 用户登录 | 使用手机号/ID 登录 |
-| 修改密码 | 修改后用新密码登录 |
-| 修改用户名 | 改名后内容详情/主页 authorName 变为新名（级联失效缓存） |
-| 发布视频 | 上传视频+封面，首页可见 |
-| 发布动态 | 上传图片帖，首页可见 |
-| 首页推荐 | 返回内容列表，有封面和计数 |
-| 搜索 | 关键词搜索返回结果 |
-| 内容详情 | 查看详情，有评论列表 |
-| 点赞内容 | 点赞后计数+1，取消后-1 |
-| 点赞评论 | 点赞后计数+1，取消后-1 |
-| 发表评论 | 评论后即时显示 |
-| 关注用户 | 关注后计数更新 |
-| 取消关注 | 取关后计数更新 |
-| 关注动态 | 只显示关注用户的内容 |
-| 优惠券抢购 | 扣库存，生成兑换码 |
-| 我的优惠券 | 显示已抢优惠券 |
-
-### 边界条件验证
-
-| 测试项 | 验证方法 |
-|--------|----------|
-| 重复点赞 | 返回 409 冲突 |
-| 重复关注 | 返回 409 冲突 |
-| 关注自己 | 返回 409 冲突 |
-| 未登录访问 | 返回 401 未授权 |
-| 资源不存在 | 返回 404 |
-| 库存不足 | 返回 409 |
-| 重复抢券 | 返回 409 |
-
----
-
-## 十、API 接口汇总
-
-### 10.1 用户相关
-
-| 方法 | 路径 | 说明 | 需要登录 |
-|------|------|------|----------|
-| POST | /user/login | 登录 | ✗ |
-| POST | /user/register | 注册 | ✗ |
-| POST | /user/changePassword | 修改密码 | ✓ |
-| POST | /user/changeUserName | 修改用户名（级联失效内容缓存 authorName） | ✓ |
-| POST | /user/changePhone | 修改手机号 | ✓ |
-
-### 10.2 内容相关
-
-| 方法 | 路径 | 说明 | 需要登录 |
-|------|------|------|----------|
-| GET | /start | 首页推荐 | ✗ |
-| GET | /search | 搜索 | ✗ |
-| GET | /detail | 内容详情 | ✗ |
-| GET | /feed | 关注动态 | ✓ |
-| POST | /api/upload/video | 上传视频 | ✓ |
-| POST | /api/upload/post | 上传动态 | ✓ |
-
-### 10.3 社交相关
-
-| 方法 | 路径 | 说明 | 需要登录 |
-|------|------|------|----------|
-| POST | /like/content/add | 点赞内容 | ✓ |
-| POST | /like/content/remove | 取消点赞 | ✓ |
-| POST | /like/comment/add | 点赞评论 | ✓ |
-| POST | /like/comment/remove | 取消点赞 | ✓ |
-| GET | /like/content/status | 点赞状态 | ✓ |
-| GET | /like/comment/status | 点赞状态 | ✓ |
-| POST | /comment/add | 发表评论 | ✓ |
-| GET | /comment/show | 查看评论 | ✗ |
-| POST | /follow/add | 关注 | ✓ |
-| POST | /follow/remove | 取关 | ✓ |
-| GET | /follow/following | 关注列表 | ✓ |
-| GET | /follow/followers | 粉丝列表 | ✓ |
-
-### 10.4 用户主页
-
-| 方法 | 路径 | 说明 | 需要登录 |
-|------|------|------|----------|
-| GET | /profile | 用户主页 | ✗ |
-
-### 10.5 优惠券相关
-
-| 方法 | 路径 | 说明 | 需要登录 |
-|------|------|------|----------|
-| GET | /coupon/list | 可用优惠券 | ✗ |
-| GET | /coupon/my | 我的优惠券 | ✓ |
-| POST | /coupon/grab | 抢购优惠券 | ✓ |
-
-### 10.6 媒体运维相关
-
-| 方法 | 路径 | 说明 | 需要登录 |
-|------|------|------|----------|
-| GET | /api/admin/media/list | 扫描并返回媒体资源状态 | ✓ |
-| POST | /api/admin/media/scan | 重新扫描并回写状态 | ✓ |
-| POST | /api/admin/media/restore | 按数据库原文件名重新上传写回 | ✓ |
-
----
-
-## 文档历史
-
-| 版本 | 日期 | 说明 |
-|------|------|------|
-| 1.1 | 2026-08-08 | 新增媒体运维流程（扫描/恢复）；上传路径更新为 D:/data/projects/VideoPlatform/stone；媒体 URL 改为动态 context path |
-| 1.0 | 2026-07-23 | 初始版本 |

@@ -12,6 +12,8 @@ public class CommentCacheDTO {
     private Long replyToUserId;
     private String replyToUsername;
     private int likeCount;
+    /** T10-B：该主楼回复总数（= 建树上溯后 children 总数，DB reply_count 字段；楼中楼回复无意义）。 */
+    private int replyCount;
     private List<CommentCacheDTO> children;
 
     public CommentCacheDTO() {
@@ -98,6 +100,14 @@ public class CommentCacheDTO {
 
     public void setLikeCount(int likeCount) {
         this.likeCount = likeCount;
+    }
+
+    public int getReplyCount() {
+        return replyCount;
+    }
+
+    public void setReplyCount(int replyCount) {
+        this.replyCount = replyCount;
     }
 
     public List<CommentCacheDTO> getChildren() {
