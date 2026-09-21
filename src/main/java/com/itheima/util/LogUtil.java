@@ -19,7 +19,7 @@ import java.util.logging.Logger;
  *
  * <p>初始化时机与既有语义不变：**首个触达本类的线程**在其静态块里完成装配——先清空 JUL root
  * 既有 handler，再挂"控制台 + N 个文件输出端"。{@link #getLogger(Class)} 的签名与语义**不变**
- * （24 个业务类按类名取 logger，本次改造零改动）。
+ * （23 个业务类按类名取 logger，本次改造零改动；原记 24，T2 窗口实测修正）。
  *
  * <p>输出层三件事：
  *

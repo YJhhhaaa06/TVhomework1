@@ -1,6 +1,6 @@
 # 当前系统架构地图
 
-> 版本：3.12（2026-09-21 日志周期 T1 log-01：日志底座——单行结构化 Formatter（固定 3 位毫秒 + 带冒号时区）+ 可扩展多输出端分流（`system` / `error`，全部由配置驱动）+ 按大小轮转 + 路径环境化；`LogUtil.getLogger` 签名与语义不变、业务代码零改动）
+> 版本：3.13（2026-09-21 日志周期 T2 log-02：请求关联——新增 `util/LogContext` 承载 reqId（与 `RequestContext` 分工：日志字段 / 业务字段各持一个 ThreadLocal，`RequestContext` 行为零改动）+ `LogFormatter` 行内输出 `req=` 字段 + 异步"捕获-恢复"传递机制先就位（本周期无异步调用点））
 > 最后更新：2026-09-21
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
@@ -31,7 +31,7 @@
 | 认证 | JWT | 4.4.0 |
 | 密码加密 | BCrypt (Spring Security Crypto) | 6.4.5 |
 | JSON | Jackson | 2.15.2 |
-| 日志 | java.util.logging（T1 起自建单行结构化输出 + 可扩展多输出端分流 + 按大小轮转） | - |
+| 日志 | java.util.logging（T1 起自建单行结构化输出 + 可扩展多输出端分流 + 按大小轮转；T2 起含请求标识 `req=`，reqId 由 `util/LogContext` 的 ThreadLocal 承载） | - |
 | 前端 | 原生 HTML/CSS/JavaScript | - |
 
 ---
@@ -167,11 +167,14 @@ com.itheima/
 | JwtUtil | 40 | JWT 生成/校验 |
 | MyRedisPool | 49 | Redis 连接池（显式 connect/so 超时 + maxWait，8 参 JedisPool 构造器） |
 | LogUtil | 159 | 日志工具（装配：清空 root 既有 handler → 挂控制台 → 逐输出端挂 FileHandler，自身零 System.out/err）。**输出端按「配置 + Handler 列表」组织**（`resolveFileOutputs()` 的规格表 + 配置键，流程内零字面量文件名 → D9 新增输出端只需加一项规格 + 一个配置键）；默认 `system`（阈值 `log.level`）与 `error`（`log.error.level`，默认 SEVERE）两路；**按大小轮转**用 JUL 原生 `FileHandler(pattern, limit, count, append)`（`log.maxBytes` / `log.fileCount`，生成 `<名>.<N>`、N=0 为当前文件、最旧一代被回收；`log.maxBytes<=0` 视为不轮转、文件名精确等于配置值）；**路径口径** = `log.file` 所在目录即日志目录、其余输出端相对路径只取文件名落同目录（改写 `LOG_PATH` 一处即全部文件换目录，N5 隔离）；`log.file` 为空则整组文件输出端跳过（降级仅控制台）；`getLogger(Class)` 签名与语义不变 |
-| LogFormatter | 83 | 单行结构化 Formatter：`ts=… level=… logger=… msg=…`（固定 3 位毫秒 + 带冒号时区偏移；行尾统一 LF；消息内换行折成 `\n` 字面量守住"一条记录一行"；异常堆栈跟在首行之后）。消息渲染复用 `Formatter.formatMessage`，与 `SimpleFormatter` 同源（`{0}` 占位符文案逐字不变）；`req=` 由 T2 在同一行补入 |
-| RequestContext | 31 | 请求上下文路径（动态拼接媒体 URL） |
+| LogFormatter | 107 | 单行结构化 Formatter：`ts=… level=… logger=… req=… msg=…`（固定 3 位毫秒 + 带冒号时区偏移；行尾统一 LF；消息内换行折成 `\n` 字面量守住"一条记录一行"；异常堆栈跟在首行之后）。消息渲染复用 `Formatter.formatMessage`，与 `SimpleFormatter` 同源（`{0}` 占位符文案逐字不变）；**`req=` 取 `LogContext` 的当前请求标识、只在有值时输出**（非请求线程 / 已 clear 时该字段整段不出现），值同样过单行折叠；`user=` 属访问日志字段（T3 在 access 输出端承载），不注入本行 |
+| LogContext | 135 | **请求级日志上下文**（T2 新增，D6 方案 B）：唯一 ThreadLocal 承载 reqId。`newRequestId()` = **唯一生成源**，固定 16 字符 = 毫秒低 32 位（8 位十六进制）+ 进程随机标识（4 位）+ 原子自增序号低 16 位（4 位）→ 同毫秒并发/连续不重复（序号 4 位约 6.5 万次/毫秒后回绕、届时理论上可撞号，本项目量级不可达）、跨重启不撞号；`setRequestId` 入参归一（null/空白 = 清除、去两侧空白）；`getRequestId` 无值返回 null（**无默认兜底**，非请求线程即无 reqId）；`clear()` 供 filter 的 finally 调用。**生命周期自治**：只在最外层 `AccessLogFilter`（T3）一处 set/clear，不与其他上下文共用清理点。**异步传递机制（D8，本周期无调用点）**：`capture()` 快照 + `restore(snapshot)` 恢复 + `wrap(Runnable)` 便捷包装（捕获→任务体恢复→结束后还原执行线程原值，池化线程不留残留）；**只包装不创建线程**，故不引入异步执行 |
+| RequestContext | 36 | 请求上下文路径（动态拼接媒体 URL）。**T2 只加注释、行为零改动**（D6）：分工 = 业务类字段放本类、日志类字段放 `LogContext`，两者 ThreadLocal 互不干扰、清理点分离（本类由内层 `EncodingFilter` set/clear，其 finally 先于外层 filter 执行——若共用 `clear()`，reqId 会被提前清掉、异常日志丢掉请求标识） |
 | StringUtil | 37 | 字符串校验 |
 | ResultUtil | 26 | 响应格式构建 |
 | TimeUtil | 15 | 时间工具 |
+
+> **日志字段与业务字段的分工（T2，D6）**：日志类字段（reqId）放 `LogContext`，业务类字段（context path）放 `RequestContext`——两个 ThreadLocal 各自 set/clear、无共同清理点。**约束（D8，随 feed 流异步化改动一并遵守）**：reqId 靠 ThreadLocal 透传，而 `LogFormatter` 在"打日志的那条线程"上读取它（日志同步写、`format()` 与业务同线程）——**将来任何引入进程内线程池的改动，提交任务前必须用 `LogContext.wrap(task)` 包装**，否则异步线程里的日志丢掉 reqId、同一请求的日志链断裂（JUL 无内建 MDC，本机制即自建替代；本周期无异步调用点，故 `wrap` 暂无调用方）。
 
 #### controller 包（跨域基建，业务 Controller 已全部搬出）
 

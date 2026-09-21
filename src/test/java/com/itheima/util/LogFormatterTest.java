@@ -1,5 +1,6 @@
 package com.itheima.util;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -13,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * T1（log-01）单行结构化 Formatter 单测：字段齐全 / 单行不变式 / 毫秒与时区 / 消息渲染同源 /
- * 异常堆栈跟随消息。纯组件测试，无外部依赖。
+ * 异常堆栈跟随消息；T2（log-02）补 {@code req=} 字段的"有值才出现"与单行不变式。纯组件测试，无外部依赖。
  */
 class LogFormatterTest {
 
@@ -22,6 +23,13 @@ class LogFormatterTest {
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
 
     private final LogFormatter formatter = new LogFormatter();
+
+    @AfterEach
+    void clearRequestContext() {
+        // 本类用例会往"当前线程"写 reqId：逐用例兜底清理（不替代用例内的 try/finally），
+        // 避免将来新增用例漏写清理时污染同 JVM 内的其它测试类（Formatter 读的是同一个 ThreadLocal）
+        LogContext.clear();
+    }
 
     private static LogRecord record(Level level, String loggerName, String message, long millis) {
         LogRecord record = new LogRecord(level, message);
@@ -105,5 +113,42 @@ class LogFormatterTest {
         assertTrue(formatted.contains("java.lang.IllegalStateException: redis down"), formatted);
         assertTrue(formatted.contains("at " + getClass().getName()), "堆栈应含调用点: " + formatted);
         assertFalse(formatted.contains("\r"), "行尾应统一归一为 LF: " + formatted);
+    }
+
+    // ==================== T2（log-02）：req= 字段 ====================
+
+    @Test
+    void requestIdFieldAppearsOnlyWhileRequestContextPresent() {
+        LogRecord record = record(Level.INFO, "com.itheima.demo.Service", "列表刷不出来", 1L);
+        try {
+            LogContext.setRequestId("6a1b2c3d0f3e0001");
+
+            String withRequestId = formatter.format(record);
+
+            assertTrue(withRequestId.endsWith(" logger=com.itheima.demo.Service req=6a1b2c3d0f3e0001 msg=列表刷不出来\n"),
+                    "req= 应插在 logger 与 msg 之间: " + withRequestId);
+        } finally {
+            LogContext.clear();
+        }
+
+        String withoutRequestId = formatter.format(record);
+
+        assertFalse(withoutRequestId.contains("req="),
+                "非请求线程 / 已 clear 时不得输出 req= 字段: " + withoutRequestId);
+    }
+
+    @Test
+    void requestIdIsCollapsedIntoOneLineWithTheRest() {
+        try {
+            LogContext.setRequestId("ab\ncd");
+
+            String formatted = formatter.format(record(Level.WARNING, "l", "m", 1L));
+            String head = formatted.substring(0, formatted.length() - 1);
+
+            assertFalse(head.contains("\n"), "reqId 内含换行也必须折成一行: " + head);
+            assertTrue(head.endsWith("req=ab\\ncd msg=m"), head);
+        } finally {
+            LogContext.clear();
+        }
     }
 }
