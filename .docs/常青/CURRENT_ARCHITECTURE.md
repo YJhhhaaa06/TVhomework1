@@ -1,6 +1,6 @@
 # 当前系统架构地图
 
-> 版本：3.11（2026-09-21 T19：四域分页口径统一——feed / search / profile / follow 均为「域级上限 100 + 域级信封 100」，前端只传 `page`；`BaseServletUtil` 归一逻辑下沉为 request 无关纯函数 `normalizePage`/`normalizePageSize`，无参 / 两参重载与公共 cap 50/10 已删）
+> 版本：3.12（2026-09-21 日志周期 T1 log-01：日志底座——单行结构化 Formatter（固定 3 位毫秒 + 带冒号时区）+ 可扩展多输出端分流（`system` / `error`，全部由配置驱动）+ 按大小轮转 + 路径环境化；`LogUtil.getLogger` 签名与语义不变、业务代码零改动）
 > 最后更新：2026-09-21
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
@@ -31,7 +31,7 @@
 | 认证 | JWT | 4.4.0 |
 | 密码加密 | BCrypt (Spring Security Crypto) | 6.4.5 |
 | JSON | Jackson | 2.15.2 |
-| 日志 | java.util.logging | - |
+| 日志 | java.util.logging（T1 起自建单行结构化输出 + 可扩展多输出端分流 + 按大小轮转） | - |
 | 前端 | 原生 HTML/CSS/JavaScript | - |
 
 ---
@@ -68,7 +68,7 @@ untitled/
 │       ├── java/com/itheima/        # JUnit 单元测试（按被测类同包随迁至各域 service 包）
 │       └── python/                  # pytest 端到端脚本
 │
-├── logs/                            # 运行日志
+├── logs/                            # 运行日志（`log.file` 所在目录即"日志目录"，其余输出端同目录；轮转后文件名为 `<名>.<N>`，N=0 为当前写入文件）
 ├── temp_script/                     # 一次性临时脚本（gitignore，可删）
 ├── tools/                           # 工具脚本（统一入口 tools/tv.py）
 └── target/                          # Maven 构建输出（gitignore；测试链路改用项目内 .stage8-target）
@@ -166,7 +166,8 @@ com.itheima/
 | PasswordUtil | 58 | BCrypt 密码哈希 |
 | JwtUtil | 40 | JWT 生成/校验 |
 | MyRedisPool | 49 | Redis 连接池（显式 connect/so 超时 + maxWait，8 参 JedisPool 构造器） |
-| LogUtil | 61 | 日志工具（初始化先清空 root 既有 handler 再挂 Console+File，自身零 System.out/err） |
+| LogUtil | 159 | 日志工具（装配：清空 root 既有 handler → 挂控制台 → 逐输出端挂 FileHandler，自身零 System.out/err）。**输出端按「配置 + Handler 列表」组织**（`resolveFileOutputs()` 的规格表 + 配置键，流程内零字面量文件名 → D9 新增输出端只需加一项规格 + 一个配置键）；默认 `system`（阈值 `log.level`）与 `error`（`log.error.level`，默认 SEVERE）两路；**按大小轮转**用 JUL 原生 `FileHandler(pattern, limit, count, append)`（`log.maxBytes` / `log.fileCount`，生成 `<名>.<N>`、N=0 为当前文件、最旧一代被回收；`log.maxBytes<=0` 视为不轮转、文件名精确等于配置值）；**路径口径** = `log.file` 所在目录即日志目录、其余输出端相对路径只取文件名落同目录（改写 `LOG_PATH` 一处即全部文件换目录，N5 隔离）；`log.file` 为空则整组文件输出端跳过（降级仅控制台）；`getLogger(Class)` 签名与语义不变 |
+| LogFormatter | 83 | 单行结构化 Formatter：`ts=… level=… logger=… msg=…`（固定 3 位毫秒 + 带冒号时区偏移；行尾统一 LF；消息内换行折成 `\n` 字面量守住"一条记录一行"；异常堆栈跟在首行之后）。消息渲染复用 `Formatter.formatMessage`，与 `SimpleFormatter` 同源（`{0}` 占位符文案逐字不变）；`req=` 由 T2 在同一行补入 |
 | RequestContext | 31 | 请求上下文路径（动态拼接媒体 URL） |
 | StringUtil | 37 | 字符串校验 |
 | ResultUtil | 26 | 响应格式构建 |

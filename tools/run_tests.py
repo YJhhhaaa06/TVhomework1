@@ -127,8 +127,10 @@ def base_env() -> dict:
     # T2 媒体目录隔离：upload.path -> UPLOAD_PATH 环境变量覆盖（AppConfig 统一机制），
     # 使测试实例上传落盘指向独立 media-test；与 WAR context.xml 的 /upload 挂载保持一致。
     env["UPLOAD_PATH"] = _norm_media_path(TEST_MEDIA_ROOT)
-    # T9 本地化：应用日志（app.properties log.file=logs/system.log 相对路径）随 LOG_PATH
-    # 收进项目内测试实例的 logs/，避免解析到 Tomcat 安装目录 logs（沙箱外）被拦截。
+    # T9 本地化 + T1 目录口径：应用日志（app.properties log.file=logs/system.log 相对路径）随
+    # LOG_PATH 收进项目内测试实例的 logs/，避免解析到 Tomcat 安装目录 logs（沙箱外）被拦截；
+    # 其余文件输出端只取文件名、自动落同一目录（口径见 util/LogUtil 类注释）。
+    # ⚠️ 轮转后磁盘上的真实文件名带代际：system.log.0 / error.log.0（N=0 为当前写入文件）。
     env["LOG_PATH"] = str(CATALINA_BASE / "logs" / "system.log")
     return env
 
