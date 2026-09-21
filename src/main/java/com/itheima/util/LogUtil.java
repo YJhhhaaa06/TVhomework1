@@ -28,8 +28,12 @@ import java.util.logging.Logger;
  *   <li><b>可扩展多输出端</b>（NEEDS 4.0 D9）：分流按「输出端规格表（{@link #resolveFileOutputs()}）
  *       + 配置键」组织，**流程内不出现字面量文件名**——将来新增输出端（如第二张清单的审计日志
  *       {@code audit.log}）只需在规格表加一项、{@code app.properties} 加一个配置键，持有 LOGGER 的
- *       业务类零改动。默认两个文件输出端：{@code system}（全域，阈值 {@code log.level}）与
- *       {@code error}（只收 {@code >= log.error.level}，默认 SEVERE，便于排障速览）。</li>
+ *       业务类零改动。默认三个文件输出端：{@code system}（全域，阈值 {@code log.level}）、
+ *       {@code error}（只收 {@code >= log.error.level}，默认 SEVERE，便于排障速览）、
+ *       {@code access}（**访问日志，T3 新增**：由 {@link #getAccessLogger()} 承载，只收写向
+ *       {@code access} logger 的记录 → access 行只落 access.log、不进 system.log；阈值固定
+ *       {@code Level.INFO}）。{@code system} / {@code error} 挂 root、{@code access} 挂专属
+ *       logger（规格表的 {code owner} 字段区分挂载目标）。</li>
  *   <li><b>按大小轮转</b>：由 JUL 原生 {@code FileHandler(pattern, limit, count, append)} 承担
  *       （阈值/保留个数来自 {@code log.maxBytes} / {@code log.fileCount}，参数化可配）。JUL 语义：
  *       文件名为 {@code <log.file>.<N>}，**N=0 即当前写入文件、N 越大越旧**，超出保留个数的最旧文件
@@ -51,6 +55,12 @@ public class LogUtil {
 
     /** 文件输出端落盘编码：显式钉 UTF-8，不依赖 JVM 默认字符集（中文日志跨环境一致）。 */
     private static final String ENCODING = "UTF-8";
+
+    /** 访问输出端专属 logger 名（T3 log-03）：access 行只写向此 logger，见 {@link #getAccessLogger()}。 */
+    public static final String ACCESS_LOGGER_NAME = "access";
+
+    /** 访问输出端专属 logger：handler 在静态块装配（挂靠目标由规格表 owner 决定）。 */
+    private static final Logger ACCESS_LOGGER = Logger.getLogger(ACCESS_LOGGER_NAME);
 
     static {
         Logger rootLogger = Logger.getLogger("");
@@ -98,13 +108,19 @@ public class LogUtil {
         File primary = new File(primaryPath);
         File logDir = primary.getAbsoluteFile().getParentFile();
 
-        outputs.add(new LogOutput("system", primary, AppConfig.getLogLevel(), Level.INFO));
+        outputs.add(new LogOutput("system", primary, AppConfig.getLogLevel(), Level.INFO, null));
 
         File errorFile = new File(AppConfig.getLogErrorFile());
         if (!errorFile.isAbsolute() && logDir != null) {
             errorFile = new File(logDir, errorFile.getName());
         }
-        outputs.add(new LogOutput("error", errorFile, AppConfig.getLogErrorLevel(), Level.SEVERE));
+        outputs.add(new LogOutput("error", errorFile, AppConfig.getLogErrorLevel(), Level.SEVERE, null));
+
+        File accessFile = new File(AppConfig.getLogAccessFile());
+        if (!accessFile.isAbsolute() && logDir != null) {
+            accessFile = new File(logDir, accessFile.getName());
+        }
+        outputs.add(new LogOutput("access", accessFile, "INFO", Level.INFO, ACCESS_LOGGER_NAME));
         return outputs;
     }
 
@@ -133,7 +149,16 @@ public class LogUtil {
             handler.setFormatter(FORMATTER);
             handler.setEncoding(ENCODING);
             handler.setLevel(parseLevel(initLogger, output.levelName(), output.defaultLevel()));
-            rootLogger.addHandler(handler);
+            // 挂载目标：owner 为空 → root（system/error 随全量日志共用 handler 列表）；
+            // owner 非空 → 专属 logger（access：access 行只落本端文件、不向 root 传播）。
+            // 仅在 handler 创建成功后设置，装失败（异常被捕获）时保持默认传播（JUL → 控制台）。
+            Logger target = rootLogger;
+            if (output.owner() != null) {
+                target = Logger.getLogger(output.owner());
+                target.setLevel(handler.getLevel());
+                target.setUseParentHandlers(false);
+            }
+            target.addHandler(handler);
             initLogger.info("successfully load logs: " + output.name() + " -> " + file.getAbsolutePath());
         } catch (Exception e) {
             initLogger.log(Level.SEVERE, "fail to log " + output.name() + ": " + e.getMessage(), e);
@@ -153,7 +178,21 @@ public class LogUtil {
         return Logger.getLogger(clazz.getName());
     }
 
-    /** 文件输出端规格：{@code name} 用于启动日志与失败提示，{@code file} 为落盘文件（已解析目录口径）。 */
-    record LogOutput(String name, File file, String levelName, Level defaultLevel) {
+    /**
+     * 访问日志专属 logger（T3 log-03）：handler 已在本类静态块按规格表装配（{@code log.access.file}、
+     * 轮转参数、{@link LogFormatter}），调用方（{@code filter/AccessLogFilter}）直接
+     * {@code getAccessLogger().info(line)} 即可——一行一请求，无需自行持文件句柄。
+     *
+     * <p>注意：该 logger 已设 {@code useParentHandlers=false}（装配成功后），记录**只**落 access
+     * 输出端文件；`log.file` 为空（整组文件输出端跳过）时保持默认传播 → access 行随 JUL 到控制台，
+     * 与"降级为仅控制台"口径一致。
+     */
+    public static Logger getAccessLogger() {
+        return ACCESS_LOGGER;
+    }
+
+    /** 文件输出端规格：{@code name} 用于启动日志与失败提示，{@code file} 为落盘文件（已解析目录口径），
+     * {@code owner} 为挂载目标 logger 名（{@code null} = 挂 root，见 {@link #installFileOutput}）。 */
+    record LogOutput(String name, File file, String levelName, Level defaultLevel, String owner) {
     }
 }

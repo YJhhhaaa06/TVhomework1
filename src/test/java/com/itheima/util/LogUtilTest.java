@@ -73,11 +73,12 @@ class LogUtilTest {
         probe.setProperty("log.level", "WARNING");
         probe.setProperty("log.error.file", "other.log");
         probe.setProperty("log.error.level", "WARNING");
+        probe.setProperty("log.access.file", "probe.log");
         replaceProps(probe);
         try {
             List<LogUtil.LogOutput> outputs = LogUtil.resolveFileOutputs();
 
-            assertEquals(2, outputs.size(), "应有 system 与 error 两个文件输出端");
+            assertEquals(3, outputs.size(), "应有 system / error / access 三个文件输出端");
             assertEquals("system", outputs.get(0).name());
             assertEquals(normalized(probePrimary), normalized(outputs.get(0).file()),
                     "system 输出端应使用配置的 log.file（同一路径必须能从配置复现 → 非字面量硬编码）");
@@ -92,6 +93,17 @@ class LogUtilTest {
             assertEquals(normalized(outputs.get(0).file().getParentFile()),
                     normalized(outputs.get(1).file().getParentFile()),
                     "相对文件名应锚到 log.file 所在目录");
+
+            assertEquals("access", outputs.get(2).name(), "T3 起第三个输出端为 access");
+            assertEquals("probe.log", outputs.get(2).file().getName(),
+                    "access 输出端文件名应使用配置的 log.access.file（不硬编码）");
+            assertEquals("INFO", outputs.get(2).levelName(), "access 输出端级别固定 INFO");
+            assertEquals(Level.INFO, outputs.get(2).defaultLevel());
+            assertEquals(LogUtil.ACCESS_LOGGER_NAME, outputs.get(2).owner(),
+                    "access 输出端应挂专属 logger（owner 区分挂载目标，不挂 root）");
+            assertEquals(normalized(outputs.get(0).file().getParentFile()),
+                    normalized(outputs.get(2).file().getParentFile()),
+                    "access 相对文件名同样锚到 log.file 所在目录");
         } finally {
             replaceProps(originalProps);
         }
@@ -132,12 +144,16 @@ class LogUtilTest {
     void errorOutputLandsBesideConfiguredSystemLog() {
         List<LogUtil.LogOutput> outputs = LogUtil.resolveFileOutputs();
 
-        assertEquals(2, outputs.size(), "配置可用时应装配 system 与 error 两个文件输出端");
+        assertEquals(3, outputs.size(), "配置可用时应装配 system / error / access 三个文件输出端");
         assertEquals(AppConfig.getLogErrorFile(), outputs.get(1).file().getName(),
                 "error 输出端文件名应来自配置");
+        assertEquals("access", outputs.get(2).name(), "第三个输出端固定为 access");
         assertEquals(normalized(outputs.get(0).file().getParentFile()),
                 normalized(outputs.get(1).file().getParentFile()),
                 "改写 log.file（测试侧即 LOG_PATH）一处即可让所有日志文件落同目录（N5 隔离）");
+        assertEquals(normalized(outputs.get(2).file().getParentFile()),
+                normalized(outputs.get(0).file().getParentFile()),
+                "access 输出端与 system/error 同目录（一次 LOG_PATH 全部换目录）");
     }
 
     @Test
@@ -148,6 +164,9 @@ class LogUtilTest {
         assertEquals(shipped.getString("log.error.level"), AppConfig.getLogErrorLevel());
         assertEquals(Integer.parseInt(shipped.getString("log.maxBytes")), AppConfig.getLogMaxBytes());
         assertEquals(Integer.parseInt(shipped.getString("log.fileCount")), AppConfig.getLogFileCount());
+        assertEquals(shipped.getString("log.access.file"), AppConfig.getLogAccessFile(), "access 文件名来自配置");
+        assertEquals(Integer.parseInt(shipped.getString("log.slowRequestMs")), AppConfig.getLogSlowRequestMs(),
+                "慢请求阈值来自配置（默认 1000ms）");
         assertTrue(AppConfig.getLogMaxBytes() > 0, "出厂配置应开启按大小轮转（N4：单文件无限增长）");
         assertTrue(AppConfig.getLogFileCount() >= 1, "保留个数至少 1（含当前写入文件）");
     }
@@ -208,14 +227,29 @@ class LogUtilTest {
             }
         }
 
+        // T3：root 仍只挂 system/error 两个文件输出端；access 挂专属 logger（见 accessLoggerWiresDedicatedFileHandler），
+        // 故此处断言不变——access 行不得混入 root 全量 handler（否则 system.log / 控制台都会被"每请求一行"灌满）
         assertEquals(1, consoles, "控制台输出端应有且仅有一个: " + handlers);
-        assertEquals(2, fileHandlers.size(), "应装配 system 与 error 两个文件输出端: " + handlers);
+        assertEquals(2, fileHandlers.size(), "root 应装配 system 与 error 两个文件输出端: " + handlers);
         assertTrue(fileHandlers.stream().anyMatch(h -> Level.SEVERE.equals(h.getLevel())),
                 "error 输出端级别应来自 log.error.level（默认 SEVERE）: " + fileHandlers);
         for (Handler handler : handlers) {
             assertTrue(handler.getFormatter() instanceof LogFormatter,
                     "各输出端应统一使用 LogFormatter: " + handler);
         }
+    }
+
+    /** T3：access 输出端挂专属 logger、level INFO、关闭向 root 传播（access 行只落 access.log）。 */
+    @Test
+    void accessLoggerWiresDedicatedFileHandler() {
+        Logger access = LogUtil.getAccessLogger();
+
+        assertFalse(access.getUseParentHandlers(), "access 记录不得传播到 root（不进 system.log/控制台）");
+        assertEquals(Level.INFO, access.getLevel(), "access logger 级别固定 INFO");
+        Handler[] handlers = access.getHandlers();
+        assertEquals(1, handlers.length, "access logger 应恰好挂一个文件输出端: " + Arrays.toString(handlers));
+        assertTrue(handlers[0] instanceof FileHandler, "access 输出端应为 JUL FileHandler（轮转/编码同构）");
+        assertTrue(handlers[0].getFormatter() instanceof LogFormatter, "access 输出端应统一使用 LogFormatter");
     }
 
     // ==================== 工具 ====================

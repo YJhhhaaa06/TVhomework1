@@ -229,6 +229,16 @@ public final class AppConfig {
         return get("log.error.level", "SEVERE");
     }
 
+    /** 访问输出端文件名：相对值只取文件名，目录与 {@code log.file} 相同（口径见 LogUtil 类注释）。 */
+    public static String getLogAccessFile() {
+        return get("log.access.file", "access.log");
+    }
+
+    /** 慢请求阈值（毫秒）：访问日志行 {@code cost >=} 此值 时带 {@code slow=1} 标记（D7 性能观测）。 */
+    public static int getLogSlowRequestMs() {
+        return getInt("log.slowRequestMs", 1000);
+    }
+
     /** 单文件大小上限（字节）；{@code <=0} 视为不轮转。 */
     public static int getLogMaxBytes() {
         return getInt("log.maxBytes", 10 * 1024 * 1024);

@@ -41,6 +41,11 @@ public final class LogContext {
 
     private static final ThreadLocal<String> REQUEST_ID = new ThreadLocal<>();
 
+    /** 结果码槽（T3 log-03）：由 {@link com.itheima.controller.BaseServletUtil} 写响应时写入
+     * （body code），供最外层 {@code AccessLogFilter} 在 finally 中一次性读取。缺省 0 = 未走
+     * 业务统一出口（静态资源 / OPTIONS 预检 / 未映射 404）。 */
+    private static final ThreadLocal<Integer> RESULT_CODE = new ThreadLocal<>();
+
     private LogContext() {
     }
 
@@ -82,9 +87,31 @@ public final class LogContext {
         return REQUEST_ID.get();
     }
 
-    /** 清除当前线程的请求标识（**只在 filter 的 finally 中调用**：请求结束必须清理，防线程复用串号）。 */
+    /**
+     * 记录本次请求的结果码（T3 log-03）：只在 {@code BaseServletUtil.writeSuccess/writeError}
+     * 中写入（body code），在**最外层 {@code AccessLogFilter} 的 finally** 中读取一次。
+     *
+     * <p>为什么放本类：结果码是**日志类字段**（访问日志行的一个字段），与 reqId 同生命周期
+     * （均由最外层 filter 收口），符合 D6"日志字段放 {@code LogContext}"的分工；放在
+     * {@code HttpServletResponse} 之外的 ThreadLocal，正是 D5"不包装响应读响应体"的载体。
+     */
+    public static void setResultCode(int code) {
+        RESULT_CODE.set(code);
+    }
+
+    /** 当前线程的结果码；未写入（未走业务统一出口）返回 0。 */
+    public static int getResultCode() {
+        Integer code = RESULT_CODE.get();
+        return code == null ? 0 : code;
+    }
+
+    /**
+     * 清除当前线程的请求级日志上下文（reqId + 结果码）。**只在最外层 {@code AccessLogFilter}
+     * 的 finally 中调用一次**：请求结束必须清理，防容器线程复用串号/串码。
+     */
     public static void clear() {
         REQUEST_ID.remove();
+        RESULT_CODE.remove();
     }
 
     /**

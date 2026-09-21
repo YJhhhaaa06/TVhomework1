@@ -61,6 +61,15 @@ TEST_RESOURCE_DIR = os.environ.get(
     "TV_TEST_RESOURCE_DIR", r"D:\dev\WorkSpace\VideoPlatform\TestResource"
 )
 
+# T3 访问日志落盘目录（log.file 所在目录 = 日志目录，access 输出端同目录；
+# 测试实例 = .stage8-target/tomcat-test-18080/logs；env TV_ACCESS_LOG_DIR 可覆盖。
+# 与 tools/run_tests.py 的 base_env LOG_PATH 注入保持一致——LOCAL 直跑若连了别的实例，
+# 用 TV_ACCESS_LOG_DIR 指对目录即可；文件为轮转形态 <名>.N，N=0 为当前写入文件）
+ACCESS_LOG_DIR = os.environ.get(
+    "TV_ACCESS_LOG_DIR",
+    "D:/javaproject/VideoPlatform/TVhomework1/.stage8-target/tomcat-test-18080/logs",
+)
+
 # T3/N2：真实媒体缺失降级为合成媒体时，stderr 一次性显式警告（不再静默）。模块级 flag 防刷屏。
 _WARNED_SYNTHETIC_MEDIA = False
 

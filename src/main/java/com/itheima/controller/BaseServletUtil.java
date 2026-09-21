@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.itheima.exception.ErrorCode;
+import com.itheima.util.LogContext;
 import com.itheima.util.ResultUtil;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -20,12 +21,17 @@ public class BaseServletUtil {
 
     // 统一返回成功
     public static void writeSuccess(HttpServletResponse resp, Object data) throws IOException {
+        // 结果码收口（T3 log-03，D5）：写响应时把 body code 写入 LogContext，
+        // 供最外层 AccessLogFilter 取用（ResultUtil.success 恒为 code=200）
+        LogContext.setResultCode(200);
         resp.setContentType("application/json;charset=UTF-8");
         mapper.writeValue(resp.getWriter(), ResultUtil.success(data));
     }
 
     // 统一返回错误
     public static void writeError(HttpServletResponse resp, int code, String msg) throws IOException {
+        // 结果码收口（T3 log-03，D5）：业务/过滤/异常统一出口，body code 与访问日志一致
+        LogContext.setResultCode(code);
         resp.setContentType("application/json;charset=UTF-8");
         mapper.writeValue(resp.getWriter(), ResultUtil.error(code, msg));
     }

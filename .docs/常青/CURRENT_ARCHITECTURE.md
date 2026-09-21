@@ -1,6 +1,6 @@
 # 当前系统架构地图
 
-> 版本：3.13（2026-09-21 日志周期 T2 log-02：请求关联——新增 `util/LogContext` 承载 reqId（与 `RequestContext` 分工：日志字段 / 业务字段各持一个 ThreadLocal，`RequestContext` 行为零改动）+ `LogFormatter` 行内输出 `req=` 字段 + 异步"捕获-恢复"传递机制先就位（本周期无异步调用点））
+> 版本：3.14（2026-09-21 日志周期 T3 log-03：新增 `filter/AccessLogFilter`（web.xml 最外层）+ 访问日志输出端（`LogUtil` 规格表第三项、专属 logger `access`）+ `BaseServletUtil` 结果码收口（`LogContext` 新增结果码槽）+ 慢请求标记 `log.slowRequestMs`；每请求在 access.log 落一行并在其 msg 携带 method/path/userId/code/cost/slow）
 > 最后更新：2026-09-21
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
@@ -31,7 +31,7 @@
 | 认证 | JWT | 4.4.0 |
 | 密码加密 | BCrypt (Spring Security Crypto) | 6.4.5 |
 | JSON | Jackson | 2.15.2 |
-| 日志 | java.util.logging（T1 起自建单行结构化输出 + 可扩展多输出端分流 + 按大小轮转；T2 起含请求标识 `req=`，reqId 由 `util/LogContext` 的 ThreadLocal 承载） | - |
+| 日志 | java.util.logging（T1 起自建单行结构化输出 + 可扩展多输出端分流 + 按大小轮转；T2 起含请求标识 `req=`，reqId 由 `util/LogContext` 的 ThreadLocal 承载；T3 起含**访问日志**：`filter/AccessLogFilter` 每请求在 `access.log` 落一行（method/path/userId/结果码/耗时/慢标记），结果码由 `BaseServletUtil` 收口进 `LogContext`） | - |
 | 前端 | 原生 HTML/CSS/JavaScript | - |
 
 ---
@@ -68,7 +68,7 @@ untitled/
 │       ├── java/com/itheima/        # JUnit 单元测试（按被测类同包随迁至各域 service 包）
 │       └── python/                  # pytest 端到端脚本
 │
-├── logs/                            # 运行日志（`log.file` 所在目录即"日志目录"，其余输出端同目录；轮转后文件名为 `<名>.<N>`，N=0 为当前写入文件）
+├── logs/                            # 运行日志（`log.file` 所在目录即"日志目录"，其余输出端同目录；轮转后文件名为 `<名>.<N>`，N=0 为当前写入文件；含访问日志 access.log）
 ├── temp_script/                     # 一次性临时脚本（gitignore，可删）
 ├── tools/                           # 工具脚本（统一入口 tools/tv.py）
 └── target/                          # Maven 构建输出（gitignore；测试链路改用项目内 .stage8-target）
@@ -126,12 +126,13 @@ com.itheima/
 
 | 类 | 行数 | 职责 | URL 匹配 |
 |----|------|------|----------|
+| AccessLogFilter | 90 | **访问日志（T3 新增，web.xml 最外层）**：进入 set reqId、finally 读结果码/耗时（nanoTime 覆盖全链）并写专属 logger `access`（行 `msg=method=… path=… userId=… code=… cost=…ms slow=0|1`）；不读 query/header/请求体（D7"绝不记"以不记为脱敏） | /* |
 | ExceptionFilter | 53 | 全局异常处理（业务异常按 code/msg 输出，未知异常 500） | /* |
 | EncodingFilter | 27 | UTF-8 编码 | /* |
 | LoginFilter | 41 | 解析 JWT Token，设置 userId | /* |
 | AuthFilter | 77 | 权限校验（登录 + /api/admin 管理员角色） | /* |
 
-**执行顺序**：ExceptionFilter → EncodingFilter → LoginFilter → AuthFilter（web.xml 注册）
+**执行顺序**：AccessLogFilter → ExceptionFilter → EncodingFilter → LoginFilter → AuthFilter（web.xml 注册；T3 只新增 AccessLogFilter 于最外层，既有 4 个顺序不变）
 
 **AuthFilter 保护路径**（`PROTECTED_PREFIXES` 5 项 + `PROTECTED_EXACT` 10 项）：
 - 前缀：`/api/upload`、`/api/admin`、`/follow`、`/like`、`/feed`
@@ -166,9 +167,9 @@ com.itheima/
 | PasswordUtil | 58 | BCrypt 密码哈希 |
 | JwtUtil | 40 | JWT 生成/校验 |
 | MyRedisPool | 49 | Redis 连接池（显式 connect/so 超时 + maxWait，8 参 JedisPool 构造器） |
-| LogUtil | 159 | 日志工具（装配：清空 root 既有 handler → 挂控制台 → 逐输出端挂 FileHandler，自身零 System.out/err）。**输出端按「配置 + Handler 列表」组织**（`resolveFileOutputs()` 的规格表 + 配置键，流程内零字面量文件名 → D9 新增输出端只需加一项规格 + 一个配置键）；默认 `system`（阈值 `log.level`）与 `error`（`log.error.level`，默认 SEVERE）两路；**按大小轮转**用 JUL 原生 `FileHandler(pattern, limit, count, append)`（`log.maxBytes` / `log.fileCount`，生成 `<名>.<N>`、N=0 为当前文件、最旧一代被回收；`log.maxBytes<=0` 视为不轮转、文件名精确等于配置值）；**路径口径** = `log.file` 所在目录即日志目录、其余输出端相对路径只取文件名落同目录（改写 `LOG_PATH` 一处即全部文件换目录，N5 隔离）；`log.file` 为空则整组文件输出端跳过（降级仅控制台）；`getLogger(Class)` 签名与语义不变 |
+| LogUtil | 205 | 日志工具（装配：清空 root 既有 handler → 挂控制台 → 逐输出端挂 FileHandler，自身零 System.out/err）。**输出端按「配置 + Handler 列表」组织**（`resolveFileOutputs()` 的规格表 + 配置键，流程内零字面量文件名 → D9 新增输出端只需加一项规格 + 一个配置键）；默认 `system`（阈值 `log.level`）/ `error`（`log.error.level`，默认 SEVERE）/ **`access`（T3：`log.access.file`，阈值固定 INFO，挂专属 logger `"access"`——`getAccessLogger()` 暴露，`useParentHandlers=false` 使 access 行只落 access.log、不进 system.log 与控制台；规格 `LogOutput` 增 `owner` 字段区分挂载目标）**三路；**按大小轮转**用 JUL 原生 `FileHandler(pattern, limit, count, append)`（`log.maxBytes` / `log.fileCount`，生成 `<名>.<N>`、N=0 为当前文件、最旧一代被回收；`log.maxBytes<=0` 视为不轮转、文件名精确等于配置值）；**路径口径** = `log.file` 所在目录即日志目录、其余输出端相对路径只取文件名落同目录（改写 `LOG_PATH` 一处即全部文件换目录，N5 隔离）；`log.file` 为空则整组文件输出端跳过（降级仅控制台，access 行随 JUL 到控制台但无文件输出）；`getLogger(Class)` 签名与语义不变 |
 | LogFormatter | 107 | 单行结构化 Formatter：`ts=… level=… logger=… req=… msg=…`（固定 3 位毫秒 + 带冒号时区偏移；行尾统一 LF；消息内换行折成 `\n` 字面量守住"一条记录一行"；异常堆栈跟在首行之后）。消息渲染复用 `Formatter.formatMessage`，与 `SimpleFormatter` 同源（`{0}` 占位符文案逐字不变）；**`req=` 取 `LogContext` 的当前请求标识、只在有值时输出**（非请求线程 / 已 clear 时该字段整段不出现），值同样过单行折叠；`user=` 属访问日志字段（T3 在 access 输出端承载），不注入本行 |
-| LogContext | 135 | **请求级日志上下文**（T2 新增，D6 方案 B）：唯一 ThreadLocal 承载 reqId。`newRequestId()` = **唯一生成源**，固定 16 字符 = 毫秒低 32 位（8 位十六进制）+ 进程随机标识（4 位）+ 原子自增序号低 16 位（4 位）→ 同毫秒并发/连续不重复（序号 4 位约 6.5 万次/毫秒后回绕、届时理论上可撞号，本项目量级不可达）、跨重启不撞号；`setRequestId` 入参归一（null/空白 = 清除、去两侧空白）；`getRequestId` 无值返回 null（**无默认兜底**，非请求线程即无 reqId）；`clear()` 供 filter 的 finally 调用。**生命周期自治**：只在最外层 `AccessLogFilter`（T3）一处 set/clear，不与其他上下文共用清理点。**异步传递机制（D8，本周期无调用点）**：`capture()` 快照 + `restore(snapshot)` 恢复 + `wrap(Runnable)` 便捷包装（捕获→任务体恢复→结束后还原执行线程原值，池化线程不留残留）；**只包装不创建线程**，故不引入异步执行 |
+| LogContext | 172 | **请求级日志上下文**（T2 新增，D6 方案 B）：唯一 ThreadLocal 承载 reqId。`newRequestId()` = **唯一生成源**，固定 16 字符 = 毫秒低 32 位（8 位十六进制）+ 进程随机标识（4 位）+ 原子自增序号低 16 位（4 位）→ 同毫秒并发/连续不重复（序号 4 位约 6.5 万次/毫秒后回绕、届时理论上可撞号，本项目量级不可达）、跨重启不撞号；`setRequestId` 入参归一（null/空白 = 清除、去两侧空白）；`getRequestId` 无值返回 null（**无默认兜底**，非请求线程即无 reqId）；`clear()` 供 filter 的 finally 调用。**T3 新增结果码槽**：`setResultCode/getResultCode`（缺省 0 = 未走业务统一出口），`clear()` 一并清 reqId 与结果码。**生命周期自治**：只在最外层 `AccessLogFilter`（T3）一处 set/clear（含结果码），不与其他上下文共用清理点。**异步传递机制（D8，本周期无调用点）**：`capture()` 快照 + `restore(snapshot)` 恢复 + `wrap(Runnable)` 便捷包装（捕获→任务体恢复→结束后还原执行线程原值，池化线程不留残留）；快照**只含 reqId**（结果码由响应写路径产生、异步任务不读写，T3 不扩）；**只包装不创建线程**，故不引入异步执行 |
 | RequestContext | 36 | 请求上下文路径（动态拼接媒体 URL）。**T2 只加注释、行为零改动**（D6）：分工 = 业务类字段放本类、日志类字段放 `LogContext`，两者 ThreadLocal 互不干扰、清理点分离（本类由内层 `EncodingFilter` set/clear，其 finally 先于外层 filter 执行——若共用 `clear()`，reqId 会被提前清掉、异常日志丢掉请求标识） |
 | StringUtil | 37 | 字符串校验 |
 | ResultUtil | 26 | 响应格式构建 |
@@ -181,7 +182,7 @@ com.itheima/
 | 类 | 行数 | 职责 |
 |----|------|------|
 | BaseServlet | 15 | 基类，`extends HttpServlet` + `init()` 做 IoC 注入（T16 起不再持有 JSON 响应/mapper，响应统一走 BaseServletUtil） |
-| BaseServletUtil | 98 | 静态工具（T16 起不再 `extends HttpServlet`），HTTP 请求/响应侧**唯一 ObjectMapper**（`mapper`，public）+ writeSuccess/writeError + 分页参数解析。**T19 起归一逻辑下沉为 request 无关纯函数** `normalizePage(Integer)` / `normalizePageSize(Integer,max,defaultSize)`（供 JSON body 形态的接口复用同一口径），`parsePage` 与三参 `parsePageSize(req,max,defaultSize)` 委托二者；**无参 / 两参重载与 `DEFAULT_PAGE_SIZE_MAX`/`DEFAULT_PAGE_SIZE` 已删**（三域改用三参后成为死代码，两参重载自 T11-B 起即零调用）——新域一律显式声明自己的 `XXX_PAGE_SIZE_MAX/DEFAULT`；RequestParser 复用同一 mapper |
+| BaseServletUtil | 105 | 静态工具（T16 起不再 `extends HttpServlet`），HTTP 请求/响应侧**唯一 ObjectMapper**（`mapper`，public）+ writeSuccess/writeError + 分页参数解析。**结果码收口（T3，D5）**：`writeSuccess`（body 恒 200）/`writeError(int,…)` 写响应时把结果码写入 `LogContext`，供最外层 `AccessLogFilter` 取用。**T19 起归一逻辑下沉为 request 无关纯函数** `normalizePage(Integer)` / `normalizePageSize(Integer,max,defaultSize)`（供 JSON body 形态的接口复用同一口径），`parsePage` 与三参 `parsePageSize(req,max,defaultSize)` 委托二者；**无参 / 两参重载与 `DEFAULT_PAGE_SIZE_MAX`/`DEFAULT_PAGE_SIZE` 已删**（三域改用三参后成为死代码，两参重载自 T11-B 起即零调用）——新域一律显式声明自己的 `XXX_PAGE_SIZE_MAX/DEFAULT`；RequestParser 复用同一 mapper |
 | RequestParser | 24 | JSON 请求体解析（`BaseServletUtil.mapper` 复用唯一 mapper） |
 | AppShutDownListener | 102 | 容器生命周期管理（@WebListener，统一关闭 IoC 容器） |
 
@@ -535,6 +536,17 @@ com.itheima/
 - **信封大小自适应（T11-B）**：`chunkSize` 只作初始/兜底值，首次成功响应后用响应回显的 `pageSize` 覆盖——信封大小由**后端域级常量**决定，前端可只传 `page`。
 - **消费方（5 处；T19 起全部只传 `page`）**：`views/detail.js`（评论主楼，chunk 兜底 200 / 小批 10）、`views/user.js`（关注/粉丝 sheet 与创作网格 `/profile`，chunk 100 / 小批 10）、`views/follow.js`（`/feed`，chunk 100 / 小批 10）、`views/search.js`（结果，chunk 100 / 小批 12）、`views/publish.js`（我的投稿 `/profile`，chunk 100 / 小批 12）。**信封大小一律由后端域常量决定**（feed/search/profile/follow = 100，评论 = 200），消费方不再传 `pageSize`；chunk 常量仅作"首次请求失败时判末页"的兜底（T19 前 `follow`/`search`/`profile` 三处的后端上限未参数化、被公共 cap 50 顶住）。
 - **本地重渲染口径（T11-B）**：`publish.js` 的"删除模式切换 / 删除卡片 / 编辑保存"从"重拉当前页"改为**本地条目集重渲染**（`state.myItems`；编辑走 `search/IdSearch` 定向刷新单条）——原实现在第 N 页会重复追加第 N 页卡片。
+
+### 6.20 访问日志与耗时基线（日志体系 T1~T3 底座 + 挂点）
+
+- **输出端**：`LogUtil` 规格表第三项 `access`（`log.access.file`，默认 `access.log`，相对路径取文件名锚 `log.file` 目录，轮转/编码与 system/error 同构）——挂**专属 logger `"access"`**（`LogUtil.getAccessLogger()`），`useParentHandlers=false`：access 行**只进 access.log**，system.log 保持纯应用日志（反向：应用日志也不会下发到 access）。
+- **挂点**：`filter/AccessLogFilter`（web.xml **最外层**，唯一获批红线例外 D3）——进入 `LogContext.setRequestId(newRequestId())`（reqId 唯一生成源）、`finally` 结算耗时（`System.nanoTime`，覆盖全 filter 链 + servlet，整除 ms）、读结果码与 userId 后写一行、`LogContext.clear()`（reqId + 结果码一并清，D6 只此一处 set/clear）。
+- **行形态**：`ts=… level=INFO logger=access req=<id> msg=method=… path=… userId=… code=… cost=…ms slow=0|1`（复用 `LogFormatter` 单行 key=value）。
+- **结果码**：`BaseServletUtil.writeSuccess`（body 恒 200）/`writeError(int,…)` 写响应时收口进 `LogContext`（D5，不包装响应读 body）；缺省 **0** = 未走业务统一出口（静态资源 / OPTIONS 预检 / 未映射 404）；业务/未处理异常经 `ExceptionFilter → writeIfUncommitted → writeError` 自动收口（已提交则保持 0）。
+- **userId 口径**：`request.getAttribute("userId")`（LoginFilter 内层已注入 `Long`），无 → `-`（login 等公共端点无 token 即 `userId=-`，属预期）。
+- **脱敏**：只记 `method` + `path`（`getRequestURI` 去 contextPath，天然不含 query）；**不记** query 串 / header / 请求体——D7"绝不记"以不记为脱敏（token / 手机号明文 / 密码零落盘；应用日志按需记时复用 `StringUtil.maskPhone`，属第二张清单口径）。
+- **慢请求标记**：`cost >= log.slowRequestMs`（默认 1000ms，可配）→ `slow=1`；打标记不另起一行、不设独立性能日志文件（D7）。
+- **用途**：每接口耗时基线的聚合来源（第三张清单的报表/趋势将基于本行 `cost=` 字段）；`grep req=<id>` 可在 access.log 与 system.log 间端到端串联同一次请求（异常/降级路径的应用日志带同一 `req=`）——D6 收益的实际落地。
 
 ---
 

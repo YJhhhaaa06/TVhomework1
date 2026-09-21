@@ -242,6 +242,38 @@ class LogContextTest {
         assertThrows(NullPointerException.class, () -> LogContext.wrap(null));
     }
 
+    // ==================== 结果码槽（T3 log-03） ====================
+
+    @Test
+    void resultCodeDefaultsToZero() {
+        assertEquals(0, LogContext.getResultCode(), "未走业务统一出口（静态资源/预检/404）缺省为 0");
+    }
+
+    @Test
+    void resultCodeSetAndGetRoundTrip() {
+        LogContext.setResultCode(409);
+        assertEquals(409, LogContext.getResultCode());
+    }
+
+    @Test
+    void clearResetsBothRequestIdAndResultCode() {
+        LogContext.setRequestId("req-abc");
+        LogContext.setResultCode(500);
+
+        LogContext.clear();
+
+        assertNull(LogContext.getRequestId(), "clear 应同时清掉 reqId");
+        assertEquals(0, LogContext.getResultCode(), "clear 应同时清掉结果码（同一请求级生命周期）");
+    }
+
+    @Test
+    void resultCodeAndRequestIdAreIndependent() {
+        LogContext.setResultCode(200);
+
+        assertEquals(200, LogContext.getResultCode());
+        assertNull(LogContext.getRequestId(), "结果码与 reqId 互不影响（D6 日志字段同槽、各自读写）");
+    }
+
     // ==================== 与 RequestContext 的分工（D6） ====================
 
     @Test
