@@ -215,6 +215,8 @@ public class SetCache {
                         return null;
                     });
                 } catch (RuntimeException e) {
+                    // T7：本行堆栈**保留**——该 frontline loader 的"基础设施异常"（TransactionTemplate 包装、
+                    // 上游无日志）在此是唯一记录；与源头 SEVERE 的双栈属**不可安全去重的残余**（已登记）
                     LOGGER.log(Level.WARNING, "Set 批量回填失败，仅影响缓存, key=" + setKey, e);
                 }
             }
@@ -303,6 +305,7 @@ public class SetCache {
                             return null;
                         });
                     } catch (RuntimeException e) {
+                        // T7：本行堆栈保留（同上——基础设施异常在此是唯一记录；该重载无生产调用方）
                         LOGGER.log(Level.WARNING, "Set 批量回填失败，仅影响缓存, key=" + setKey, e);
                     }
                 }

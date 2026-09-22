@@ -2,6 +2,8 @@ package com.itheima.content.service;
 
 import com.itheima.cache.CacheAside;
 import com.itheima.cache.CacheKeys;
+import com.itheima.cache.CacheStats;
+import com.itheima.cache.JacksonCodec;
 import com.itheima.cache.RedisAccess;
 import com.itheima.cache.SingleFlight;
 import com.itheima.content.dao.ContentDao;
@@ -12,10 +14,14 @@ import com.itheima.content.model.vo.ContentDetailVO;
 import com.itheima.content.model.vo.ContentVO;
 import com.itheima.exception.CacheException;
 import com.itheima.exception.DatabaseException;
+import com.itheima.util.LogUtil;
+import com.itheima.util.MyRedisPool;
 import com.itheima.util.TransactionTemplate;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
+import org.mockito.MockedStatic;
 import redis.clients.jedis.Jedis;
 
 import java.sql.Connection;
@@ -29,7 +35,12 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import redis.clients.jedis.Pipeline;
+import redis.clients.jedis.Response;
 import redis.clients.jedis.params.ScanParams;
 import redis.clients.jedis.resps.ScanResult;
 
@@ -48,6 +59,52 @@ class ContentCacheTest {
     private Connection conn;
     private Jedis jedis;
     private ContentCache cache;
+
+    /** T7 去重断言：ContentCache logger 的记录探针（只收集、不影响真实输出端），测完在 @AfterEach 摘除。 */
+    private final List<LogRecord> captured = new ArrayList<>();
+    private Handler probeHandler;
+
+    /** 捕获记录中"带异常堆栈"的那些（T7：同一失败只允许一条）。 */
+    private List<LogRecord> withStack() {
+        return captured.stream().filter(r -> r.getThrown() != null).toList();
+    }
+
+    /** 捕获记录中"不带堆栈"的结论行。 */
+    private List<LogRecord> withoutStack() {
+        return captured.stream().filter(r -> r.getThrown() == null).toList();
+    }
+
+    /** 记录探针工厂（publish 即收集到 sink）：可挂到任意 logger（联合用例会同时挂 CacheAside）。 */
+    private static Handler probe(List<LogRecord> sink) {
+        Handler handler = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                sink.add(record);
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        handler.setLevel(Level.ALL);
+        return handler;
+    }
+
+    @BeforeEach
+    void attachLogProbe() {
+        captured.clear();
+        probeHandler = probe(captured);
+        LogUtil.getLogger(ContentCache.class).addHandler(probeHandler);
+    }
+
+    @AfterEach
+    void detachLogProbe() {
+        LogUtil.getLogger(ContentCache.class).removeHandler(probeHandler);
+    }
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -183,6 +240,12 @@ class ContentCacheTest {
         when(contentDao.findContent(conn, 1L)).thenThrow(new SQLException("db down"));
 
         assertThrows(DatabaseException.class, () -> cache.getContent(1L));
+
+        // T7 去重：本用例的吸收点（cacheAside）是 mock 不记日志，故本类只出"上下文行"（不带堆栈、
+        // 保留 contentId）；真实吸收点的单堆栈联合断言见下方 getContentDbFailureLogsExactlyOneStackTrace…
+        assertEquals(1, captured.size(), () -> "本类应只出装载层一条上下文行: " + captured);
+        assertNull(captured.getFirst().getThrown(), "上下文行不带堆栈");
+        assertTrue(captured.getFirst().getMessage().contains("contentId=1"), "上下文行保留业务标识");
     }
 
     @Test
@@ -194,6 +257,115 @@ class ContentCacheTest {
 
         verify(cacheAside, never()).writeOrInvalidate(anyString(), any(ContentCacheDTO.class), anyLong());
         verify(jedis, never()).lpush(anyString(), anyString());
+
+        // T7 去重：同一失败只有一条带堆栈——本路径的"最终处理点"是写路径结论行（带堆栈），
+        // 装载层只留"上下文行"（不带堆栈、保留 contentId）
+        assertEquals(1, withStack().size(), () -> "同一失败只允许一条带堆栈记录: " + captured);
+        assertTrue(withStack().getFirst().getMessage()
+                .contains("新增内容缓存装载失败（跳过缓存同步）, contentId=5"), "堆栈留在写路径结论行");
+        assertEquals(1, withoutStack().size(), () -> "应有且仅有一条上下文行: " + captured);
+        assertTrue(withoutStack().getFirst().getMessage().startsWith("内容装载")
+                && withoutStack().getFirst().getMessage().contains("contentId=5"), "上下文行保留业务标识");
+    }
+
+    @Test
+    void refreshContentDbErrorLogsSingleStackTraceAndKeepsContext() throws SQLException {
+        // T7 去重：与 addContent 同型——结论行带堆栈 + 装载层上下文行不带，业务标识（contentId）两行都在
+        when(contentDao.findContent(conn, 5L)).thenThrow(new SQLException("db down"));
+
+        assertDoesNotThrow(() -> cache.refreshContent(5L));
+
+        assertEquals(1, withStack().size(), () -> "同一失败只允许一条带堆栈记录: " + captured);
+        assertTrue(withStack().getFirst().getMessage()
+                .contains("刷新内容缓存装载失败（保留旧缓存，读自愈）, contentId=5"));
+        assertEquals(1, withoutStack().size());
+        assertTrue(withoutStack().getFirst().getMessage().startsWith("内容装载")
+                && withoutStack().getFirst().getMessage().contains("contentId=5"));
+        verify(cacheAside, never()).writeOrInvalidate(anyString(), any(ContentCacheDTO.class), anyLong());
+    }
+
+    @Test
+    void getContentDbFailureLogsExactlyOneStackTraceAcrossLoaderAndAbsorber() throws SQLException {
+        // T7 验收：同一失败跨"装载层上下文行（不带堆栈）+ 吸收点结论行（带堆栈）"只有一条带堆栈。
+        // 本用例用**真实 CacheAside**（内容装载链的最终处理点）+ mock Redis。
+        when(contentDao.findContent(conn, 1L)).thenThrow(new SQLException("db down"));
+        ContentCache jointCache = new ContentCache(contentDao, contentMediaDao, tt,
+                new CacheAside(new RedisAccess(), new JacksonCodec(), new SingleFlight(), new CacheStats()),
+                redisAccess, singleFlight, 60_000L);
+
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Pipeline p = mock(Pipeline.class);
+            Response<Boolean> emptyResp = mock(Response.class);
+            Response<String> jsonResp = mock(Response.class);
+            when(emptyResp.get()).thenReturn(false);
+            when(jsonResp.get()).thenReturn(null);
+            when(jedis.pipelined()).thenReturn(p);
+            when(p.exists(anyString())).thenReturn(emptyResp);
+            when(p.get(anyString())).thenReturn(jsonResp);
+            ms.when(MyRedisPool::getJedis).thenReturn(jedis);
+
+            Handler absorbProbe = probe(captured);
+            LogUtil.getLogger(CacheAside.class).addHandler(absorbProbe);
+            try {
+                assertNull(jointCache.getContent(1L));
+            } finally {
+                LogUtil.getLogger(CacheAside.class).removeHandler(absorbProbe);
+            }
+        }
+
+        assertEquals(1, withStack().size(), () -> "同一失败跨两层只允许一条带堆栈记录: " + captured);
+        assertEquals(CacheAside.class.getName(), withStack().getFirst().getLoggerName(),
+                "堆栈留在吸收点（最终处理点）结论行");
+        assertTrue(withStack().getFirst().getMessage().contains("缓存加载失败")
+                        && withStack().getFirst().getMessage().contains("key=content:1"),
+                () -> "结论行应保留 key 上下文: " + captured);
+        assertEquals(1, withoutStack().size(), () -> "应有且仅有一条上下文行: " + captured);
+        assertEquals(ContentCache.class.getName(), withoutStack().getFirst().getLoggerName());
+        assertTrue(withoutStack().getFirst().getMessage().contains("contentId=1"),
+                () -> "装载层上下文行应保留业务标识: " + captured);
+    }
+
+    @Test
+    void getContentsBatchDbFailureLogsExactlyOneStackTraceAcrossLoaderAndAbsorber() throws SQLException {
+        // T7 验收（批量热路径，T2 装载合并后生产主路径）：整批装载失败 → 装载层上下文行（不带堆栈）
+        // + 吸收点（CacheAside 批量结论行，带堆栈）；key 数量上下文两行都在
+        when(contentDao.findContentsByIds(eq(conn), anyCollection())).thenThrow(new SQLException("db down"));
+        ContentCache jointCache = new ContentCache(contentDao, contentMediaDao, tt,
+                new CacheAside(new RedisAccess(), new JacksonCodec(), new SingleFlight(), new CacheStats()),
+                redisAccess, singleFlight, 60_000L);
+
+        try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
+            Pipeline p = mock(Pipeline.class);
+            Response<Boolean> emptyResp = mock(Response.class);
+            Response<String> jsonResp = mock(Response.class);
+            when(emptyResp.get()).thenReturn(false);
+            when(jsonResp.get()).thenReturn(null);
+            when(jedis.pipelined()).thenReturn(p);
+            when(p.exists(anyString())).thenReturn(emptyResp);
+            when(p.get(anyString())).thenReturn(jsonResp);
+            ms.when(MyRedisPool::getJedis).thenReturn(jedis);
+
+            Handler absorbProbe = probe(captured);
+            LogUtil.getLogger(CacheAside.class).addHandler(absorbProbe);
+            try {
+                Map<Long, ContentCacheDTO> result = jointCache.getContentsBatch(List.of(1L, 2L));
+                assertNull(result.get(1L));
+                assertNull(result.get(2L));
+            } finally {
+                LogUtil.getLogger(CacheAside.class).removeHandler(absorbProbe);
+            }
+        }
+
+        assertEquals(1, withStack().size(), () -> "同一失败跨两层只允许一条带堆栈记录: " + captured);
+        assertEquals(CacheAside.class.getName(), withStack().getFirst().getLoggerName(),
+                "堆栈留在吸收点（最终处理点）结论行");
+        assertTrue(withStack().getFirst().getMessage()
+                        .contains("批量缓存加载失败（不写空标记、不写回）, keys=2"),
+                () -> "结论行应保留批量规模上下文: " + captured);
+        assertEquals(1, withoutStack().size(), () -> "应有且仅有一条上下文行: " + captured);
+        assertEquals(ContentCache.class.getName(), withoutStack().getFirst().getLoggerName());
+        assertTrue(withoutStack().getFirst().getMessage().contains("keys=2"),
+                () -> "装载层上下文行应保留批量规模上下文: " + captured);
     }
 
     @Test

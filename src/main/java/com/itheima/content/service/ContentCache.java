@@ -183,6 +183,7 @@ public class ContentCache implements Initializable {
             dto = loadContentFromDb(contentId);
         } catch (DatabaseException e) {
             // 三期 T3：DB 瞬时失败 = 加载失败，跳过缓存同步（读自愈回填），不抛 500
+            // T7：本行是内容装载链该路径的唯一带堆栈记录（装载层上下文行不带堆栈）
             LOGGER.log(Level.WARNING, "新增内容缓存装载失败（跳过缓存同步）, contentId=" + contentId, e);
             return;
         }
@@ -200,6 +201,7 @@ public class ContentCache implements Initializable {
             dto = loadContentFromDb(contentId);
         } catch (DatabaseException e) {
             // 三期 T3：DB 瞬时失败 = 加载失败，保留旧缓存让读自愈，不做删除语义
+            // T7：本行是内容装载链该路径的唯一带堆栈记录（装载层上下文行不带堆栈）
             LOGGER.log(Level.WARNING, "刷新内容缓存装载失败（保留旧缓存，读自愈）, contentId=" + contentId, e);
             return;
         }
@@ -389,7 +391,9 @@ public class ContentCache implements Initializable {
                 return dto;
             });
         } catch (DatabaseException e) {
-            LOGGER.log(Level.SEVERE, "内容装载 DB 查询失败（加载失败，不写空标记）, contentId=" + contentId, e);
+            // T7 去重：本行是**上下文行（不带堆栈）**——同一失败的堆栈由吸收点（最终处理点）记录：
+            // 读路径 = CacheAside 的"缓存加载失败/降级装载失败"结论行，写路径 = 本类 addContent/refreshContent 结论行
+            LOGGER.log(Level.SEVERE, "内容装载 DB 查询失败（加载失败，不写空标记）, contentId=" + contentId);
             throw e;
         } catch (NotFoundException e) {
             LOGGER.log(Level.WARNING, "内容装载跳过（媒体损坏）, contentId=" + contentId, e);
@@ -399,7 +403,8 @@ public class ContentCache implements Initializable {
             LOGGER.log(Level.WARNING, "内容装载跳过（类型异常）, contentId=" + contentId, e);
             return null;
         } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "内容装载异常（按加载失败处理，不写空标记）, contentId=" + contentId, e);
+            // T7 去重：上下文行不带堆栈（同 393 行 catch；本异常包装为 DatabaseException 后由吸收点记堆栈）
+            LOGGER.log(Level.WARNING, "内容装载异常（按加载失败处理，不写空标记）, contentId=" + contentId);
             throw new DatabaseException("内容装载失败", e);
         }
     }
@@ -454,12 +459,14 @@ public class ContentCache implements Initializable {
                 return byKey;
             });
         } catch (DatabaseException e) {
+            // T7 去重：上下文行不带堆栈——同一失败的堆栈由吸收点（CacheAside 批量结论行）记录
             LOGGER.log(Level.SEVERE, "内容批量装载 DB 查询失败（加载失败，不写空标记）, keys="
-                    + dataKeys.size(), e);
+                    + dataKeys.size());
             throw e;
         } catch (Exception e) {
+            // T7 去重：上下文行不带堆栈（同上一 catch；包装为 DatabaseException 后由吸收点记堆栈）
             LOGGER.log(Level.WARNING, "内容批量装载异常（按加载失败处理，不写空标记）, keys="
-                    + dataKeys.size(), e);
+                    + dataKeys.size());
             throw new DatabaseException("内容批量装载失败", e);
         }
     }
