@@ -89,7 +89,7 @@ python tools\tv.py admin|cleanup|integrity|backup|init-test-db|test|cleanup-orph
 | C2 | 需要经 HTTP 入口（鉴权/过滤器/参数解析），或依赖真实堆栈副作用（落库/缓存/文件/跨接口可见性）才能断言？ | → pytest                             |
 | C3 | C1、C2 都命中？                                                | → **按行为拆分**，每条子断言重走 C1/C2 单选，分别进两份文件 |
 
-规则：**同一条断言的意图永远只有唯一归属**；多选仅发生在"需求跨层"（同一需求既有纯逻辑契约又有跨层副作用时拆两份文件），绝不允许同一断言重复覆盖。示例：JUnit 不写 401/400（HTTP 入口归 pytest）；pytest 不重复归一化计算（逻辑契约归 JUnit）。
+规则：**同一条断言的意图永远只有唯一归属**；多选仅发生在"需求跨层"（同一需求既有纯逻辑契约又有跨层副作用时拆两份文件），绝不允许同一断言重复覆盖。示例：JUnit 不写 401/400（HTTP 入口归 pytest）；pytest 不重复归一化计算（逻辑契约归 JUnit）。日志类断言同理（T4 日志体系）：格式串 / 装配 / 轮转参数 → JUnit；"真实请求是否落盘、输出端之间是否串通、跨文件能否按 `req=` 串联" → pytest（读落盘文件，写法见 §4.5）。
 
 ### 0.3 实测用例基数（2026-09-01）
 
@@ -214,13 +214,25 @@ pytest 阶段有整体超时刹车（T2，2026-09-05）：`subprocess.run(timeou
 
 ### 4.5 日志
 
-全部位于 `CATALINA_BASE\logs\`：
+脚本与容器日志全部位于 `CATALINA_BASE\logs\`（T9 起即项目内 `.stage8-target\tomcat-test-18080\logs\`）：
 
 - `run.log`：脚本自己的操作日志
 
 - `tomcat_stdout.log` / `tomcat_stderr.log`：Tomcat 控制台输出
 
 - `catalina.*.log`、`localhost.*.log`：Tomcat 运行日志
+
+**应用日志（T1~T4 日志体系，JUL 自建）**：与上面的容器日志同目录，但由应用自己写；落点规则 = "**`log.file` 所在目录 = 日志目录，其余输出端相对路径只取文件名、落同一目录**"（口径见 `src/main/java/com/itheima/util/LogUtil.java` 类注释）：
+
+| 输出端 | 文件名 | 收什么                                              |
+| ---- | ---- | ------------------------------------------------ |
+| system | `system.log.<N>` | 全域应用日志（阈值 `log.level`，默认 INFO）                   |
+| error | `error.log.<N>` | 只收 `>= log.error.level`（默认 SEVERE）                |
+| access | `access.log.<N>` | 访问日志（专属 logger `access`，`useParentHandlers=false` → **只落本文件**，不进 system.log） |
+
+- **落盘目录随链路不同**：`all`/`start`/`test`（18080 实例）注入 `LOG_PATH=<CATALINA_BASE>/logs/system.log` → 三个文件都落 `.stage8-target\tomcat-test-18080\logs\`；`junit` 由 surefire 另注入 `LOG_PATH=${stage8.buildDir}/test-logs/system.log` → 落 `.stage8-target\test-logs\`（由此"测试日志不再写进运行日志目录"，N5）。
+- **文件名是轮转形态**：`<名>.<N>`，**N=0 为当前写入文件、N 越大越旧**（`log.maxBytes` / `log.fileCount` 控制）；读日志要取"前缀匹配 + mtime 最新"的那个文件，不要写死 `<名>.log`。
+- **pytest 怎么断言日志**（先例：`src/test/python/test_access_log.py`、`test_log_outputs.py`）：① 选文件 = "`<名>.log*` 前缀匹配 + mtime 最新"，**必须排除 JUL 的 `<名>.<N>.lck` 锁文件**；② 断言分两类——**全文件不变式**（分流口径须对文件里每一行成立，如 error 只收 SEVERE）与**本 run 记录**（"响应先于落盘返回"是常态 → 轮询至多 3s）；③ 精确定位"本次请求"的落盘记录**不要依赖行号增量**（落盘期间可能发生轮转），改用**唯一指纹**：把随机 marker 塞进请求参数、由异常栈回显，再向前回退到最近的 `ts=` 行即为该记录（`test_log_outputs.py` 的 `record_containing`），记录行上的 `req=` 可继续用来跨输出端回查。归属判据见 §〇.2：**日志是否真的落盘、输出端之间是否串通**属"依赖真实堆栈副作用" → pytest；只到装配层（handler / level / 格式串 / 轮转参数）的断言归 JUnit。
 
 ***
 

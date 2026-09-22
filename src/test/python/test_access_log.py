@@ -106,7 +106,8 @@ def test_success_request_has_full_access_line(user_a):
         lambda ln: "path=/coupon/my " in ln and " code=200 " in ln and "userId=- " not in ln
     )
     assert authed_line, f"应找到带 token 的 /coupon/my 200 行且 userId=<id>"
-    return line
+    # T4：原 `return line` 让 pytest 报 PytestReturnNotNoneWarning（测试函数应返回 None）；
+    # 需要的断言都已在上方完成，删除返回值不影响覆盖。
 
 
 # ---------------------------------------------------------------------------

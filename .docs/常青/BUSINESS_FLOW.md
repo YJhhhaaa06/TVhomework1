@@ -1,7 +1,7 @@
 # 业务流程文档
 
-> 版本：2.5
-> 最后更新：2026-09-20（T15 文档与代码一致性清理：Filter 链补 `ExceptionFilter`、AuthFilter 精确名单补 `/content/update`·`/content/mediaDelete`·`/content/delete`、搜索端点更正为 `GET /search/keywordSearch`、公开接口补 `/comment/replies`。历史变更见 git 提交历史与 `NEXT_CYCLE_TASKS.md` 执行回写）
+> 版本：2.6
+> 最后更新：2026-09-22（日志周期 T4 收尾：§1.1 Filter 链图补最外层 `AccessLogFilter`——访问日志，纯旁路、业务语义与权限矩阵零变化。上一版 2.5 = 2026-09-20 T15 文档与代码一致性清理：Filter 链补 `ExceptionFilter`、AuthFilter 精确名单补 `/content/update`·`/content/mediaDelete`·`/content/delete`、搜索端点更正为 `GET /search/keywordSearch`、公开接口补 `/comment/replies`。历史变更见 git 提交历史与 `NEXT_CYCLE_TASKS.md` 执行回写）
 > 用途：保障重构时不破坏业务逻辑
 
 ---
@@ -28,9 +28,9 @@
     ▼
 ┌─────────────────────────────────────────────────────────┐
 │                    Filter 链                             │
-│  ExceptionFilter → EncodingFilter → LoginFilter          │
-│  (全局异常)        (UTF-8编码)      (解析Token)            │
-│  → AuthFilter（权限校验）                                  │
+│  AccessLogFilter → ExceptionFilter → EncodingFilter     │
+│  (访问日志)        (全局异常)        (UTF-8编码)        │
+│  → LoginFilter（解析Token）→ AuthFilter（权限校验）     │
 └─────────────────────────────────────────────────────────┘
     │
     ▼
