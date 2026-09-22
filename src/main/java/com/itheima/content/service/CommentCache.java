@@ -616,7 +616,7 @@ public class CommentCache {
                     Long rootId = commentDao.getRootIdByCommentId(conn, commentId);
                     return new CommentRef(contentId, rootId);
                 } catch (SQLException e) {
-                    LOGGER.log(Level.SEVERE, "评论所属内容/主楼查询失败, commentId=" + commentId, e);
+                    LOGGER.log(Level.WARNING, "评论所属内容/主楼查询失败, commentId=" + commentId, e);
                     return null;
                 }
             });

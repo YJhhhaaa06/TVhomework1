@@ -51,7 +51,7 @@
 | **测试隔离**（三种运行互不污染） | ① JUnit（`python tools\tv.py test junit`）→ `.stage8-target/test-logs/`（`pom.xml` surefire 注入 `LOG_PATH`）；② e2e（`test all`）→ `.stage8-target/tomcat-test-18080/logs/`（`tools/run_tests.py` 注入）；③ 生产 / 本地直跑 → `logs/`（`app.properties` 相对路径，按 cwd 解析） |
 | **关联** | 日志行 `req=`（`LogContext`；**非请求线程整段不输出**）+ 访问日志行 `method= path= userId= code= cost= slow=` |
 | **轮转** | JUL 原生 `FileHandler(pattern, limit, count, append)`：`<名>.<N>`，N=0 为当前写入文件、N 越大越旧；`log.maxBytes<=0` = 不轮转 |
-| **存量分布**（2026-09-22 实测，一次性只读脚本） | **134 个调用点 / 23 个持 `LOGGER` 的类**：SEVERE **49**（100% 在 catch 内，其中 40 处上抛、**9 处吞掉**）/ WARNING **78**（94% 在 catch 内，**48 处为降级·自愈路径**）/ INFO **5**（业务成功路径 **0**）/ FINE **2**（`log.level=INFO` 下为死代码） |
+| **存量分布**（2026-09-22 实测 + **2026-09-22 T6 复批后**） | 复批后 **132 个调用点 / 23 个持 `LOGGER` 的类**：SEVERE **44**（40 处上抛、**4 处吞掉但需人介入**保持）+ WARNING **83**（78 + 5 处降级并入，48 处为降级·自愈路径）/ INFO **5**（业务成功路径 0）/ FINE **0**（原 2 处死代码已删）。复批结论：**原 9 处吞掉型 SEVERE → 5 处维持或降级路径见 `目标与任务/NEXT_CYCLE_TASKS.md` T6 执行回写**；T6 只动级别，未改文案/控制流 |
 
 ***
 

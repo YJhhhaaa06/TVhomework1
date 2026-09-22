@@ -695,7 +695,7 @@ public class ContentCache implements Initializable {
                 try {
                     return contentDao.findAllContent(conn);
                 } catch (SQLException e) {
-                    LOGGER.log(Level.SEVERE, "索引重建 DB 查询失败", e);
+                    LOGGER.log(Level.WARNING, "索引重建 DB 查询失败", e);
                     return new ArrayList<>();
                 }
             });
