@@ -391,4 +391,46 @@ class FollowServiceTest {
         assertFalse((Boolean) page.getList().get(0).get("isFollowed"));
         verify(followCache, never()).batchIsFollowing(anyLong(), anyList());
     }
+
+    // ------------------------------------------------------------------
+    // T11-B（log2-T11-B）：包装点即源头——批量装载失败链"恰一条带堆栈记录"
+    // ------------------------------------------------------------------
+
+    @Test
+    void followingListDbLoadSqlErrorLogsExactlyOneStackedSevere() throws SQLException {
+        when(followCache.getFollowingWindow(7L, 0L, 10))
+                .thenReturn(new ZSetCache.Window(List.of(8L, 9L), 2L));
+        when(userDao.findUsersByIds(conn, List.of(8L, 9L)))
+                .thenThrow(new SQLException("db down"));
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(FollowService.class));
+        try {
+            assertThrows(ServerException.class, () -> service.getFollowingList(7L, 7L, 1, 10));
+        } finally {
+            probe.detach();
+        }
+
+        // 消息只记 ids 规模，不记具体 id 列表
+        LogProbe.assertExactlyOneStacked(probe, Level.SEVERE,
+                "用户批量查询失败, ids=2", SQLException.class);
+    }
+
+    /** 粉丝列表共用 {@code loadUserList}：同一源头覆盖两个入口（不是各记一次）。 */
+    @Test
+    void followerListDbLoadSqlErrorLogsExactlyOneStackedSevere() throws SQLException {
+        when(followCache.getFollowerWindow(9L, 0L, 10))
+                .thenReturn(new ZSetCache.Window(List.of(8L), 1L));
+        when(userDao.findUsersByIds(conn, List.of(8L)))
+                .thenThrow(new SQLException("db down"));
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(FollowService.class));
+        try {
+            assertThrows(ServerException.class, () -> service.getFollowerList(9L, 7L, 1, 10));
+        } finally {
+            probe.detach();
+        }
+
+        LogProbe.assertExactlyOneStacked(probe, Level.SEVERE,
+                "用户批量查询失败, ids=1", SQLException.class);
+    }
 }

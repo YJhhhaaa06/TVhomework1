@@ -47,6 +47,8 @@ public class TransactionTemplate {
             throw e;
         } catch (Exception e) {
             rollbackQuietly(conn);
+            // T11 裁决：近乎不可达（动作体是 lambda，其 checked 异常只有 SQLException，已被上面的分支接走）
+            // → 不补日志；若将来动作签名引入其它 checked 异常，须重新评估（评审 Y1 留痕）
             throw new DatabaseException("数据库操作失败", e);
         } finally {
             MyConnectionPool.release(conn);

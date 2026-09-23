@@ -7,6 +7,8 @@ import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
+import org.junit.jupiter.api.Assertions;
+
 /**
  * 日志探针（T9 立）：把写向某个 logger 的记录捕获下来，供"成功路径恰一条 / 失败路径 0 条"
  * 这类断言使用（先例 = {@code AuditLogTest} / {@code UserServiceTest#changePhoneSuccess} 的内联探针，
@@ -62,6 +64,33 @@ public final class LogProbe extends Handler {
             messages.add(record.getMessage());
         }
         return messages;
+    }
+
+    /** 带堆栈的记录（{@code getThrown() != null}，即"末参传了异常对象"的调用点）。 */
+    public List<LogRecord> stackedRecords() {
+        List<LogRecord> hits = new ArrayList<>();
+        for (LogRecord record : records) {
+            if (record.getThrown() != null) {
+                hits.add(record);
+            }
+        }
+        return hits;
+    }
+
+    /**
+     * 断言"**恰一条**带堆栈记录，且级别 / 消息 / 根因类型符合预期"——T11-B 立的
+     * "包装点即源头"契约的通用断言（包装点记 `SEVERE` + 堆栈，下游吸收点只记结论、不带栈）。
+     *
+     * @param expectedThrown 期望的根因类型（应即被包装掉的那个异常）
+     */
+    public static void assertExactlyOneStacked(LogProbe probe, Level level, String expectedMessage,
+                                               Class<? extends Throwable> expectedThrown) {
+        List<LogRecord> stacked = probe.stackedRecords();
+        Assertions.assertEquals(1, stacked.size(),
+                () -> "应恰一条带堆栈记录，实际: " + probe.records());
+        Assertions.assertEquals(level, stacked.getFirst().getLevel(), "记录级别不符");
+        Assertions.assertEquals(expectedMessage, stacked.getFirst().getMessage(), "记录消息不符");
+        Assertions.assertInstanceOf(expectedThrown, stacked.getFirst().getThrown(), "根因类型不符");
     }
 
     @Override

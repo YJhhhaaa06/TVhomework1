@@ -117,6 +117,9 @@ public class FollowService {
             try {
                 return userDao.findUsersByIds(conn, ids);
             } catch (SQLException e) {
+                // T11-B：包装点即源头——本行是该链唯一带堆栈记录（LOG_CONVENTION §3.1 附加纪律 2）；
+                // 只记 ids 规模，不记具体 id 列表
+                LOGGER.log(Level.SEVERE, "用户批量查询失败, ids=" + ids.size(), e);
                 throw new ServerException("查询失败");
             }
         });

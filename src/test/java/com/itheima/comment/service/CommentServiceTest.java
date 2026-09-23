@@ -5,6 +5,7 @@ import com.itheima.content.service.CommentCache;
 import com.itheima.content.service.ContentCache;
 import com.itheima.content.dao.ContentDao;
 import com.itheima.exception.ConflictException;
+import com.itheima.exception.DatabaseException;
 import com.itheima.exception.ForbiddenException;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ServerException;
@@ -13,6 +14,8 @@ import com.itheima.content.model.cache.ContentCacheDTO;
 import com.itheima.comment.model.command.CommentCommand;
 import com.itheima.content.model.vo.CommentVO;
 import com.itheima.like.service.LikeService;
+import com.itheima.util.LogProbe;
+import com.itheima.util.LogUtil;
 import com.itheima.util.TransactionTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,6 +25,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.logging.Level;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -282,5 +286,42 @@ class CommentServiceTest {
         assertFalse(childVO.getIsLiked());
         assertEquals(8L, childVO.getReplyToUserId());
         assertEquals("bob", childVO.getReplyToUsername());
+    }
+
+    // ------------------------------------------------------------------
+    // T11-B（log2-T11-B）：包装点即源头——展开链"恰一条带堆栈记录"
+    // ------------------------------------------------------------------
+
+    @Test
+    void repliesForRootMainFloorSqlErrorLogsExactlyOneStackedSevere() throws SQLException {
+        when(commentDao.findMainById(conn, 9L)).thenThrow(new SQLException("db down"));
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(CommentService.class));
+        try {
+            assertThrows(DatabaseException.class, () -> service.getRepliesForRoot(9L, 7L, 1, 10));
+        } finally {
+            probe.detach();
+        }
+
+        LogProbe.assertExactlyOneStacked(probe, Level.SEVERE,
+                "主楼评论查询失败, rootId=9", SQLException.class);
+    }
+
+    @Test
+    void repliesForRootRepliesSqlErrorLogsExactlyOneStackedSevere() throws SQLException {
+        when(commentDao.findMainById(conn, 9L))
+                .thenReturn(new CommentCacheDTO("alice", 9L, 3L, 7L, "root", null, 0));
+        when(commentDao.getRepliesInTreeByRoot(conn, 3L, 9L, 0L, 10))
+                .thenThrow(new SQLException("db down"));
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(CommentService.class));
+        try {
+            assertThrows(DatabaseException.class, () -> service.getRepliesForRoot(9L, 7L, 1, 10));
+        } finally {
+            probe.detach();
+        }
+
+        LogProbe.assertExactlyOneStacked(probe, Level.SEVERE,
+                "评论回复查询失败, rootId=9", SQLException.class);
     }
 }

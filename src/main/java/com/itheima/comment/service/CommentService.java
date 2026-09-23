@@ -103,6 +103,8 @@ public class CommentService {
             try {
                 return commentDao.findMainById(conn, rootId);
             } catch (SQLException e) {
+                // T11-B：包装点即源头——本行是该链唯一带堆栈记录（LOG_CONVENTION §3.1 附加纪律 2）
+                LOGGER.log(Level.SEVERE, "主楼评论查询失败, rootId=" + rootId, e);
                 throw new DatabaseException("主楼评论查询失败", e);
             }
         });
@@ -115,6 +117,8 @@ public class CommentService {
                 return commentDao.getRepliesInTreeByRoot(conn, root.getContentId(), rootId, 0L,
                         toIntLimit((long) page * pageSize));
             } catch (SQLException e) {
+                // T11-B：包装点即源头——本行是该链唯一带堆栈记录（LOG_CONVENTION §3.1 附加纪律 2）
+                LOGGER.log(Level.SEVERE, "评论回复查询失败, rootId=" + rootId, e);
                 throw new DatabaseException("评论回复查询失败", e);
             }
         });

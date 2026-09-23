@@ -284,6 +284,8 @@ public class UserService {
             try {
                 return userDao.getUserRole(conn, userId) == 1;
             } catch (SQLException e) {
+                // T11-B：包装点即源头——本行是该链唯一带堆栈记录（LOG_CONVENTION §3.1 附加纪律 2）
+                LOGGER.log(Level.SEVERE, "查询用户角色失败, userId=" + userId, e);
                 throw new DatabaseException("查询用户角色失败", e);
             }
         });

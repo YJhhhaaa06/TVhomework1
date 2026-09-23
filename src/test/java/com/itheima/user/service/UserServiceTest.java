@@ -462,6 +462,16 @@ class UserServiceTest {
     @Test
     void isAdminSqlErrorWrapsDatabaseException() throws SQLException {
         when(userDao.getUserRole(conn, 7L)).thenThrow(new SQLException("db down"));
-        assertThrows(DatabaseException.class, () -> service.isAdmin(7L));
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        try {
+            assertThrows(DatabaseException.class, () -> service.isAdmin(7L));
+        } finally {
+            probe.detach();
+        }
+
+        // T11-B：包装点即源头——本链唯一的带堆栈记录（ExceptionFilter 侧只有不带栈的结论行）
+        LogProbe.assertExactlyOneStacked(probe, Level.SEVERE,
+                "查询用户角色失败, userId=7", SQLException.class);
     }
 }

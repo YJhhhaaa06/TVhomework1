@@ -1,6 +1,8 @@
 # 当前系统架构地图
 
-> 版本：3.18（2026-09-23 第二张清单 T11 log2-11 第 1 次提交：**补齐事务基础设施异常的源头日志**（`TransactionTemplate` 的 `catch (SQLException)` 记 `SEVERE` + 堆栈）+ **"包装点即源头"定栈重排**（去栈 20 处、补源头 11 处、上下文行升级持栈 2 处、评审处置拆 catch 增 1 处持栈行），T7 登记的回填链双栈残余收口；调用点 139 → **151**、SEVERE 44 → **55**、WARNING 83 → **84**；见 6.23；顺带修正本表 8 处陈旧行数）
+> 版本：3.19（2026-09-23 第二张清单 T11 **两批**：第 1 次提交 log2-11：**补齐事务基础设施异常的源头日志**（`TransactionTemplate` 的 `catch (SQLException)` 记 `SEVERE` + 堆栈）+ **"包装点即源头"定栈重排**（去栈 20 处、补源头 11 处、上下文行升级持栈 2 处、评审处置拆 catch 增 1 处持栈行），T7 登记的回填链双栈残余收口；调用点 139 → **151**、SEVERE 44 → **55**、WARNING 83 → **84**；见 6.23；顺带修正本表 8 处陈旧行数）。**第 2 次提交 log2-T11-B（同日）**：**同族业务 wrap 缺口 8 处收口**
+> （`CommentService` 2 / `UserService.isAdmin` 1 / `FollowService.loadUserList` 1 / `CouponService` 4——包装点补 `SEVERE` + 堆栈，
+> "包装点即源头"口径下**无存量未合规点**），调用点 151 → **159**、SEVERE 55 → **63**、持 `LOGGER` 类 23 → **24**、级别零变化；见 6.23）
 > 最后更新：2026-09-23
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
@@ -163,7 +165,7 @@ com.itheima/
 | 类 | 行数 | 职责 |
 |----|------|------|
 | MyConnectionPool | 138 | JDBC 连接池（上限 20、获取超时 5000ms、等待归还） |
-| TransactionTemplate | 66 | 统一事务模板（取连接/提交/回滚/归还，业务异常原样重抛） |
+| TransactionTemplate | 68 | 统一事务模板（取连接/提交/回滚/归还，业务异常原样重抛） |
 | PasswordUtil | 58 | BCrypt 密码哈希 |
 | JwtUtil | 40 | JWT 生成/校验 |
 | MyRedisPool | 49 | Redis 连接池（显式 connect/so 超时 + maxWait，8 参 JedisPool 构造器） |
@@ -224,7 +226,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | LoginController（95，/user/*） | 登录、注册、修改密码/用户名 |
-| service | UserService（292） | 用户认证 + 管理员判定 + 改名后级联失效内容缓存（注入 ContentCache）；**`registerAndLogin`（T13，池 U-16 兜底）= 注册 + 自动登录编排**——自动登录失败不回抛，返回 `token=null` 的 LoginVO（注册已提交即算成功），注册本身失败仍抛错 |
+| service | UserService（294） | 用户认证 + 管理员判定 + 改名后级联失效内容缓存（注入 ContentCache）；**`registerAndLogin`（T13，池 U-16 兜底）= 注册 + 自动登录编排**——自动登录失败不回抛，返回 `token=null` 的 LoginVO（注册已提交即算成功），注册本身失败仍抛错 |
 | dao | UserDao（275） | users 用户 CRUD + 角色查询（`findUsersByIds` T7 起带 `ORDER BY id`：关注/粉丝列表顺序由此保证，唯一调用方 FollowService）；T14 起内含从 `dao.ResultMap` 下沉的 `buildUserForLogin` / `buildUserForProfile` 两个 `private static` 行映射方法 |
 | model | entity/User（89）、dto/LoginDTO（28）/RegisterDTO（41）/ChangePasswordDTO（35）/ChangeUserNameDTO（15）、command/LoginCommand（63）/RegisterCommand（44）/ChangePasswordCommand（44）/LoginType（7）、vo/LoginVO（40） | 用户实体与请求/命令/响应对象 |
 
@@ -244,7 +246,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | FollowController（104，/follow/*） | 关注/取关/关注列表/粉丝列表（**T11-A：列表只有分页入口**——`page`/`pageSize` 均可选，缺省归一为 page 1 / 信封 100；域级常量 `FOLLOW_PAGE_SIZE_MAX = 100` + 信封 `FOLLOW_PAGE_SIZE_DEFAULT = 100`（**T19 由 200 调整为 100**，与 feed/search/profile 同口径），T7 的「缺省返回全量数组」分支已删除） |
-| service | FollowService（189） | 关注业务（读路径委托 FollowCache；关注/取关 DB 提交后缓存双写；**T7 新增分页读**——缓存窗口取该页 ids+total，仅对该页 ids 做 DB 装载与批量判重，信封在事务外组装；**T11-A 删除两个缺省全量重载**，分页读为唯一入口；**T12 起事务回调只做 DB 装载**（`findUsersByIds`），`batchIsFollowing` 与视图组装移事务外；**T14 起信封用公共 `common.model.dto.PageResult`**） |
+| service | FollowService（192） | 关注业务（读路径委托 FollowCache；关注/取关 DB 提交后缓存双写；**T7 新增分页读**——缓存窗口取该页 ids+total，仅对该页 ids 做 DB 装载与批量判重，信封在事务外组装；**T11-A 删除两个缺省全量重载**，分页读为唯一入口；**T12 起事务回调只做 DB 装载**（`findUsersByIds`），`batchIsFollowing` 与视图组装移事务外；**T14 起信封用公共 `common.model.dto.PageResult`**） |
 | service | FollowCache（539） | 关注关系 Redis 缓存（**双 ZSet（score=成员 id）+ 条件 MULTI 双写 + 失败双 DEL** + 三态读 + 单飞 + 降级单飞全量装载作答；读路径收口 **ZSetCache**——单成员三态/批量/全量/窗口走基建 + `sortIds` 归一升序，写路径 MULTI 双写语义保持；关注/粉丝计数 key 读写。**T11-C**：窗口 loader 换 DAO **窗口 SQL**（分页读不再全量装载）、新增部分态判定回落 `isFollowingInDb`（单行）、`probePair` 扩为六探针且**任一侧 `partial:` → 三件套双 DEL**（增量写分支与 Redis 异常分支同口径：异常分支走新增私有 `invalidatePairQuietly`，而 `CacheAside.invalidate` 只删数据 key + 空标记）、删除已无主代码调用方的 `getFollowerIds`（池 U-21）） |
 | dao | FollowDao（155） | follow 关注关系（仅 FollowService 业务校验与 FollowCache loader 使用；**T11-C-1 新增两个窗口查询**：`getFollowedUserIdsInWindow` / `getFollowerUserIdsInWindow`——`WHERE … ORDER BY … LIMIT ? OFFSET ?`，供前缀窗口装载；关注方向复用 `uk_user_follow`、粉丝方向走新增 `idx_followed_user_user`，EXPLAIN 均 `Using index`（覆盖索引）且无 filesort） |
 | model | —（T14 起无专属 model） | 关注/粉丝列表分页信封改用公共 `common.model.dto.PageResult`（T14）；原 `FollowPageResult`（T7 B2 为避开 follow→content 环而自建的同形类）已随 T14 删除，同形二分消除 |
@@ -267,7 +269,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | CommentController（160，/comment/*） | 评论发表/查询/删除（**T8/T11-B：`/show`、`/replies` 可选 `page`/`pageSize`**——`/show` 显式判"是否传分页参数"分支：缺省全量数组、传参走分页信封；`pageSize` 缺省取域级信封 **200**、上限 **500**） |
-| service | CommentService（299） | 评论业务（楼中楼：发表归一化主楼 + 软删除：用户自删/管理员删）；**T14 起分页信封改用公共 `common.model.dto.PageResult`**（原 import content 域信封） |
+| service | CommentService（303） | 评论业务（楼中楼：发表归一化主楼 + 软删除：用户自删/管理员删）；**T14 起分页信封改用公共 `common.model.dto.PageResult`**（原 import content 域信封） |
 | dao | CommentDao（368） | comment 评论 CRUD + 软删除（整楼/单条）+ 楼内回复计数 + 评论所属内容定位；T14 起内含从 `dao.ResultMap` 下沉的 `buildComment` `private static` 行映射方法 |
 | model | dto/CommentDTO（44）、command/CommentCommand（50） | 评论请求/命令（CommentVO 归 content 域；**T14 R-03 口径①：content↔comment 包层环保留现状**，未拆分共享组件——环的 15 条边中仅 5 条属组件错位，其余为业务互依） |
 
@@ -276,7 +278,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | CouponController（72，/coupon/*） | 优惠券抢购/列表/我的 |
-| service | CouponService（74） | 优惠券抢购 |
+| service | CouponService（87） | 优惠券抢购 |
 | dao | CouponDao（95） | coupon, coupon_order 优惠券 CRUD |
 | model | dto/GrabCouponRequest（8） | 抢券请求 |
 
@@ -591,7 +593,7 @@ com.itheima/
 - **与 6.21 审计的边界**：审计 = 管理端写操作 + 账号敏感变更（→ `audit.log`，专属 logger）；里程碑 = 非审计的业务状态迁移（→ `system.log`，业务 logger）——**零重叠**，文件级有断言（pytest 里里程碑行不出现在 `audit.log`，反之 `test_audit_log.py` 已证审计行不进 `system.log`）。
 - **明确不记**（同批评判结论）：点赞·取消点赞、评论发表·删除、作品编辑类（`update`/`mediaDelete`/`commentEnabled`/`replaceMedia`）——高频或常规写操作；管理端与账号敏感变更属 6.21。
 - **统一脱敏出口** = `util/StringUtil#maskForLog(field, value)`：按字段类型名 + **值形态**分派（当前仅 `phone`，仅通过 `phoneCheck` 时保留首 3 + 末 4），**fail-closed**（未登记字段名 / null / 空值 / 形态不符一律 `******`）；既有 `StringUtil.maskPhone` 保留为实现、经本出口调用（`UserService` 注册失败的既有 `SEVERE` 行已改走出口）。**不新建类、不做策略表 / 注解式脱敏**（全仓需脱敏字段仅 1 种、调用点 1 处）——扩展方式见 `LOG_CONVENTION` 3.7。
-- **断言口径（T9）**：**单测**归 JUnit——`src/test/java/com/itheima/util/LogProbe`（共享探针，`*Test` 命名不匹配故不会被 surefire 当用例执行）+ `UserServiceTest` / `ContentServiceTest` / `FollowServiceTest` 断言"成功恰一条 INFO / 失败零 INFO"、`StringUtilTest` 断言出口的 fail-closed 契约；**落盘 / 分流 / 无敏感值**归 pytest `src/test/python/test_milestone_log.py`（7 点各自恰好一条、"只落 `system.log`"、全文件不变式"无 11 位手机号明文"）。
+- **断言口径（T9）**：**单测**归 JUnit——`src/test/java/com/itheima/util/LogProbe`（共享探针，`*Test` 命名不匹配故不会被 surefire 当用例执行；T11-B 起新增 `stackedRecords()` / `assertExactlyOneStacked(...)` 供"包装点即源头"契约断言）+ `UserServiceTest` / `ContentServiceTest` / `FollowServiceTest` 断言"成功恰一条 INFO / 失败零 INFO"、`StringUtilTest` 断言出口的 fail-closed 契约；**落盘 / 分流 / 无敏感值**归 pytest `src/test/python/test_milestone_log.py`（7 点各自恰好一条、"只落 `system.log`"、全文件不变式"无 11 位手机号明文"）。
 - **级别与粒度标准**：`说明书/LOG_CONVENTION.md` 3.2-必记③ / **3.6**（里程碑口径）/ **3.7**（脱敏出口）。
 
 ---
@@ -617,6 +619,18 @@ com.itheima/
 - **覆盖边界**：`catch (Exception)`/`catch (RuntimeException)` 型吸收点去栈后，"逃出模板的非业务 RuntimeException"
   （关停期 `IllegalStateException("连接池已关闭")`、编程错误）在该链无栈 —— 该失败已被自动吸收、对外可用性未受损
   （§3.1-② 判 `WARNING`）；不引入"按类型分流"分支。
+
+- **同族业务 wrap 缺口（第 2 次提交 log2-T11-B，2026-09-23）**：8 处"包装成 `DatabaseException`/`ServerException` 但不记日志"的
+  业务 wrap 点已按同一定案收口——`CommentService.getRepliesForRoot` 2（`findMainById` / `getRepliesInTreeByRoot`）、`UserService.isAdmin` 1、
+  `FollowService.loadUserList` 1（关注/粉丝两个入口共用）、`CouponService` 4（`grabCoupon` 内外层 + 两个列表查询；该类**新增 `LOGGER` 字段**）。
+  逐点在 `throw` 前补 `SEVERE` + 堆栈，消息只放 id / size（`rootId` / `userId` / `ids.size()` / `couponId`），**不记 SQL 文本与参数**；
+  `CouponService` 的 `ConflictException("您已抢过该优惠券")` 属可预期拒绝 → **不补**（§3.1 附加纪律 1）。
+- **同批判"不补"**：9 处 `catch (Exception)` 紧跟 `catch (RuntimeException) { throw e; }` 的分支（`FollowCache` 5 / `LikeCacheService` 3 /
+  `TransactionTemplate` 1）**实际不可达**（动作体是 lambda，逃不出 checked 异常），沿用第 1 次提交对 `TransactionTemplate` 同型分支的裁决
+  （代码内已留注释）；另 4 处**非 catch 内、无根因**的防御式抛出（`UserService` 3 处 `rows==0` 校验 + `ContentCache` 的 `ServerException("未知内容类型")`）
+  不属"包装点"，范围外。
+- **断言口径（T11-B）**：8 处均由 JUnit 断言"**恰一条**带堆栈记录、级别 `SEVERE`、根因类型 `SQLException`"
+  （共享探针 `src/test/java/com/itheima/util/LogProbe` 新增 `stackedRecords()` / `assertExactlyOneStacked(...)`）；JUnit 616 → **620**。
 
 ## 七、API 接口清单
 
