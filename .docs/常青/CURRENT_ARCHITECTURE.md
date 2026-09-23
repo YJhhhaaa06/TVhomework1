@@ -1,7 +1,7 @@
 # 当前系统架构地图
 
-> 版本：3.15（2026-09-22 日志周期 T4 log-04 收尾：类行数按 `wc -l` 实测校正 + 6.20 补"断言口径"；T3 log-03 = 新增 `filter/AccessLogFilter`（web.xml 最外层）+ 访问日志输出端（`LogUtil` 规格表第三项、专属 logger `access`）+ `BaseServletUtil` 结果码收口（`LogContext` 新增结果码槽）+ 慢请求标记 `log.slowRequestMs`）
-> 最后更新：2026-09-22
+> 版本：3.16（2026-09-23 第二张清单 T8 log2-08：新增**审计日志输出端**——`LogUtil` 规格表第四项 `audit`（`log.audit.file`、专属 logger `audit`、阈值固定 INFO）+ 新增 `util/AuditLog` 记录器 + 7 个操作点成功路径留痕（管理端 4 写操作取 request attribute 的 userId、用户侧 3 敏感变更取方法入参），详见 6.21）
+> 最后更新：2026-09-23
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
 ---
@@ -31,7 +31,7 @@
 | 认证 | JWT | 4.4.0 |
 | 密码加密 | BCrypt (Spring Security Crypto) | 6.4.5 |
 | JSON | Jackson | 2.15.2 |
-| 日志 | java.util.logging（T1 起自建单行结构化输出 + 可扩展多输出端分流 + 按大小轮转；T2 起含请求标识 `req=`，reqId 由 `util/LogContext` 的 ThreadLocal 承载；T3 起含**访问日志**：`filter/AccessLogFilter` 每请求在 `access.log` 落一行（method/path/userId/结果码/耗时/慢标记），结果码由 `BaseServletUtil` 收口进 `LogContext`） | - |
+| 日志 | java.util.logging（T1 起自建单行结构化输出 + 可扩展多输出端分流 + 按大小轮转；T2 起含请求标识 `req=`，reqId 由 `util/LogContext` 的 ThreadLocal 承载；T3 起含**访问日志**：`filter/AccessLogFilter` 每请求在 `access.log` 落一行（method/path/userId/结果码/耗时/慢标记），结果码由 `BaseServletUtil` 收口进 `LogContext`；T8 起含**审计日志**：`util/AuditLog` 在 7 个操作点的**成功路径**各记一行到 `audit.log`（action/operatorId/target/result），写失败吞掉降级不影响业务） | - |
 | 前端 | 原生 HTML/CSS/JavaScript | - |
 
 ---
@@ -68,7 +68,7 @@ untitled/
 │       ├── java/com/itheima/        # JUnit 单元测试（按被测类同包随迁至各域 service 包）
 │       └── python/                  # pytest 端到端脚本
 │
-├── logs/                            # 运行日志（`log.file` 所在目录即"日志目录"，其余输出端同目录；轮转后文件名为 `<名>.<N>`，N=0 为当前写入文件；含访问日志 access.log）
+├── logs/                            # 运行日志（`log.file` 所在目录即"日志目录"，其余输出端同目录；轮转后文件名为 `<名>.<N>`，N=0 为当前写入文件；含访问日志 access.log 与审计日志 audit.log）
 ├── temp_script/                     # 一次性临时脚本（gitignore，可删）
 ├── tools/                           # 工具脚本（统一入口 tools/tv.py）
 └── target/                          # Maven 构建输出（gitignore；测试链路改用项目内 .stage8-target）
@@ -167,7 +167,8 @@ com.itheima/
 | PasswordUtil | 58 | BCrypt 密码哈希 |
 | JwtUtil | 40 | JWT 生成/校验 |
 | MyRedisPool | 49 | Redis 连接池（显式 connect/so 超时 + maxWait，8 参 JedisPool 构造器） |
-| LogUtil | 198 | 日志工具（装配：清空 root 既有 handler → 挂控制台 → 逐输出端挂 FileHandler，自身零 System.out/err）。**输出端按「配置 + Handler 列表」组织**（`resolveFileOutputs()` 的规格表 + 配置键，流程内零字面量文件名 → D9 新增输出端只需加一项规格 + 一个配置键）；默认 `system`（阈值 `log.level`）/ `error`（`log.error.level`，默认 SEVERE）/ **`access`（T3：`log.access.file`，阈值固定 INFO，挂专属 logger `"access"`——`getAccessLogger()` 暴露，`useParentHandlers=false` 使 access 行只落 access.log、不进 system.log 与控制台；规格 `LogOutput` 增 `owner` 字段区分挂载目标）**三路；**按大小轮转**用 JUL 原生 `FileHandler(pattern, limit, count, append)`（`log.maxBytes` / `log.fileCount`，生成 `<名>.<N>`、N=0 为当前文件、最旧一代被回收；`log.maxBytes<=0` 视为不轮转、文件名精确等于配置值）；**路径口径** = `log.file` 所在目录即日志目录、其余输出端相对路径只取文件名落同目录（改写 `LOG_PATH` 一处即全部文件换目录，N5 隔离）；`log.file` 为空则整组文件输出端跳过（降级仅控制台，access 行随 JUL 到控制台但无文件输出）；`getLogger(Class)` 签名与语义不变 |
+| LogUtil | 229 | 日志工具（装配：清空 root 既有 handler → 挂控制台 → 逐输出端挂 FileHandler，自身零 System.out/err）。**输出端按「配置 + Handler 列表」组织**（`resolveFileOutputs()` 的规格表 + 配置键，流程内零字面量文件名 → D9 新增输出端只需加一项规格 + 一个配置键）；默认 `system`（阈值 `log.level`）/ `error`（`log.error.level`，默认 SEVERE）/ **`access`（T3：`log.access.file`，阈值固定 INFO，挂专属 logger `"access"`——`getAccessLogger()` 暴露，`useParentHandlers=false` 使 access 行只落 access.log、不进 system.log 与控制台；规格 `LogOutput` 增 `owner` 字段区分挂载目标）**`audit`（T8：`log.audit.file`，阈值固定 INFO，挂专属 logger `"audit"`——`getAuditLogger()` 暴露，`useParentHandlers=false` 使审计行只落 audit.log、不进 system.log 与控制台；记录器 `util/AuditLog` 见 6.21）**四路；**按大小轮转**用 JUL 原生 `FileHandler(pattern, limit, count, append)`（`log.maxBytes` / `log.fileCount`，生成 `<名>.<N>`、N=0 为当前文件、最旧一代被回收；`log.maxBytes<=0` 视为不轮转、文件名精确等于配置值）；**路径口径** = `log.file` 所在目录即日志目录、其余输出端相对路径只取文件名落同目录（改写 `LOG_PATH` 一处即全部文件换目录，N5 隔离）；`log.file` 为空则整组文件输出端跳过（降级仅控制台，access 行随 JUL 到控制台但无文件输出）；`getLogger(Class)` 签名与语义不变 |
+| AuditLog | 74 | **审计记录器**（T8 新增）：管理端 4 个写操作 + 用户侧 3 个敏感变更的**成功路径**留痕——`success(action, operatorId, target)` 写向模板 logger（`LogUtil.getAuditLogger()`，只落 `audit.log`），行形态 `msg=action=… operatorId=… target=… result=success`（时间与 `req=` 由 `LogFormatter` 前缀提供，不在 msg 内重复）；**写失败吞掉降级、绝不影响业务**（注意 JUL 的 `Logger.log` 不兜 handler 异常 → 该 try/catch 承重）；`buildLine` 为包可见纯函数供单测直测。口径见 `说明书/LOG_CONVENTION.md` 3.5，落点见 6.21 |
 | LogFormatter | 107 | 单行结构化 Formatter：`ts=… level=… logger=… req=… msg=…`（固定 3 位毫秒 + 带冒号时区偏移；行尾统一 LF；消息内换行折成 `\n` 字面量守住"一条记录一行"；异常堆栈跟在首行之后）。消息渲染复用 `Formatter.formatMessage`，与 `SimpleFormatter` 同源（`{0}` 占位符文案逐字不变）；**`req=` 取 `LogContext` 的当前请求标识、只在有值时输出**（非请求线程 / 已 clear 时该字段整段不出现），值同样过单行折叠；`user=` 属访问日志字段（T3 在 access 输出端承载），不注入本行 |
 | LogContext | 162 | **请求级日志上下文**（T2 新增，D6 方案 B）：唯一 ThreadLocal 承载 reqId。`newRequestId()` = **唯一生成源**，固定 16 字符 = 毫秒低 32 位（8 位十六进制）+ 进程随机标识（4 位）+ 原子自增序号低 16 位（4 位）→ 同毫秒并发/连续不重复（序号 4 位约 6.5 万次/毫秒后回绕、届时理论上可撞号，本项目量级不可达）、跨重启不撞号；`setRequestId` 入参归一（null/空白 = 清除、去两侧空白）；`getRequestId` 无值返回 null（**无默认兜底**，非请求线程即无 reqId）；`clear()` 供 filter 的 finally 调用。**T3 新增结果码槽**：`setResultCode/getResultCode`（缺省 0 = 未走业务统一出口），`clear()` 一并清 reqId 与结果码。**生命周期自治**：只在最外层 `AccessLogFilter`（T3）一处 set/clear（含结果码），不与其他上下文共用清理点。**异步传递机制（D8，本周期无调用点）**：`capture()` 快照 + `restore(snapshot)` 恢复 + `wrap(Runnable)` 便捷包装（捕获→任务体恢复→结束后还原执行线程原值，池化线程不留残留）；快照**只含 reqId**（结果码由响应写路径产生、异步任务不读写，T3 不扩）；**只包装不创建线程**，故不引入异步执行 |
 | RequestContext | 36 | 请求上下文路径（动态拼接媒体 URL）。**T2 只加注释、行为零改动**（D6）：分工 = 业务类字段放本类、日志类字段放 `LogContext`，两者 ThreadLocal 互不干扰、清理点分离（本类由内层 `EncodingFilter` set/clear，其 finally 先于外层 filter 执行——若共用 `clear()`，reqId 会被提前清掉、异常日志丢掉请求标识） |
@@ -210,9 +211,9 @@ com.itheima/
 | SingleFlight | 70 | 统一单飞组件：ConcurrentHashMap+FutureTask，失败/成功均 remove（防缓存失败结果 + 防泄漏）；降级读路径与 miss 回填共用同一 key 空间 |
 | CacheStatus | 15 | 三态枚举：MISS / HIT_EMPTY / HIT_DATA |
 | CacheResult | 47 | 三态读取结果载体（status + value，HIT_EMPTY 时 value=null） |
-| CacheAside | 619 | 统一 Cache-Aside 封装：`read` 三态读 / `get` 带单飞回填 / `getBatch` 批量读（4 参与 5 参批量装载重载）/ `writeOrInvalidate`（写失败=DEL 自愈，写数据同时清空标记）/ `markEmpty`（存在守卫）/ `invalidate`；TTL ±10% 抖动；读路径 pipeline 化（EXISTS 空标记+GET 一趟往返）；命中滑动续期（空标记从不续期）；降级读与 miss 共用单飞、仅装载不写回；loader 抛 DatabaseException 视为加载失败——不写空标记、不 DEL 数据 key |
-| SetCache | 393 | 原生 Set 缓存基建：单成员三态 `isMember` / 全量 `getMembers`（不排序，需确定性顺序的调用方自包装）/ 批量判定（`batchIsMember` 单 set 多成员、`batchKeysIsMember` 多 set 单成员）/ `writeSet` 回填（空→`cacheAside.markEmpty` 含存在守卫）/ `loadViaSingleFlight` 降级装载；探针续期精确 TTL 无抖动、空标记不续；批量 DB 答案失败上抛、回填 best-effort。**第六期 T7 起生产调用方 = like 域（`user:likeSet` / `user:commentLikeSet`）**；follow 域已迁 ZSetCache |
-| ZSetCache | 623 | 有序集合（ZSet）缓存基建（A1「缓存有序结构」落点）：命令层 ZSCORE/ZRANGE/ZADD，**score = 成员自身数值**（故 ZRANGE 天然按成员数值升序）；API 与 SetCache 同构（`isMember` / `getMembers` / `batchIsMember` / `writeZSet` 回填（空→`markEmpty` 含存在守卫）/ `loadViaSingleFlight` 降级不写回）+ **按序窗口读 `getWindow(key, offset, count, WindowLoader, totalLoader)`**——完整态一趟 pipeline `ZRANGE[start,stop]` + `ZCARD`（total 与页同源）；**T11-C 前缀窗口装载**（miss/部分态/降级/部分态三处配套的完整口径见 6.17）；探针续期精确 TTL（`partial:` 标记与数据 key 同步续期）、空标记不续；窗口装载单飞 key 带窗口指纹 `key@offset+count` 防不同页串用 |
+| CacheAside | 624 | 统一 Cache-Aside 封装：`read` 三态读 / `get` 带单飞回填 / `getBatch` 批量读（4 参与 5 参批量装载重载）/ `writeOrInvalidate`（写失败=DEL 自愈，写数据同时清空标记）/ `markEmpty`（存在守卫）/ `invalidate`；TTL ±10% 抖动；读路径 pipeline 化（EXISTS 空标记+GET 一趟往返）；命中滑动续期（空标记从不续期）；降级读与 miss 共用单飞、仅装载不写回；loader 抛 DatabaseException 视为加载失败——不写空标记、不 DEL 数据 key |
+| SetCache | 396 | 原生 Set 缓存基建：单成员三态 `isMember` / 全量 `getMembers`（不排序，需确定性顺序的调用方自包装）/ 批量判定（`batchIsMember` 单 set 多成员、`batchKeysIsMember` 多 set 单成员）/ `writeSet` 回填（空→`cacheAside.markEmpty` 含存在守卫）/ `loadViaSingleFlight` 降级装载；探针续期精确 TTL 无抖动、空标记不续；批量 DB 答案失败上抛、回填 best-effort。**第六期 T7 起生产调用方 = like 域（`user:likeSet` / `user:commentLikeSet`）**；follow 域已迁 ZSetCache |
+| ZSetCache | 625 | 有序集合（ZSet）缓存基建（A1「缓存有序结构」落点）：命令层 ZSCORE/ZRANGE/ZADD，**score = 成员自身数值**（故 ZRANGE 天然按成员数值升序）；API 与 SetCache 同构（`isMember` / `getMembers` / `batchIsMember` / `writeZSet` 回填（空→`markEmpty` 含存在守卫）/ `loadViaSingleFlight` 降级不写回）+ **按序窗口读 `getWindow(key, offset, count, WindowLoader, totalLoader)`**——完整态一趟 pipeline `ZRANGE[start,stop]` + `ZCARD`（total 与页同源）；**T11-C 前缀窗口装载**（miss/部分态/降级/部分态三处配套的完整口径见 6.17）；探针续期精确 TTL（`partial:` 标记与数据 key 同步续期）、空标记不续；窗口装载单飞 key 带窗口指纹 `key@offset+count` 防不同页串用 |
 
 > 测试：`src/test/java/com/itheima/cache/` 9 类单测（mockStatic MyRedisPool + mock Jedis，不碰真实 Redis），用例清单以 `surefire-reports` 为准（见九节指针）。
 
@@ -548,6 +549,30 @@ com.itheima/
 - **慢请求标记**：`cost >= log.slowRequestMs`（默认 1000ms，可配）→ `slow=1`；打标记不另起一行、不设独立性能日志文件（D7）。
 - **用途**：每接口耗时基线的聚合来源（第三张清单的报表/趋势将基于本行 `cost=` 字段）；`grep req=<id>` 可在 access.log 与 system.log 间端到端串联同一次请求（异常/降级路径的应用日志带同一 `req=`）——D6 收益的实际落地。
 - **断言口径（T4）**：**装配层**由 JUnit 覆盖（输出端规格表取名自配置、各端 level、`access` 专属 handler 与 `useParentHandlers=false`、轮转文件名模式与保留个数）；**文件级分流与串联**由 pytest `src/test/python/test_log_outputs.py` 覆盖（`error` 只收 SEVERE、`access` 与 `system` 互不污染、access 行严格单行结构化 + LF 行尾、同一 `req` 在 access/system/error 三输出端串联、未处理异常路径 `code=500` 收口）。
+
+### 6.21 审计日志（第二张清单 T8：管理端写操作 + 用户敏感变更留痕）
+
+- **目标**：管理端写操作与用户敏感变更的**成功路径**可追溯"谁、何时、做了什么"；**只落文件、不落库**（本周期无 DDL）。
+- **输出端**：`LogUtil` 规格表**第四项** `audit`（`log.audit.file`，默认 `audit.log`，相对路径取文件名锚 `log.file` 目录）——挂**专属 logger `"audit"`**（`LogUtil.getAuditLogger()`），`useParentHandlers=false`：审计行**只进 audit.log**（反向：应用日志也不会下发到 audit）；阈值**固定 INFO、不取 `log.level`**（审计不得被运维开关静默）；轮转沿用 `log.maxBytes` / `log.fileCount`。扩展代价 = 规格表加一项 + 配置加一个键，**持有 LOGGER 的业务类零改动**（D9 底座的首个实践）。
+- **记录器**：`util/AuditLog.success(action, operatorId, target)` —— 只记成功（失败由既有 `SEVERE` 承载，不重复记）；**写失败吞掉降级，不影响业务**（注意 JUL 的 `Logger.log` 不对 handler 异常兜底 → 该 try/catch 承重）；包可见纯函数 `buildLine` 供单测直测。
+- **操作者口径**：管理端读 `LoginFilter` 放入的 `userId` attribute（`AuthFilter` 对 `/api/admin` 先判非空并校验 `role==1`，故控制器内**理论不可达 null**，代码按全仓同款 `(Long)` 直取）；用户侧**方法入参即操作者**，**不给 service 加 `operatorId` 参数**（B 形态已否决，见 NEEDS 三节议程块 ②）。
+- **行形态**：`ts=… level=INFO logger=audit req=<id> msg=action=… operatorId=… target=… result=success`（复用 `LogFormatter` 单行 key=value；时间与 `req=` 由前缀提供，避免重复）。
+- **脱敏**：审计行只含**对象标识**与操作名——请求体 / query 串 / 密码 / 手机号明文一律不落盘（pytest 有"明文缺席"断言）。
+
+**7 个操作点**（形态 A：管理端 controller 层补点、零签名改动；用户侧 service 层）：
+
+| 操作点 | 操作名 | 操作者来源 | 对象（target） |
+| ---- | ---- | ---- | ---- |
+| `POST /api/admin/content/hide` | `admin.content.hide` | `req.getAttribute("userId")` | `contentId:<id>` |
+| `POST /api/admin/content/unhide` | `admin.content.unhide` | 同上 | `contentId:<id>` |
+| `POST /api/admin/media/restore` | `admin.media.restore` | 同上 | `mediaId:<id>` |
+| `POST /api/admin/comment/delete` | `admin.comment.delete` | 同上 | `commentId:<id>` |
+| `UserService.changePassword` | `user.changePassword` | 方法入参 `userId` | `userId:<id>` |
+| `UserService.changeUserName` | `user.changeUserName` | 同上 | `userId:<id>` |
+| `UserService.changePhone` | `user.changePhone` | 同上 | `userId:<id>`（**当前无 HTTP 入口**，仅 JUnit 覆盖） |
+
+- **断言口径（T8）**：**装配层 + 写失败守卫**归 JUnit（`LogUtilTest` = 第 4 输出端/专属 handler/配置键；`AuditLogTest` = 行形态纯函数 + 记录写向 audit logger + 抛异常 handler 下守卫吞掉异常）；**文件级留痕 + `audit.log` 与 `system`/`access` 互不污染**归 pytest `src/test/python/test_audit_log.py`（6 个可 HTTP 触达点各恰好一条 + 无敏感值）。
+- **级别与粒度标准**：`说明书/LOG_CONVENTION.md` 3.5（审计留痕口径）；审计行**不占** `system.log` 的 INFO 配额。
 
 ---
 

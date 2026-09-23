@@ -229,10 +229,11 @@ pytest 阶段有整体超时刹车（T2，2026-09-05）：`subprocess.run(timeou
 | system | `system.log.<N>` | 全域应用日志（阈值 `log.level`，默认 INFO）                   |
 | error | `error.log.<N>` | 只收 `>= log.error.level`（默认 SEVERE）                |
 | access | `access.log.<N>` | 访问日志（专属 logger `access`，`useParentHandlers=false` → **只落本文件**，不进 system.log） |
+| audit | `audit.log.<N>` | 审计留痕（专属 logger `audit`，T8：管理端 4 个写操作 + 用户侧 3 个敏感变更的**成功路径**；同样 `useParentHandlers=false` → 不进 system.log；阈值固定 INFO，**不受 `log.level` 影响**） |
 
-- **落盘目录随链路不同**：`all`/`start`/`test`（18080 实例）注入 `LOG_PATH=<CATALINA_BASE>/logs/system.log` → 三个文件都落 `.stage8-target\tomcat-test-18080\logs\`；`junit` 由 surefire 另注入 `LOG_PATH=${stage8.buildDir}/test-logs/system.log` → 落 `.stage8-target\test-logs\`（由此"测试日志不再写进运行日志目录"，N5）。
+- **落盘目录随链路不同**：`all`/`start`/`test`（18080 实例）注入 `LOG_PATH=<CATALINA_BASE>/logs/system.log` → 四个文件都落 `.stage8-target\tomcat-test-18080\logs\`；`junit` 由 surefire 另注入 `LOG_PATH=${stage8.buildDir}/test-logs/system.log` → 落 `.stage8-target\test-logs\`（由此"测试日志不再写进运行日志目录"，N5）。
 - **文件名是轮转形态**：`<名>.<N>`，**N=0 为当前写入文件、N 越大越旧**（`log.maxBytes` / `log.fileCount` 控制）；读日志要取"前缀匹配 + mtime 最新"的那个文件，不要写死 `<名>.log`。
-- **pytest 怎么断言日志**（先例：`src/test/python/test_access_log.py`、`test_log_outputs.py`）：① 选文件 = "`<名>.log*` 前缀匹配 + mtime 最新"，**必须排除 JUL 的 `<名>.<N>.lck` 锁文件**；② 断言分两类——**全文件不变式**（分流口径须对文件里每一行成立，如 error 只收 SEVERE）与**本 run 记录**（"响应先于落盘返回"是常态 → 轮询至多 3s）；③ 精确定位"本次请求"的落盘记录**不要依赖行号增量**（落盘期间可能发生轮转），改用**唯一指纹**：把随机 marker 塞进请求参数、由异常栈回显，再向前回退到最近的 `ts=` 行即为该记录（`test_log_outputs.py` 的 `record_containing`），记录行上的 `req=` 可继续用来跨输出端回查。归属判据见 §〇.2：**日志是否真的落盘、输出端之间是否串通**属"依赖真实堆栈副作用" → pytest；只到装配层（handler / level / 格式串 / 轮转参数）的断言归 JUnit。
+- **pytest 怎么断言日志**（先例：`src/test/python/test_access_log.py`、`test_log_outputs.py`、`test_audit_log.py`）：① 选文件 = "`<名>.log*` 前缀匹配 + mtime 最新"，**必须排除 JUL 的 `<名>.<N>.lck` 锁文件**；② 断言分两类——**全文件不变式**（分流口径须对文件里每一行成立，如 error 只收 SEVERE、audit 只收合法审计行）与**本 run 记录**（"响应先于落盘返回"是常态 → 轮询至多 3s）；③ 精确定位"本次请求"的落盘记录**不要依赖行号增量**（落盘期间可能发生轮转），改用**唯一指纹**：把随机 marker 塞进请求参数、由异常栈回显，再向前回退到最近的 `ts=` 行即为该记录（`test_log_outputs.py` 的 `record_containing`），记录行上的 `req=` 可继续用来跨输出端回查；**审计行没有异常栈可回显** → 改用"**动作三元组指纹 + 全文件计数 delta**"（`test_audit_log.py` 的 `audited()`：`action=`/`operatorId=`/`target=` 的行数在执行操作前后必须恰好 +1；target id 全部取自本 run 新建对象，故测试库重建导致 id 复用、历史行仍在也不会误判）。归属判据见 §〇.2：**日志是否真的落盘、输出端之间是否串通**属"依赖真实堆栈副作用" → pytest；只到装配层（handler / level / 格式串 / 轮转参数）的断言归 JUnit。
 
 ***
 

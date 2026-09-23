@@ -151,6 +151,8 @@ public class UserService {
                 throw new DatabaseException("修改密码失败", e);
             }
         });
+        // 审计（T8）：事务提交成功即留痕；操作者 = 方法入参 userId（用户侧敏感变更，无 HTTP 操作者参数）
+        AuditLog.success("user.changePassword", userId, "userId:" + userId);
     }
     private void doChangePassword(Connection conn,  long userId,String phone, String oldPassword, String newPassword) throws SQLException {
 
@@ -195,6 +197,8 @@ public class UserService {
                 throw new DatabaseException("修改用户名失败", e);
             }
         });
+        // 审计（T8）：事务提交成功即留痕（置于缓存级联失效之前——"变更已落库"即成功）
+        AuditLog.success("user.changeUserName", userId, "userId:" + userId);
         // DB 提交后级联失效该作者内容缓存 key；失败不抛（缓存仅作加速器，TTL 自愈）
         contentCache.invalidateAuthorContentKeys(userId);
     }
@@ -211,6 +215,8 @@ public class UserService {
                 throw new DatabaseException("修改手机号失败", e);
             }
         });
+        // 审计（T8）：事务提交成功即留痕（操作者 = 入参 userId）；**不记新旧手机号明文**
+        AuditLog.success("user.changePhone", userId, "userId:" + userId);
     }
 
     private void doChangeUserName(Connection conn, long userId, String newName) throws SQLException {

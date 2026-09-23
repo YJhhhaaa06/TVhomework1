@@ -15,6 +15,7 @@ import com.itheima.user.model.command.RegisterCommand;
 import com.itheima.user.model.entity.User;
 import com.itheima.user.model.vo.LoginVO;
 import com.itheima.util.JwtUtil;
+import com.itheima.util.LogUtil;
 import com.itheima.util.PasswordUtil;
 import com.itheima.util.TransactionTemplate;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,6 +24,11 @@ import org.mockito.ArgumentCaptor;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -332,9 +338,35 @@ class UserServiceTest {
         when(userDao.isPhoneUsed(conn, "13900000002")).thenReturn(false);
         when(userDao.updateUserPhone(conn, 7L, "13900000002")).thenReturn(1);
 
-        service.changePhone(7L, "13800000001", "13900000002");
+        // T8：该点**无 HTTP 入口**（e2e 覆盖不到）→ 在此断言"成功恰留一条审计记录"，补齐验收①的 7/7。
+        // 探针挂真实 audit logger、用完摘除；记录同时会经真实 FileHandler 落 JUnit 链路日志目录。
+        List<LogRecord> auditRecords = new ArrayList<>();
+        Handler probe = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                auditRecords.add(record);
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        Logger auditLogger = LogUtil.getAuditLogger();
+        auditLogger.addHandler(probe);
+        try {
+            service.changePhone(7L, "13800000001", "13900000002");
+        } finally {
+            auditLogger.removeHandler(probe);
+        }
 
         verify(userDao).updateUserPhone(conn, 7L, "13900000002");
+        assertEquals(1, auditRecords.size(), "changePhone 成功路径应恰有一条审计记录");
+        assertEquals("action=user.changePhone operatorId=7 target=userId:7 result=success",
+                auditRecords.get(0).getMessage(), "审计行口径见 AuditLog 类注释 / LOG_CONVENTION 3.5");
     }
 
     @Test

@@ -26,13 +26,17 @@ import java.util.logging.Logger;
  * <ol>
  *   <li><b>单行结构化</b>：Console 与所有文件输出端共用同一个 {@link LogFormatter}。</li>
  *   <li><b>可扩展多输出端</b>（NEEDS 4.0 D9）：分流按「输出端规格表（{@link #resolveFileOutputs()}）
- *       + 配置键」组织，**流程内不出现字面量文件名**——将来新增输出端（如第二张清单的审计日志
- *       {@code audit.log}）只需在规格表加一项、{@code app.properties} 加一个配置键，持有 LOGGER 的
- *       业务类零改动。默认三个文件输出端：{@code system}（全域，阈值 {@code log.level}）、
+ *       + 配置键」组织，**流程内不出现字面量文件名**——新增输出端只需在规格表加一项、
+ *       {@code app.properties} 加一个配置键，持有 LOGGER 的
+ *       业务类零改动（T8 的审计日志 {@code audit.log} 即该底座的首个实践，零调用方改动）。
+ *       默认四个文件输出端：{@code system}（全域，阈值 {@code log.level}）、
  *       {@code error}（只收 {@code >= log.error.level}，默认 SEVERE，便于排障速览）、
  *       {@code access}（**访问日志，T3 新增**：由 {@link #getAccessLogger()} 承载，只收写向
  *       {@code access} logger 的记录 → access 行只落 access.log、不进 system.log；阈值固定
- *       {@code Level.INFO}）。{@code system} / {@code error} 挂 root、{@code access} 挂专属
+ *       {@code Level.INFO}）、{@code audit}（**审计日志，T8 新增**：由 {@link #getAuditLogger()}
+ *       承载，写向 {@code audit} logger 的记录只落 audit.log；阈值固定 {@code Level.INFO}，
+ *       **不随 {@code log.level} 变**——审计不得被运维开关静默）。{@code system} / {@code error}
+ *       挂 root，{@code access} / {@code audit} 挂专属
  *       logger（规格表的 {code owner} 字段区分挂载目标）。</li>
  *   <li><b>按大小轮转</b>：由 JUL 原生 {@code FileHandler(pattern, limit, count, append)} 承担
  *       （阈值/保留个数来自 {@code log.maxBytes} / {@code log.fileCount}，参数化可配）。JUL 语义：
@@ -61,6 +65,12 @@ public class LogUtil {
 
     /** 访问输出端专属 logger：handler 在静态块装配（挂靠目标由规格表 owner 决定）。 */
     private static final Logger ACCESS_LOGGER = Logger.getLogger(ACCESS_LOGGER_NAME);
+
+    /** 审计输出端专属 logger 名（T8 log2-08）：审计行只写向此 logger，见 {@link #getAuditLogger()}。 */
+    public static final String AUDIT_LOGGER_NAME = "audit";
+
+    /** 审计输出端专属 logger：handler 在静态块装配（挂靠目标由规格表 owner 决定）。 */
+    private static final Logger AUDIT_LOGGER = Logger.getLogger(AUDIT_LOGGER_NAME);
 
     static {
         Logger rootLogger = Logger.getLogger("");
@@ -121,6 +131,15 @@ public class LogUtil {
             accessFile = new File(logDir, accessFile.getName());
         }
         outputs.add(new LogOutput("access", accessFile, "INFO", Level.INFO, ACCESS_LOGGER_NAME));
+
+        // T8 审计端：形态与 access 同构（专属 logger + useParentHandlers=false → 只落 audit.log）。
+        // 阈值**固定 INFO、不取 log.level**：审计是合规留痕，不得被运维级别开关静默；
+        // 轮转复用 log.maxBytes / log.fileCount（审计记录稀疏，同容量已远超需求）。
+        File auditFile = new File(AppConfig.getLogAuditFile());
+        if (!auditFile.isAbsolute() && logDir != null) {
+            auditFile = new File(logDir, auditFile.getName());
+        }
+        outputs.add(new LogOutput("audit", auditFile, "INFO", Level.INFO, AUDIT_LOGGER_NAME));
         return outputs;
     }
 
@@ -189,6 +208,18 @@ public class LogUtil {
      */
     public static Logger getAccessLogger() {
         return ACCESS_LOGGER;
+    }
+
+    /**
+     * 审计日志专属 logger（T8 log2-08）：handler 已在本类静态块按规格表装配（{@code log.audit.file}、
+     * 轮转参数、{@link LogFormatter}），调用方（{@code util/AuditLog}）直接 {@code info(line)} 即可。
+     *
+     * <p>与 {@link #getAccessLogger()} 同口径：该 logger 已设 {@code useParentHandlers=false}，记录
+     * **只**落 audit 输出端文件；{@code log.file} 为空（整组文件输出端跳过）时保持默认传播 → 审计行
+     * 随 JUL 到控制台，与"降级为仅控制台"口径一致。
+     */
+    public static Logger getAuditLogger() {
+        return AUDIT_LOGGER;
     }
 
     /** 文件输出端规格：{@code name} 用于启动日志与失败提示，{@code file} 为落盘文件（已解析目录口径），

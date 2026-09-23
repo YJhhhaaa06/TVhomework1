@@ -234,6 +234,11 @@ public final class AppConfig {
         return get("log.access.file", "access.log");
     }
 
+    /** 审计输出端文件名（T8）：相对值只取文件名，目录与 {@code log.file} 相同（口径见 LogUtil 类注释）。 */
+    public static String getLogAuditFile() {
+        return get("log.audit.file", "audit.log");
+    }
+
     /** 慢请求阈值（毫秒）：访问日志行 {@code cost >=} 此值 时带 {@code slow=1} 标记（D7 性能观测）。 */
     public static int getLogSlowRequestMs() {
         return getInt("log.slowRequestMs", 1000);

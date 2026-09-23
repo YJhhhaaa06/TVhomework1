@@ -74,11 +74,12 @@ class LogUtilTest {
         probe.setProperty("log.error.file", "other.log");
         probe.setProperty("log.error.level", "WARNING");
         probe.setProperty("log.access.file", "probe.log");
+        probe.setProperty("log.audit.file", "audit-probe.log");
         replaceProps(probe);
         try {
             List<LogUtil.LogOutput> outputs = LogUtil.resolveFileOutputs();
 
-            assertEquals(3, outputs.size(), "应有 system / error / access 三个文件输出端");
+            assertEquals(4, outputs.size(), "应有 system / error / access / audit 四个文件输出端");
             assertEquals("system", outputs.get(0).name());
             assertEquals(normalized(probePrimary), normalized(outputs.get(0).file()),
                     "system 输出端应使用配置的 log.file（同一路径必须能从配置复现 → 非字面量硬编码）");
@@ -104,6 +105,18 @@ class LogUtilTest {
             assertEquals(normalized(outputs.get(0).file().getParentFile()),
                     normalized(outputs.get(2).file().getParentFile()),
                     "access 相对文件名同样锚到 log.file 所在目录");
+
+            assertEquals("audit", outputs.get(3).name(), "T8 起第四个输出端为 audit");
+            assertEquals("audit-probe.log", outputs.get(3).file().getName(),
+                    "audit 输出端文件名应使用配置的 log.audit.file（不硬编码）");
+            assertEquals("INFO", outputs.get(3).levelName(),
+                    "audit 输出端级别固定 INFO——不取 log.level，审计不得被运维开关静默");
+            assertEquals(Level.INFO, outputs.get(3).defaultLevel());
+            assertEquals(LogUtil.AUDIT_LOGGER_NAME, outputs.get(3).owner(),
+                    "audit 输出端应挂专属 logger（owner 区分挂载目标，不挂 root）");
+            assertEquals(normalized(outputs.get(0).file().getParentFile()),
+                    normalized(outputs.get(3).file().getParentFile()),
+                    "audit 相对文件名同样锚到 log.file 所在目录");
         } finally {
             replaceProps(originalProps);
         }
@@ -144,16 +157,24 @@ class LogUtilTest {
     void errorOutputLandsBesideConfiguredSystemLog() {
         List<LogUtil.LogOutput> outputs = LogUtil.resolveFileOutputs();
 
-        assertEquals(3, outputs.size(), "配置可用时应装配 system / error / access 三个文件输出端");
+        assertEquals(4, outputs.size(), "配置可用时应装配 system / error / access / audit 四个文件输出端");
         assertEquals(AppConfig.getLogErrorFile(), outputs.get(1).file().getName(),
                 "error 输出端文件名应来自配置");
         assertEquals("access", outputs.get(2).name(), "第三个输出端固定为 access");
+        assertEquals("audit", outputs.get(3).name(), "第四个输出端固定为 audit（T8）");
+        assertEquals(AppConfig.getLogAuditFile(), outputs.get(3).file().getName(),
+                "audit 输出端文件名应来自配置");
         assertEquals(normalized(outputs.get(0).file().getParentFile()),
                 normalized(outputs.get(1).file().getParentFile()),
                 "改写 log.file（测试侧即 LOG_PATH）一处即可让所有日志文件落同目录（N5 隔离）");
         assertEquals(normalized(outputs.get(2).file().getParentFile()),
                 normalized(outputs.get(0).file().getParentFile()),
                 "access 输出端与 system/error 同目录（一次 LOG_PATH 全部换目录）");
+        assertEquals(normalized(outputs.get(3).file().getParentFile()),
+                normalized(outputs.get(0).file().getParentFile()),
+                "audit 输出端与 system/error 同目录（一次 LOG_PATH 全部换目录）");
+        assertEquals(AppConfig.getLogAccessFile(), outputs.get(2).file().getName(),
+                "access 输出端文件名应来自配置");
     }
 
     @Test
@@ -165,6 +186,7 @@ class LogUtilTest {
         assertEquals(Integer.parseInt(shipped.getString("log.maxBytes")), AppConfig.getLogMaxBytes());
         assertEquals(Integer.parseInt(shipped.getString("log.fileCount")), AppConfig.getLogFileCount());
         assertEquals(shipped.getString("log.access.file"), AppConfig.getLogAccessFile(), "access 文件名来自配置");
+        assertEquals(shipped.getString("log.audit.file"), AppConfig.getLogAuditFile(), "audit 文件名来自配置");
         assertEquals(Integer.parseInt(shipped.getString("log.slowRequestMs")), AppConfig.getLogSlowRequestMs(),
                 "慢请求阈值来自配置（默认 1000ms）");
         assertTrue(AppConfig.getLogMaxBytes() > 0, "出厂配置应开启按大小轮转（N4：单文件无限增长）");
@@ -250,6 +272,21 @@ class LogUtilTest {
         assertEquals(1, handlers.length, "access logger 应恰好挂一个文件输出端: " + Arrays.toString(handlers));
         assertTrue(handlers[0] instanceof FileHandler, "access 输出端应为 JUL FileHandler（轮转/编码同构）");
         assertTrue(handlers[0].getFormatter() instanceof LogFormatter, "access 输出端应统一使用 LogFormatter");
+    }
+
+    /** T8：audit 输出端挂专属 logger、level INFO、关闭向 root 传播（审计行只落 audit.log）。 */
+    @Test
+    void auditLoggerWiresDedicatedFileHandler() {
+        Logger audit = LogUtil.getAuditLogger();
+
+        assertSame(Logger.getLogger(LogUtil.AUDIT_LOGGER_NAME), audit,
+                "审计 logger 名应与规格表的 owner 一致（改名即失联）");
+        assertFalse(audit.getUseParentHandlers(), "审计记录不得传播到 root（否则会进 system.log/控制台）");
+        assertEquals(Level.INFO, audit.getLevel(), "audit logger 级别固定 INFO（不取 log.level）");
+        Handler[] handlers = audit.getHandlers();
+        assertEquals(1, handlers.length, "audit logger 应恰好挂一个文件输出端: " + Arrays.toString(handlers));
+        assertTrue(handlers[0] instanceof FileHandler, "audit 输出端应为 JUL FileHandler（轮转/编码同构）");
+        assertTrue(handlers[0].getFormatter() instanceof LogFormatter, "audit 输出端应统一使用 LogFormatter");
     }
 
     // ==================== 工具 ====================

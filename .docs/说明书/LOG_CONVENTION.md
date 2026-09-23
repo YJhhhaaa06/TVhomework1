@@ -46,12 +46,12 @@
 | 机制 | 现状 |
 | ---- | ---- |
 | **配置覆盖链** | `AppConfig`：**环境变量**（`log.level` → `LOG_LEVEL`，点转下划线大写；`log.file` 另有 **`LOG_PATH` 别名**）→ **`-Dkey=value`** 系统属性 → `app.properties`。**覆盖无需改代码** |
-| **输出端** | 三路：`system.log`（阈值 `log.level`，默认 INFO）/ `error.log`（`log.error.level`，默认 SEVERE）/ `access.log`（**每请求一行**，阈值固定 INFO，专属 logger `access`） |
+| **输出端** | 四路：`system.log`（阈值 `log.level`，默认 INFO）/ `error.log`（`log.error.level`，默认 SEVERE）/ `access.log`（**每请求一行**，阈值固定 INFO，专属 logger `access`）/ `audit.log`（**审计留痕**，阈值固定 INFO，专属 logger `audit`，T8） |
 | **落点口径** | `log.file` 的**父目录 = 日志目录**，其余输出端相对路径只取文件名落同目录 → **注入 `LOG_PATH` 一处即全部换目录** |
 | **测试隔离**（三种运行互不污染） | ① JUnit（`python tools\tv.py test junit`）→ `.stage8-target/test-logs/`（`pom.xml` surefire 注入 `LOG_PATH`）；② e2e（`test all`）→ `.stage8-target/tomcat-test-18080/logs/`（`tools/run_tests.py` 注入）；③ 生产 / 本地直跑 → `logs/`（`app.properties` 相对路径，按 cwd 解析） |
 | **关联** | 日志行 `req=`（`LogContext`；**非请求线程整段不输出**）+ 访问日志行 `method= path= userId= code= cost= slow=` |
 | **轮转** | JUL 原生 `FileHandler(pattern, limit, count, append)`：`<名>.<N>`，N=0 为当前写入文件、N 越大越旧；`log.maxBytes<=0` = 不轮转 |
-| **存量分布**（2026-09-22 实测 + **2026-09-22 T6 复批后**） | 复批后 **132 个调用点 / 23 个持 `LOGGER` 的类**：SEVERE **44**（40 处上抛、**4 处吞掉但需人介入**保持）+ WARNING **83**（78 + 5 处降级并入，48 处为降级·自愈路径）/ INFO **5**（业务成功路径 0）/ FINE **0**（原 2 处死代码已删）。复批结论：**原 9 处吞掉型 SEVERE → 5 处维持或降级路径见 `目标与任务/NEXT_CYCLE_TASKS.md` T6 执行回写**；T6 只动级别，未改文案/控制流 |
+| **存量分布**（2026-09-22 实测 + **2026-09-22 T6 复批后**） | 复批后 **132 个调用点 / 23 个持 `LOGGER` 的类**：SEVERE **44**（40 处上抛、**4 处吞掉但需人介入**保持）+ WARNING **83**（78 + 5 处降级并入，48 处为降级·自愈路径）/ INFO **5**（业务成功路径 0）/ FINE **0**（原 2 处死代码已删）。复批结论：**原 9 处吞掉型 SEVERE → 5 处维持或降级路径见 `目标与任务/NEXT_CYCLE_TASKS.md` T6 执行回写**；T6 只动级别，未改文案/控制流。**T8 增补**：审计记录器 `util/AuditLog` 新增 1 处 `INFO` 调用点，但它写向 **audit 专属 logger（独立输出端）**、不进 `system.log` → 上面的分布（`system` 侧）与"业务成功路径 0 处"口径不变，审计留痕单列（见 3.5） |
 
 ***
 
@@ -79,7 +79,7 @@
 
 ### 3.2 粒度标准（记什么 / 不记什么）
 
-- **必记**：① 每次"最终失败"（`SEVERE`）；② 每次"降级 / 自愈 / 熔断切换"（`WARNING`——**保留现状**，这 48 处是本项目排障含金量最高的日志）；③ 业务里程碑与状态迁移（`INFO`——**待补**，现成功路径 0 处）；④ **每请求一行**访问日志（已落地，属基础设施层）。
+- **必记**：① 每次"最终失败"（`SEVERE`）；② 每次"降级 / 自愈 / 熔断切换"（`WARNING`——**保留现状**，这 48 处是本项目排障含金量最高的日志）；③ 业务里程碑与状态迁移（`INFO`——**待补**，现成功路径 0 处）；④ **每请求一行**访问日志（已落地，属基础设施层）；⑤ **审计留痕**（管理端写操作 + 用户敏感变更的**成功路径**，T8 已落地，走独立输出端 `audit.log`——口径见 **3.5**，不占 `system.log` 的 INFO 配额）。
 - **不记**：常规成功读操作的逐条日志；循环体内逐条 `INFO`；框架 / 第三方噪音（根级别保持 INFO）；任何敏感值。
 - **暂不引入**：WARNING 采样 / 限流（78 处中 48 处是降级路径、含金量高）——**先治级别语义，再谈限流**；也不新增"严重等级"命名（沿用 JUL 五级，避免造第二套词汇）。
 
@@ -95,6 +95,22 @@
 ### 3.4 与既有代码的关系
 
 本档自 2026-09-22 起对**新增与修改**的调用点生效；存量调用点**不自动合规**。真偏差面（2026-09-22 量化 + 外部评审后收敛为三条）：**① 9 处"吞掉型 SEVERE"**（按 3.1-② 的"是否需要人介入"逐点判，**不是一律降级**；**T6 已复批，调用点 134 → 132**）、**② 成功路径与关键状态变更的 `INFO` 补点**（对齐 3.2-必记③，与审计日志 R-02 同源；**待 T9**）、**③ 同一失败的"双堆栈"**（**T7 已按"安全门禁"按链收口并留残余，2026-09-22**：业务链本即"源头带堆栈 + 最外层结论行"（无需改动）；**内容装载链**在**装载层**去栈 4 处（"内容装载 DB 查询失败…"/"内容装载异常…"/"内容批量装载 DB 查询失败…"/"内容批量装载异常…"，堆栈由 `CacheAside` / 写路径结论行持有）；**关注/点赞 best-effort 回填链维持双栈为已登记残余**（loader 双路径冲突、两侧都不可去，见 T7 执行回写"残余"与候选治本方案）。治理落任务见第二张清单（`目标与任务/NEXT_CYCLE_NEEDS.md` R-01），执行记录与逐条归属见 `目标与任务/NEXT_CYCLE_TASKS.md` T6 / T7 执行回写。
+
+***
+
+### 3.5 审计留痕口径（T8 落地）
+
+- **记什么**：**管理端写操作** 4 个点（`/api/admin/content/hide`、`/content/unhide`、`/media/restore`、`/comment/delete`）+ **用户侧敏感变更** 3 个点（`UserService.changePassword` / `changeUserName` / `changePhone`）的**成功路径**。
+- **只记成功**：失败由既有 `SEVERE` 记录承载（源头记录 + `ExceptionFilter` 结论行），审计**不重复记**——避免"同一失败两条记录"（3.1 附加纪律 2）。
+- **行形态**（复用 `LogFormatter` 前缀；时间与请求关联不在 msg 内重复）：
+  `ts=… level=INFO logger=audit req=… msg=action=<操作名> operatorId=<id> target=<对象:值> result=success`
+  - 字段 = 操作者（`operatorId`）· 操作（`action`）· 对象（`target`）· 结果（`result`）· 时间（前缀 `ts=`，3 位毫秒 + 带冒号时区）· 请求关联（前缀 `req=`，同线程自动带，可与 access/system 行串联）。
+  - **操作名用稳定字面量**（管理端 `admin.<域>.<动作>`、用户侧 `user.<方法语义>`）——**不拿 `getPathInfo()` 拼**：裸 action（`/hide`）会丢域信息，且名字随 URL 漂移；URL 本身受"不擅改 `@WebServlet`"约束，二者不会分叉。
+  - 对象只放**标识**（`contentId:42` / `mediaId:7` / `commentId:9` / `userId:13`），**不放变更后的值**（手机号属 PII、用户名无记录必要）；请求体 / query 串 / 密码 / token 一律不落盘。
+- **输出端**：专属 logger `audit`（`useParentHandlers=false`）→ 只落 `audit.log`、**不进 `system.log`**；阈值**固定 INFO**（不取 `log.level`）——审计是合规留痕，不得被运维开关静默；轮转复用 `log.maxBytes` / `log.fileCount`（审计记录稀疏，同容量远超需求）。
+- **写失败不得影响业务**：记录器 `util/AuditLog` 吞掉写入异常并降级（同"缓存失败不导致业务失败"）。注意 JUL 的 `Logger.log` **不对 handler 异常兜底**（JDK 25 源码实测）→ 该 try/catch 是承重的，不是摆设。
+- **写在哪一层**：管理端在 **controller**（操作者 = `request.getAttribute("userId")`——`LoginFilter` 已放入、`AuthFilter` 对 `/api/admin` 已保证非空，**零签名改动**）；用户侧在 **service**（操作者 = 方法入参 `userId`，该层无 request 可取）。**注**：`changePhone` 当前**无 HTTP 入口**（`LoginController` 未暴露），其审计点仅由 JUnit 覆盖。
+- **测试口径**：装配层与写失败守卫归 JUnit（`AuditLogTest` / `LogUtilTest`）；文件级留痕与"`audit.log` 与 `system.log`/`access.log` 互不污染"归 pytest（`src/test/python/test_audit_log.py`，定位指纹 = 动作三元组 + 全文件计数 delta）。
 
 ***
 
