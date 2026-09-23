@@ -60,6 +60,8 @@ public class FollowService {
                 throw new ServerException("关注失败");
             }
         });
+        // 里程碑（T9）：关系状态迁移（关注）——DB 已提交即记；置于缓存双写之前
+        LOGGER.log(Level.INFO, "关注成功, userId=" + userId + ", followedUserId=" + followedUserId);
         // DB 提交后缓存双写（NEEDS 4.10：MULTI 原子，失败双 DEL 自愈，不影响主流程）
         followCache.cacheFollow(userId, followedUserId);
     }
@@ -180,6 +182,8 @@ public class FollowService {
                 throw new ServerException("取关失败");
             }
         });
+        // 里程碑（T9）：关系状态迁移（取关）——口径同 follow
+        LOGGER.log(Level.INFO, "取关成功, userId=" + userId + ", followedUserId=" + followedUserId);
         // DB 提交后缓存双写（SREM，失败双 DEL 自愈，不影响主流程）
         followCache.cacheUnfollow(userId, followedUserId);
     }

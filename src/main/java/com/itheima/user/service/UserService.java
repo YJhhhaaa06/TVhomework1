@@ -83,7 +83,11 @@ public class UserService {
         if (!PasswordUtil.isPasswordCorrect(rawPassword, user.getHashedPassword())) {
             throw new PasswordIncorrectException();
         }
-        return JwtUtil.generateToken(user.getId());
+        String token = JwtUtil.generateToken(user.getId());
+        // 里程碑（T9）：登录成功。**只记 userId**——账号（手机号）与 token 一律不落盘
+        //（唯一出口 = LogUtil.getLogger → system.log；请求关联 req= 由 LogFormatter 前缀给）
+        LOGGER.log(Level.INFO, "登录成功, userId=" + user.getId());
+        return token;
     }
 
 
@@ -114,7 +118,7 @@ public class UserService {
         String phone=rc.getPhone();
         String password=rc.getPassword();
         String hashedPassword=PasswordUtil.hashPassword(password);
-        return transactionTemplate.execute(conn -> {
+        long id = transactionTemplate.execute(conn -> {
             if(userDao.isPhoneUsed(conn,phone)){
                 throw new DuplicatePhoneException();
             }
@@ -124,10 +128,14 @@ public class UserService {
             try {
                 return userDao.addUser(conn, username, hashedPassword, phone);
             } catch (SQLException e) {
-                LOGGER.log(Level.SEVERE, "用户注册失败, phone=" + StringUtil.maskPhone(phone), e);
+                // 手机号走统一脱敏出口（LOG_CONVENTION §3.7）：绝不允许明文落盘
+                LOGGER.log(Level.SEVERE, "用户注册失败, phone=" + StringUtil.maskForLog("phone", phone), e);
                 throw new ServerException("服务器异常");
             }
         });
+        // 里程碑（T9）：注册已提交 = 账号创建成功；失败路径不记（异常已抛出，无 INFO 可达）
+        LOGGER.log(Level.INFO, "用户注册成功, userId=" + id);
+        return id;
     }
 //
 

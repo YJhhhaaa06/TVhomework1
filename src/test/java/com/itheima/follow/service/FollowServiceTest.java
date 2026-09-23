@@ -7,6 +7,8 @@ import com.itheima.user.dao.UserDao;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.ServerException;
 import com.itheima.user.model.entity.User;
+import com.itheima.util.LogProbe;
+import com.itheima.util.LogUtil;
 import com.itheima.util.TransactionTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.logging.Level;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -100,6 +103,37 @@ class FollowServiceTest {
         verify(followCache, never()).cacheFollow(anyLong(), anyLong());
     }
 
+    // ===== T9（log2-09）：成功路径里程碑 INFO——关系状态迁移 =====
+
+    @Test
+    void followSuccessWritesExactlyOneMilestoneInfo() throws SQLException {
+        when(followDao.isFollowing(conn, 7L, 8L)).thenReturn(false);
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(FollowService.class));
+        try {
+            service.follow(7L, 8L);
+        } finally {
+            probe.detach();
+        }
+
+        assertEquals(List.of("关注成功, userId=7, followedUserId=8"), probe.messagesAtLevel(Level.INFO),
+                "关注 = 关系状态迁移（含双方计数变更），与既有失败文案（关注失败, userId=…）成对");
+    }
+
+    @Test
+    void followFailureWritesNoMilestoneInfo() throws SQLException {
+        when(followDao.isFollowing(conn, 7L, 8L)).thenReturn(true);
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(FollowService.class));
+        try {
+            assertThrows(ConflictException.class, () -> service.follow(7L, 8L));
+        } finally {
+            probe.detach();
+        }
+
+        assertTrue(probe.atLevel(Level.INFO).isEmpty(), "重复关注属可预期业务拒绝，不得记成功里程碑");
+    }
+
     // ===== unfollow =====
 
     @Test
@@ -130,6 +164,21 @@ class FollowServiceTest {
         verify(userDao).updateFollowCount(conn, 7L, -1);
         verify(userDao).updateFollowerCount(conn, 8L, -1);
         verify(followCache).cacheUnfollow(7L, 8L);
+    }
+
+    @Test
+    void unfollowSuccessWritesExactlyOneMilestoneInfo() throws SQLException {
+        when(followDao.isFollowing(conn, 7L, 8L)).thenReturn(true);
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(FollowService.class));
+        try {
+            service.unfollow(7L, 8L);
+        } finally {
+            probe.detach();
+        }
+
+        assertEquals(List.of("取关成功, userId=7, followedUserId=8"), probe.messagesAtLevel(Level.INFO),
+                "取关同属关系状态迁移");
     }
 
     @Test

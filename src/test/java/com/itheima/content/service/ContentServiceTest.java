@@ -20,6 +20,8 @@ import com.itheima.admin.model.vo.AdminContentVO;
 import com.itheima.content.model.vo.ContentDetailVO;
 import com.itheima.content.model.vo.ContentVO;
 import com.itheima.content.model.vo.CommentVO;
+import com.itheima.util.LogProbe;
+import com.itheima.util.LogUtil;
 import com.itheima.util.TransactionTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,6 +34,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.logging.Level;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -504,6 +507,55 @@ class ContentServiceTest {
         verify(contentCache).addContent(200L);
     }
 
+    // ===== T9（log2-09）：成功路径里程碑 INFO——内容发布 / 删除 =====
+
+    @Test
+    void addVideoSuccessWritesExactlyOneMilestoneInfo() throws SQLException {
+        UploadCommand uc = UploadCommand.asVideo("title", "desc", 7L, 1);
+        when(contentDao.addContent(conn, 7L, 1, "title", "desc", 1)).thenReturn(100L);
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(ContentService.class));
+        try {
+            service.addVideo(uc, "v.mp4", "c.png");
+        } finally {
+            probe.detach();
+        }
+
+        assertEquals(List.of("添加视频成功, contentId=100, userId=7"), probe.messagesAtLevel(Level.INFO),
+                "发布 = 业务里程碑；消息与既有失败文案（添加视频失败, userId=…）成对，便于按前缀检索");
+    }
+
+    @Test
+    void addPostSuccessWritesExactlyOneMilestoneInfo() throws SQLException {
+        UploadCommand uc = UploadCommand.asPost("title", "desc", 7L, 0);
+        when(contentDao.addContent(conn, 7L, 2, "title", "desc", 0)).thenReturn(200L);
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(ContentService.class));
+        try {
+            service.addPost(uc, "c.png", List.of("i1.jpg"));
+        } finally {
+            probe.detach();
+        }
+
+        assertEquals(List.of("添加动态成功, contentId=200, userId=7"), probe.messagesAtLevel(Level.INFO));
+    }
+
+    @Test
+    void publishFailureWritesNoMilestoneInfo() throws SQLException {
+        UploadCommand uc = UploadCommand.asVideo("title", "desc", 7L, 1);
+        when(contentDao.addContent(conn, 7L, 1, "title", "desc", 1))
+                .thenThrow(new SQLException("db down"));
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(ContentService.class));
+        try {
+            assertThrows(ServerException.class, () -> service.addVideo(uc, "v.mp4", "c.png"));
+        } finally {
+            probe.detach();
+        }
+
+        assertTrue(probe.atLevel(Level.INFO).isEmpty(), "发布失败不得留下成功里程碑（失败由 SEVERE 承载）");
+    }
+
     // ===== 评论区开关（C2）=====
 
     @Test
@@ -728,6 +780,22 @@ class ContentServiceTest {
         verify(contentCache).removeContent(1L);
         verify(commentCache).invalidateComments(1L);
         verify(likeService).deleteContentLike(1L);
+    }
+
+    @Test
+    void deleteContentSuccessWritesExactlyOneMilestoneInfo() throws SQLException {
+        when(contentDao.findContent(conn, 1L)).thenReturn(dto(1L));
+        when(contentMediaDao.findMedia(conn, 1L)).thenReturn(new LinkedHashMap<>());
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(ContentService.class));
+        try {
+            service.deleteContent(1L, 7L);
+        } finally {
+            probe.detach();
+        }
+
+        assertEquals(List.of("删除内容成功, contentId=1, userId=7"), probe.messagesAtLevel(Level.INFO),
+                "作者删除作品（软删、不可恢复）属状态迁移 → 记 INFO；管理端下架/恢复属 T8 审计（另落 audit.log）");
     }
 
     @Test

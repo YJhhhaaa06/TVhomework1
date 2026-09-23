@@ -15,6 +15,7 @@ import com.itheima.user.model.command.RegisterCommand;
 import com.itheima.user.model.entity.User;
 import com.itheima.user.model.vo.LoginVO;
 import com.itheima.util.JwtUtil;
+import com.itheima.util.LogProbe;
 import com.itheima.util.LogUtil;
 import com.itheima.util.PasswordUtil;
 import com.itheima.util.TransactionTemplate;
@@ -27,6 +28,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Handler;
+import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
@@ -125,6 +127,46 @@ class UserServiceTest {
         assertThrows(DatabaseException.class, () -> service.login("13800000001", "abc123"));
     }
 
+    // ------------------------------------------------------------------
+    // T9（log2-09）：成功路径里程碑 INFO——登录
+    // ------------------------------------------------------------------
+
+    @Test
+    void loginSuccessWritesExactlyOneMilestoneInfo() throws SQLException {
+        when(userDao.getUserForLoginByPhone(conn, "13800000001")).thenReturn(loginUser("abc123"));
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        LoginVO vo;
+        try {
+            vo = service.login("13800000001", "abc123");
+        } finally {
+            probe.detach();
+        }
+
+        assertNotNull(vo.getToken());
+        assertEquals(List.of("登录成功, userId=7"), probe.messagesAtLevel(Level.INFO),
+                "登录成功路径应恰有一条里程碑 INFO（请求级访问行由 AccessLogFilter 承担，此处只记业务里程碑）");
+        assertEquals(Level.INFO, probe.records().get(0).getLevel(), "里程碑用 INFO");
+        assertNull(probe.records().get(0).getThrown(), "成功路径不带堆栈");
+        assertFalse(probe.records().get(0).getMessage().contains("13800000001"),
+                "账号（手机号）不落盘——只记 userId");
+    }
+
+    @Test
+    void loginFailureWritesNoMilestoneInfo() throws SQLException {
+        when(userDao.getUserForLoginByPhone(conn, "13800000001")).thenReturn(loginUser("abc123"));
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        try {
+            assertThrows(PasswordIncorrectException.class, () -> service.login("13800000001", "wrong"));
+        } finally {
+            probe.detach();
+        }
+
+        assertTrue(probe.atLevel(Level.INFO).isEmpty(),
+                "失败路径不记 INFO（可预期业务拒绝由 ExceptionFilter 的 WARNING 结论行承载）");
+    }
+
     @Test
     void registerDuplicatePhoneThrowsDuplicatePhoneException() throws SQLException {
         when(userDao.isPhoneUsed(conn, "13800000001")).thenReturn(true);
@@ -154,6 +196,42 @@ class UserServiceTest {
         verify(userDao).addUser(eq(conn), eq("bob"), hashedCaptor.capture(), eq("13800000001"));
         assertNotEquals("abc123", hashedCaptor.getValue());
         assertTrue(PasswordUtil.isPasswordCorrect("abc123", hashedCaptor.getValue()));
+    }
+
+    // ------------------------------------------------------------------
+    // T9（log2-09）：成功路径里程碑 INFO——注册
+    // ------------------------------------------------------------------
+
+    @Test
+    void registerSuccessWritesExactlyOneMilestoneInfo() throws SQLException {
+        stubRegisterSuccess();
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        long id;
+        try {
+            id = service.registerAsUser(RegisterCommand.getInstance("13800000001", "abc123", "bob"));
+        } finally {
+            probe.detach();
+        }
+
+        assertEquals(42L, id);
+        assertEquals(List.of("用户注册成功, userId=42"), probe.messagesAtLevel(Level.INFO),
+                "注册提交成功 = 账号创建里程碑；**不记手机号/用户名**（只记 userId）");
+    }
+
+    @Test
+    void registerFailureWritesNoMilestoneInfo() throws SQLException {
+        when(userDao.isPhoneUsed(conn, "13800000001")).thenReturn(true);
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        try {
+            assertThrows(DuplicatePhoneException.class, () -> service.registerAsUser(
+                    RegisterCommand.getInstance("13800000001", "abc123", "bob")));
+        } finally {
+            probe.detach();
+        }
+
+        assertTrue(probe.atLevel(Level.INFO).isEmpty(), "注册失败不得留下成功里程碑");
     }
 
     // ------------------------------------------------------------------

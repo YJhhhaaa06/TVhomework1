@@ -1,6 +1,6 @@
 # 当前系统架构地图
 
-> 版本：3.16（2026-09-23 第二张清单 T8 log2-08：新增**审计日志输出端**——`LogUtil` 规格表第四项 `audit`（`log.audit.file`、专属 logger `audit`、阈值固定 INFO）+ 新增 `util/AuditLog` 记录器 + 7 个操作点成功路径留痕（管理端 4 写操作取 request attribute 的 userId、用户侧 3 敏感变更取方法入参），详见 6.21）
+> 版本：3.17（2026-09-23 第二张清单 T9 log2-09：补齐**业务里程碑 INFO**——登录 / 注册 / 内容发布（视频·动态）/ 作者删除作品 / 关注·取关共 7 个点（写 `system.log`，与 T8 审计零重叠），并立**统一脱敏出口** `StringUtil.maskForLog`（fail-closed，见 6.22）；调用点 132 → 139、INFO 5 → 12）
 > 最后更新：2026-09-23
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
@@ -172,7 +172,7 @@ com.itheima/
 | LogFormatter | 107 | 单行结构化 Formatter：`ts=… level=… logger=… req=… msg=…`（固定 3 位毫秒 + 带冒号时区偏移；行尾统一 LF；消息内换行折成 `\n` 字面量守住"一条记录一行"；异常堆栈跟在首行之后）。消息渲染复用 `Formatter.formatMessage`，与 `SimpleFormatter` 同源（`{0}` 占位符文案逐字不变）；**`req=` 取 `LogContext` 的当前请求标识、只在有值时输出**（非请求线程 / 已 clear 时该字段整段不出现），值同样过单行折叠；`user=` 属访问日志字段（T3 在 access 输出端承载），不注入本行 |
 | LogContext | 162 | **请求级日志上下文**（T2 新增，D6 方案 B）：唯一 ThreadLocal 承载 reqId。`newRequestId()` = **唯一生成源**，固定 16 字符 = 毫秒低 32 位（8 位十六进制）+ 进程随机标识（4 位）+ 原子自增序号低 16 位（4 位）→ 同毫秒并发/连续不重复（序号 4 位约 6.5 万次/毫秒后回绕、届时理论上可撞号，本项目量级不可达）、跨重启不撞号；`setRequestId` 入参归一（null/空白 = 清除、去两侧空白）；`getRequestId` 无值返回 null（**无默认兜底**，非请求线程即无 reqId）；`clear()` 供 filter 的 finally 调用。**T3 新增结果码槽**：`setResultCode/getResultCode`（缺省 0 = 未走业务统一出口），`clear()` 一并清 reqId 与结果码。**生命周期自治**：只在最外层 `AccessLogFilter`（T3）一处 set/clear（含结果码），不与其他上下文共用清理点。**异步传递机制（D8，本周期无调用点）**：`capture()` 快照 + `restore(snapshot)` 恢复 + `wrap(Runnable)` 便捷包装（捕获→任务体恢复→结束后还原执行线程原值，池化线程不留残留）；快照**只含 reqId**（结果码由响应写路径产生、异步任务不读写，T3 不扩）；**只包装不创建线程**，故不引入异步执行 |
 | RequestContext | 36 | 请求上下文路径（动态拼接媒体 URL）。**T2 只加注释、行为零改动**（D6）：分工 = 业务类字段放本类、日志类字段放 `LogContext`，两者 ThreadLocal 互不干扰、清理点分离（本类由内层 `EncodingFilter` set/clear，其 finally 先于外层 filter 执行——若共用 `clear()`，reqId 会被提前清掉、异常日志丢掉请求标识） |
-| StringUtil | 37 | 字符串校验 |
+| StringUtil | 61 | 字符串校验（`isAllDigit` / `isSpecificLength` / `isLengthLegal` / `phoneCheck`）+ **脱敏**：`maskPhone`（138****1234）与 **T9 立的统一脱敏出口 `maskForLog(field,value)`**——按字段类型名 + 值形态分派、**fail-closed**（未登记字段名 / null / 空值 / 形态不符一律 `******`；`phone` 仅通过 `phoneCheck` 时保留首 3 + 末 4），日志里的敏感字段必须经它取值，口径见 `说明书/LOG_CONVENTION.md` 3.7 |
 | ResultUtil | 26 | 响应格式构建 |
 | TimeUtil | 15 | 时间工具 |
 
@@ -545,7 +545,7 @@ com.itheima/
 - **行形态**：`ts=… level=INFO logger=access req=<id> msg=method=… path=… userId=… code=… cost=…ms slow=0|1`（复用 `LogFormatter` 单行 key=value）。
 - **结果码**：`BaseServletUtil.writeSuccess`（body 恒 200）/`writeError(int,…)` 写响应时收口进 `LogContext`（D5，不包装响应读 body）；缺省 **0** = 未走业务统一出口（静态资源 / OPTIONS 预检 / 未映射 404）；业务/未处理异常经 `ExceptionFilter → writeIfUncommitted → writeError` 自动收口（已提交则保持 0）。
 - **userId 口径**：`request.getAttribute("userId")`（LoginFilter 内层已注入 `Long`），无 → `-`（login 等公共端点无 token 即 `userId=-`，属预期）。
-- **脱敏**：只记 `method` + `path`（`getRequestURI` 去 contextPath，天然不含 query）；**不记** query 串 / header / 请求体——D7"绝不记"以不记为脱敏（token / 手机号明文 / 密码零落盘；应用日志按需记时复用 `StringUtil.maskPhone`，属第二张清单口径）。
+- **脱敏**：只记 `method` + `path`（`getRequestURI` 去 contextPath，天然不含 query）；**不记** query 串 / header / 请求体——D7"绝不记"以不记为脱敏（token / 手机号明文 / 密码零落盘；应用日志按需记敏感字段时走**统一出口 `StringUtil.maskForLog`**，见 6.22 / `LOG_CONVENTION` 3.7）。
 - **慢请求标记**：`cost >= log.slowRequestMs`（默认 1000ms，可配）→ `slow=1`；打标记不另起一行、不设独立性能日志文件（D7）。
 - **用途**：每接口耗时基线的聚合来源（第三张清单的报表/趋势将基于本行 `cost=` 字段）；`grep req=<id>` 可在 access.log 与 system.log 间端到端串联同一次请求（异常/降级路径的应用日志带同一 `req=`）——D6 收益的实际落地。
 - **断言口径（T4）**：**装配层**由 JUnit 覆盖（输出端规格表取名自配置、各端 level、`access` 专属 handler 与 `useParentHandlers=false`、轮转文件名模式与保留个数）；**文件级分流与串联**由 pytest `src/test/python/test_log_outputs.py` 覆盖（`error` 只收 SEVERE、`access` 与 `system` 互不污染、access 行严格单行结构化 + LF 行尾、同一 `req` 在 access/system/error 三输出端串联、未处理异常路径 `code=500` 收口）。
@@ -573,6 +573,26 @@ com.itheima/
 
 - **断言口径（T8）**：**装配层 + 写失败守卫**归 JUnit（`LogUtilTest` = 第 4 输出端/专属 handler/配置键；`AuditLogTest` = 行形态纯函数 + 记录写向 audit logger + 抛异常 handler 下守卫吞掉异常）；**文件级留痕 + `audit.log` 与 `system`/`access` 互不污染**归 pytest `src/test/python/test_audit_log.py`（6 个可 HTTP 触达点各恰好一条 + 无敏感值）。
 - **级别与粒度标准**：`说明书/LOG_CONVENTION.md` 3.5（审计留痕口径）；审计行**不占** `system.log` 的 INFO 配额。
+
+### 6.22 业务里程碑 INFO 与统一脱敏出口（第二张清单 T9）
+
+- **目标**：让"业务成功了什么"可事后追溯（此前全仓 `INFO` 只有 5 处基础设施日志、**业务成功路径 0 处**），同时给"要记敏感字段"的场景一个唯一出口。
+- **输出端**：**不新建输出端**（走既有多输出端底座的 `system` 路：业务类 logger 经 root 下发 → `system.log`，阈值 `log.level` 默认 INFO）；请求线程内自动带 `req=`，可与 access 行按 `req` 串联。
+- **7 个补点**（一律"事务提交后、缓存同步前"= 落库即成功；**失败路径不记**，由既有 `SEVERE` 承载）：
+
+| 里程碑 | 记录点 | msg |
+| ---- | ---- | ---- |
+| 登录成功 | `user/service/UserService#doLogin`（三条 `login` 重载的唯一收口，含注册后的自动登录） | `登录成功, userId=<id>` |
+| 用户注册成功 | `UserService#registerAsUser` | `用户注册成功, userId=<id>` |
+| 内容发布 | `content/service/ContentService#addVideo` / `#addPost` | `添加视频成功, contentId=<id>, userId=<id>`（同构：添加动态成功…） |
+| 作者删除作品 | `ContentService#deleteContent` | `删除内容成功, contentId=<id>, userId=<id>` |
+| 关注 / 取关 | `follow/service/FollowService#follow` / `#unfollow` | `关注成功, userId=<id>, followedUserId=<id>`（同构：取关成功…） |
+
+- **与 6.21 审计的边界**：审计 = 管理端写操作 + 账号敏感变更（→ `audit.log`，专属 logger）；里程碑 = 非审计的业务状态迁移（→ `system.log`，业务 logger）——**零重叠**，文件级有断言（pytest 里里程碑行不出现在 `audit.log`，反之 `test_audit_log.py` 已证审计行不进 `system.log`）。
+- **明确不记**（同批评判结论）：点赞·取消点赞、评论发表·删除、作品编辑类（`update`/`mediaDelete`/`commentEnabled`/`replaceMedia`）——高频或常规写操作；管理端与账号敏感变更属 6.21。
+- **统一脱敏出口** = `util/StringUtil#maskForLog(field, value)`：按字段类型名 + **值形态**分派（当前仅 `phone`，仅通过 `phoneCheck` 时保留首 3 + 末 4），**fail-closed**（未登记字段名 / null / 空值 / 形态不符一律 `******`）；既有 `StringUtil.maskPhone` 保留为实现、经本出口调用（`UserService` 注册失败的既有 `SEVERE` 行已改走出口）。**不新建类、不做策略表 / 注解式脱敏**（全仓需脱敏字段仅 1 种、调用点 1 处）——扩展方式见 `LOG_CONVENTION` 3.7。
+- **断言口径（T9）**：**单测**归 JUnit——`src/test/java/com/itheima/util/LogProbe`（共享探针，`*Test` 命名不匹配故不会被 surefire 当用例执行）+ `UserServiceTest` / `ContentServiceTest` / `FollowServiceTest` 断言"成功恰一条 INFO / 失败零 INFO"、`StringUtilTest` 断言出口的 fail-closed 契约；**落盘 / 分流 / 无敏感值**归 pytest `src/test/python/test_milestone_log.py`（7 点各自恰好一条、"只落 `system.log`"、全文件不变式"无 11 位手机号明文"）。
+- **级别与粒度标准**：`说明书/LOG_CONVENTION.md` 3.2-必记③ / **3.6**（里程碑口径）/ **3.7**（脱敏出口）。
 
 ---
 
