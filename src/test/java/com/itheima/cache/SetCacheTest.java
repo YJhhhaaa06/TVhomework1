@@ -1,6 +1,8 @@
 package com.itheima.cache;
 
 import com.itheima.exception.CacheException;
+import com.itheima.util.LogProbe;
+import com.itheima.util.LogUtil;
 import com.itheima.util.MyRedisPool;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
@@ -20,6 +22,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.logging.LogRecord;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -436,6 +439,7 @@ class SetCacheTest {
 
     @Test
     void batchIsMemberBackfillFailureBestEffortKeepsAnswer() {
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(SetCache.class));
         try (MockedStatic<MyRedisPool> ms = mockStatic(MyRedisPool.class)) {
             Jedis jedis = mockJedis(ms);
             Response<Boolean> e = boolResponse(false);
@@ -455,7 +459,16 @@ class SetCacheTest {
                     }, 100);
 
             assertTrue(result.get(1L));
+        } finally {
+            probe.detach();
         }
+
+        // T11 定栈（T7 残余收口）：吸收点只记结论、**不带栈**——该链的堆栈由 loader 源头 SEVERE
+        // 与 TransactionTemplate 包装点持有（本用例的 IllegalStateException 属非业务运行时异常，
+        // 由最终处理点 ExceptionFilter 覆盖）
+        List<LogRecord> absorbed = probe.records();
+        assertEquals(1, absorbed.size(), () -> "应恰一条吸收点结论行: " + absorbed);
+        assertNull(absorbed.getFirst().getThrown(), "吸收点不得再持栈（T11 定栈）");
     }
 
     @Test

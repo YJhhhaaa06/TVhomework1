@@ -355,9 +355,9 @@ public class ZSetCache {
                             return null;
                         });
                     } catch (RuntimeException e) {
-                        // T7：本行堆栈**保留**——该 loader 的"基础设施异常"（TransactionTemplate 包装、
-                        // 上游无日志）在此是唯一记录；与源头 SEVERE 的双栈属**不可安全去重的残余**（已登记）
-                        LOGGER.log(Level.WARNING, "ZSet 批量回填失败，仅影响缓存, key=" + zsetKey, e);
+                        // T11 定栈：本行只记结论（不带栈）——T7 登记的"回填链双栈残余"已随 T11 收口：
+                        // DAO 级失败由 loader 源头 SEVERE 持栈，事务基础设施失败由 TransactionTemplate 持栈
+                        LOGGER.log(Level.WARNING, "ZSet 批量回填失败，仅影响缓存, key=" + zsetKey);
                     }
                 }
             }

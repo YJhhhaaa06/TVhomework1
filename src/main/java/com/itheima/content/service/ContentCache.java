@@ -183,8 +183,8 @@ public class ContentCache implements Initializable {
             dto = loadContentFromDb(contentId);
         } catch (DatabaseException e) {
             // 三期 T3：DB 瞬时失败 = 加载失败，跳过缓存同步（读自愈回填），不抛 500
-            // T7：本行是内容装载链该路径的唯一带堆栈记录（装载层上下文行不带堆栈）
-            LOGGER.log(Level.WARNING, "新增内容缓存装载失败（跳过缓存同步）, contentId=" + contentId, e);
+            // T11 定栈：本行只记结论（不带栈）——堆栈由包装点持有（装载层 catch (Exception) / TransactionTemplate）
+            LOGGER.log(Level.WARNING, "新增内容缓存装载失败（跳过缓存同步）, contentId=" + contentId);
             return;
         }
         if (dto == null) {
@@ -201,8 +201,8 @@ public class ContentCache implements Initializable {
             dto = loadContentFromDb(contentId);
         } catch (DatabaseException e) {
             // 三期 T3：DB 瞬时失败 = 加载失败，保留旧缓存让读自愈，不做删除语义
-            // T7：本行是内容装载链该路径的唯一带堆栈记录（装载层上下文行不带堆栈）
-            LOGGER.log(Level.WARNING, "刷新内容缓存装载失败（保留旧缓存，读自愈）, contentId=" + contentId, e);
+            // T11 定栈：本行只记结论（不带栈）——堆栈由包装点持有（装载层 catch (Exception) / TransactionTemplate）
+            LOGGER.log(Level.WARNING, "刷新内容缓存装载失败（保留旧缓存，读自愈）, contentId=" + contentId);
             return;
         }
         if (dto == null) {
@@ -250,11 +250,15 @@ public class ContentCache implements Initializable {
                 try {
                     return contentDao.findContentIdsByUser(conn, userId);
                 } catch (SQLException e) {
+                    // T11 定栈：本行是该链（改名级联失效）的**唯一带堆栈记录**——包装点即源头；
+                    // 下游吸收点（catch (DatabaseException) 处）只记结论、不再带栈
+                    LOGGER.log(Level.SEVERE, "查询用户内容 id 失败, userId=" + userId, e);
                     throw new DatabaseException("查询用户内容 id 失败", e);
                 }
             });
         } catch (DatabaseException e) {
-            LOGGER.log(Level.WARNING, "改名级联失效：查询内容 id 失败（保留缓存，TTL 自愈）, userId=" + userId, e);
+            // T11 定栈：本行只记结论（不带栈）；DAO 级失败由同链包装点（"查询用户内容 id 失败"）持有堆栈
+            LOGGER.log(Level.WARNING, "改名级联失效：查询内容 id 失败（保留缓存，TTL 自愈）, userId=" + userId);
             return;
         }
         if (contentIds == null || contentIds.isEmpty()) {
@@ -323,7 +327,9 @@ public class ContentCache implements Initializable {
         try {
             buildable = transactionTemplate.execute(this::loadBuildableFromDb);
         } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "内容缓存初始化 DB 装载失败（跳过，缓存走读自愈）", e);
+            // T11 定栈：本行只记结论（不带栈）——模板自身步骤失败的堆栈由 TransactionTemplate 持有；
+            // 逃出模板的非业务异常在本链由 loadContentFromDb / loadContentsFromDb 的包装点持有
+            LOGGER.log(Level.WARNING, "内容缓存初始化 DB 装载失败（跳过，缓存走读自愈）");
             return;
         }
         rebuildRedis(buildable);
@@ -391,8 +397,8 @@ public class ContentCache implements Initializable {
                 return dto;
             });
         } catch (DatabaseException e) {
-            // T7 去重：本行是**上下文行（不带堆栈）**——同一失败的堆栈由吸收点（最终处理点）记录：
-            // 读路径 = CacheAside 的"缓存加载失败/降级装载失败"结论行，写路径 = 本类 addContent/refreshContent 结论行
+            // T11 定栈：本行是**上下文行（不带堆栈）**——同一失败的堆栈由**包装点**记录：
+            // DAO 级 SQLException / 基础设施失败 → TransactionTemplate；逃出模板的非业务异常 → 本类 catch (Exception)
             LOGGER.log(Level.SEVERE, "内容装载 DB 查询失败（加载失败，不写空标记）, contentId=" + contentId);
             throw e;
         } catch (NotFoundException e) {
@@ -403,8 +409,9 @@ public class ContentCache implements Initializable {
             LOGGER.log(Level.WARNING, "内容装载跳过（类型异常）, contentId=" + contentId, e);
             return null;
         } catch (Exception e) {
-            // T7 去重：上下文行不带堆栈（同 393 行 catch；本异常包装为 DatabaseException 后由吸收点记堆栈）
-            LOGGER.log(Level.WARNING, "内容装载异常（按加载失败处理，不写空标记）, contentId=" + contentId);
+            // T11 定栈：本行是该包装点的**唯一带堆栈记录**——逃出事务模板的非业务异常（模板只对自身步骤与
+            // SQLException 包装点记栈）只在此处被包成 DatabaseException；下游吸收点不再持栈
+            LOGGER.log(Level.WARNING, "内容装载异常（按加载失败处理，不写空标记）, contentId=" + contentId, e);
             throw new DatabaseException("内容装载失败", e);
         }
     }
@@ -459,14 +466,14 @@ public class ContentCache implements Initializable {
                 return byKey;
             });
         } catch (DatabaseException e) {
-            // T7 去重：上下文行不带堆栈——同一失败的堆栈由吸收点（CacheAside 批量结论行）记录
+            // T11 定栈：上下文行不带堆栈——同一失败的堆栈由包装点记录（TransactionTemplate / 本类 catch (Exception)）
             LOGGER.log(Level.SEVERE, "内容批量装载 DB 查询失败（加载失败，不写空标记）, keys="
                     + dataKeys.size());
             throw e;
         } catch (Exception e) {
-            // T7 去重：上下文行不带堆栈（同上一 catch；包装为 DatabaseException 后由吸收点记堆栈）
+            // T11 定栈：本行是该包装点的**唯一带堆栈记录**（同 loadContentFromDb 的同名分支）
             LOGGER.log(Level.WARNING, "内容批量装载异常（按加载失败处理，不写空标记）, keys="
-                    + dataKeys.size());
+                    + dataKeys.size(), e);
             throw new DatabaseException("内容批量装载失败", e);
         }
     }
@@ -707,7 +714,9 @@ public class ContentCache implements Initializable {
                 }
             });
         } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "索引重建 DB 装载异常", e);
+            // T11 定栈：本行只记结论（不带栈）——模板自身步骤失败的堆栈由 TransactionTemplate 持有；
+            // 装载失败路径由 loadAllWithoutMedia 内层 catch（SQLException）持栈
+            LOGGER.log(Level.WARNING, "索引重建 DB 装载异常");
             return new ArrayList<>();
         }
     }

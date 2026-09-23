@@ -1,6 +1,6 @@
 # 当前系统架构地图
 
-> 版本：3.17（2026-09-23 第二张清单 T9 log2-09：补齐**业务里程碑 INFO**——登录 / 注册 / 内容发布（视频·动态）/ 作者删除作品 / 关注·取关共 7 个点（写 `system.log`，与 T8 审计零重叠），并立**统一脱敏出口** `StringUtil.maskForLog`（fail-closed，见 6.22）；调用点 132 → 139、INFO 5 → 12）
+> 版本：3.18（2026-09-23 第二张清单 T11 log2-11 第 1 次提交：**补齐事务基础设施异常的源头日志**（`TransactionTemplate` 的 `catch (SQLException)` 记 `SEVERE` + 堆栈）+ **"包装点即源头"定栈重排**（去栈 20 处、补源头 11 处、上下文行升级持栈 2 处、评审处置拆 catch 增 1 处持栈行），T7 登记的回填链双栈残余收口；调用点 139 → **151**、SEVERE 44 → **55**、WARNING 83 → **84**；见 6.23；顺带修正本表 8 处陈旧行数）
 > 最后更新：2026-09-23
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
@@ -163,7 +163,7 @@ com.itheima/
 | 类 | 行数 | 职责 |
 |----|------|------|
 | MyConnectionPool | 138 | JDBC 连接池（上限 20、获取超时 5000ms、等待归还） |
-| TransactionTemplate | 61 | 统一事务模板（取连接/提交/回滚/归还，业务异常原样重抛） |
+| TransactionTemplate | 66 | 统一事务模板（取连接/提交/回滚/归还，业务异常原样重抛） |
 | PasswordUtil | 58 | BCrypt 密码哈希 |
 | JwtUtil | 40 | JWT 生成/校验 |
 | MyRedisPool | 49 | Redis 连接池（显式 connect/so 超时 + maxWait，8 参 JedisPool 构造器） |
@@ -212,7 +212,7 @@ com.itheima/
 | CacheStatus | 15 | 三态枚举：MISS / HIT_EMPTY / HIT_DATA |
 | CacheResult | 47 | 三态读取结果载体（status + value，HIT_EMPTY 时 value=null） |
 | CacheAside | 624 | 统一 Cache-Aside 封装：`read` 三态读 / `get` 带单飞回填 / `getBatch` 批量读（4 参与 5 参批量装载重载）/ `writeOrInvalidate`（写失败=DEL 自愈，写数据同时清空标记）/ `markEmpty`（存在守卫）/ `invalidate`；TTL ±10% 抖动；读路径 pipeline 化（EXISTS 空标记+GET 一趟往返）；命中滑动续期（空标记从不续期）；降级读与 miss 共用单飞、仅装载不写回；loader 抛 DatabaseException 视为加载失败——不写空标记、不 DEL 数据 key |
-| SetCache | 396 | 原生 Set 缓存基建：单成员三态 `isMember` / 全量 `getMembers`（不排序，需确定性顺序的调用方自包装）/ 批量判定（`batchIsMember` 单 set 多成员、`batchKeysIsMember` 多 set 单成员）/ `writeSet` 回填（空→`cacheAside.markEmpty` 含存在守卫）/ `loadViaSingleFlight` 降级装载；探针续期精确 TTL 无抖动、空标记不续；批量 DB 答案失败上抛、回填 best-effort。**第六期 T7 起生产调用方 = like 域（`user:likeSet` / `user:commentLikeSet`）**；follow 域已迁 ZSetCache |
+| SetCache | 397 | 原生 Set 缓存基建：单成员三态 `isMember` / 全量 `getMembers`（不排序，需确定性顺序的调用方自包装）/ 批量判定（`batchIsMember` 单 set 多成员、`batchKeysIsMember` 多 set 单成员）/ `writeSet` 回填（空→`cacheAside.markEmpty` 含存在守卫）/ `loadViaSingleFlight` 降级装载；探针续期精确 TTL 无抖动、空标记不续；批量 DB 答案失败上抛、回填 best-effort。**第六期 T7 起生产调用方 = like 域（`user:likeSet` / `user:commentLikeSet`）**；follow 域已迁 ZSetCache |
 | ZSetCache | 625 | 有序集合（ZSet）缓存基建（A1「缓存有序结构」落点）：命令层 ZSCORE/ZRANGE/ZADD，**score = 成员自身数值**（故 ZRANGE 天然按成员数值升序）；API 与 SetCache 同构（`isMember` / `getMembers` / `batchIsMember` / `writeZSet` 回填（空→`markEmpty` 含存在守卫）/ `loadViaSingleFlight` 降级不写回）+ **按序窗口读 `getWindow(key, offset, count, WindowLoader, totalLoader)`**——完整态一趟 pipeline `ZRANGE[start,stop]` + `ZCARD`（total 与页同源）；**T11-C 前缀窗口装载**（miss/部分态/降级/部分态三处配套的完整口径见 6.17）；探针续期精确 TTL（`partial:` 标记与数据 key 同步续期）、空标记不续；窗口装载单飞 key 带窗口指纹 `key@offset+count` 防不同页串用 |
 
 > 测试：`src/test/java/com/itheima/cache/` 9 类单测（mockStatic MyRedisPool + mock Jedis，不碰真实 Redis），用例清单以 `surefire-reports` 为准（见九节指针）。
@@ -224,7 +224,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | LoginController（95，/user/*） | 登录、注册、修改密码/用户名 |
-| service | UserService（271） | 用户认证 + 管理员判定 + 改名后级联失效内容缓存（注入 ContentCache）；**`registerAndLogin`（T13，池 U-16 兜底）= 注册 + 自动登录编排**——自动登录失败不回抛，返回 `token=null` 的 LoginVO（注册已提交即算成功），注册本身失败仍抛错 |
+| service | UserService（292） | 用户认证 + 管理员判定 + 改名后级联失效内容缓存（注入 ContentCache）；**`registerAndLogin`（T13，池 U-16 兜底）= 注册 + 自动登录编排**——自动登录失败不回抛，返回 `token=null` 的 LoginVO（注册已提交即算成功），注册本身失败仍抛错 |
 | dao | UserDao（275） | users 用户 CRUD + 角色查询（`findUsersByIds` T7 起带 `ORDER BY id`：关注/粉丝列表顺序由此保证，唯一调用方 FollowService）；T14 起内含从 `dao.ResultMap` 下沉的 `buildUserForLogin` / `buildUserForProfile` 两个 `private static` 行映射方法 |
 | model | entity/User（89）、dto/LoginDTO（28）/RegisterDTO（41）/ChangePasswordDTO（35）/ChangeUserNameDTO（15）、command/LoginCommand（63）/RegisterCommand（44）/ChangePasswordCommand（44）/LoginType（7）、vo/LoginVO（40） | 用户实体与请求/命令/响应对象 |
 
@@ -233,7 +233,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | ContentController（181，/content/*）、StartController（49，/start）、SearchController（101，/search/*）、FeedController（37，/feed）、ProfileController（50，/profile） | 内容管理 + 首页推荐 + 搜索 + 关注流 + 用户主页；**T19：三域统一为「域级上限 100 + 域级信封 100」**（各 Controller 自持 `XXX_PAGE_SIZE_MAX/DEFAULT`；`/search/keywordSearch` 的 GET 与 JSON body 两条分支共用 `BaseServletUtil.normalize*`，前端只传 `page`） |
-| service | ContentService（497）、ContentCache（710）、CommentCache（716）、ContentStatusFiller（81）、FeedService（107）、ProfileService（118） | 内容业务（内容/搜索 + 评论读路径编排）+ Redis 内容缓存（三态 Cache-Aside + 索引 + `invalidateAuthorContentKeys` 改名级联失效 + `getContentsBatch` 批量装载）+ Redis 评论缓存（两键组 主楼 List + 楼中楼 Hash + 主楼窗口/count）+ 点赞/关注状态填充 + 关注流 + 主页；**Feed/Profile/Search 与关注·粉丝列表的缓存读一律在 DB 事务外**（见 6.4） |
+| service | ContentService（505）、ContentCache（726）、CommentCache（744）、ContentStatusFiller（81）、FeedService（107）、ProfileService（118） | 内容业务（内容/搜索 + 评论读路径编排）+ Redis 内容缓存（三态 Cache-Aside + 索引 + `invalidateAuthorContentKeys` 改名级联失效 + `getContentsBatch` 批量装载）+ Redis 评论缓存（两键组 主楼 List + 楼中楼 Hash + 主楼窗口/count）+ 点赞/关注状态填充 + 关注流 + 主页；**Feed/Profile/Search 与关注·粉丝列表的缓存读一律在 DB 事务外**（见 6.4） |
 | dao | ContentDao（446）、ContentMediaDao（202） | content/content_media 数据访问（ContentLikeDao 按 like 域归属）；`findContentsByIds` 批量 IN 查询（供批量缓存装载，列与 findContent 同源）；T14 起各自内含从 `dao.ResultMap` 下沉的 `private static` 行映射方法（2 / 1） |
 | model | entity/ContentMedia（63）、cache/ContentCacheDTO（135）/CommentCacheDTO（119）、vo/ContentVO（42）/ContentDetailVO（25）/CommentVO（21）/ProfileVO（43）、dto/SearchDTO（51）、command/CommandConverter（139）/ContentType（16） | 内容模型 + 共享缓存 DTO + 共享 VO/DTO/转换器（`PageResult` 归 `common.model.dto`） |
 
@@ -244,7 +244,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | FollowController（104，/follow/*） | 关注/取关/关注列表/粉丝列表（**T11-A：列表只有分页入口**——`page`/`pageSize` 均可选，缺省归一为 page 1 / 信封 100；域级常量 `FOLLOW_PAGE_SIZE_MAX = 100` + 信封 `FOLLOW_PAGE_SIZE_DEFAULT = 100`（**T19 由 200 调整为 100**，与 feed/search/profile 同口径），T7 的「缺省返回全量数组」分支已删除） |
-| service | FollowService（185） | 关注业务（读路径委托 FollowCache；关注/取关 DB 提交后缓存双写；**T7 新增分页读**——缓存窗口取该页 ids+total，仅对该页 ids 做 DB 装载与批量判重，信封在事务外组装；**T11-A 删除两个缺省全量重载**，分页读为唯一入口；**T12 起事务回调只做 DB 装载**（`findUsersByIds`），`batchIsFollowing` 与视图组装移事务外；**T14 起信封用公共 `common.model.dto.PageResult`**） |
+| service | FollowService（189） | 关注业务（读路径委托 FollowCache；关注/取关 DB 提交后缓存双写；**T7 新增分页读**——缓存窗口取该页 ids+total，仅对该页 ids 做 DB 装载与批量判重，信封在事务外组装；**T11-A 删除两个缺省全量重载**，分页读为唯一入口；**T12 起事务回调只做 DB 装载**（`findUsersByIds`），`batchIsFollowing` 与视图组装移事务外；**T14 起信封用公共 `common.model.dto.PageResult`**） |
 | service | FollowCache（539） | 关注关系 Redis 缓存（**双 ZSet（score=成员 id）+ 条件 MULTI 双写 + 失败双 DEL** + 三态读 + 单飞 + 降级单飞全量装载作答；读路径收口 **ZSetCache**——单成员三态/批量/全量/窗口走基建 + `sortIds` 归一升序，写路径 MULTI 双写语义保持；关注/粉丝计数 key 读写。**T11-C**：窗口 loader 换 DAO **窗口 SQL**（分页读不再全量装载）、新增部分态判定回落 `isFollowingInDb`（单行）、`probePair` 扩为六探针且**任一侧 `partial:` → 三件套双 DEL**（增量写分支与 Redis 异常分支同口径：异常分支走新增私有 `invalidatePairQuietly`，而 `CacheAside.invalidate` 只删数据 key + 空标记）、删除已无主代码调用方的 `getFollowerIds`（池 U-21）） |
 | dao | FollowDao（155） | follow 关注关系（仅 FollowService 业务校验与 FollowCache loader 使用；**T11-C-1 新增两个窗口查询**：`getFollowedUserIdsInWindow` / `getFollowerUserIdsInWindow`——`WHERE … ORDER BY … LIMIT ? OFFSET ?`，供前缀窗口装载；关注方向复用 `uk_user_follow`、粉丝方向走新增 `idx_followed_user_user`，EXPLAIN 均 `Using index`（覆盖索引）且无 filesort） |
 | model | —（T14 起无专属 model） | 关注/粉丝列表分页信封改用公共 `common.model.dto.PageResult`（T14）；原 `FollowPageResult`（T7 B2 为避开 follow→content 环而自建的同形类）已随 T14 删除，同形二分消除 |
@@ -285,7 +285,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | UploadController（205，/api/upload/*）、UploadType（84） | 上传视频/动态 + 作者换源；上传类型枚举 |
-| service | FileUploadService（103） | 文件上传/按 URL 清理旧文件 |
+| service | FileUploadService（101） | 文件上传/按 URL 清理旧文件 |
 | dao | — | 无专属 DAO |
 | model | command/UploadCommand（48）、vo/UploadResult（31） | 上传命令/结果 |
 
@@ -595,6 +595,28 @@ com.itheima/
 - **级别与粒度标准**：`说明书/LOG_CONVENTION.md` 3.2-必记③ / **3.6**（里程碑口径）/ **3.7**（脱敏出口）。
 
 ---
+
+### 6.23 事务基础设施异常与"包装点即源头"定栈（第二张清单 T11）
+
+- **问题**：`TransactionTemplate.execute` 的**自身步骤**（`getConnection` / `setAutoCommit` / `commit`）失败时**不记任何日志**，
+  只把异常包成 `DatabaseException("数据库操作失败")`；而 `DatabaseException ⊂ ServerException ⊂ BusinessException`
+  → 出口 `ExceptionFilter` 的 `BusinessException` 分支按"可预期业务拒绝"只记 `WARNING` **且不带堆栈**
+  → **非缓存业务路径的数据库不可达在全链没有任何堆栈**（T7 前既存缺口）。
+- **定案（判据唯一源 = `说明书/LOG_CONVENTION.md` §3.1 附加纪律 2）**：**"包装点即源头"** —— 包装成
+  `DatabaseException`/`ServerException` 的那一处记 `SEVERE` + 堆栈；下游吸收点/结论行/上下文行只记结论与业务标识。
+  `TransactionTemplate` 的 `catch (BusinessException)`（业务层已持栈）与 `catch (RuntimeException)`
+  （最终由 `ExceptionFilter`"未处理异常"或缓存吸收点带栈）**不记**，避免新双栈。
+- **持栈归属（重排后）**：业务链 = 业务层原地 `SEVERE` + `ExceptionFilter` 结论行；事务基础设施 = `TransactionTemplate`；
+  内容装载链 = DAO 级 `SQLException` / 基础设施失败 → `TransactionTemplate`，逃出模板的非业务异常 →
+  `ContentCache` 的 `catch (Exception)`（`WARNING`）；吸收点 `CacheAside` 全部去栈；
+  评论树链 = `CommentCache` 七个 `catch (SQLException)` 包装点；吸收点七个去栈（其中 `ensureRootsWindow` 外层按
+  "是否 `DatabaseException`"**拆 catch**：数据库侧去栈、Redis `CacheException` 侧持栈——该侧在全链无其它带栈载体）；
+  关注/点赞回填链 = loader 源头 `SEVERE`（**保留**，它同时是 answer/单读路径直达 `ExceptionFilter` 的唯一栈）
+  + 回填吸收点去栈 → **T7 登记的残余关闭**。
+- **例外**：包装点自身可为 `WARNING`（级别与持栈是两件事）；"吸收点即该链唯一捕获点"（吞掉型）必须持栈。
+- **覆盖边界**：`catch (Exception)`/`catch (RuntimeException)` 型吸收点去栈后，"逃出模板的非业务 RuntimeException"
+  （关停期 `IllegalStateException("连接池已关闭")`、编程错误）在该链无栈 —— 该失败已被自动吸收、对外可用性未受损
+  （§3.1-② 判 `WARNING`）；不引入"按类型分流"分支。
 
 ## 七、API 接口清单
 

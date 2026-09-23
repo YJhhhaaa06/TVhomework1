@@ -55,6 +55,9 @@ public class UserService {
             try {
                 return userDao.getUserForLoginById(conn, id);
             } catch (SQLException e) {
+                // T11 定栈：本行是该链（按 id 登录）的**唯一带堆栈记录**（包装点即源头；
+                // 上层 registerAndLogin 的兜底结论行只记结论、不带栈）
+                LOGGER.log(Level.SEVERE, "登录失败（按 id 查询用户）, userId=" + id, e);
                 throw new DatabaseException("登录失败", e);
             }
         });
@@ -66,6 +69,9 @@ public class UserService {
             try {
                 return userDao.getUserForLoginByPhone(conn, phone);
             } catch (SQLException e) {
+                // T11 定栈：本行是该链（按手机号登录）的**唯一带堆栈记录**；手机号走统一脱敏出口（LOG_CONVENTION §3.7）
+                LOGGER.log(Level.SEVERE, "登录失败（按手机号查询用户）, phone="
+                        + StringUtil.maskForLog("phone", phone), e);
                 throw new DatabaseException("登录失败", e);
             }
         });
@@ -107,7 +113,8 @@ public class UserService {
             return login(id, rc.getPassword());
         } catch (BusinessException e) {
             // 注册已提交：不能把自动登录失败报成注册失败；留痕不静默
-            LOGGER.log(Level.WARNING, "注册后自动登录失败, userId=" + id + ", 改为提示手动登录", e);
+            // T11 定栈：本行只记结论（不带栈）——堆栈由包装点持有（login 的 catch (SQLException) / TransactionTemplate）
+            LOGGER.log(Level.WARNING, "注册后自动登录失败, userId=" + id + ", 改为提示手动登录");
             return new LoginVO(id, rc.getUsername(), null);
         }
     }

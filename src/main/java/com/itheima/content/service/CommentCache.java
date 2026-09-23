@@ -125,6 +125,9 @@ public class CommentCache {
                 try {
                     return commentDao.getComments(conn, contentId);
                 } catch (SQLException e) {
+                    // T11 定栈：本行是该链的**唯一带堆栈记录**（包装点即源头）——下游吸收点（catch (DatabaseException)）
+                    // 只记结论、不带栈
+                    LOGGER.log(Level.SEVERE, "评论树 DB 查询失败, contentId=" + contentId, e);
                     throw new DatabaseException("评论树 DB 查询失败", e);
                 }
             });
@@ -133,7 +136,8 @@ public class CommentCache {
             }
             return buildCommentTree(rows);
         } catch (DatabaseException e) {
-            LOGGER.log(Level.WARNING, "评论树 DB 查询失败（缺省全量路径，按无评论处理）, contentId=" + contentId, e);
+            // T11 定栈：只记结论（不带栈）——堆栈由包装点（同链 catch (SQLException)）持有
+            LOGGER.log(Level.WARNING, "评论树 DB 查询失败（缺省全量路径，按无评论处理）, contentId=" + contentId);
             return null;
         }
     }
@@ -185,8 +189,15 @@ public class CommentCache {
             }
             try {
                 ensureRootsWindow(rootsKey, contentId, needWatermark);
+            } catch (DatabaseException e) {
+                // 装载失败（DB 瞬时故障 / 模板包装的基础设施异常）→ 不使用错误结果，本次降级走 DB
+                // T11 定栈：本行只记结论（不带栈）——堆栈由包装点（ensureRootsWindow 的 catch (SQLException) /
+                // TransactionTemplate 自身步骤）持有
+                LOGGER.log(Level.WARNING, "评论主楼窗口装载失败（本次降级走 DB）, contentId=" + contentId);
             } catch (RuntimeException e) {
-                // 装载失败（DB 瞬时故障等）→ 不使用错误结果，本次降级走 DB
+                // T11 定栈：其余运行时异常（`ensureRootsWindow` 内 `redisAccess` 抛出的 Redis `CacheException`、
+                // 编程错误）→ 本行是该路径**唯一带堆栈记录**（RedisCircuitBreaker 的失败/熔断行不带栈）；
+                // 本 catch 的拆分只为决定"是否带栈"，控制流、级别、文案一律不变
                 LOGGER.log(Level.WARNING, "评论主楼窗口装载失败（本次降级走 DB）, contentId=" + contentId, e);
             }
             List<String> jsons = redisAccess.execute(j -> {
@@ -242,6 +253,8 @@ public class CommentCache {
                             int total = (len2 == 0) ? commentDao.countMainComments(conn, contentId) : -1;
                             return new RootLoad(mains, total);
                         } catch (SQLException e) {
+                            // T11 定栈：本行是该链的**唯一带堆栈记录**（包装点即源头；上层 catch (RuntimeException) 只记结论）
+                            LOGGER.log(Level.SEVERE, "评论主楼窗口查询失败, contentId=" + contentId, e);
                             throw new DatabaseException("评论主楼窗口查询失败", e);
                         }
                     });
@@ -309,6 +322,8 @@ public class CommentCache {
                         try {
                             return commentDao.getMainCommentsAfter(conn, contentId, cursor, LOAD_BATCH_LIMIT);
                         } catch (SQLException e) {
+                            // T11 定栈：本行是该链的**唯一带堆栈记录**（包装点即源头；下游只记结论）
+                            LOGGER.log(Level.SEVERE, "评论主楼降级查询失败, contentId=" + contentId, e);
                             throw new DatabaseException("评论主楼降级查询失败", e);
                         }
                     });
@@ -325,11 +340,14 @@ public class CommentCache {
                     return commentDao.getMainCommentsAfter(conn, contentId, 0L,
                             Math.min(LOAD_BATCH_LIMIT, batchToInt(needWatermark)));
                 } catch (SQLException e) {
+                    // T11 定栈：本行是该链的**唯一带堆栈记录**（包装点即源头；下游只记结论）
+                    LOGGER.log(Level.SEVERE, "评论主楼降级查询失败, contentId=" + contentId, e);
                     throw new DatabaseException("评论主楼降级查询失败", e);
                 }
             });
         } catch (DatabaseException e) {
-            LOGGER.log(Level.WARNING, "评论主楼降级查询失败（按无评论处理，对外行为不变）, contentId=" + contentId, e);
+            // T11 定栈：只记结论（不带栈）——堆栈由包装点（loadRootsFromDb 内的 catch (SQLException) / TransactionTemplate）持有
+            LOGGER.log(Level.WARNING, "评论主楼降级查询失败（按无评论处理，对外行为不变）, contentId=" + contentId);
             return null;
         }
     }
@@ -354,11 +372,14 @@ public class CommentCache {
                 try {
                     return commentDao.countMainComments(conn, contentId);
                 } catch (SQLException e) {
+                    // T11 定栈：本行是该链的**唯一带堆栈记录**（包装点即源头；下游只记结论）
+                    LOGGER.log(Level.SEVERE, "评论主楼总数查询失败, contentId=" + contentId, e);
                     throw new DatabaseException("评论主楼总数查询失败", e);
                 }
             });
         } catch (DatabaseException e) {
-            LOGGER.log(Level.WARNING, "评论主楼总数查询失败（按 0 处理）, contentId=" + contentId, e);
+            // T11 定栈：只记结论（不带栈）——堆栈由包装点（loadRootTotal 内的 catch (SQLException) / TransactionTemplate）持有
+            LOGGER.log(Level.WARNING, "评论主楼总数查询失败（按 0 处理）, contentId=" + contentId);
             return 0;
         }
     }
@@ -463,14 +484,17 @@ public class CommentCache {
                         try {
                             return commentDao.getRepliesByRootIds(conn, contentId, missing);
                         } catch (SQLException e) {
+                            // T11 定栈：本行是该链的**唯一带堆栈记录**（包装点即源头；下游只记结论）
+                            LOGGER.log(Level.SEVERE, "评论楼中楼懒载查询失败, contentId=" + contentId, e);
                             throw new DatabaseException("评论楼中楼懒载查询失败", e);
                         }
                     });
                     return groupByParent(rows);
                 } catch (DatabaseException e) {
                     // DB 装载失败：不写 field（保持"未装载"态，下次重试）、不写空标记
+                    // T11 定栈：只记结论（不带栈）——堆栈由包装点（同链 catch (SQLException)）持有
                     LOGGER.log(Level.WARNING,
-                            "评论楼中楼懒载失败（保持未装载态，下次重试）, contentId=" + contentId, e);
+                            "评论楼中楼懒载失败（保持未装载态，下次重试）, contentId=" + contentId);
                     return Map.of();
                 }
             });
@@ -528,12 +552,15 @@ public class CommentCache {
                 try {
                     return commentDao.getRepliesByRootIds(conn, contentId, rootIds);
                 } catch (SQLException e) {
+                    // T11 定栈：本行是该链的**唯一带堆栈记录**（包装点即源头；下游只记结论）
+                    LOGGER.log(Level.SEVERE, "评论楼中楼降级查询失败, contentId=" + contentId, e);
                     throw new DatabaseException("评论楼中楼降级查询失败", e);
                 }
             });
             return groupByParent(rows);
         } catch (DatabaseException e) {
-            LOGGER.log(Level.WARNING, "评论楼中楼降级查询失败（按无回复处理）, contentId=" + contentId, e);
+            // T11 定栈：只记结论（不带栈）——堆栈由包装点（loadRepliesFromDb 内的 catch (SQLException) / TransactionTemplate）持有
+            LOGGER.log(Level.WARNING, "评论楼中楼降级查询失败（按无回复处理）, contentId=" + contentId);
             return null;
         }
     }
@@ -621,7 +648,8 @@ public class CommentCache {
                 }
             });
         } catch (Exception e) {
-            LOGGER.log(Level.WARNING, "评论所属内容/主楼查询异常, commentId=" + commentId, e);
+            // T11 定栈：只记结论（不带栈）——DAO 级失败由内层 catch (SQLException) 持栈，模板自身步骤失败由 TransactionTemplate 持栈
+            LOGGER.log(Level.WARNING, "评论所属内容/主楼查询异常, commentId=" + commentId);
             return null;
         }
     }

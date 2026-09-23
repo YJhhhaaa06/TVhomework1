@@ -154,9 +154,9 @@ public class CacheAside {
                     value = invokeLoader(dataKey, loader);
                 } catch (DatabaseException e) {
                     // 三期 T3：加载失败 ≠ 确认无数据——不写空标记、不 DEL（读路径不固化瞬时故障）
-                    // T7：本行是"内容装载链"的**唯一带堆栈记录**（装载层上下文行不带堆栈，见 LOG_CONVENTION
-                    // §3.1 附加纪律 2）——同时兜住 TransactionTemplate 基础设施异常（上游无日志）等无源头的 DatabaseException
-                    LOGGER.log(Level.WARNING, "缓存加载失败（不写空标记、不 DEL 数据 key）, key=" + dataKey, e);
+                    // T11 定栈：本行只记结论（不带栈）——该失败的堆栈由包装点持有：回调内 SQLException /
+                    // 模板自身步骤失败 → TransactionTemplate；逃出模板的非业务异常 → ContentCache 装载层
+                    LOGGER.log(Level.WARNING, "缓存加载失败（不写空标记、不 DEL 数据 key）, key=" + dataKey);
                     return null;
                 }
                 if (value != null) {
@@ -455,8 +455,8 @@ public class CacheAside {
         try {
             return invokeLoader(dataKey, loader);
         } catch (DatabaseException e) {
-            // T7：内容装载链的唯一带堆栈记录（同 getInternal，兜住无源头的 DatabaseException）
-            LOGGER.log(Level.WARNING, "降级装载失败（不写回）, key=" + dataKey, e);
+            // T11 定栈：本行只记结论（不带栈）；堆栈由包装点持有（装载层 catch (Exception) / TransactionTemplate）
+            LOGGER.log(Level.WARNING, "降级装载失败（不写回）, key=" + dataKey);
             return null;
         }
     }
@@ -508,8 +508,8 @@ public class CacheAside {
                     T value = loader.apply(key);
                     return value == null ? LoadOutcome.empty() : LoadOutcome.of(value);
                 } catch (DatabaseException e) {
-                    // T7：内容装载链的唯一带堆栈记录（装载层上下文行不带堆栈）
-                    LOGGER.log(Level.WARNING, "批量缓存加载失败（不写空标记、不 DEL 数据 key）, key=" + key, e);
+                    // T11 定栈：本行只记结论（不带栈）——堆栈由 TransactionTemplate 包装点持有
+                    LOGGER.log(Level.WARNING, "批量缓存加载失败（不写空标记、不 DEL 数据 key）, key=" + key);
                     return LoadOutcome.fail();
                 }
             }
@@ -543,8 +543,8 @@ public class CacheAside {
                     loaded = (map == null) ? Collections.emptyMap() : map;
                 } catch (DatabaseException e) {
                     failed = true;
-                    // T7：内容装载链的唯一带堆栈记录（批量装载层上下文行不带堆栈）
-                    LOGGER.log(Level.WARNING, "批量缓存加载失败（不写空标记、不写回）, keys=" + keys.size(), e);
+                    // T11 定栈：本行只记结论（不带栈）——堆栈由 TransactionTemplate 包装点持有
+                    LOGGER.log(Level.WARNING, "批量缓存加载失败（不写空标记、不写回）, keys=" + keys.size());
                 }
             }
         }
