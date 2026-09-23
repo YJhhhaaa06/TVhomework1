@@ -128,6 +128,7 @@ python tools\tv.py admin|cleanup|integrity|backup|init-test-db|test|cleanup-orph
 | 测试代码           | 项目 `src\test\python`                                                                      | 无                     | pytest 用例 + conftest.py + pytest.ini                       |
 
 > 覆盖机制：上述路径均可在 `tools/run_tests*.py` 中通过同名 `TV_*` 环境变量覆盖（T1 落地，与 conftest.py 的 TV\_BASE\_URL 等先例一致）。HTTP 端口 18080/shutdown 18005 属安全隔离设计，**不可覆盖**。
+> 两个超时旋钮同样可覆盖：`TV_START_TIMEOUT`（就绪等待上限，默认 **180s**，T10）/ `TV_PYTEST_TIMEOUT`（pytest 整体刹车，默认 60s，T2）——见 §三 退出码 6 / 11。
 
 外部服务依赖：生产库 MySQL80（TVDatabase:3306）+ **独立测试库 Docker MySQL8.4（TVDatabase\_test:3307）** + Redis，均需运行中。
 
@@ -145,7 +146,7 @@ python tools\run_tests.py test     # 只跑 pytest（要求 18080 已就绪）
 python tools\run_tests.py stop     # 只关停独立 Tomcat
 ```
 
-`all` 的典型耗时约 30\~35 秒：打包约 2 秒，Tomcat 启动约 16 秒，pytest 约 3 秒，关停约 5 秒。
+`all` 的典型耗时约 **2 分钟**（2026-09-23 T10 实测：连续 3 次 `test all` 的分段耗时 = 打包 12\~26s / Tomcat 就绪（多数走重展开路径）40\~46s / pytest 34\~42s / 关停 8\~10s）。⚠️ 旧文记的「约 30\~35 秒：打包 2 秒、启动 16 秒、pytest 3 秒」是更早窗口（构建/部署目录在仓库外）的口径，与本机现状不符，已作废。
 
 ### 退出码约定
 
@@ -163,7 +164,7 @@ python tools\run_tests.py stop     # 只关停独立 Tomcat
 | 11    | pytest 执行超时（默认 60s，`TV_PYTEST_TIMEOUT` 可覆盖）被强制终止 |
 | 12    | 媒体目录门禁拒绝（破坏权只信任硬编码白名单，任一失败 exit 12）：① 移动源（归一化后）不等于 run_tests.py 硬编码的 `DEFAULT_TEST_MEDIA_ROOT`（白名单）——env 覆盖到任何其它目录均无法移动、无人工确认通道；② 移动源命中生产媒体根（app.properties upload.path / 默认生产 stone 或其子目录）——白名单被人工改动指向生产时的第二道保险；③ 回收站落点（`TEST_TRASH_ROOT`）命中生产根或与移动源重叠/嵌套 |
 
-> 补充（哪类失败本就快，T2 于 2026-09-05 确认）：Maven 编译失败与 Tomcat 提前退出本就秒级失败（exit = mvn 返回码 / 5，不空等）；10 号专门解决「DB/Redis 未就绪导致应用不就绪的空等」；90s 就绪超时（6）保留为兜底。
+> 补充（哪类失败本就快，T2 于 2026-09-05 确认）：Maven 编译失败与 Tomcat 提前退出本就秒级失败（exit = mvn 返回码 / 5，不空等）；10 号专门解决「DB/Redis 未就绪导致应用不就绪的空等」；就绪超时（6）保留为兜底，上限**默认 180s、`TV_START_TIMEOUT` 可覆盖**（T10，2026-09-23：原 90s 仅最慢通过样本的 1.4 倍、落在实测抖动带内，会造成 `test all` 偶发"等待超时"假失败）。
 
 ***
 
@@ -186,6 +187,8 @@ pytest 阶段有整体超时刹车（T2，2026-09-05）：`subprocess.run(timeou
 - 把包装进程 PID 写入 `CATALINA_BASE\logs\tomcat.pid`。
 
 - 轮询 `http://127.0.0.1:18080/start`，就绪后返回。
+
+- **就绪等待上限**（T10，2026-09-23）：**每 2s 探测一次**，上限**默认 180s**（`TV_START_TIMEOUT` 可覆盖）；到点仍未就绪 → `stop` + `exit 6`（退出码口径不变，日志仍为 `等待超时（<上限>s）`）。默认值依据 = **全量 `run.log` 实测（45 个就绪样本，三带分布）**：**40.1\~45.3s ×23**（主流，推断为 Tomcat 重展开 `webapps/ROOT` —— war 每次重建、约 8.2MB / 数百文件）/ **61.0\~65.4s ×4**（慢时段）/ **6.0\~6.6s ×18**（Tomcat 命中复用、未重展开）/ 1 次 **>90s** 触顶（即 T10 要消除的那次假失败）；**180s ≈ 最慢通过样本（65.4s）的 2.8 倍**，已落在抖动带之外（旧值 90s 仅 1.4 倍、正卡带内）。⚠️ "是否重展开"由 Tomcat 自己的 mtime 比较决定（两带并存），本窗口未追根因——不影响取值：上限要覆盖的是**慢带**。
 
 - **启动前环境预检**（T2，2026-09-05）：纯 socket 探测测试库 MySQL(3307) 与 Redis(6379)，不通即报「测试环境未就绪」并秒级退出（exit 10），不再空等至启动超时（6）。
 
@@ -252,7 +255,7 @@ pytest 阶段有整体超时刹车（T2，2026-09-05）：`subprocess.run(timeou
    ```
 
    沙盒运行测试时通过 `PYTHONPATH` 指向该目录。
-7. **javac 无法读取 worktree 的** **`target/`** **作为 classpath**：沙箱内目录枚举被拒，表现为测试编译时"程序包 com.itheima.\* 不存在"；因此 Maven 构建通过 `-Dstage8.buildDir` 指向 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（pom 默认 `./target`），war 也位于该目录。
+7. **javac 无法读取 worktree 的** **`target/`** **作为 classpath**：沙箱内目录枚举被拒，表现为测试编译时"程序包 com.itheima.\* 不存在"；因此 Maven 构建通过 `-Dstage8.buildDir` 指向项目内 `.stage8-target`（T9 起；早期为 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`，pom 默认 `./target`），war 也位于该目录。
 8. **离线仓库来源记录**：新加入的测试依赖（junit/mockito/bytebuddy/surefire）`_remote.repositories` 原本只有 `>central=`，默认 aliyun 镜像下离线解析会拒认；已逐项追加 `>aliyun=` 行（只追加不删除，模式与既有 mysql 依赖一致）。
 
 ***

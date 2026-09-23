@@ -73,7 +73,14 @@ SHUTDOWN_PORT = 18005
 # 用 127.0.0.1 而不是 localhost：Tomcat 只绑定 IPv4，Python 连 localhost
 # 会先尝试 IPv6 ::1 并等待超时（约 2 秒/次），导致整套测试变慢。
 BASE_URL = f"http://127.0.0.1:{HTTP_PORT}"
-START_TIMEOUT_SECONDS = 90
+# 就绪等待上限（T10，2026-09-23）：每 2s 探测一次 /start，就绪即返回；到点未就绪 → stop + exit 6。
+# 默认值依据 = 全量 run.log 实测（45 个就绪样本分三带，统计脚本 temp_script/t10_ready_stats.py）：
+#   40.1~45.3s ×23（主流，推断为 Tomcat 重展开 webapps/ROOT：war 每次重建、约 8.2MB / 数百文件）
+#   61.0~65.4s ×4（慢时段） / 6.0~6.6s ×18（明显走复用路径，未重展开）
+#   另有 1 次 >90s 触顶（run-20260921_201227 = T10 要消除的那次假失败）
+# 上限须覆盖"慢带"：180s ≈ 最慢通过样本（65.4s）的 2.8 倍，落在实测抖动带之外；旧值 90s 仅 1.4 倍、正卡带内。
+# 只调等待上限、不动退出码口径（超时仍是 exit 6）；TV_START_TIMEOUT 可覆盖（验证用短上限模拟超时）。
+START_TIMEOUT_SECONDS = int(os.environ.get("TV_START_TIMEOUT", "180"))
 STOP_TIMEOUT_SECONDS = 25
 
 # ---- 测试库连接（独立测试库 TVDatabase_test，docker mysql8.4:3307）----
