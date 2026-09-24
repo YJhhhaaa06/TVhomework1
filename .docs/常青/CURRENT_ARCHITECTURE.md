@@ -469,11 +469,11 @@ com.itheima/
 - **事务外写**：`ContentCache.init()` 拆两段——DB 阶段事务内**只读**（`findAllContent` + `ContentMediaDao.findMediaByContentIds` 批量媒体装载 + 构建 DTO，DB 恒 2 次查询），事务提交后 `rebuildRedis` 在**事务外**写 Redis；DB 装载失败 → 记日志 return，不触发任何 Redis 写。
 - **内容 key 批量写**：`CacheAside.writeBatch(map, ttl)`——一趟 pipeline `(setex[per-key TTL 抖动] + del empty:)×N`，失败 → 逐 key `deleteQuietly` 自愈 + WRITE_FAIL 打点；批内单命令 server 错误依赖 `Pipeline.sync()` 抛异常统一兜底。
 - **索引 pipeline 化**：`rebuildIndexes` 单条 executeVoid——SCAN 顺序收集旧 `content:index:*` key → 一趟 pipeline DEL 全部 + `lremAndLpush` 全部。启动 Redis 往返从 ≈12N 降到 ≈3 次（内容 pipeline 1 + 索引 SCAN 页 + 索引 pipeline 1），与内容量解耦。
-- **索引懒重建**：索引 key 缺失时 `ensureIndex` 单飞懒重建（`getRecommendByFilter` 首访触发，防 Redis 重启后 /start 空推荐）。
+- **索引懒重建**：索引 key 缺失时 `ensureIndex` 单飞懒重建（`getRecommendByFilter` 首访触发，防 Redis 重启后 /start 空推荐）。**装载失败 ≠ 确无数据（T14，R-20 裁决 A）**：`loadAllWithoutMedia` 对外表现为"成功返回列表（真·空表 = 空列表）/ 失败上抛 `DatabaseException`"——DAO 级 `SQLException` 由本方法包装上抛、事务基础设施异常经 `TransactionTemplate` 同型上抛；调用方据此**跳过重建**（不清 `content:index:*`）并入冷却；仅真·空表（空列表）照常走"清旧键 + 重建"。
 
 ### 6.11 索引维护：重建失败退避 + 长尾漂移
 
-- **冷却退避**：`ensureIndex` 重建失败（Redis 写失败）记进程内冷却（`cache.content.indexRebuildCooldownMillis=10000`，对齐熔断冷却先例），**窗口内跳过探测与重建**（Redis 停机期间 `/start` 从"逐请求 DB 全表查询"收敛到"每冷却窗口 1 次"）；冷却过期后下一请求自然重试，重建成功即恢复正常（与熔断探针恢复语义同构）。
+- **冷却退避**：`ensureIndex` 重建失败（Redis 写失败；**T14 起含 DB 装载失败**——同口径跳过重建并记冷却，且不清旧索引）记进程内冷却（`cache.content.indexRebuildCooldownMillis=10000`，对齐熔断冷却先例），**窗口内跳过探测与重建**（Redis 停机期间 `/start` 从"逐请求 DB 全表查询"收敛到"每冷却窗口 1 次"；DB 装载失败同收敛，`/start` 仍走既有降级=该次为空）；冷却过期后下一请求自然重试，重建成功即恢复正常（与熔断探针恢复语义同构）。
 - **长尾漂移结论**：`lrem(k,0,id)`（删全部出现）+ `lpush` 写即去重 → id 每 key 至多 1 条、索引大小 ≤ 该维度活跃内容数，**不随增删操作累积**，正常操作无系统性漂移、无需定期重建。残余窗口（已接受）：仅删除 LREM 失败（停机窗口）残留有界脏 id，读侧 null 跳过免疫、惰性探测每条至多消耗 1 个探测位；索引 key 缺失/启动全量重建时 SCAN+DEL 全量收敛。
 
 ### 6.12 Set 基建组件 SetCache 与域收口

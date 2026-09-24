@@ -665,6 +665,92 @@ class ContentCacheTest {
         verify(contentDao, times(2)).findAllContent(any(Connection.class));
     }
 
+    // ==================== R-20 方案 A：索引重建装载失败不清索引（log3-14） ====================
+
+    @Test
+    void ensureIndexDbLoadFailureKeepsIndexesAndSkipsRebuild() throws Exception {
+        // R-20 裁决 A：装载失败 ≠ 确无数据——跳过全量重建（不清 content:index:*），本次推荐照走读路径降级
+        when(jedis.exists("content:index:1:2")).thenReturn(false);
+        when(jedis.lrange("content:index:1:2", 0, -1)).thenReturn(List.of());
+        when(contentDao.findAllContent(conn)).thenThrow(new SQLException("db down"));
+        when(singleFlight.get(eq("content:index:rebuild"), any(Callable.class)))
+                .thenAnswer(inv -> ((Callable<?>) inv.getArgument(1)).call());
+
+        List<ContentVO> result = cache.getRecommendByFilter(1, 2, 12);
+
+        assertTrue(result.isEmpty());
+        // 关键：既有索引未被清（改动前 = 空表重建，会 SCAN + DEL 全部 content:index:*）
+        verify(jedis, never()).scan(anyString(), any(ScanParams.class));
+        verify(jedis, never()).pipelined();
+        verify(contentDao, times(1)).findAllContent(any(Connection.class));
+        // "同一失败只有一条带堆栈记录"（T7/T11）：包装点持栈 1 条 + 吸收点结论行 1 条
+        assertEquals(1, withStack().size(), () -> "装载失败只允许一条带堆栈记录: " + captured);
+        assertEquals(1, withoutStack().size(), () -> "应有且仅有一条结论行: " + captured);
+        assertTrue(withoutStack().getFirst().getMessage().contains("跳过重建，保留旧索引"),
+                () -> "结论行应写明跳过重建、保留旧索引: " + captured);
+    }
+
+    @Test
+    void ensureIndexDbLoadFailureEntersCooldown() throws Exception {
+        // R-20 A：装载失败与重建失败同口径进入冷却——不把 DB 故障放大成"每请求一次全表查询"
+        when(jedis.exists("content:index:1:2")).thenReturn(false);
+        when(jedis.lrange("content:index:1:2", 0, -1)).thenReturn(List.of());
+        when(contentDao.findAllContent(conn)).thenThrow(new SQLException("db down"));
+        stubIndexScan(Set.of());
+        stubPipeline();
+        when(singleFlight.get(eq("content:index:rebuild"), any(Callable.class)))
+                .thenAnswer(inv -> ((Callable<?>) inv.getArgument(1)).call());
+
+        cache.getRecommendByFilter(1, 2, 12); // 第 1 次：装载失败 → 记冷却
+        cache.getRecommendByFilter(1, 2, 12); // 第 2 次：冷却窗口内 → 跳过探测与重建
+
+        verify(contentDao, times(1)).findAllContent(any(Connection.class));
+    }
+
+    @Test
+    void ensureIndexEmptyTableStillConvergesStaleKeys() throws Exception {
+        // 真·空库（确无内容，非失败）：行为与改动前一致——仍按空表"清旧索引 + 无重建"
+        when(jedis.exists("content:index:1:2")).thenReturn(false);
+        when(jedis.lrange("content:index:1:2", 0, -1)).thenReturn(List.of());
+        when(contentDao.findAllContent(conn)).thenReturn(List.of());
+        stubIndexScan(Set.of("content:index:1:2", "content:index:-1:-1"));
+        Pipeline p = stubPipeline();
+        when(singleFlight.get(eq("content:index:rebuild"), any(Callable.class)))
+                .thenAnswer(inv -> ((Callable<?>) inv.getArgument(1)).call());
+
+        List<ContentVO> result = cache.getRecommendByFilter(1, 2, 12);
+
+        assertTrue(result.isEmpty());
+        verify(p).del("content:index:1:2");
+        verify(p).del("content:index:-1:-1");
+        verify(p, never()).lpush(anyString(), anyString());
+    }
+
+    @Test
+    void ensureIndexRecoversAfterDbLoadFailure() throws Exception {
+        // R-20 A 的自愈路径：冷却过期 + DB 恢复后，下一请求照常重建并按 DB 现状恢复索引
+        ContentCache shortCooling = new ContentCache(contentDao, contentMediaDao, tt, cacheAside,
+                redisAccess, singleFlight, 30L);
+        when(jedis.exists("content:index:1:2")).thenReturn(false);
+        when(jedis.lrange("content:index:1:2", 0, -1)).thenReturn(List.of());
+        when(contentDao.findAllContent(conn)).thenThrow(new SQLException("db down"));
+        stubIndexScan(Set.of("content:index:1:2"));
+        Pipeline p = stubPipeline();
+        when(singleFlight.get(eq("content:index:rebuild"), any(Callable.class)))
+                .thenAnswer(inv -> ((Callable<?>) inv.getArgument(1)).call());
+
+        shortCooling.getRecommendByFilter(1, 2, 12); // DB 故障：跳过重建（不清索引）
+        verify(p, never()).del(anyString());
+
+        // DB 恢复（doReturn 重桩：when(...) 形式会先触发旧 thenThrow 桩）
+        doReturn(List.of(dto(5L, 2, 1))).when(contentDao).findAllContent(conn);
+        Thread.sleep(60); // 越过 30ms 冷却窗口（DB 已恢复）
+        shortCooling.getRecommendByFilter(1, 2, 12);
+
+        verify(p).del("content:index:1:2");        // 重建照旧"先清后建"
+        verify(p).lpush("content:index:2:1", "5"); // 索引按 DB 现状恢复
+    }
+
     // ==================== 写路径 ====================
 
     @Test

@@ -370,7 +370,7 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 │  │   hit-data=直接返回；Redis 挂=降级走 DB                    │   │
 │  │ 类型分区索引：content:index:{type}:{category}（Redis LIST）│   │
 │  │   4 key/内容（含 type=-1 / category=-1 通配），新前序      │   │
-│  │ TTL：内容 10min（+±10% 抖动，4.12 一版）                  │   │
+│  │ TTL：内容 30min（+±10% 抖动，4.12 一版）                  │   │
 │  └──────────────────────────────────────────────────────────┘   │
 │  评论读路径（/comment/show、详情页评论区）                       │
 │    ↓  CommentCache（com.itheima.content.service，T3）          │
@@ -421,7 +421,7 @@ POST /user/changePhone?token=xxx&oldPhone=13800138000&newPhone=13900139000
 >
 > **评论查询分页（T8 → T11-B）**：`/comment/show` 传 `page`/`pageSize` **任一** → 返回分页信封 `{list,total,page,pageSize,totalPages}`（`total`=**主楼条数**）；**两者都不传 → 仍返回全量数组**（零破坏）。`pageSize` **缺省 = 评论域信封 200**（T11-B：前端只传 `page`，决定权在后端域常量）、上限 **500**（显式传参仍生效）。命中路径与装载形态（两键组 / 主楼窗口装载 / 楼中楼前 K + 展开接口）见 `CURRENT_ARCHITECTURE` 6.18；前端分块与去重见 6.19。
 >
-> 启动与索引维护：启动全量重建拆两段（DB 事务内只读、事务外写 Redis，Redis 往返 ≈3 次与内容量解耦）；索引 key 生成/解析/匹配同源（`CacheKeys.contentIndex`）；读命中滑动续期（分域 TTL：content 30min / comment 10min / like 15min / follow 30min，空标记不续）；推荐读惰性探测（凑满 limit 即止，分布语义不变）+ 索引重建失败冷却退避 + 索引长尾无系统性漂移；详情见 `CURRENT_ARCHITECTURE` 6.5/6.10/6.11。
+> 启动与索引维护：启动全量重建拆两段（DB 事务内只读、事务外写 Redis，Redis 往返 ≈3 次与内容量解耦）；索引 key 生成/解析/匹配同源（`CacheKeys.contentIndex`）；读命中滑动续期（分域 TTL：content 30min / comment 10min / like 15min / follow 30min，空标记不续）；推荐读惰性探测（凑满 limit 即止，分布语义不变）+ 索引重建失败冷却退避（**T14 起含 DB 装载失败：跳过重建、保留旧索引**，失败不再当空表）+ 索引长尾无系统性漂移；详情见 `CURRENT_ARCHITECTURE` 6.5/6.10/6.11。
 
 ### 3.2 发布视频流程
 

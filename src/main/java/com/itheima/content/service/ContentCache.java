@@ -50,7 +50,8 @@ import redis.clients.jedis.resps.ScanResult;
  * init 不 crash 应用（旧 ContentCacheManager 的 HashMap 实现已随 T6 移除）。
  * 索引懒重建：索引 key 缺失（Redis 重启/被清）时按需从 DB 重建，防 /start 空推荐；
  * 索引写入失败（三期 T4/N4）时 best-effort DEL 所属索引 key 让读路径触发懒重建自愈；
- * 懒重建失败（T5/N1）进入进程内冷却退避，停机期间不再逐请求触发 DB 全量重建。
+ * 懒重建失败（T5/N1）进入进程内冷却退避，停机期间不再逐请求触发 DB 全量重建；
+ * **索引重建装载失败（log3-14，R-20 裁决 A）= 跳过重建、保留旧索引**（失败 ≠ 确无数据，空表才收敛旧键）。
  */
 @Component
 public class ContentCache implements Initializable {
@@ -547,7 +548,18 @@ public class ContentCache implements Initializable {
         }
         try {
             singleFlight.get(INDEX_REBUILD_KEY, () -> {
-                List<ContentCacheDTO> all = loadAllWithoutMedia();
+                List<ContentCacheDTO> all;
+                try {
+                    all = loadAllWithoutMedia();
+                } catch (DatabaseException ignored) {
+                    // R-20 裁决 A（log3-14）：装载失败 ≠ 确无数据——**跳过**全量重建（不清 content:index:*，
+                    // 既有索引原样保留供其它索引键继续服务），并与重建失败同口径进入冷却退避（T5/N1），
+                    // 不把 DB 瞬时故障放大成"全站索引归零 + 每请求一次全表查询"。
+                    // T11 定栈：本行只记结论（不带栈）——堆栈由包装点持有（loadAllWithoutMedia 内层 catch / TransactionTemplate）
+                    LOGGER.log(Level.WARNING, "索引重建装载失败（跳过重建，保留旧索引）");
+                    lastFailedRebuildAtMillis = System.currentTimeMillis();
+                    return null;
+                }
                 if (!rebuildIndexes(all)) {
                     lastFailedRebuildAtMillis = System.currentTimeMillis();
                 } else {
@@ -703,22 +715,23 @@ public class ContentCache implements Initializable {
         rebuildIndexes(buildable);
     }
 
+    /**
+     * 索引重建 DB 装载（R-20 裁决 A，log3-14 起）：**空列表 = 确无数据**（调用方照常按空表收敛旧索引）；
+     * {@link DatabaseException} = **加载失败**（DAO 级 SQLException / 事务基础设施异常）→ 由调用方
+     * {@link #ensureIndex} 跳过重建并进入冷却，**不得**把失败当成空表传给重建（否则先删后建会清空旧索引）。
+     * 与 {@link #loadContentFromDb} 的 loader 契约同源：失败与无数据在类型上分离。
+     */
     private List<ContentCacheDTO> loadAllWithoutMedia() {
-        try {
-            return transactionTemplate.execute(conn -> {
-                try {
-                    return contentDao.findAllContent(conn);
-                } catch (SQLException e) {
-                    LOGGER.log(Level.WARNING, "索引重建 DB 查询失败", e);
-                    return new ArrayList<>();
-                }
-            });
-        } catch (Exception e) {
-            // T11 定栈：本行只记结论（不带栈）——模板自身步骤失败的堆栈由 TransactionTemplate 持有；
-            // 装载失败路径由 loadAllWithoutMedia 内层 catch（SQLException）持栈
-            LOGGER.log(Level.WARNING, "索引重建 DB 装载异常");
-            return new ArrayList<>();
-        }
+        return transactionTemplate.execute(conn -> {
+            try {
+                return contentDao.findAllContent(conn);
+            } catch (SQLException e) {
+                // T11 定栈：本行是该链的**包装点**（SQLException → DatabaseException），持堆栈；
+                // 吸收点（ensureIndex）只记结论、不带栈
+                LOGGER.log(Level.WARNING, "索引重建 DB 查询失败", e);
+                throw new DatabaseException("索引重建 DB 查询失败", e);
+            }
+        });
     }
 
     private long ttlSeconds() {
