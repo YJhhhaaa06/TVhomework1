@@ -550,7 +550,7 @@ com.itheima/
 - **userId 口径**：`request.getAttribute("userId")`（LoginFilter 内层已注入 `Long`），无 → `-`（login 等公共端点无 token 即 `userId=-`，属预期）。
 - **脱敏**：只记 `method` + `path`（`getRequestURI` 去 contextPath，天然不含 query）；**不记** query 串 / header / 请求体——D7"绝不记"以不记为脱敏（token / 手机号明文 / 密码零落盘；应用日志按需记敏感字段时走**统一出口 `StringUtil.maskForLog`**，见 6.22 / `LOG_CONVENTION` 3.7）。
 - **慢请求标记**：`cost >= log.slowRequestMs`（默认 1000ms，可配）→ `slow=1`；打标记不另起一行、不设独立性能日志文件（D7）。
-- **用途**：每接口耗时基线的聚合来源（第三张清单的报表/趋势将基于本行 `cost=` 字段）；`grep req=<id>` 可在 access.log 与 system.log 间端到端串联同一次请求（异常/降级路径的应用日志带同一 `req=`）——D6 收益的实际落地。
+- **用途**：每接口耗时基线的聚合来源；`grep req=<id>` 可在 access.log 与 system.log 间端到端串联同一次请求（异常/降级路径的应用日志带同一 `req=`）——D6 收益的实际落地。**消费侧已落地（日志第三张清单 T13，`log3-13`）**：`tools/log_report.py`（挂 `tv.py` 子命令 `log-report`，**只读**）基于本行 `cost=` / `slow=` / `code=` 做 **`req=` 跨四端追溯 + 按 path 耗时分布与慢请求 + 错误率（4xx 预期拒绝 / 5xx 失败分列）**，并输出 `--json` 机器可读形态；用法与判读见 `说明书/TEST_AUTOMATION.md` §4.6。
 - **断言口径（T4）**：**装配层**由 JUnit 覆盖（输出端规格表取名自配置、各端 level、`access` 专属 handler 与 `useParentHandlers=false`、轮转文件名模式与保留个数）；**文件级分流与串联**由 pytest `src/test/python/test_log_outputs.py` 覆盖（`error` 只收 SEVERE、`access` 与 `system` 互不污染、access 行严格单行结构化 + LF 行尾、同一 `req` 在 access/system/error 三输出端串联、未处理异常路径 `code=500` 收口）。
 
 ### 6.21 审计日志（第二张清单 T8：管理端写操作 + 用户敏感变更留痕）
