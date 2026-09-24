@@ -158,7 +158,14 @@ public class UserService {
             try {
                 doChangePassword(conn, userId, phone, oldPassword, newPassword);
                 return null;
+            } catch (ParamException | PasswordIncorrectException | ConflictException e) {
+                // T12：可预期业务拒绝（400 / 401 / 409）→ WARNING 且**不带栈**（LOG_CONVENTION §3.1 附加纪律 1）；
+                // 结论行由 ExceptionFilter 的 BusinessException 分支承载，此处只补上层拿不到的业务标识 userId
+                //（"同一失败只有一条带堆栈记录"不破——本分支不持栈，带栈记录只留给真失败）
+                LOGGER.log(Level.WARNING, "修改密码失败（可预期拒绝）, userId=" + userId);
+                throw e;
             } catch (BusinessException e) {
+                // T12：兜底真失败（本链的 UserNotFoundException 与 rows==0 的 DatabaseException）→ 仍 SEVERE + 堆栈（本链唯一带栈记录）
                 LOGGER.log(Level.SEVERE, "修改密码失败, userId=" + userId, e);
                 throw e;
             } catch (SQLException e) {
@@ -204,7 +211,12 @@ public class UserService {
             try {
                 doChangeUserName(conn, userId, newName);
                 return null;
+            } catch (ParamException | PasswordIncorrectException | ConflictException e) {
+                // T12：可预期业务拒绝（409 用户名已被占用等）→ WARNING 不带栈（判据/口径同 changePassword）
+                LOGGER.log(Level.WARNING, "修改用户名失败（可预期拒绝）, userId=" + userId);
+                throw e;
             } catch (BusinessException e) {
+                // T12：兜底真失败（本链的 UserNotFoundException 与 rows==0 的 DatabaseException）→ 仍 SEVERE + 堆栈（本链唯一带栈记录）
                 LOGGER.log(Level.SEVERE, "修改用户名失败, userId=" + userId, e);
                 throw e;
             } catch (SQLException e) {
@@ -222,7 +234,12 @@ public class UserService {
             try {
                 doChangePhone(conn, userId, oldPhone, newPhone);
                 return null;
+            } catch (ParamException | PasswordIncorrectException | ConflictException e) {
+                // T12：可预期业务拒绝（400 格式/同号等、409 手机号已被占用）→ WARNING 不带栈（判据/口径同 changePassword）
+                LOGGER.log(Level.WARNING, "修改手机号失败（可预期拒绝）, userId=" + userId);
+                throw e;
             } catch (BusinessException e) {
+                // T12：兜底真失败（本链的 UserNotFoundException 与 rows==0 的 DatabaseException）→ 仍 SEVERE + 堆栈（本链唯一带栈记录）
                 LOGGER.log(Level.SEVERE, "修改手机号失败, userId=" + userId, e);
                 throw e;
             } catch (SQLException e) {

@@ -1,9 +1,10 @@
 # 当前系统架构地图
 
-> 版本：3.19（2026-09-23 第二张清单 T11 **两批**：第 1 次提交 log2-11：**补齐事务基础设施异常的源头日志**（`TransactionTemplate` 的 `catch (SQLException)` 记 `SEVERE` + 堆栈）+ **"包装点即源头"定栈重排**（去栈 20 处、补源头 11 处、上下文行升级持栈 2 处、评审处置拆 catch 增 1 处持栈行），T7 登记的回填链双栈残余收口；调用点 139 → **151**、SEVERE 44 → **55**、WARNING 83 → **84**；见 6.23；顺带修正本表 8 处陈旧行数）。**第 2 次提交 log2-T11-B（同日）**：**同族业务 wrap 缺口 8 处收口**
-> （`CommentService` 2 / `UserService.isAdmin` 1 / `FollowService.loadUserList` 1 / `CouponService` 4——包装点补 `SEVERE` + 堆栈，
-> "包装点即源头"口径下**无存量未合规点**），调用点 151 → **159**、SEVERE 55 → **63**、持 `LOGGER` 类 23 → **24**、级别零变化；见 6.23）
-> 最后更新：2026-09-23
+> 版本：3.20（2026-09-24 日志第三张清单 **T12 log3-12**：**可预期业务拒绝的级别修正**——`UserService` 的 `changePassword` / `changeUserName` / `changePhone`
+> 三处**按异常类型拆 catch**（`ParamException | PasswordIncorrectException | ConflictException` → `WARNING` **不带栈**；兜底 `catch (BusinessException e)` 与 `catch (SQLException e)` 保持 `SEVERE` + 堆栈），
+> 400/401/409 **不再落 `error.log`**；调用点 159 → **162**、SEVERE 63 → **60**、WARNING 84 → **87**；详见 6.24，判据 `说明书/LOG_CONVENTION.md` §3.1 附加纪律 1）
+> 上一版 3.19（2026-09-23 第二张清单 T11 **两批**：第 1 次提交 log2-11：**补齐事务基础设施异常的源头日志**（`TransactionTemplate` 的 `catch (SQLException)` 记 `SEVERE` + 堆栈）+ **"包装点即源头"定栈重排**（去栈 20 处、补源头 11 处、上下文行升级持栈 2 处、评审处置拆 catch 增 1 处持栈行），T7 登记的回填链双栈残余收口（调用点 139 → 151、SEVERE 44 → 55、WARNING 83 → 84）；第 2 次提交 log2-T11-B（同日）：**同族业务 wrap 缺口 8 处收口**（`CommentService` 2 / `UserService.isAdmin` 1 / `FollowService.loadUserList` 1 / `CouponService` 4——包装点补 `SEVERE` + 堆栈，"包装点即源头"口径下**无存量未合规点**，调用点 151 → **159**、SEVERE 55 → **63**、持 `LOGGER` 类 23 → **24**、级别零变化）；见 6.23，顺带修正本表 8 处陈旧行数）
+> 最后更新：2026-09-24
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
 ---
@@ -226,7 +227,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | LoginController（95，/user/*） | 登录、注册、修改密码/用户名 |
-| service | UserService（294） | 用户认证 + 管理员判定 + 改名后级联失效内容缓存（注入 ContentCache）；**`registerAndLogin`（T13，池 U-16 兜底）= 注册 + 自动登录编排**——自动登录失败不回抛，返回 `token=null` 的 LoginVO（注册已提交即算成功），注册本身失败仍抛错 |
+| service | UserService（311） | 用户认证 + 管理员判定 + 改名后级联失效内容缓存（注入 ContentCache）；**三个敏感变更方法按异常类型拆 catch（T12）**——可预期拒绝（400/401/409）记 `WARNING` 无栈、真失败兜底 `SEVERE` + 栈；**`registerAndLogin`（T13，池 U-16 兜底）= 注册 + 自动登录编排**——自动登录失败不回抛，返回 `token=null` 的 LoginVO（注册已提交即算成功），注册本身失败仍抛错 |
 | dao | UserDao（275） | users 用户 CRUD + 角色查询（`findUsersByIds` T7 起带 `ORDER BY id`：关注/粉丝列表顺序由此保证，唯一调用方 FollowService）；T14 起内含从 `dao.ResultMap` 下沉的 `buildUserForLogin` / `buildUserForProfile` 两个 `private static` 行映射方法 |
 | model | entity/User（89）、dto/LoginDTO（28）/RegisterDTO（41）/ChangePasswordDTO（35）/ChangeUserNameDTO（15）、command/LoginCommand（63）/RegisterCommand（44）/ChangePasswordCommand（44）/LoginType（7）、vo/LoginVO（40） | 用户实体与请求/命令/响应对象 |
 
@@ -631,6 +632,26 @@ com.itheima/
   不属"包装点"，范围外。
 - **断言口径（T11-B）**：8 处均由 JUnit 断言"**恰一条**带堆栈记录、级别 `SEVERE`、根因类型 `SQLException`"
   （共享探针 `src/test/java/com/itheima/util/LogProbe` 新增 `stackedRecords()` / `assertExactlyOneStacked(...)`）；JUnit 616 → **620**。
+
+### 6.24 可预期业务拒绝的级别修正（日志第三张清单 T12）
+
+- **问题（NEEDS R-08 / R-18）**：`UserService` 的 `changePassword` / `changeUserName` / `changePhone` 三个敏感变更方法，
+  把业务方法内抛出的**可预期拒绝**（`ParamException` 400 / `PasswordIncorrectException` 401 / `ConflictException` 409）
+  与真失败一起收进同一个 `catch (BusinessException e)` → 记 **`SEVERE` + 堆栈** → 按 `log.error.level=SEVERE` 的阈值
+  **落进 `error.log`**（e2e 实测 401/409 各产生 46 行堆栈），与 `LOG_CONVENTION.md` §3.1 附加纪律 1（"**`SEVERE` 必须可行动**"）不符。
+- **判据与形态（2026-09-24 定案）**：**按异常类型拆 catch**（`instanceof` 分流已否决）——
+  `catch (ParamException | PasswordIncorrectException | ConflictException e)` → `WARNING`、只带业务标识 `userId`、**不带栈**；
+  原 `catch (BusinessException e)` 降为**兜底**（`UserNotFoundException` 401 与 `rows==0` 的 `DatabaseException` 等真失败仍 `SEVERE` + 堆栈）；
+  `catch (SQLException e)` 分支不变（"包装点即源头"，T11 口径）。异常类型 / 文案 / 控制流 / 对外响应 / 事务语义**零变化**。
+- **覆盖与边界**：三处均拆；`UploadController` 3 处 `catch (BusinessException e)` **只做文件清理、不记日志**（非同族偏差、不动）；
+  `UserService.registerAndLogin` 的兜底行（`WARNING` 无栈）与 `ExceptionFilter` 的结论行口径（`WARNING`）本即合规、不在范围；
+  `UserNotFoundException`（401）**仍按真失败**记 `SEVERE` + 栈——它是"令牌指向的用户已不存在"的数据异常，不属可预期拒绝。
+- **副作用（实测）**：400/401/409 **不再落 `error.log`**（该端阈值 `SEVERE`），改由 `system.log` 的 `WARNING` 结论行（源头）+ `WARNING` 结论行（`ExceptionFilter`）承载；
+  调用点 159 → **162**、SEVERE 63 → **60**、WARNING 84 → **87**（级别语义修正，无新增能力）。
+- **断言口径（T12）**：**JUnit**（`UserServiceTest` + `LogProbe`）——三方法各断言"可预期拒绝 `WARNING` 恰一条、带栈记录 **0** 条、`SEVERE` **0** 条"，
+  真失败（`rows==0`）断言 `assertExactlyOneStacked(..., SEVERE, ..., DatabaseException.class)`；**文件级分流**归 pytest
+  `src/test/python/test_log_outputs.py`（新增用例：401 / 400 / 409 各按 `req=` 定位 → `system.log` 有 `WARNING` 结论行且无堆栈续行、`error.log` 该 `req` **0 条**）。
+  判据唯一源 = `说明书/LOG_CONVENTION.md` §3.1 附加纪律 1。
 
 ## 七、API 接口清单
 

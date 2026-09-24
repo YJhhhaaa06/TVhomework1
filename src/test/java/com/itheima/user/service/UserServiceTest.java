@@ -474,4 +474,131 @@ class UserServiceTest {
         LogProbe.assertExactlyOneStacked(probe, Level.SEVERE,
                 "查询用户角色失败, userId=7", SQLException.class);
     }
+
+    // ------------------------------------------------------------------
+    // T12（log3-12）：可预期业务拒绝的级别修正——400/401/409 → WARNING 无栈（不再落 error.log）；
+    // 兜底真失败（UserNotFoundException / rows==0 的 DatabaseException）仍 SEVERE + 栈
+    // ------------------------------------------------------------------
+
+    @Test
+    void changePasswordExpectedRejectionsLogWarningWithoutStack() throws SQLException {
+        when(userDao.getUserForLoginById(conn, 7L)).thenReturn(loginUser("abc123"));
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        try {
+            // 401：旧密码错误（PasswordIncorrectException ⊂ AuthException）
+            assertThrows(PasswordIncorrectException.class, () -> service.changePassword(
+                    7L, new ChangePasswordCommand("13800000001", "old", "new1")));
+            // 400：手机号不匹配（ParamException）
+            assertThrows(ParamException.class, () -> service.changePassword(
+                    7L, new ChangePasswordCommand("13900000002", "abc123", "new1")));
+        } finally {
+            probe.detach();
+        }
+
+        assertEquals(List.of(
+                "修改密码失败（可预期拒绝）, userId=7",
+                "修改密码失败（可预期拒绝）, userId=7"), probe.messagesAtLevel(Level.WARNING),
+                "可预期拒绝（400/401）应各记一条 WARNING 结论行（带 userId 业务标识）");
+        assertTrue(probe.stackedRecords().isEmpty(), "可预期拒绝不得持栈（堆栈只留给真失败）");
+        assertTrue(probe.atLevel(Level.SEVERE).isEmpty(), "可预期拒绝不得再记 SEVERE（否则仍会落 error.log）");
+    }
+
+    @Test
+    void changePasswordRealFailureStillLogsSevereWithStack() throws SQLException {
+        when(userDao.getUserForLoginById(conn, 7L)).thenReturn(loginUser("abc123"));
+        when(userDao.updateUserPassword(eq(conn), eq(7L), anyString())).thenReturn(0);
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        try {
+            assertThrows(DatabaseException.class, () -> service.changePassword(
+                    7L, new ChangePasswordCommand("13800000001", "abc123", "new1")));
+        } finally {
+            probe.detach();
+        }
+
+        // T12 不破 T11 定栈：真失败（rows==0 → DatabaseException ⊂ ServerException，500 类）仍由兜底分支
+        // 记 SEVERE + 堆栈，且仍恰一条（ExceptionFilter 侧只有不带栈的结论行）
+        LogProbe.assertExactlyOneStacked(probe, Level.SEVERE,
+                "修改密码失败, userId=7", DatabaseException.class);
+    }
+
+    @Test
+    void changeUserNameConflictLogsWarningWithoutStack() throws SQLException {
+        when(userDao.isUserExist(conn, 7L)).thenReturn(true);
+        when(userDao.isUsernameUsed(conn, "newName")).thenReturn(true);
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        try {
+            // 409：用户名已被占用（ConflictException）
+            assertThrows(ConflictException.class, () -> service.changeUserName(7L, "newName"));
+        } finally {
+            probe.detach();
+        }
+
+        assertEquals(List.of("修改用户名失败（可预期拒绝）, userId=7"), probe.messagesAtLevel(Level.WARNING));
+        assertTrue(probe.stackedRecords().isEmpty(), "409 不得持栈");
+        assertTrue(probe.atLevel(Level.SEVERE).isEmpty(), "409 不得再记 SEVERE（否则仍会落 error.log）");
+    }
+
+    @Test
+    void changeUserNameRealFailureStillLogsSevereWithStack() throws SQLException {
+        when(userDao.isUserExist(conn, 7L)).thenReturn(true);
+        when(userDao.isUsernameUsed(conn, "newName")).thenReturn(false);
+        when(userDao.updateUserName(conn, 7L, "newName")).thenReturn(0);
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        try {
+            assertThrows(DatabaseException.class, () -> service.changeUserName(7L, "newName"));
+        } finally {
+            probe.detach();
+        }
+
+        LogProbe.assertExactlyOneStacked(probe, Level.SEVERE,
+                "修改用户名失败, userId=7", DatabaseException.class);
+    }
+
+    @Test
+    void changePhoneExpectedRejectionsLogWarningWithoutStack() throws SQLException {
+        User dbUser = new User(7L, "hash", "alice", "13800000001");
+        when(userDao.getUserForProfileById(conn, 7L)).thenReturn(dbUser);
+        when(userDao.isPhoneUsed(conn, "13900000002")).thenReturn(true);
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        try {
+            // 400：新手机号格式非法（InvalidPhoneException ⊂ ParamException）
+            assertThrows(InvalidPhoneException.class, () -> service.changePhone(7L, "13800000001", "123"));
+            // 400：新手机号与旧手机号相同（ParamException）
+            assertThrows(ParamException.class, () -> service.changePhone(7L, "13800000001", "13800000001"));
+            // 409：新手机号已被占用（DuplicatePhoneException ⊂ ConflictException）
+            assertThrows(DuplicatePhoneException.class, () -> service.changePhone(7L, "13800000001", "13900000002"));
+        } finally {
+            probe.detach();
+        }
+
+        assertEquals(List.of(
+                "修改手机号失败（可预期拒绝）, userId=7",
+                "修改手机号失败（可预期拒绝）, userId=7",
+                "修改手机号失败（可预期拒绝）, userId=7"), probe.messagesAtLevel(Level.WARNING));
+        assertTrue(probe.stackedRecords().isEmpty(), "可预期拒绝（400/409）不得持栈");
+        assertTrue(probe.atLevel(Level.SEVERE).isEmpty(), "可预期拒绝不得再记 SEVERE（否则仍会落 error.log）");
+    }
+
+    @Test
+    void changePhoneRealFailureStillLogsSevereWithStack() throws SQLException {
+        User dbUser = new User(7L, "hash", "alice", "13800000001");
+        when(userDao.getUserForProfileById(conn, 7L)).thenReturn(dbUser);
+        when(userDao.isPhoneUsed(conn, "13900000002")).thenReturn(false);
+        when(userDao.updateUserPhone(conn, 7L, "13900000002")).thenReturn(0);
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        try {
+            assertThrows(DatabaseException.class, () -> service.changePhone(7L, "13800000001", "13900000002"));
+        } finally {
+            probe.detach();
+        }
+
+        LogProbe.assertExactlyOneStacked(probe, Level.SEVERE,
+                "修改手机号失败, userId=7", DatabaseException.class);
+    }
 }

@@ -32,7 +32,7 @@ import uuid
 
 import requests
 
-from conftest import ACCESS_LOG_DIR, BASE_URL
+from conftest import ACCESS_LOG_DIR, BASE_URL, register_user
 
 # 结构化单行形态：ts=<ISO，3 位毫秒 + 带冒号时区> level=… logger=… [req=<16 位 hex> ]msg=…
 TS = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}"
@@ -279,3 +279,95 @@ def test_severe_request_correlates_across_three_outputs():
     access_line = wait_for_line("access.log*", lambda ln: home in ln)
     assert " path=/comment/show " in access_line, f"access 行 path 应为本次请求: {access_line[:200]}"
     assert " code=500 " in access_line, f"access 行结果码应为 500: {access_line[:200]}"
+
+
+# ---------------------------------------------------------------------------
+# ⑤ 可预期业务拒绝（T12）：WARNING 结论行只落 system.log、不进 error.log
+# ---------------------------------------------------------------------------
+
+def _register_disposable(prefix="testA_"):
+    """注册一次性测试用户（username 命中 cleanup_data 白名单，级联清理），返回 {id, username, token, phone}。"""
+    unique = uuid.uuid4().hex[:8]
+    phone = "138" + str(int(unique, 16))[-8:].zfill(8)
+    username = f"{prefix}{unique}"
+    body = register_user(username, phone, "abc123")
+    assert body.get("code") == 200, f"注册一次性用户失败: {body}"
+    data = body.get("data") or {}
+    return {"id": data.get("id"), "username": username, "token": data.get("token"), "phone": phone}
+
+
+def _req_of(user_id, path, code):
+    """按"本 run 新建用户的 id + 端点 + 结果码"定位该请求的 access 行并取出 `req=`（唯一串联键）。"""
+    line = wait_for_line(
+        "access.log*",
+        lambda ln: f" userId={user_id} " in ln and f" path={path} " in ln and f" code={code} " in ln,
+    )
+    match = REQ_RE.search(line)
+    assert match, f"access 行应带 req=: {line[:200]}"
+    return match.group(1)
+
+
+def _assert_rejection_warning_line(req_id, message):
+    """断言该 req 的**源头结论行**在 system.log 上存在、级别 WARNING、且**不带堆栈续行**。"""
+    line = wait_for_line("system.log*", lambda ln: f"req={req_id} " in ln and message in ln)
+    assert " level=WARNING " in line, f"可预期拒绝应记 WARNING（不得 SEVERE）: {line[:200]}"
+    assert " logger=com.itheima.user.service.UserService " in line, (
+        f"结论行应由业务类 logger 记（非 ExceptionFilter 侧）: {line[:200]}"
+    )
+    lines = read_lines(log_path("system.log*"))
+    following = lines[lines.index(line) + 1] if lines.index(line) + 1 < len(lines) else ""
+    assert following == "" or following.startswith("ts="), (
+        f"可预期拒绝记录不得带堆栈续行（否则仍是 SEVERE 口径）: {following[:120]}"
+    )
+
+
+def test_expected_rejections_are_warning_and_never_reach_error_output():
+    """T12：400 / 401 / 409 三个可预期业务拒绝各记一条 WARNING 结论行（system.log、不带栈），且**不落 error.log**。
+
+    改动前会红：旧口径这三条在 `UserService` 被记成 SEVERE + 堆栈 → error.log 里能按 `req=` 查到。
+    这里用"本 run 新建用户 id"定位 access 行取 req（**不用行号增量**，见模块 docstring）。
+    """
+    user = _register_disposable()
+    other = _register_disposable(prefix="testB_")
+    uid = user["id"]
+    assert uid, f"注册响应应含用户 id: {user}"
+
+    # 401：旧密码错误（PasswordIncorrectException ⊂ AuthException）
+    resp = requests.post(f"{BASE_URL}/user/changePassword",
+                         headers={"token": user["token"], "Content-Type": "application/json"},
+                         json={"phone": user["phone"], "oldPassword": "wrong001", "newPassword": "xyz789"},
+                         timeout=10)
+    assert resp.json().get("code") == 401, f"旧密码错误应回 401: {resp.json()}"
+    req_401 = _req_of(uid, "/user/changePassword", 401)
+
+    # 400：手机号不匹配（ParamException）——生成号为 139 开头，必不等于本人 138 号
+    other_phone = "139" + str(int(uuid.uuid4().hex[:8], 16))[-8:].zfill(8)
+    assert other_phone != user["phone"], "生成的手机号必须与本人不同"
+    resp = requests.post(f"{BASE_URL}/user/changePassword",
+                         headers={"token": user["token"], "Content-Type": "application/json"},
+                         json={"phone": other_phone, "oldPassword": "abc123", "newPassword": "xyz789"},
+                         timeout=10)
+    assert resp.json().get("code") == 400, f"手机号不匹配应回 400: {resp.json()}"
+    req_400 = _req_of(uid, "/user/changePassword", 400)
+
+    # 409：改名撞名（ConflictException）
+    resp = requests.post(f"{BASE_URL}/user/changeUserName",
+                         headers={"token": user["token"], "Content-Type": "application/json"},
+                         json={"userName": other["username"]}, timeout=10)
+    assert resp.json().get("code") == 409, f"改名撞名应回 409: {resp.json()}"
+    req_409 = _req_of(uid, "/user/changeUserName", 409)
+
+    # 先证"请求确实发生且落了盘"（否则下面的"未泄漏"会静默空过）
+    _assert_rejection_warning_line(req_401, f"修改密码失败（可预期拒绝）, userId={uid}")
+    _assert_rejection_warning_line(req_400, f"修改密码失败（可预期拒绝）, userId={uid}")
+    _assert_rejection_warning_line(req_409, f"修改用户名失败（可预期拒绝）, userId={uid}")
+
+    # 三条可预期拒绝都不得进 error.log（该端阈值 SEVERE，进即被记成 SEVERE）；按 req 定位、不依赖行号增量
+    err_path = log_path("error.log*")
+    assert err_path, f"error.log 未生成（目录 {ACCESS_LOG_DIR}），本断言无从证伪"
+    leaked = [ln for ln in read_lines(err_path)
+              if any(f"req={r} " in ln for r in (req_401, req_400, req_409))]
+    assert not leaked, (
+        f"可预期业务拒绝（400/401/409）不得落 error.log（T12）共 {len(leaked)} 条，"
+        f"前 2 条: {[ln[:160] for ln in leaked[:2]]}"
+    )
