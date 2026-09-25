@@ -269,13 +269,13 @@ public class ContentDao {
         String sql;
         boolean singleChar = kw.length() == 1;
         if (singleChar) {
-            sql = "SELECT c.id FROM content c WHERE c.title LIKE ? AND c.is_deleted = 0 ORDER BY c.create_time DESC LIMIT ?,?";
+            sql = "SELECT c.id FROM content c WHERE c.title LIKE ? AND c.is_deleted = 0 ORDER BY c.create_time DESC, c.id DESC LIMIT ?,?";
         } else {
             sql = """
                     SELECT c.id FROM content c
                     WHERE MATCH(c.title, c.description) AGAINST (? IN NATURAL LANGUAGE MODE)
                       AND c.is_deleted = 0
-                    ORDER BY c.create_time DESC
+                    ORDER BY c.create_time DESC, c.id DESC
                     LIMIT ?,?
                     """;
         }
