@@ -49,6 +49,7 @@ SUBCOMMANDS = [
     ("init-test-db", "tools/init_test_db.py", "重建测试库（固定 test 环境）"),
     ("test", "tools/run_tests_report.py", "跑测试（默认 all；固定 test 环境）"),
     ("cleanup-orphan-media", "tools/cleanup_orphan_media.py", "孤儿媒体回收（仅 prod 环境）"),
+    ("log-report", "tools/log_report.py", "日志消费报告（只读；req 追溯 / 耗时 / 错误率）"),
 ]
 CMD_TO_SCRIPT = {name: rel for name, rel, _ in SUBCOMMANDS}
 CMD_TO_DESC = {name: desc for name, _, desc in SUBCOMMANDS}

@@ -1,7 +1,15 @@
 package com.itheima.controller;
 
+import com.itheima.exception.ErrorCode;
+import com.itheima.util.LogContext;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.mock;
@@ -128,5 +136,46 @@ class BaseServletUtilTest {
         assertEquals(51, BaseServletUtil.parsePageSize(reqWithPageSize("51"), MAX, DEFAULT));
         // 小信封仍生效（pytest 三域"页间不重不漏"的验证能力依赖此路径）
         assertEquals(1, BaseServletUtil.parsePageSize(reqWithPageSize("1"), MAX, DEFAULT));
+    }
+
+    // ---------- 结果码收口（T3 log-03，D5） ----------
+
+    @Test
+    void writeSuccessRecordsBodyCodeIntoLogContext() throws Exception {
+        HttpServletResponse resp = mock(HttpServletResponse.class);
+        when(resp.getWriter()).thenReturn(new PrintWriter(new StringWriter()));
+        try {
+            BaseServletUtil.writeSuccess(resp, Map.of("k", "v"));
+
+            assertEquals(200, LogContext.getResultCode(), "writeSuccess 的 body code 恒为 200（ResultUtil.success）");
+        } finally {
+            LogContext.clear();
+        }
+    }
+
+    @Test
+    void writeErrorRecordsErrorCodeIntoLogContext() throws Exception {
+        HttpServletResponse resp = mock(HttpServletResponse.class);
+        when(resp.getWriter()).thenReturn(new PrintWriter(new StringWriter()));
+        try {
+            // int 形态
+            BaseServletUtil.writeError(resp, 409, "冲突");
+            assertEquals(409, LogContext.getResultCode());
+
+            // 枚举 + 自定义消息形态（委托 int 形态，收口不重开路径）
+            BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "x");
+            assertEquals(404, LogContext.getResultCode());
+
+            // 枚举缺省消息形态
+            BaseServletUtil.writeError(resp, ErrorCode.FORBIDDEN);
+            assertEquals(403, LogContext.getResultCode());
+        } finally {
+            LogContext.clear();
+        }
+    }
+
+    @AfterEach
+    void clearLogContextAfterEach() {
+        LogContext.clear();
     }
 }

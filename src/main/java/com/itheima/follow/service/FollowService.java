@@ -60,6 +60,8 @@ public class FollowService {
                 throw new ServerException("关注失败");
             }
         });
+        // 里程碑（T9）：关系状态迁移（关注）——DB 已提交即记；置于缓存双写之前
+        LOGGER.log(Level.INFO, "关注成功, userId=" + userId + ", followedUserId=" + followedUserId);
         // DB 提交后缓存双写（NEEDS 4.10：MULTI 原子，失败双 DEL 自愈，不影响主流程）
         followCache.cacheFollow(userId, followedUserId);
     }
@@ -115,6 +117,9 @@ public class FollowService {
             try {
                 return userDao.findUsersByIds(conn, ids);
             } catch (SQLException e) {
+                // T11-B：包装点即源头——本行是该链唯一带堆栈记录（LOG_CONVENTION §3.1 附加纪律 2）；
+                // 只记 ids 规模，不记具体 id 列表
+                LOGGER.log(Level.SEVERE, "用户批量查询失败, ids=" + ids.size(), e);
                 throw new ServerException("查询失败");
             }
         });
@@ -180,6 +185,8 @@ public class FollowService {
                 throw new ServerException("取关失败");
             }
         });
+        // 里程碑（T9）：关系状态迁移（取关）——口径同 follow
+        LOGGER.log(Level.INFO, "取关成功, userId=" + userId + ", followedUserId=" + followedUserId);
         // DB 提交后缓存双写（SREM，失败双 DEL 自愈，不影响主流程）
         followCache.cacheUnfollow(userId, followedUserId);
     }

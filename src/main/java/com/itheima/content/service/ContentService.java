@@ -205,6 +205,9 @@ public class ContentService {
                 throw new ServerException("数据库写入失败");
             }
         });
+        // 里程碑（T9）：发布成功 = DB 已提交（置于缓存同步之前——"内容已产生"即成功，
+        // 缓存写失败另记 WARNING 且读自愈，不影响本条语义）
+        LOGGER.log(Level.INFO, "添加视频成功, contentId=" + videoId + ", userId=" + uc.getUserId());
         // 事务提交后写 Redis 内容缓存（H3 修复：缓存写入不在事务内）
         contentCache.addContent(videoId);
         return videoId;
@@ -227,6 +230,8 @@ public class ContentService {
                 throw new ServerException("数据库写入失败");
             }
         });
+        // 里程碑（T9）：发布成功 = DB 已提交（口径同 addVideo）
+        LOGGER.log(Level.INFO, "添加动态成功, contentId=" + contentId + ", userId=" + uc.getUserId());
         // 事务提交后写 Redis 内容缓存（H3 修复：缓存写入不在事务内）
         contentCache.addContent(contentId);
         return contentId;
@@ -376,6 +381,9 @@ public class ContentService {
                 throw new ServerException("数据库写入失败");
             }
         });
+        // 里程碑（T9）：作者删除作品（软删、不可恢复）= 状态迁移；同样置于缓存同步之前
+        // （缓存失效失败另有 WARNING、读自愈路径，不影响"删除已落库"这一事实）
+        LOGGER.log(Level.INFO, "删除内容成功, contentId=" + contentId + ", userId=" + userId);
         // 缓存同步放事务提交后：
         // 新内容缓存：失效内容 key + 索引剔除（读自愈 404）
         contentCache.removeContent(contentId);

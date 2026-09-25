@@ -8,6 +8,8 @@ import com.itheima.cache.SingleFlight;
 import com.itheima.comment.dao.CommentDao;
 import com.itheima.content.model.cache.CommentCacheDTO;
 import com.itheima.exception.CacheException;
+import com.itheima.util.LogProbe;
+import com.itheima.util.LogUtil;
 import com.itheima.util.TransactionTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,6 +19,8 @@ import java.sql.SQLException;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -151,6 +155,27 @@ class CommentCacheTest {
         List<CommentCacheDTO> tree = cache.getFullTree(4L);
 
         assertEquals(3, tree.get(0).getReplyCount(), "缺省数组带 replyCount（DB reply_count 字段）");
+    }
+
+    @Test
+    void getFullTreeDbFailureLogsSingleStackTraceAtWrapperPoint() throws SQLException {
+        // T11 定栈：DAO 失败 → 包装点（catch (SQLException)）持**唯一**带栈记录；吸收点结论行只记结论
+        when(commentDao.getComments(conn, 4L)).thenThrow(new SQLException("db down"));
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(CommentCache.class));
+        try {
+            assertNull(cache.getFullTree(4L));
+        } finally {
+            probe.detach();
+        }
+
+        List<LogRecord> stacked = probe.records().stream().filter(r -> r.getThrown() != null).toList();
+        assertEquals(1, stacked.size(), () -> "同一失败只允许一条带堆栈记录: " + probe.records());
+        assertEquals(Level.SEVERE, stacked.getFirst().getLevel());
+        assertEquals("评论树 DB 查询失败, contentId=4", stacked.getFirst().getMessage());
+
+        List<LogRecord> plain = probe.records().stream().filter(r -> r.getThrown() == null).toList();
+        assertEquals(1, plain.size(), () -> "应有且仅有一条结论行: " + probe.records());
+        assertTrue(plain.getFirst().getMessage().contains("按无评论处理"), "结论行保留语义文案");
     }
 
     // ==================== 楼中楼懒载（HMGET field 缺失 → 单飞 DB 分组回填） ====================

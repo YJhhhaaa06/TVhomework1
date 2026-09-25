@@ -3,6 +3,8 @@ package com.itheima.coupon.service;
 import com.itheima.coupon.dao.CouponDao;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.ServerException;
+import com.itheima.util.LogProbe;
+import com.itheima.util.LogUtil;
 import com.itheima.util.TransactionTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -13,6 +15,7 @@ import java.sql.SQLException;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.logging.Level;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -81,14 +84,32 @@ class CouponServiceTest {
         doThrow(new SQLException("db error", "08001", 9999))
                 .when(couponDao).insertOrder(eq(conn), eq(3L), eq(7L), anyString());
 
-        assertThrows(ServerException.class, () -> service.grabCoupon(3L, 7L));
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(CouponService.class));
+        try {
+            assertThrows(ServerException.class, () -> service.grabCoupon(3L, 7L));
+        } finally {
+            probe.detach();
+        }
+
+        // T11-B：包装点即源头——内层 catch（1062 之外）是"下单 SQL 失败"链唯一带堆栈记录
+        LogProbe.assertExactlyOneStacked(probe, Level.SEVERE,
+                "抢购失败, couponId=3, userId=7", SQLException.class);
     }
 
     @Test
     void grabCouponDeductStockSqlErrorThrowsServerException() throws SQLException {
         when(couponDao.deductStock(conn, 3L)).thenThrow(new SQLException("db down"));
 
-        assertThrows(ServerException.class, () -> service.grabCoupon(3L, 7L));
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(CouponService.class));
+        try {
+            assertThrows(ServerException.class, () -> service.grabCoupon(3L, 7L));
+        } finally {
+            probe.detach();
+        }
+
+        // T11-B：包装点即源头——外层 catch 是"扣库存 SQL 失败"链唯一带堆栈记录
+        LogProbe.assertExactlyOneStacked(probe, Level.SEVERE,
+                "抢购失败, couponId=3, userId=7", SQLException.class);
         verify(couponDao, never()).insertOrder(any(), anyLong(), anyLong(), anyString());
     }
 
@@ -119,7 +140,16 @@ class CouponServiceTest {
     void listAvailableCouponsSqlErrorThrowsServerException() throws SQLException {
         when(couponDao.findAvailableCoupons(conn)).thenThrow(new SQLException("db down"));
 
-        assertThrows(ServerException.class, () -> service.listAvailableCoupons());
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(CouponService.class));
+        try {
+            assertThrows(ServerException.class, () -> service.listAvailableCoupons());
+        } finally {
+            probe.detach();
+        }
+
+        // T11-B：包装点即源头
+        LogProbe.assertExactlyOneStacked(probe, Level.SEVERE,
+                "优惠券列表查询失败", SQLException.class);
     }
 
     // ===== listMyCoupons =====
@@ -149,6 +179,15 @@ class CouponServiceTest {
     void listMyCouponsSqlErrorThrowsServerException() throws SQLException {
         when(couponDao.findOrdersByUserId(conn, 7L)).thenThrow(new SQLException("db down"));
 
-        assertThrows(ServerException.class, () -> service.listMyCoupons(7L));
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(CouponService.class));
+        try {
+            assertThrows(ServerException.class, () -> service.listMyCoupons(7L));
+        } finally {
+            probe.detach();
+        }
+
+        // T11-B：包装点即源头
+        LogProbe.assertExactlyOneStacked(probe, Level.SEVERE,
+                "我的优惠券查询失败, userId=7", SQLException.class);
     }
 }

@@ -156,7 +156,7 @@
                                 <exclude>**/MyConnectionPoolTest.java</exclude>
                             </excludes>
                             <environmentVariables>
-                                <LOG_PATH>target/test-logs</LOG_PATH>
+                                <LOG_PATH>${stage8.buildDir}/test-logs/system.log</LOG_PATH>
                             </environmentVariables>
                         </configuration>
                     </execution>
@@ -171,7 +171,7 @@
                                 <include>**/MyConnectionPoolTest.java</include>
                             </includes>
                             <environmentVariables>
-                                <LOG_PATH>target/test-logs</LOG_PATH>
+                                <LOG_PATH>${stage8.buildDir}/test-logs/system.log</LOG_PATH>
                                 <DB_POOL_INITSIZE>1</DB_POOL_INITSIZE>
                                 <DB_POOL_MAXSIZE>1</DB_POOL_MAXSIZE>
                                 <DB_POOL_TIMEOUTMS>500</DB_POOL_TIMEOUTMS>

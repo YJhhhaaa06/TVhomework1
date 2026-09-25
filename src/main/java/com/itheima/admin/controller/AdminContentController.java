@@ -7,6 +7,7 @@ import com.itheima.exception.ErrorCode;
 import com.itheima.ioc.annotation.Inject;
 import com.itheima.admin.model.vo.AdminContentVO;
 import com.itheima.content.service.ContentService;
+import com.itheima.util.AuditLog;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServletRequest;
@@ -46,11 +47,16 @@ public class AdminContentController extends BaseServlet {
             Long contentId = parseContentId(req, resp);
             if (contentId == null) return;
             contentService.hideContent(contentId);
+            // 审计（T8）：成功路径留痕——操作者取 LoginFilter 放入的 userId attribute（恒为 Long）：
+            // AuthFilter 对 /api/admin 已先判非空、且自身也做同款 (Long) 强转，故类型漂移会先在 filter 层
+            // 暴露（与全仓各 controller 同款直取，不另加 instanceof 分支）；写失败由 AuditLog 吞掉降级
+            AuditLog.success("admin.content.hide", (Long) req.getAttribute("userId"), "contentId:" + contentId);
             BaseServletUtil.writeSuccess(resp, "下架成功");
         } else if ("/unhide".equals(action)) {
             Long contentId = parseContentId(req, resp);
             if (contentId == null) return;
             contentService.unhideContent(contentId);
+            AuditLog.success("admin.content.unhide", (Long) req.getAttribute("userId"), "contentId:" + contentId);
             BaseServletUtil.writeSuccess(resp, "恢复成功");
         } else {
             BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "未识别功能");

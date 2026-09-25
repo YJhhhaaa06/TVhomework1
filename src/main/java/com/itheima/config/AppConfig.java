@@ -206,7 +206,11 @@ public final class AppConfig {
         return Boolean.parseBoolean(get("ioc.failFast"));
     }
 
-    // ===== 日志 =====
+    // ===== 日志（T1 log-01：输出端表 + 轮转参数）=====
+
+    // 下列键在 app.properties 中均已给出，此处**仍带默认值**——与 db.*/redis.* 的 fail-fast 不同，
+    // 日志配置缺失不得让应用起不来（对齐 LogUtil"某一路输出不可用即降级"的容错口径）。
+    // 注意 getInt/get 语义：键**存在但值非法**照旧抛（fail-fast），只有"键缺失或为空"才取默认值。
 
     public static String getLogFile() {
         return get("log.file");
@@ -214,5 +218,39 @@ public final class AppConfig {
 
     public static String getLogLevel() {
         return get("log.level");
+    }
+
+    /** 错误输出端文件名：相对值只取文件名，目录与 {@code log.file} 相同（口径见 LogUtil 类注释）。 */
+    public static String getLogErrorFile() {
+        return get("log.error.file", "error.log");
+    }
+
+    public static String getLogErrorLevel() {
+        return get("log.error.level", "SEVERE");
+    }
+
+    /** 访问输出端文件名：相对值只取文件名，目录与 {@code log.file} 相同（口径见 LogUtil 类注释）。 */
+    public static String getLogAccessFile() {
+        return get("log.access.file", "access.log");
+    }
+
+    /** 审计输出端文件名（T8）：相对值只取文件名，目录与 {@code log.file} 相同（口径见 LogUtil 类注释）。 */
+    public static String getLogAuditFile() {
+        return get("log.audit.file", "audit.log");
+    }
+
+    /** 慢请求阈值（毫秒）：访问日志行 {@code cost >=} 此值 时带 {@code slow=1} 标记（D7 性能观测）。 */
+    public static int getLogSlowRequestMs() {
+        return getInt("log.slowRequestMs", 1000);
+    }
+
+    /** 单文件大小上限（字节）；{@code <=0} 视为不轮转。 */
+    public static int getLogMaxBytes() {
+        return getInt("log.maxBytes", 10 * 1024 * 1024);
+    }
+
+    /** 轮转保留的文件个数（含当前写入文件）。 */
+    public static int getLogFileCount() {
+        return getInt("log.fileCount", 5);
     }
 }

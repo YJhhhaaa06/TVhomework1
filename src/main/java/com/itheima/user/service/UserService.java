@@ -55,6 +55,9 @@ public class UserService {
             try {
                 return userDao.getUserForLoginById(conn, id);
             } catch (SQLException e) {
+                // T11 定栈：本行是该链（按 id 登录）的**唯一带堆栈记录**（包装点即源头；
+                // 上层 registerAndLogin 的兜底结论行只记结论、不带栈）
+                LOGGER.log(Level.SEVERE, "登录失败（按 id 查询用户）, userId=" + id, e);
                 throw new DatabaseException("登录失败", e);
             }
         });
@@ -66,6 +69,9 @@ public class UserService {
             try {
                 return userDao.getUserForLoginByPhone(conn, phone);
             } catch (SQLException e) {
+                // T11 定栈：本行是该链（按手机号登录）的**唯一带堆栈记录**；手机号走统一脱敏出口（LOG_CONVENTION §3.7）
+                LOGGER.log(Level.SEVERE, "登录失败（按手机号查询用户）, phone="
+                        + StringUtil.maskForLog("phone", phone), e);
                 throw new DatabaseException("登录失败", e);
             }
         });
@@ -83,7 +89,11 @@ public class UserService {
         if (!PasswordUtil.isPasswordCorrect(rawPassword, user.getHashedPassword())) {
             throw new PasswordIncorrectException();
         }
-        return JwtUtil.generateToken(user.getId());
+        String token = JwtUtil.generateToken(user.getId());
+        // 里程碑（T9）：登录成功。**只记 userId**——账号（手机号）与 token 一律不落盘
+        //（唯一出口 = LogUtil.getLogger → system.log；请求关联 req= 由 LogFormatter 前缀给）
+        LOGGER.log(Level.INFO, "登录成功, userId=" + user.getId());
+        return token;
     }
 
 
@@ -103,7 +113,8 @@ public class UserService {
             return login(id, rc.getPassword());
         } catch (BusinessException e) {
             // 注册已提交：不能把自动登录失败报成注册失败；留痕不静默
-            LOGGER.log(Level.WARNING, "注册后自动登录失败, userId=" + id + ", 改为提示手动登录", e);
+            // T11 定栈：本行只记结论（不带栈）——堆栈由包装点持有（login 的 catch (SQLException) / TransactionTemplate）
+            LOGGER.log(Level.WARNING, "注册后自动登录失败, userId=" + id + ", 改为提示手动登录");
             return new LoginVO(id, rc.getUsername(), null);
         }
     }
@@ -114,7 +125,7 @@ public class UserService {
         String phone=rc.getPhone();
         String password=rc.getPassword();
         String hashedPassword=PasswordUtil.hashPassword(password);
-        return transactionTemplate.execute(conn -> {
+        long id = transactionTemplate.execute(conn -> {
             if(userDao.isPhoneUsed(conn,phone)){
                 throw new DuplicatePhoneException();
             }
@@ -124,10 +135,14 @@ public class UserService {
             try {
                 return userDao.addUser(conn, username, hashedPassword, phone);
             } catch (SQLException e) {
-                LOGGER.log(Level.SEVERE, "用户注册失败, phone=" + StringUtil.maskPhone(phone), e);
+                // 手机号走统一脱敏出口（LOG_CONVENTION §3.7）：绝不允许明文落盘
+                LOGGER.log(Level.SEVERE, "用户注册失败, phone=" + StringUtil.maskForLog("phone", phone), e);
                 throw new ServerException("服务器异常");
             }
         });
+        // 里程碑（T9）：注册已提交 = 账号创建成功；失败路径不记（异常已抛出，无 INFO 可达）
+        LOGGER.log(Level.INFO, "用户注册成功, userId=" + id);
+        return id;
     }
 //
 
@@ -143,7 +158,14 @@ public class UserService {
             try {
                 doChangePassword(conn, userId, phone, oldPassword, newPassword);
                 return null;
+            } catch (ParamException | PasswordIncorrectException | ConflictException e) {
+                // T12：可预期业务拒绝（400 / 401 / 409）→ WARNING 且**不带栈**（LOG_CONVENTION §3.1 附加纪律 1）；
+                // 结论行由 ExceptionFilter 的 BusinessException 分支承载，此处只补上层拿不到的业务标识 userId
+                //（"同一失败只有一条带堆栈记录"不破——本分支不持栈，带栈记录只留给真失败）
+                LOGGER.log(Level.WARNING, "修改密码失败（可预期拒绝）, userId=" + userId);
+                throw e;
             } catch (BusinessException e) {
+                // T12：兜底真失败（本链的 UserNotFoundException 与 rows==0 的 DatabaseException）→ 仍 SEVERE + 堆栈（本链唯一带栈记录）
                 LOGGER.log(Level.SEVERE, "修改密码失败, userId=" + userId, e);
                 throw e;
             } catch (SQLException e) {
@@ -151,6 +173,8 @@ public class UserService {
                 throw new DatabaseException("修改密码失败", e);
             }
         });
+        // 审计（T8）：事务提交成功即留痕；操作者 = 方法入参 userId（用户侧敏感变更，无 HTTP 操作者参数）
+        AuditLog.success("user.changePassword", userId, "userId:" + userId);
     }
     private void doChangePassword(Connection conn,  long userId,String phone, String oldPassword, String newPassword) throws SQLException {
 
@@ -187,7 +211,12 @@ public class UserService {
             try {
                 doChangeUserName(conn, userId, newName);
                 return null;
+            } catch (ParamException | PasswordIncorrectException | ConflictException e) {
+                // T12：可预期业务拒绝（409 用户名已被占用等）→ WARNING 不带栈（判据/口径同 changePassword）
+                LOGGER.log(Level.WARNING, "修改用户名失败（可预期拒绝）, userId=" + userId);
+                throw e;
             } catch (BusinessException e) {
+                // T12：兜底真失败（本链的 UserNotFoundException 与 rows==0 的 DatabaseException）→ 仍 SEVERE + 堆栈（本链唯一带栈记录）
                 LOGGER.log(Level.SEVERE, "修改用户名失败, userId=" + userId, e);
                 throw e;
             } catch (SQLException e) {
@@ -195,6 +224,8 @@ public class UserService {
                 throw new DatabaseException("修改用户名失败", e);
             }
         });
+        // 审计（T8）：事务提交成功即留痕（置于缓存级联失效之前——"变更已落库"即成功）
+        AuditLog.success("user.changeUserName", userId, "userId:" + userId);
         // DB 提交后级联失效该作者内容缓存 key；失败不抛（缓存仅作加速器，TTL 自愈）
         contentCache.invalidateAuthorContentKeys(userId);
     }
@@ -203,7 +234,12 @@ public class UserService {
             try {
                 doChangePhone(conn, userId, oldPhone, newPhone);
                 return null;
+            } catch (ParamException | PasswordIncorrectException | ConflictException e) {
+                // T12：可预期业务拒绝（400 格式/同号等、409 手机号已被占用）→ WARNING 不带栈（判据/口径同 changePassword）
+                LOGGER.log(Level.WARNING, "修改手机号失败（可预期拒绝）, userId=" + userId);
+                throw e;
             } catch (BusinessException e) {
+                // T12：兜底真失败（本链的 UserNotFoundException 与 rows==0 的 DatabaseException）→ 仍 SEVERE + 堆栈（本链唯一带栈记录）
                 LOGGER.log(Level.SEVERE, "修改手机号失败, userId=" + userId, e);
                 throw e;
             } catch (SQLException e) {
@@ -211,6 +247,8 @@ public class UserService {
                 throw new DatabaseException("修改手机号失败", e);
             }
         });
+        // 审计（T8）：事务提交成功即留痕（操作者 = 入参 userId）；**不记新旧手机号明文**
+        AuditLog.success("user.changePhone", userId, "userId:" + userId);
     }
 
     private void doChangeUserName(Connection conn, long userId, String newName) throws SQLException {
@@ -263,6 +301,8 @@ public class UserService {
             try {
                 return userDao.getUserRole(conn, userId) == 1;
             } catch (SQLException e) {
+                // T11-B：包装点即源头——本行是该链唯一带堆栈记录（LOG_CONVENTION §3.1 附加纪律 2）
+                LOGGER.log(Level.SEVERE, "查询用户角色失败, userId=" + userId, e);
                 throw new DatabaseException("查询用户角色失败", e);
             }
         });

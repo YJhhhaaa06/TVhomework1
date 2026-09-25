@@ -48,7 +48,7 @@ python tools\run_tests.py stop     # 只关停独立 Tomcat
 python tools\tv.py                               # 帮助 + 当前环境（tools/env/active.conf）
 python tools\tv.py env test|prod                 # 持久切换环境（复制覆盖 active.conf）
 python tools\tv.py --env test|prod <子命令>      # 本次命令临时用指定环境（不写盘）
-python tools\tv.py admin|cleanup|integrity|backup|init-test-db|test|cleanup-orphan-media [参数...]
+python tools\tv.py admin|cleanup|integrity|backup|init-test-db|test|cleanup-orphan-media|log-report [参数...]
 ```
 
 手动运维脚本（admin / cleanup / integrity / backup）默认连接**当前激活环境**（默认 test 测试库 3307），不再默认生产库；生产操作需先 `tv.py env prod`（持久）或 `--env prod`（临时）并在写操作时二次确认。测试库口令在 `tools/env/test.conf`（追踪）；生产口令放 `tools/env/prod.conf`（.gitignore 排除，模板 `prod.conf.example`）。`init-test-db` 与 `test` 固定测试库、拒绝 prod 语境；`cleanup-orphan-media` 仅允许 prod 语境（T2 起测试/生产媒体目录已隔离，本工具为保护真实内容的回收工具）。
@@ -89,7 +89,7 @@ python tools\tv.py admin|cleanup|integrity|backup|init-test-db|test|cleanup-orph
 | C2 | 需要经 HTTP 入口（鉴权/过滤器/参数解析），或依赖真实堆栈副作用（落库/缓存/文件/跨接口可见性）才能断言？ | → pytest                             |
 | C3 | C1、C2 都命中？                                                | → **按行为拆分**，每条子断言重走 C1/C2 单选，分别进两份文件 |
 
-规则：**同一条断言的意图永远只有唯一归属**；多选仅发生在"需求跨层"（同一需求既有纯逻辑契约又有跨层副作用时拆两份文件），绝不允许同一断言重复覆盖。示例：JUnit 不写 401/400（HTTP 入口归 pytest）；pytest 不重复归一化计算（逻辑契约归 JUnit）。
+规则：**同一条断言的意图永远只有唯一归属**；多选仅发生在"需求跨层"（同一需求既有纯逻辑契约又有跨层副作用时拆两份文件），绝不允许同一断言重复覆盖。示例：JUnit 不写 401/400（HTTP 入口归 pytest）；pytest 不重复归一化计算（逻辑契约归 JUnit）。日志类断言同理（T4 日志体系）：格式串 / 装配 / 轮转参数 → JUnit；"真实请求是否落盘、输出端之间是否串通、跨文件能否按 `req=` 串联" → pytest（读落盘文件，写法见 §4.5）。
 
 ### 0.3 实测用例基数（2026-09-01）
 
@@ -128,6 +128,7 @@ python tools\tv.py admin|cleanup|integrity|backup|init-test-db|test|cleanup-orph
 | 测试代码           | 项目 `src\test\python`                                                                      | 无                     | pytest 用例 + conftest.py + pytest.ini                       |
 
 > 覆盖机制：上述路径均可在 `tools/run_tests*.py` 中通过同名 `TV_*` 环境变量覆盖（T1 落地，与 conftest.py 的 TV\_BASE\_URL 等先例一致）。HTTP 端口 18080/shutdown 18005 属安全隔离设计，**不可覆盖**。
+> 两个超时旋钮同样可覆盖：`TV_START_TIMEOUT`（就绪等待上限，默认 **180s**，T10）/ `TV_PYTEST_TIMEOUT`（pytest 整体刹车，默认 60s，T2）——见 §三 退出码 6 / 11。
 
 外部服务依赖：生产库 MySQL80（TVDatabase:3306）+ **独立测试库 Docker MySQL8.4（TVDatabase\_test:3307）** + Redis，均需运行中。
 
@@ -145,7 +146,7 @@ python tools\run_tests.py test     # 只跑 pytest（要求 18080 已就绪）
 python tools\run_tests.py stop     # 只关停独立 Tomcat
 ```
 
-`all` 的典型耗时约 30\~35 秒：打包约 2 秒，Tomcat 启动约 16 秒，pytest 约 3 秒，关停约 5 秒。
+`all` 的典型耗时约 **2 分钟**（2026-09-23 T10 实测：连续 3 次 `test all` 的分段耗时 = 打包 12\~26s / Tomcat 就绪（多数走重展开路径）40\~46s / pytest 34\~42s / 关停 8\~10s）。⚠️ 旧文记的「约 30\~35 秒：打包 2 秒、启动 16 秒、pytest 3 秒」是更早窗口（构建/部署目录在仓库外）的口径，与本机现状不符，已作废。
 
 ### 退出码约定
 
@@ -163,7 +164,7 @@ python tools\run_tests.py stop     # 只关停独立 Tomcat
 | 11    | pytest 执行超时（默认 60s，`TV_PYTEST_TIMEOUT` 可覆盖）被强制终止 |
 | 12    | 媒体目录门禁拒绝（破坏权只信任硬编码白名单，任一失败 exit 12）：① 移动源（归一化后）不等于 run_tests.py 硬编码的 `DEFAULT_TEST_MEDIA_ROOT`（白名单）——env 覆盖到任何其它目录均无法移动、无人工确认通道；② 移动源命中生产媒体根（app.properties upload.path / 默认生产 stone 或其子目录）——白名单被人工改动指向生产时的第二道保险；③ 回收站落点（`TEST_TRASH_ROOT`）命中生产根或与移动源重叠/嵌套 |
 
-> 补充（哪类失败本就快，T2 于 2026-09-05 确认）：Maven 编译失败与 Tomcat 提前退出本就秒级失败（exit = mvn 返回码 / 5，不空等）；10 号专门解决「DB/Redis 未就绪导致应用不就绪的空等」；90s 就绪超时（6）保留为兜底。
+> 补充（哪类失败本就快，T2 于 2026-09-05 确认）：Maven 编译失败与 Tomcat 提前退出本就秒级失败（exit = mvn 返回码 / 5，不空等）；10 号专门解决「DB/Redis 未就绪导致应用不就绪的空等」；就绪超时（6）保留为兜底，上限**默认 180s、`TV_START_TIMEOUT` 可覆盖**（T10，2026-09-23：原 90s 仅最慢通过样本的 1.4 倍、落在实测抖动带内，会造成 `test all` 偶发"等待超时"假失败）。
 
 ***
 
@@ -186,6 +187,8 @@ pytest 阶段有整体超时刹车（T2，2026-09-05）：`subprocess.run(timeou
 - 把包装进程 PID 写入 `CATALINA_BASE\logs\tomcat.pid`。
 
 - 轮询 `http://127.0.0.1:18080/start`，就绪后返回。
+
+- **就绪等待上限**（T10，2026-09-23）：**每 2s 探测一次**，上限**默认 180s**（`TV_START_TIMEOUT` 可覆盖）；到点仍未就绪 → `stop` + `exit 6`（退出码口径不变，日志仍为 `等待超时（<上限>s）`）。默认值依据 = **全量 `run.log` 实测（45 个就绪样本，三带分布）**：**40.1\~45.3s ×23**（主流，推断为 Tomcat 重展开 `webapps/ROOT` —— war 每次重建、约 8.2MB / 数百文件）/ **61.0\~65.4s ×4**（慢时段）/ **6.0\~6.6s ×18**（Tomcat 命中复用、未重展开）/ 1 次 **>90s** 触顶（即 T10 要消除的那次假失败）；**180s ≈ 最慢通过样本（65.4s）的 2.8 倍**，已落在抖动带之外（旧值 90s 仅 1.4 倍、正卡带内）。⚠️ "是否重展开"由 Tomcat 自己的 mtime 比较决定（两带并存），本窗口未追根因——不影响取值：上限要覆盖的是**慢带**。
 
 - **启动前环境预检**（T2，2026-09-05）：纯 socket 探测测试库 MySQL(3307) 与 Redis(6379)，不通即报「测试环境未就绪」并秒级退出（exit 10），不再空等至启动超时（6）。
 
@@ -214,13 +217,57 @@ pytest 阶段有整体超时刹车（T2，2026-09-05）：`subprocess.run(timeou
 
 ### 4.5 日志
 
-全部位于 `CATALINA_BASE\logs\`：
+脚本与容器日志全部位于 `CATALINA_BASE\logs\`（T9 起即项目内 `.stage8-target\tomcat-test-18080\logs\`）：
 
 - `run.log`：脚本自己的操作日志
 
 - `tomcat_stdout.log` / `tomcat_stderr.log`：Tomcat 控制台输出
 
 - `catalina.*.log`、`localhost.*.log`：Tomcat 运行日志
+
+**应用日志（T1~T4 日志体系，JUL 自建）**：与上面的容器日志同目录，但由应用自己写；落点规则 = "**`log.file` 所在目录 = 日志目录，其余输出端相对路径只取文件名、落同一目录**"（口径见 `src/main/java/com/itheima/util/LogUtil.java` 类注释）：
+
+| 输出端 | 文件名 | 收什么                                              |
+| ---- | ---- | ------------------------------------------------ |
+| system | `system.log.<N>` | 全域应用日志（阈值 `log.level`，默认 INFO）：失败（SEVERE）/ 降级（WARNING）/ **业务里程碑 INFO（T9：登录、注册、内容发布、作者删除作品、关注·取关，共 7 点）** |
+| error | `error.log.<N>` | 只收 `>= log.error.level`（默认 SEVERE）                |
+| access | `access.log.<N>` | 访问日志（专属 logger `access`，`useParentHandlers=false` → **只落本文件**，不进 system.log） |
+| audit | `audit.log.<N>` | 审计留痕（专属 logger `audit`，T8：管理端 4 个写操作 + 用户侧 3 个敏感变更的**成功路径**；同样 `useParentHandlers=false` → 不进 system.log；阈值固定 INFO，**不受 `log.level` 影响**） |
+
+- **落盘目录随链路不同**：`all`/`start`/`test`（18080 实例）注入 `LOG_PATH=<CATALINA_BASE>/logs/system.log` → 四个文件都落 `.stage8-target\tomcat-test-18080\logs\`；`junit` 由 surefire 另注入 `LOG_PATH=${stage8.buildDir}/test-logs/system.log` → 落 `.stage8-target\test-logs\`（由此"测试日志不再写进运行日志目录"，N5）。
+- **文件名是轮转形态**：`<名>.<N>`，**N=0 为当前写入文件、N 越大越旧**（`log.maxBytes` / `log.fileCount` 控制）；读日志要取"前缀匹配 + mtime 最新"的那个文件，不要写死 `<名>.log`。
+- **pytest 怎么断言日志**（先例：`src/test/python/test_access_log.py`、`test_log_outputs.py`、`test_audit_log.py`、`test_milestone_log.py`）：① 选文件 = "`<名>.log*` 前缀匹配 + mtime 最新"，**必须排除 JUL 的 `<名>.<N>.lck` 锁文件**；② 断言分两类——**全文件不变式**（分流口径须对文件里每一行成立，如 error 只收 SEVERE、audit 只收合法审计行）与**本 run 记录**（"响应先于落盘返回"是常态 → 轮询至多 3s）；③ 精确定位"本次请求"的落盘记录**不要依赖行号增量**（落盘期间可能发生轮转），改用**唯一指纹**：把随机 marker 塞进请求参数、由异常栈回显，再向前回退到最近的 `ts=` 行即为该记录（`test_log_outputs.py` 的 `record_containing`），记录行上的 `req=` 可继续用来跨输出端回查；**审计行没有异常栈可回显** → 改用"**动作三元组指纹 + 全文件计数 delta**"（`test_audit_log.py` 的 `audited()`：`action=`/`operatorId=`/`target=` 的行数在执行操作前后必须恰好 +1；target id 全部取自本 run 新建对象，故测试库重建导致 id 复用、历史行仍在也不会误判）。归属判据见 §〇.2：**日志是否真的落盘、输出端之间是否串通**属"依赖真实堆栈副作用" → pytest；只到装配层（handler / level / 格式串 / 轮转参数）的断言归 JUnit。
+- **业务里程碑 INFO 的断言口径（T9 立的第三类写法，先例 `src/test/python/test_milestone_log.py`）**：① **"恰一条"仍用指纹 + 全文件计数 delta**（`milestone()`：执行前后必须恰好 +1），但指纹取**消息前缀**（`msg=关注成功, userId=`）而非对象 id——对象 id 只能从响应里拿到、无法用于"执行前"计数；随后把**新增那一行**与本 run 新建对象对齐（`userId=` / `contentId=` 出现在该行即证归属）。② **失败路径断言 = delta 恒 0**（`assert_no_milestone()`：401 / 409 等拒绝后指纹行数不得变化）。③ **手机号不变式必须先剥掉 `req=<16hex>`**：请求 id 是 16 位十六进制、天然命中 `1[3-9]\\d{9}`（实测 26 行假阳性），不剥会误报"日志出现明文手机号"。④ 单测侧的共享探针 = `src/test/java/com/itheima/util/LogProbe`（命名不匹配 surefire includes，不会被当用例跑）。
+- **事务基础设施 / 包装点定栈的断言口径（T11 立的第四类写法）**：① **"恰一条带堆栈"用 JUnit 探针 + 真实模板**（`src/test/java/com/itheima/util/TransactionTemplateTest`：真实 `TransactionTemplate` + 真实连接池，回调分别抛 `SQLException` / `BusinessException` / `IllegalStateException` → 断言"恰一条 SEVERE 带栈（且消息不含 SQL 文本）" / "0 条" / "0 条"）；② **真实基础设施异常**（连接池耗尽）在 `pool-test` 执行 fork 内做（`MyConnectionPoolTest#transactionTemplateLogsSevereWhenConnectionExhausted`——该 fork 已是 `DB_POOL_MAXSIZE=1` / `DB_POOL_TIMEOUTMS=500`，占满池即得 `SQLException("获取数据库连接超时")`）；③ **跨层联合断言**（内容装载链、评论树链）用真实模板 + mock DAO/Redis，断言堆栈恰落在包装点（`TransactionTemplate` / `CommentCache`）、装载层与吸收点两行均 `getThrown() == null`；④ **e2e 注不进基础设施异常** → 该类验收只由单测承担，pytest 侧只做回归（本任务对外行为零变化，故无新增 pytest 断言）。
+- **可预期业务拒绝的级别断言（T12 立的第五类写法，先例 `src/test/python/test_log_outputs.py` 的 `test_expected_rejections_are_warning_and_never_reach_error_output`）**：① 触发面用**本 run 新建的一次性用户**（401 旧密码错误 / 400 手机号不匹配 / 409 撞名），按其 `userId` + 端点 + 结果码在 `access.log` 上定位本请求的 `req=`（**不用行号增量**）；② 正向断言 = `system.log` 上同 `req` 的**源头结论行**存在且 `level=WARNING`，并检查其**紧随一行不是堆栈续行**（"不带栈"的落盘判据）；③ 反向断言 = `error.log` 里该 `req` **0 条**（**按 req 定向**，不做全文件计数——append=true 下历史 SEVERE 行仍在，全文件断言会误红）；④ 该口径属"**真失败才允许进 `error.log`**"（该端阈值 `SEVERE`）的负向验证，正面（500 类仍落）由 JUnit `assertExactlyOneStacked` + T4 的 `test_error_output_keeps_only_severe` 承担。
+
+### 4.6 日志消费报告（`tools/log_report.py`，日志第三张清单 T13）
+
+让结构化日志"第一次被真正消费"的**只读**工具（NEEDS R-01 消费层最小可用收窄版），挂 `tv.py` 子命令 `log-report`。
+
+- **只读红线**：不写 / 不删 / 不改 / 不移动 / 不压缩任何日志文件、不触发轮转；报告只落 stdout（**不生成落盘文件**，需要留档自行重定向）。可证方式 = 日志目录 `(文件名, 字节数, LastWriteTime)` 前后快照 diff + `git status` 无业务代码改动。
+- **数据源（三条链路）**：默认 `.stage8-target\tomcat-test-18080\logs\`（e2e `test all` 产物）；`--dir .stage8-target/test-logs` = JUnit 链路；`--dir logs` = 生产 / 本地直跑链路（相对路径按 cwd 解析）。**四端文件名与慢请求阈值取自 `src/main/resources/app.properties`**（`--config` 可换；文件 / 键缺失回退内置默认名与 1000ms，并在报告头部提示）。
+- **窗口与轮转合并**：每端取目录内匹配 `<名>.log` 或 `<名>.log.<N>` 的全部文件（**排除 JUL 的 `.lck` 锁文件**；后缀非轮转序号的同名文件列入报告的 `忽略文件`），**裸名文件视为最旧、其后按 N 降序（N 越大越旧）**；逐文件读入后按 `ts=` 升序**稳定排序**，取**末尾 N 行**（默认 `--limit 2000`，`--all` 取消上限）。视角 (a) **不受窗口约束**（在四端全部行里定向过滤 `req=`）。
+- **容错判读**：半行 / 缺字段 / 非 UTF-8 坏字节 / 混入其它端记录 / 旧格式残留一律**跳过并计数**（报告的 `未识别行`，按文件分列；空行单列）。现成例子：e2e 目录里的裸名 `system.log`（T1 前的 JUL 两行格式）**贡献 0 条记录 + 5755 行未识别**——属预期而非故障。`未识别行` / `空行` 只统计**整份文件**，与窗口无关。
+- **三视角口径**：
+  - **(a) `req=` 全链路追溯**：按 `ts` 排序展示同一请求在四端的记录；`system` / `error` 的异常堆栈计入该记录的 `续行 N`（首行续行另起一行显示）。缺省自动选"窗口内最新一条 `code>=500`"（无则最新一条 access 行），`--req <16hex>` 可指定。**注意**：同一条记录可能在 `tomcat_stderr.log` 出现容器 stderr 副本——本工具**只消费四端**；JUnit 侧审计行（非请求线程写入）**没有 `req=`**，不参与串联。
+  - **(b) 耗时分布**：按 `path` 聚合（次数 / 平均 / p50 / p95 / 最大 / `slow=1` 数；p95 = 最近秩法），按 p95 降序取 `--top`（默认 10）+ `slow=1` 明细（按 `cost` 降序）+ **一致性核对**。
+  - **(c) 错误率**：结果码分布；**分母 = `code != 0` 的业务行**（`code=0` = 未走业务统一出口：静态资源 / OPTIONS 预检 / 未映射 404——单列、不计入错误率）；**4xx = 预期拒绝、5xx = 失败，必须分列**（与 `LOG_CONVENTION` §3.1 附加纪律 1 / T12 同源口径）；附 Top 5xx path 与 Top 4xx (path, code)。
+- **`slow` 一致性不是全局不变式**：`slow=1 ⇔ cost >= log.slowRequestMs` 只在**同一阈值**下成立，**记录值即权威**（工具不重算、不据此返回非 0）。反例：JUnit 链路 `access.log.0` 的 15 条 `/probe` 行 `cost=0ms slow=1`（用例直测阈值 0）→ 报告如实显示"不一致 15 条"。
+- **审计动作分布**：概览里按 `action=` 聚合（窗口内、**只列出现的动作**）——未出现即 0 条，如 e2e 中 `user.changePhone` 恒为 0（该点当前无 HTTP 入口，见 §4.5 与 `LOG_CONVENTION` 3.5）。
+- **机器可读**：`--json` 在 stdout 输出单个 JSON 对象（`meta` / `overview` / `trace` / `latency` / `errors`）；**经 `tv.py` 调用会多出横幅行 → 机器消费请直调 `python tools\log_report.py --json`**。
+- **退出码**：0 = 出报告（含"目录存在但无日志文件"的零数据报告）；2 = 参数 / 目录错误（argparse 或友好错误，**无 Traceback**）。工具**不因报告内容异常返回非 0**（只读报告，不做门禁）。
+- **典型用法**：
+
+  ```powershell
+  python tools\tv.py log-report                                 # e2e 产物 + 默认窗口
+  python tools\log_report.py --all                              # 全量口径
+  python tools\log_report.py --req <16hex>                      # 指定请求跨端追溯
+  python tools\log_report.py --dir .stage8-target/test-logs     # JUnit 链路
+  python tools\log_report.py --dir logs                         # 生产 / 本地直跑链路
+  ```
+
+- **验证边界（T13）**：本任务**不改业务代码**，故**未新增 pytest 用例**（项目规则只约束业务改动；归属判据同 §〇.2——该工具是消费侧、不产生落盘副作用）；验收数字由**三方对账**承担：报告 ↔ **独立重算**（`ts=` 行数 / 结果码分布 / `slow` 计数）↔ **合成夹具**（`temp_script/t13_fixture_check.py`，23 项：轮转合并顺序 / 窗口 tail / 未识别与空行计数 / 4xx·5xx 分列 / slow 一致性 / 四端串联 / 只读性 / 非法参数）。**生产 / 本地直跑链路仍无实测数据**（`logs/` 现为空，属 R-11"已知缺口"）。
 
 ***
 
@@ -238,7 +285,7 @@ pytest 阶段有整体超时刹车（T2，2026-09-05）：`subprocess.run(timeou
    ```
 
    沙盒运行测试时通过 `PYTHONPATH` 指向该目录。
-7. **javac 无法读取 worktree 的** **`target/`** **作为 classpath**：沙箱内目录枚举被拒，表现为测试编译时"程序包 com.itheima.\* 不存在"；因此 Maven 构建通过 `-Dstage8.buildDir` 指向 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`（pom 默认 `./target`），war 也位于该目录。
+7. **javac 无法读取 worktree 的** **`target/`** **作为 classpath**：沙箱内目录枚举被拒，表现为测试编译时"程序包 com.itheima.\* 不存在"；因此 Maven 构建通过 `-Dstage8.buildDir` 指向项目内 `.stage8-target`（T9 起；早期为 `D:\data\projects\VideoPlatform\stone\temp\stage8-target`，pom 默认 `./target`），war 也位于该目录。
 8. **离线仓库来源记录**：新加入的测试依赖（junit/mockito/bytebuddy/surefire）`_remote.repositories` 原本只有 `>central=`，默认 aliyun 镜像下离线解析会拒认；已逐项追加 `>aliyun=` 行（只追加不删除，模式与既有 mysql 依赖一致）。
 
 ***

@@ -9,6 +9,7 @@ import com.itheima.ioc.annotation.Inject;
 import com.itheima.admin.model.audit.MediaAuditResult;
 import com.itheima.admin.model.audit.RestoreResult;
 import com.itheima.admin.service.MediaAuditService;
+import com.itheima.util.AuditLog;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.MultipartConfig;
 import jakarta.servlet.annotation.WebServlet;
@@ -54,6 +55,10 @@ public class MediaAdminController extends BaseServlet {
             long mediaId = parseMediaId(req);
             Part part = req.getPart("file");
             RestoreResult result = mediaAuditService.restoreMedia(mediaId, part);
+            // 审计（T8）：成功路径留痕——操作者取 LoginFilter 放入的 userId attribute（恒为 Long）：
+            // AuthFilter 对 /api/admin 已先判非空、且自身也做同款 (Long) 强转，故类型漂移会先在 filter 层
+            // 暴露（与全仓各 controller 同款直取，不另加 instanceof 分支）；写失败由 AuditLog 吞掉降级
+            AuditLog.success("admin.media.restore", (Long) req.getAttribute("userId"), "mediaId:" + mediaId);
             BaseServletUtil.writeSuccess(resp, result);
         } else {
             BaseServletUtil.writeError(resp, ErrorCode.NOT_FOUND, "未识别功能");

@@ -1,7 +1,10 @@
 # 当前系统架构地图
 
-> 版本：3.11（2026-09-21 T19：四域分页口径统一——feed / search / profile / follow 均为「域级上限 100 + 域级信封 100」，前端只传 `page`；`BaseServletUtil` 归一逻辑下沉为 request 无关纯函数 `normalizePage`/`normalizePageSize`，无参 / 两参重载与公共 cap 50/10 已删）
-> 最后更新：2026-09-21
+> 版本：3.20（2026-09-24 日志第三张清单 **T12 log3-12**：**可预期业务拒绝的级别修正**——`UserService` 的 `changePassword` / `changeUserName` / `changePhone`
+> 三处**按异常类型拆 catch**（`ParamException | PasswordIncorrectException | ConflictException` → `WARNING` **不带栈**；兜底 `catch (BusinessException e)` 与 `catch (SQLException e)` 保持 `SEVERE` + 堆栈），
+> 400/401/409 **不再落 `error.log`**；调用点 159 → **162**（+3 新 WARNING 分支）、SEVERE **63（计数不变**，兜底仍是 SEVERE 调用点、覆盖面收窄）、WARNING 84 → **87**；详见 6.24，判据 `说明书/LOG_CONVENTION.md` §3.1 附加纪律 1）
+> 上一版 3.19（2026-09-23 第二张清单 T11 **两批**：第 1 次提交 log2-11：**补齐事务基础设施异常的源头日志**（`TransactionTemplate` 的 `catch (SQLException)` 记 `SEVERE` + 堆栈）+ **"包装点即源头"定栈重排**（去栈 20 处、补源头 11 处、上下文行升级持栈 2 处、评审处置拆 catch 增 1 处持栈行），T7 登记的回填链双栈残余收口（调用点 139 → 151、SEVERE 44 → 55、WARNING 83 → 84）；第 2 次提交 log2-T11-B（同日）：**同族业务 wrap 缺口 8 处收口**（`CommentService` 2 / `UserService.isAdmin` 1 / `FollowService.loadUserList` 1 / `CouponService` 4——包装点补 `SEVERE` + 堆栈，"包装点即源头"口径下**无存量未合规点**，调用点 151 → **159**、SEVERE 55 → **63**、持 `LOGGER` 类 23 → **24**、级别零变化）；见 6.23，顺带修正本表 8 处陈旧行数）
+> 最后更新：2026-09-24
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
 ---
@@ -31,7 +34,7 @@
 | 认证 | JWT | 4.4.0 |
 | 密码加密 | BCrypt (Spring Security Crypto) | 6.4.5 |
 | JSON | Jackson | 2.15.2 |
-| 日志 | java.util.logging | - |
+| 日志 | java.util.logging（T1 起自建单行结构化输出 + 可扩展多输出端分流 + 按大小轮转；T2 起含请求标识 `req=`，reqId 由 `util/LogContext` 的 ThreadLocal 承载；T3 起含**访问日志**：`filter/AccessLogFilter` 每请求在 `access.log` 落一行（method/path/userId/结果码/耗时/慢标记），结果码由 `BaseServletUtil` 收口进 `LogContext`；T8 起含**审计日志**：`util/AuditLog` 在 7 个操作点的**成功路径**各记一行到 `audit.log`（action/operatorId/target/result），写失败吞掉降级不影响业务） | - |
 | 前端 | 原生 HTML/CSS/JavaScript | - |
 
 ---
@@ -68,7 +71,7 @@ untitled/
 │       ├── java/com/itheima/        # JUnit 单元测试（按被测类同包随迁至各域 service 包）
 │       └── python/                  # pytest 端到端脚本
 │
-├── logs/                            # 运行日志
+├── logs/                            # 运行日志（`log.file` 所在目录即"日志目录"，其余输出端同目录；轮转后文件名为 `<名>.<N>`，N=0 为当前写入文件；含访问日志 access.log 与审计日志 audit.log）
 ├── temp_script/                     # 一次性临时脚本（gitignore，可删）
 ├── tools/                           # 工具脚本（统一入口 tools/tv.py）
 └── target/                          # Maven 构建输出（gitignore；测试链路改用项目内 .stage8-target）
@@ -126,12 +129,13 @@ com.itheima/
 
 | 类 | 行数 | 职责 | URL 匹配 |
 |----|------|------|----------|
+| AccessLogFilter | 78 | **访问日志（T3 新增，web.xml 最外层）**：进入 set reqId、finally 读结果码/耗时（nanoTime 覆盖全链）并写专属 logger `access`（行 `msg=method=… path=… userId=… code=… cost=…ms slow=0|1`）；不读 query/header/请求体（D7"绝不记"以不记为脱敏） | /* |
 | ExceptionFilter | 53 | 全局异常处理（业务异常按 code/msg 输出，未知异常 500） | /* |
 | EncodingFilter | 27 | UTF-8 编码 | /* |
 | LoginFilter | 41 | 解析 JWT Token，设置 userId | /* |
 | AuthFilter | 77 | 权限校验（登录 + /api/admin 管理员角色） | /* |
 
-**执行顺序**：ExceptionFilter → EncodingFilter → LoginFilter → AuthFilter（web.xml 注册）
+**执行顺序**：AccessLogFilter → ExceptionFilter → EncodingFilter → LoginFilter → AuthFilter（web.xml 注册；T3 只新增 AccessLogFilter 于最外层，既有 4 个顺序不变）
 
 **AuthFilter 保护路径**（`PROTECTED_PREFIXES` 5 项 + `PROTECTED_EXACT` 10 项）：
 - 前缀：`/api/upload`、`/api/admin`、`/follow`、`/like`、`/feed`
@@ -162,24 +166,29 @@ com.itheima/
 | 类 | 行数 | 职责 |
 |----|------|------|
 | MyConnectionPool | 138 | JDBC 连接池（上限 20、获取超时 5000ms、等待归还） |
-| TransactionTemplate | 61 | 统一事务模板（取连接/提交/回滚/归还，业务异常原样重抛） |
+| TransactionTemplate | 68 | 统一事务模板（取连接/提交/回滚/归还，业务异常原样重抛） |
 | PasswordUtil | 58 | BCrypt 密码哈希 |
 | JwtUtil | 40 | JWT 生成/校验 |
 | MyRedisPool | 49 | Redis 连接池（显式 connect/so 超时 + maxWait，8 参 JedisPool 构造器） |
-| LogUtil | 61 | 日志工具（初始化先清空 root 既有 handler 再挂 Console+File，自身零 System.out/err） |
-| RequestContext | 31 | 请求上下文路径（动态拼接媒体 URL） |
-| StringUtil | 37 | 字符串校验 |
+| LogUtil | 229 | 日志工具（装配：清空 root 既有 handler → 挂控制台 → 逐输出端挂 FileHandler，自身零 System.out/err）。**输出端按「配置 + Handler 列表」组织**（`resolveFileOutputs()` 的规格表 + 配置键，流程内零字面量文件名 → D9 新增输出端只需加一项规格 + 一个配置键）；默认 `system`（阈值 `log.level`）/ `error`（`log.error.level`，默认 SEVERE）/ **`access`（T3：`log.access.file`，阈值固定 INFO，挂专属 logger `"access"`——`getAccessLogger()` 暴露，`useParentHandlers=false` 使 access 行只落 access.log、不进 system.log 与控制台；规格 `LogOutput` 增 `owner` 字段区分挂载目标）**`audit`（T8：`log.audit.file`，阈值固定 INFO，挂专属 logger `"audit"`——`getAuditLogger()` 暴露，`useParentHandlers=false` 使审计行只落 audit.log、不进 system.log 与控制台；记录器 `util/AuditLog` 见 6.21）**四路；**按大小轮转**用 JUL 原生 `FileHandler(pattern, limit, count, append)`（`log.maxBytes` / `log.fileCount`，生成 `<名>.<N>`、N=0 为当前文件、最旧一代被回收；`log.maxBytes<=0` 视为不轮转、文件名精确等于配置值）；**路径口径** = `log.file` 所在目录即日志目录、其余输出端相对路径只取文件名落同目录（改写 `LOG_PATH` 一处即全部文件换目录，N5 隔离）；`log.file` 为空则整组文件输出端跳过（降级仅控制台，access 行随 JUL 到控制台但无文件输出）；`getLogger(Class)` 签名与语义不变 |
+| AuditLog | 74 | **审计记录器**（T8 新增）：管理端 4 个写操作 + 用户侧 3 个敏感变更的**成功路径**留痕——`success(action, operatorId, target)` 写向模板 logger（`LogUtil.getAuditLogger()`，只落 `audit.log`），行形态 `msg=action=… operatorId=… target=… result=success`（时间与 `req=` 由 `LogFormatter` 前缀提供，不在 msg 内重复）；**写失败吞掉降级、绝不影响业务**（注意 JUL 的 `Logger.log` 不兜 handler 异常 → 该 try/catch 承重）；`buildLine` 为包可见纯函数供单测直测。口径见 `说明书/LOG_CONVENTION.md` 3.5，落点见 6.21 |
+| LogFormatter | 107 | 单行结构化 Formatter：`ts=… level=… logger=… req=… msg=…`（固定 3 位毫秒 + 带冒号时区偏移；行尾统一 LF；消息内换行折成 `\n` 字面量守住"一条记录一行"；异常堆栈跟在首行之后）。消息渲染复用 `Formatter.formatMessage`，与 `SimpleFormatter` 同源（`{0}` 占位符文案逐字不变）；**`req=` 取 `LogContext` 的当前请求标识、只在有值时输出**（非请求线程 / 已 clear 时该字段整段不出现），值同样过单行折叠；`user=` 属访问日志字段（T3 在 access 输出端承载），不注入本行 |
+| LogContext | 162 | **请求级日志上下文**（T2 新增，D6 方案 B）：唯一 ThreadLocal 承载 reqId。`newRequestId()` = **唯一生成源**，固定 16 字符 = 毫秒低 32 位（8 位十六进制）+ 进程随机标识（4 位）+ 原子自增序号低 16 位（4 位）→ 同毫秒并发/连续不重复（序号 4 位约 6.5 万次/毫秒后回绕、届时理论上可撞号，本项目量级不可达）、跨重启不撞号；`setRequestId` 入参归一（null/空白 = 清除、去两侧空白）；`getRequestId` 无值返回 null（**无默认兜底**，非请求线程即无 reqId）；`clear()` 供 filter 的 finally 调用。**T3 新增结果码槽**：`setResultCode/getResultCode`（缺省 0 = 未走业务统一出口），`clear()` 一并清 reqId 与结果码。**生命周期自治**：只在最外层 `AccessLogFilter`（T3）一处 set/clear（含结果码），不与其他上下文共用清理点。**异步传递机制（D8，本周期无调用点）**：`capture()` 快照 + `restore(snapshot)` 恢复 + `wrap(Runnable)` 便捷包装（捕获→任务体恢复→结束后还原执行线程原值，池化线程不留残留）；快照**只含 reqId**（结果码由响应写路径产生、异步任务不读写，T3 不扩）；**只包装不创建线程**，故不引入异步执行 |
+| RequestContext | 36 | 请求上下文路径（动态拼接媒体 URL）。**T2 只加注释、行为零改动**（D6）：分工 = 业务类字段放本类、日志类字段放 `LogContext`，两者 ThreadLocal 互不干扰、清理点分离（本类由内层 `EncodingFilter` set/clear，其 finally 先于外层 filter 执行——若共用 `clear()`，reqId 会被提前清掉、异常日志丢掉请求标识） |
+| StringUtil | 61 | 字符串校验（`isAllDigit` / `isSpecificLength` / `isLengthLegal` / `phoneCheck`）+ **脱敏**：`maskPhone`（138****1234）与 **T9 立的统一脱敏出口 `maskForLog(field,value)`**——按字段类型名 + 值形态分派、**fail-closed**（未登记字段名 / null / 空值 / 形态不符一律 `******`；`phone` 仅通过 `phoneCheck` 时保留首 3 + 末 4），日志里的敏感字段必须经它取值，口径见 `说明书/LOG_CONVENTION.md` 3.7 |
 | ResultUtil | 26 | 响应格式构建 |
 | TimeUtil | 15 | 时间工具 |
+
+> **日志字段与业务字段的分工（T2，D6）**：日志类字段（reqId）放 `LogContext`，业务类字段（context path）放 `RequestContext`——两个 ThreadLocal 各自 set/clear、无共同清理点。**约束（D8，随 feed 流异步化改动一并遵守）**：reqId 靠 ThreadLocal 透传，而 `LogFormatter` 在"打日志的那条线程"上读取它（日志同步写、`format()` 与业务同线程）——**将来任何引入进程内线程池的改动，提交任务前必须用 `LogContext.wrap(task)` 包装**，否则异步线程里的日志丢掉 reqId、同一请求的日志链断裂（JUL 无内建 MDC，本机制即自建替代；本周期无异步调用点，故 `wrap` 暂无调用方）。
 
 #### controller 包（跨域基建，业务 Controller 已全部搬出）
 
 | 类 | 行数 | 职责 |
 |----|------|------|
-| BaseServlet | 15 | 基类，`extends HttpServlet` + `init()` 做 IoC 注入（T16 起不再持有 JSON 响应/mapper，响应统一走 BaseServletUtil） |
-| BaseServletUtil | 98 | 静态工具（T16 起不再 `extends HttpServlet`），HTTP 请求/响应侧**唯一 ObjectMapper**（`mapper`，public）+ writeSuccess/writeError + 分页参数解析。**T19 起归一逻辑下沉为 request 无关纯函数** `normalizePage(Integer)` / `normalizePageSize(Integer,max,defaultSize)`（供 JSON body 形态的接口复用同一口径），`parsePage` 与三参 `parsePageSize(req,max,defaultSize)` 委托二者；**无参 / 两参重载与 `DEFAULT_PAGE_SIZE_MAX`/`DEFAULT_PAGE_SIZE` 已删**（三域改用三参后成为死代码，两参重载自 T11-B 起即零调用）——新域一律显式声明自己的 `XXX_PAGE_SIZE_MAX/DEFAULT`；RequestParser 复用同一 mapper |
+| BaseServlet | 14 | 基类，`extends HttpServlet` + `init()` 做 IoC 注入（T16 起不再持有 JSON 响应/mapper，响应统一走 BaseServletUtil） |
+| BaseServletUtil | 104 | 静态工具（T16 起不再 `extends HttpServlet`），HTTP 请求/响应侧**唯一 ObjectMapper**（`mapper`，public）+ writeSuccess/writeError + 分页参数解析。**结果码收口（T3，D5）**：`writeSuccess`（body 恒 200）/`writeError(int,…)` 写响应时把结果码写入 `LogContext`，供最外层 `AccessLogFilter` 取用。**T19 起归一逻辑下沉为 request 无关纯函数** `normalizePage(Integer)` / `normalizePageSize(Integer,max,defaultSize)`（供 JSON body 形态的接口复用同一口径），`parsePage` 与三参 `parsePageSize(req,max,defaultSize)` 委托二者；**无参 / 两参重载与 `DEFAULT_PAGE_SIZE_MAX`/`DEFAULT_PAGE_SIZE` 已删**（三域改用三参后成为死代码，两参重载自 T11-B 起即零调用）——新域一律显式声明自己的 `XXX_PAGE_SIZE_MAX/DEFAULT`；RequestParser 复用同一 mapper |
 | RequestParser | 24 | JSON 请求体解析（`BaseServletUtil.mapper` 复用唯一 mapper） |
-| AppShutDownListener | 102 | 容器生命周期管理（@WebListener，统一关闭 IoC 容器） |
+| AppShutDownListener | 134 | 容器生命周期管理（@WebListener，统一关闭 IoC 容器） |
 
 #### common 包 — 跨域共享模型（T14 新增）
 
@@ -205,9 +214,9 @@ com.itheima/
 | SingleFlight | 70 | 统一单飞组件：ConcurrentHashMap+FutureTask，失败/成功均 remove（防缓存失败结果 + 防泄漏）；降级读路径与 miss 回填共用同一 key 空间 |
 | CacheStatus | 15 | 三态枚举：MISS / HIT_EMPTY / HIT_DATA |
 | CacheResult | 47 | 三态读取结果载体（status + value，HIT_EMPTY 时 value=null） |
-| CacheAside | 619 | 统一 Cache-Aside 封装：`read` 三态读 / `get` 带单飞回填 / `getBatch` 批量读（4 参与 5 参批量装载重载）/ `writeOrInvalidate`（写失败=DEL 自愈，写数据同时清空标记）/ `markEmpty`（存在守卫）/ `invalidate`；TTL ±10% 抖动；读路径 pipeline 化（EXISTS 空标记+GET 一趟往返）；命中滑动续期（空标记从不续期）；降级读与 miss 共用单飞、仅装载不写回；loader 抛 DatabaseException 视为加载失败——不写空标记、不 DEL 数据 key |
-| SetCache | 393 | 原生 Set 缓存基建：单成员三态 `isMember` / 全量 `getMembers`（不排序，需确定性顺序的调用方自包装）/ 批量判定（`batchIsMember` 单 set 多成员、`batchKeysIsMember` 多 set 单成员）/ `writeSet` 回填（空→`cacheAside.markEmpty` 含存在守卫）/ `loadViaSingleFlight` 降级装载；探针续期精确 TTL 无抖动、空标记不续；批量 DB 答案失败上抛、回填 best-effort。**第六期 T7 起生产调用方 = like 域（`user:likeSet` / `user:commentLikeSet`）**；follow 域已迁 ZSetCache |
-| ZSetCache | 623 | 有序集合（ZSet）缓存基建（A1「缓存有序结构」落点）：命令层 ZSCORE/ZRANGE/ZADD，**score = 成员自身数值**（故 ZRANGE 天然按成员数值升序）；API 与 SetCache 同构（`isMember` / `getMembers` / `batchIsMember` / `writeZSet` 回填（空→`markEmpty` 含存在守卫）/ `loadViaSingleFlight` 降级不写回）+ **按序窗口读 `getWindow(key, offset, count, WindowLoader, totalLoader)`**——完整态一趟 pipeline `ZRANGE[start,stop]` + `ZCARD`（total 与页同源）；**T11-C 前缀窗口装载**（miss/部分态/降级/部分态三处配套的完整口径见 6.17）；探针续期精确 TTL（`partial:` 标记与数据 key 同步续期）、空标记不续；窗口装载单飞 key 带窗口指纹 `key@offset+count` 防不同页串用 |
+| CacheAside | 624 | 统一 Cache-Aside 封装：`read` 三态读 / `get` 带单飞回填 / `getBatch` 批量读（4 参与 5 参批量装载重载）/ `writeOrInvalidate`（写失败=DEL 自愈，写数据同时清空标记）/ `markEmpty`（存在守卫）/ `invalidate`；TTL ±10% 抖动；读路径 pipeline 化（EXISTS 空标记+GET 一趟往返）；命中滑动续期（空标记从不续期）；降级读与 miss 共用单飞、仅装载不写回；loader 抛 DatabaseException 视为加载失败——不写空标记、不 DEL 数据 key |
+| SetCache | 397 | 原生 Set 缓存基建：单成员三态 `isMember` / 全量 `getMembers`（不排序，需确定性顺序的调用方自包装）/ 批量判定（`batchIsMember` 单 set 多成员、`batchKeysIsMember` 多 set 单成员）/ `writeSet` 回填（空→`cacheAside.markEmpty` 含存在守卫）/ `loadViaSingleFlight` 降级装载；探针续期精确 TTL 无抖动、空标记不续；批量 DB 答案失败上抛、回填 best-effort。**第六期 T7 起生产调用方 = like 域（`user:likeSet` / `user:commentLikeSet`）**；follow 域已迁 ZSetCache |
+| ZSetCache | 625 | 有序集合（ZSet）缓存基建（A1「缓存有序结构」落点）：命令层 ZSCORE/ZRANGE/ZADD，**score = 成员自身数值**（故 ZRANGE 天然按成员数值升序）；API 与 SetCache 同构（`isMember` / `getMembers` / `batchIsMember` / `writeZSet` 回填（空→`markEmpty` 含存在守卫）/ `loadViaSingleFlight` 降级不写回）+ **按序窗口读 `getWindow(key, offset, count, WindowLoader, totalLoader)`**——完整态一趟 pipeline `ZRANGE[start,stop]` + `ZCARD`（total 与页同源）；**T11-C 前缀窗口装载**（miss/部分态/降级/部分态三处配套的完整口径见 6.17）；探针续期精确 TTL（`partial:` 标记与数据 key 同步续期）、空标记不续；窗口装载单飞 key 带窗口指纹 `key@offset+count` 防不同页串用 |
 
 > 测试：`src/test/java/com/itheima/cache/` 9 类单测（mockStatic MyRedisPool + mock Jedis，不碰真实 Redis），用例清单以 `surefire-reports` 为准（见九节指针）。
 
@@ -218,7 +227,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | LoginController（95，/user/*） | 登录、注册、修改密码/用户名 |
-| service | UserService（271） | 用户认证 + 管理员判定 + 改名后级联失效内容缓存（注入 ContentCache）；**`registerAndLogin`（T13，池 U-16 兜底）= 注册 + 自动登录编排**——自动登录失败不回抛，返回 `token=null` 的 LoginVO（注册已提交即算成功），注册本身失败仍抛错 |
+| service | UserService（311） | 用户认证 + 管理员判定 + 改名后级联失效内容缓存（注入 ContentCache）；**三个敏感变更方法按异常类型拆 catch（T12）**——可预期拒绝（400/401/409）记 `WARNING` 无栈、真失败兜底 `SEVERE` + 栈；**`registerAndLogin`（T13，池 U-16 兜底）= 注册 + 自动登录编排**——自动登录失败不回抛，返回 `token=null` 的 LoginVO（注册已提交即算成功），注册本身失败仍抛错 |
 | dao | UserDao（275） | users 用户 CRUD + 角色查询（`findUsersByIds` T7 起带 `ORDER BY id`：关注/粉丝列表顺序由此保证，唯一调用方 FollowService）；T14 起内含从 `dao.ResultMap` 下沉的 `buildUserForLogin` / `buildUserForProfile` 两个 `private static` 行映射方法 |
 | model | entity/User（89）、dto/LoginDTO（28）/RegisterDTO（41）/ChangePasswordDTO（35）/ChangeUserNameDTO（15）、command/LoginCommand（63）/RegisterCommand（44）/ChangePasswordCommand（44）/LoginType（7）、vo/LoginVO（40） | 用户实体与请求/命令/响应对象 |
 
@@ -227,7 +236,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | ContentController（181，/content/*）、StartController（49，/start）、SearchController（101，/search/*）、FeedController（37，/feed）、ProfileController（50，/profile） | 内容管理 + 首页推荐 + 搜索 + 关注流 + 用户主页；**T19：三域统一为「域级上限 100 + 域级信封 100」**（各 Controller 自持 `XXX_PAGE_SIZE_MAX/DEFAULT`；`/search/keywordSearch` 的 GET 与 JSON body 两条分支共用 `BaseServletUtil.normalize*`，前端只传 `page`） |
-| service | ContentService（497）、ContentCache（710）、CommentCache（716）、ContentStatusFiller（81）、FeedService（107）、ProfileService（118） | 内容业务（内容/搜索 + 评论读路径编排）+ Redis 内容缓存（三态 Cache-Aside + 索引 + `invalidateAuthorContentKeys` 改名级联失效 + `getContentsBatch` 批量装载）+ Redis 评论缓存（两键组 主楼 List + 楼中楼 Hash + 主楼窗口/count）+ 点赞/关注状态填充 + 关注流 + 主页；**Feed/Profile/Search 与关注·粉丝列表的缓存读一律在 DB 事务外**（见 6.4） |
+| service | ContentService（505）、ContentCache（726）、CommentCache（744）、ContentStatusFiller（81）、FeedService（107）、ProfileService（118） | 内容业务（内容/搜索 + 评论读路径编排）+ Redis 内容缓存（三态 Cache-Aside + 索引 + `invalidateAuthorContentKeys` 改名级联失效 + `getContentsBatch` 批量装载）+ Redis 评论缓存（两键组 主楼 List + 楼中楼 Hash + 主楼窗口/count）+ 点赞/关注状态填充 + 关注流 + 主页；**Feed/Profile/Search 与关注·粉丝列表的缓存读一律在 DB 事务外**（见 6.4） |
 | dao | ContentDao（446）、ContentMediaDao（202） | content/content_media 数据访问（ContentLikeDao 按 like 域归属）；`findContentsByIds` 批量 IN 查询（供批量缓存装载，列与 findContent 同源）；T14 起各自内含从 `dao.ResultMap` 下沉的 `private static` 行映射方法（2 / 1） |
 | model | entity/ContentMedia（63）、cache/ContentCacheDTO（135）/CommentCacheDTO（119）、vo/ContentVO（42）/ContentDetailVO（25）/CommentVO（21）/ProfileVO（43）、dto/SearchDTO（51）、command/CommandConverter（139）/ContentType（16） | 内容模型 + 共享缓存 DTO + 共享 VO/DTO/转换器（`PageResult` 归 `common.model.dto`） |
 
@@ -238,7 +247,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | FollowController（104，/follow/*） | 关注/取关/关注列表/粉丝列表（**T11-A：列表只有分页入口**——`page`/`pageSize` 均可选，缺省归一为 page 1 / 信封 100；域级常量 `FOLLOW_PAGE_SIZE_MAX = 100` + 信封 `FOLLOW_PAGE_SIZE_DEFAULT = 100`（**T19 由 200 调整为 100**，与 feed/search/profile 同口径），T7 的「缺省返回全量数组」分支已删除） |
-| service | FollowService（185） | 关注业务（读路径委托 FollowCache；关注/取关 DB 提交后缓存双写；**T7 新增分页读**——缓存窗口取该页 ids+total，仅对该页 ids 做 DB 装载与批量判重，信封在事务外组装；**T11-A 删除两个缺省全量重载**，分页读为唯一入口；**T12 起事务回调只做 DB 装载**（`findUsersByIds`），`batchIsFollowing` 与视图组装移事务外；**T14 起信封用公共 `common.model.dto.PageResult`**） |
+| service | FollowService（192） | 关注业务（读路径委托 FollowCache；关注/取关 DB 提交后缓存双写；**T7 新增分页读**——缓存窗口取该页 ids+total，仅对该页 ids 做 DB 装载与批量判重，信封在事务外组装；**T11-A 删除两个缺省全量重载**，分页读为唯一入口；**T12 起事务回调只做 DB 装载**（`findUsersByIds`），`batchIsFollowing` 与视图组装移事务外；**T14 起信封用公共 `common.model.dto.PageResult`**） |
 | service | FollowCache（539） | 关注关系 Redis 缓存（**双 ZSet（score=成员 id）+ 条件 MULTI 双写 + 失败双 DEL** + 三态读 + 单飞 + 降级单飞全量装载作答；读路径收口 **ZSetCache**——单成员三态/批量/全量/窗口走基建 + `sortIds` 归一升序，写路径 MULTI 双写语义保持；关注/粉丝计数 key 读写。**T11-C**：窗口 loader 换 DAO **窗口 SQL**（分页读不再全量装载）、新增部分态判定回落 `isFollowingInDb`（单行）、`probePair` 扩为六探针且**任一侧 `partial:` → 三件套双 DEL**（增量写分支与 Redis 异常分支同口径：异常分支走新增私有 `invalidatePairQuietly`，而 `CacheAside.invalidate` 只删数据 key + 空标记）、删除已无主代码调用方的 `getFollowerIds`（池 U-21）） |
 | dao | FollowDao（155） | follow 关注关系（仅 FollowService 业务校验与 FollowCache loader 使用；**T11-C-1 新增两个窗口查询**：`getFollowedUserIdsInWindow` / `getFollowerUserIdsInWindow`——`WHERE … ORDER BY … LIMIT ? OFFSET ?`，供前缀窗口装载；关注方向复用 `uk_user_follow`、粉丝方向走新增 `idx_followed_user_user`，EXPLAIN 均 `Using index`（覆盖索引）且无 filesort） |
 | model | —（T14 起无专属 model） | 关注/粉丝列表分页信封改用公共 `common.model.dto.PageResult`（T14）；原 `FollowPageResult`（T7 B2 为避开 follow→content 环而自建的同形类）已随 T14 删除，同形二分消除 |
@@ -261,7 +270,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | CommentController（160，/comment/*） | 评论发表/查询/删除（**T8/T11-B：`/show`、`/replies` 可选 `page`/`pageSize`**——`/show` 显式判"是否传分页参数"分支：缺省全量数组、传参走分页信封；`pageSize` 缺省取域级信封 **200**、上限 **500**） |
-| service | CommentService（299） | 评论业务（楼中楼：发表归一化主楼 + 软删除：用户自删/管理员删）；**T14 起分页信封改用公共 `common.model.dto.PageResult`**（原 import content 域信封） |
+| service | CommentService（303） | 评论业务（楼中楼：发表归一化主楼 + 软删除：用户自删/管理员删）；**T14 起分页信封改用公共 `common.model.dto.PageResult`**（原 import content 域信封） |
 | dao | CommentDao（368） | comment 评论 CRUD + 软删除（整楼/单条）+ 楼内回复计数 + 评论所属内容定位；T14 起内含从 `dao.ResultMap` 下沉的 `buildComment` `private static` 行映射方法 |
 | model | dto/CommentDTO（44）、command/CommentCommand（50） | 评论请求/命令（CommentVO 归 content 域；**T14 R-03 口径①：content↔comment 包层环保留现状**，未拆分共享组件——环的 15 条边中仅 5 条属组件错位，其余为业务互依） |
 
@@ -270,7 +279,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | CouponController（72，/coupon/*） | 优惠券抢购/列表/我的 |
-| service | CouponService（74） | 优惠券抢购 |
+| service | CouponService（87） | 优惠券抢购 |
 | dao | CouponDao（95） | coupon, coupon_order 优惠券 CRUD |
 | model | dto/GrabCouponRequest（8） | 抢券请求 |
 
@@ -279,7 +288,7 @@ com.itheima/
 | 层 | 类（行数） | 职责 |
 |----|------|------|
 | controller | UploadController（205，/api/upload/*）、UploadType（84） | 上传视频/动态 + 作者换源；上传类型枚举 |
-| service | FileUploadService（103） | 文件上传/按 URL 清理旧文件 |
+| service | FileUploadService（101） | 文件上传/按 URL 清理旧文件 |
 | dao | — | 无专属 DAO |
 | model | command/UploadCommand（48）、vo/UploadResult（31） | 上传命令/结果 |
 
@@ -460,11 +469,11 @@ com.itheima/
 - **事务外写**：`ContentCache.init()` 拆两段——DB 阶段事务内**只读**（`findAllContent` + `ContentMediaDao.findMediaByContentIds` 批量媒体装载 + 构建 DTO，DB 恒 2 次查询），事务提交后 `rebuildRedis` 在**事务外**写 Redis；DB 装载失败 → 记日志 return，不触发任何 Redis 写。
 - **内容 key 批量写**：`CacheAside.writeBatch(map, ttl)`——一趟 pipeline `(setex[per-key TTL 抖动] + del empty:)×N`，失败 → 逐 key `deleteQuietly` 自愈 + WRITE_FAIL 打点；批内单命令 server 错误依赖 `Pipeline.sync()` 抛异常统一兜底。
 - **索引 pipeline 化**：`rebuildIndexes` 单条 executeVoid——SCAN 顺序收集旧 `content:index:*` key → 一趟 pipeline DEL 全部 + `lremAndLpush` 全部。启动 Redis 往返从 ≈12N 降到 ≈3 次（内容 pipeline 1 + 索引 SCAN 页 + 索引 pipeline 1），与内容量解耦。
-- **索引懒重建**：索引 key 缺失时 `ensureIndex` 单飞懒重建（`getRecommendByFilter` 首访触发，防 Redis 重启后 /start 空推荐）。
+- **索引懒重建**：索引 key 缺失时 `ensureIndex` 单飞懒重建（`getRecommendByFilter` 首访触发，防 Redis 重启后 /start 空推荐）。**装载失败 ≠ 确无数据（T14，R-20 裁决 A）**：`loadAllWithoutMedia` 对外表现为"成功返回列表（真·空表 = 空列表）/ 失败上抛 `DatabaseException`"——DAO 级 `SQLException` 由本方法包装上抛、事务基础设施异常经 `TransactionTemplate` 同型上抛；调用方据此**跳过重建**（不清 `content:index:*`）并入冷却；仅真·空表（空列表）照常走"清旧键 + 重建"。
 
 ### 6.11 索引维护：重建失败退避 + 长尾漂移
 
-- **冷却退避**：`ensureIndex` 重建失败（Redis 写失败）记进程内冷却（`cache.content.indexRebuildCooldownMillis=10000`，对齐熔断冷却先例），**窗口内跳过探测与重建**（Redis 停机期间 `/start` 从"逐请求 DB 全表查询"收敛到"每冷却窗口 1 次"）；冷却过期后下一请求自然重试，重建成功即恢复正常（与熔断探针恢复语义同构）。
+- **冷却退避**：`ensureIndex` 重建失败（Redis 写失败；**T14 起含 DB 装载失败**——同口径跳过重建并记冷却，且不清旧索引）记进程内冷却（`cache.content.indexRebuildCooldownMillis=10000`，对齐熔断冷却先例），**窗口内跳过探测与重建**（Redis 停机期间 `/start` 从"逐请求 DB 全表查询"收敛到"每冷却窗口 1 次"；DB 装载失败同收敛，`/start` 仍走既有降级=该次为空）；冷却过期后下一请求自然重试，重建成功即恢复正常（与熔断探针恢复语义同构）。
 - **长尾漂移结论**：`lrem(k,0,id)`（删全部出现）+ `lpush` 写即去重 → id 每 key 至多 1 条、索引大小 ≤ 该维度活跃内容数，**不随增删操作累积**，正常操作无系统性漂移、无需定期重建。残余窗口（已接受）：仅删除 LREM 失败（停机窗口）残留有界脏 id，读侧 null 跳过免疫、惰性探测每条至多消耗 1 个探测位；索引 key 缺失/启动全量重建时 SCAN+DEL 全量收敛。
 
 ### 6.12 Set 基建组件 SetCache 与域收口
@@ -528,11 +537,122 @@ com.itheima/
 
 - **helper 语义**（`static/js/chunkedList.js`）：`createChunkedList({fetchChunk, chunkSize, batchSize, keyOf})` → `nextBatch()/hasMore()/reset()`。"大 chunk 拉取 + 本地小批展示"：本地余量足够时不发请求，用尽才拉下一页。
 - **去重（T11-B）**：内部 `seen` 集合按 `keyOf` 过滤已展示条目——只兜"翻页期间集合变化导致的 offset 漂移"，**不替代后端契约**（后端"页间不重不漏"仍由 pytest 直打 API 验证，去重不得掩盖后端分页 bug）。`keyOf` 缺省依次取 `item.userId`/`item.commentId`/`item.id`；**评论 VO 同时含 `userId`（作者）与 `commentId`，评论类列表必须显式传 `keyOf: c => c.commentId`**，否则同一作者的多条评论会被折叠；`keyOf` 返回 `null` 的条目不参与去重（不吞条目）。单次 `nextBatch` 内最多再拉 10 个 chunk（防"整页重复"死循环）。
+- **后端页间确定性的构造保证（日志第三张清单 T15，治池 U-25）**：`/search/keywordSearch` 两分支（单字符 `title LIKE`、多字符 `MATCH … AGAINST`）此前缺 id tie-breaker（`ContentDao.keywordSearchInBrief` 两处 `ORDER BY c.create_time DESC`）——同秒创建内容的顺序**取决于执行计划**（实测随 `LIMIT` 变化：`LIMIT 0,1` 走 `idx_del_time` 反向索引扫描、域级信封 `LIMIT 0,100` 翻为全表扫描 + `Using filesort`），offset 分页下页间可重可漏；前端 `seen` 去重只兜漂移、**掩盖**该缺陷。T15 补齐 `, c.id DESC` 后，四域内容列表（feed/search/profile/admin）排序一律 `create_time DESC, id DESC`，同秒顺序**由构造保证而非巧合**（对齐 6.17 的口径）。
 - **信封大小自适应（T11-B）**：`chunkSize` 只作初始/兜底值，首次成功响应后用响应回显的 `pageSize` 覆盖——信封大小由**后端域级常量**决定，前端可只传 `page`。
 - **消费方（5 处；T19 起全部只传 `page`）**：`views/detail.js`（评论主楼，chunk 兜底 200 / 小批 10）、`views/user.js`（关注/粉丝 sheet 与创作网格 `/profile`，chunk 100 / 小批 10）、`views/follow.js`（`/feed`，chunk 100 / 小批 10）、`views/search.js`（结果，chunk 100 / 小批 12）、`views/publish.js`（我的投稿 `/profile`，chunk 100 / 小批 12）。**信封大小一律由后端域常量决定**（feed/search/profile/follow = 100，评论 = 200），消费方不再传 `pageSize`；chunk 常量仅作"首次请求失败时判末页"的兜底（T19 前 `follow`/`search`/`profile` 三处的后端上限未参数化、被公共 cap 50 顶住）。
 - **本地重渲染口径（T11-B）**：`publish.js` 的"删除模式切换 / 删除卡片 / 编辑保存"从"重拉当前页"改为**本地条目集重渲染**（`state.myItems`；编辑走 `search/IdSearch` 定向刷新单条）——原实现在第 N 页会重复追加第 N 页卡片。
 
+### 6.20 访问日志与耗时基线（日志体系 T1~T3 底座 + 挂点）
+
+- **输出端**：`LogUtil` 规格表第三项 `access`（`log.access.file`，默认 `access.log`，相对路径取文件名锚 `log.file` 目录，轮转/编码与 system/error 同构）——挂**专属 logger `"access"`**（`LogUtil.getAccessLogger()`），`useParentHandlers=false`：access 行**只进 access.log**，system.log 保持纯应用日志（反向：应用日志也不会下发到 access）。
+- **挂点**：`filter/AccessLogFilter`（web.xml **最外层**，唯一获批红线例外 D3）——进入 `LogContext.setRequestId(newRequestId())`（reqId 唯一生成源）、`finally` 结算耗时（`System.nanoTime`，覆盖全 filter 链 + servlet，整除 ms）、读结果码与 userId 后写一行、`LogContext.clear()`（reqId + 结果码一并清，D6 只此一处 set/clear）。
+- **行形态**：`ts=… level=INFO logger=access req=<id> msg=method=… path=… userId=… code=… cost=…ms slow=0|1`（复用 `LogFormatter` 单行 key=value）。
+- **结果码**：`BaseServletUtil.writeSuccess`（body 恒 200）/`writeError(int,…)` 写响应时收口进 `LogContext`（D5，不包装响应读 body）；缺省 **0** = 未走业务统一出口（静态资源 / OPTIONS 预检 / 未映射 404）；业务/未处理异常经 `ExceptionFilter → writeIfUncommitted → writeError` 自动收口（已提交则保持 0）。
+- **userId 口径**：`request.getAttribute("userId")`（LoginFilter 内层已注入 `Long`），无 → `-`（login 等公共端点无 token 即 `userId=-`，属预期）。
+- **脱敏**：只记 `method` + `path`（`getRequestURI` 去 contextPath，天然不含 query）；**不记** query 串 / header / 请求体——D7"绝不记"以不记为脱敏（token / 手机号明文 / 密码零落盘；应用日志按需记敏感字段时走**统一出口 `StringUtil.maskForLog`**，见 6.22 / `LOG_CONVENTION` 3.7）。
+- **慢请求标记**：`cost >= log.slowRequestMs`（默认 1000ms，可配）→ `slow=1`；打标记不另起一行、不设独立性能日志文件（D7）。
+- **用途**：每接口耗时基线的聚合来源；`grep req=<id>` 可在 access.log 与 system.log 间端到端串联同一次请求（异常/降级路径的应用日志带同一 `req=`）——D6 收益的实际落地。**消费侧已落地（日志第三张清单 T13，`log3-13`）**：`tools/log_report.py`（挂 `tv.py` 子命令 `log-report`，**只读**）基于本行 `cost=` / `slow=` / `code=` 做 **`req=` 跨四端追溯 + 按 path 耗时分布与慢请求 + 错误率（4xx 预期拒绝 / 5xx 失败分列）**，并输出 `--json` 机器可读形态；用法与判读见 `说明书/TEST_AUTOMATION.md` §4.6。
+- **断言口径（T4）**：**装配层**由 JUnit 覆盖（输出端规格表取名自配置、各端 level、`access` 专属 handler 与 `useParentHandlers=false`、轮转文件名模式与保留个数）；**文件级分流与串联**由 pytest `src/test/python/test_log_outputs.py` 覆盖（`error` 只收 SEVERE、`access` 与 `system` 互不污染、access 行严格单行结构化 + LF 行尾、同一 `req` 在 access/system/error 三输出端串联、未处理异常路径 `code=500` 收口）。
+
+### 6.21 审计日志（第二张清单 T8：管理端写操作 + 用户敏感变更留痕）
+
+- **目标**：管理端写操作与用户敏感变更的**成功路径**可追溯"谁、何时、做了什么"；**只落文件、不落库**（本周期无 DDL）。
+- **输出端**：`LogUtil` 规格表**第四项** `audit`（`log.audit.file`，默认 `audit.log`，相对路径取文件名锚 `log.file` 目录）——挂**专属 logger `"audit"`**（`LogUtil.getAuditLogger()`），`useParentHandlers=false`：审计行**只进 audit.log**（反向：应用日志也不会下发到 audit）；阈值**固定 INFO、不取 `log.level`**（审计不得被运维开关静默）；轮转沿用 `log.maxBytes` / `log.fileCount`。扩展代价 = 规格表加一项 + 配置加一个键，**持有 LOGGER 的业务类零改动**（D9 底座的首个实践）。
+- **记录器**：`util/AuditLog.success(action, operatorId, target)` —— 只记成功（失败由既有 `SEVERE` 承载，不重复记）；**写失败吞掉降级，不影响业务**（注意 JUL 的 `Logger.log` 不对 handler 异常兜底 → 该 try/catch 承重）；包可见纯函数 `buildLine` 供单测直测。
+- **操作者口径**：管理端读 `LoginFilter` 放入的 `userId` attribute（`AuthFilter` 对 `/api/admin` 先判非空并校验 `role==1`，故控制器内**理论不可达 null**，代码按全仓同款 `(Long)` 直取）；用户侧**方法入参即操作者**，**不给 service 加 `operatorId` 参数**（B 形态已否决，见 NEEDS 三节议程块 ②）。
+- **行形态**：`ts=… level=INFO logger=audit req=<id> msg=action=… operatorId=… target=… result=success`（复用 `LogFormatter` 单行 key=value；时间与 `req=` 由前缀提供，避免重复）。
+- **脱敏**：审计行只含**对象标识**与操作名——请求体 / query 串 / 密码 / 手机号明文一律不落盘（pytest 有"明文缺席"断言）。
+
+**7 个操作点**（形态 A：管理端 controller 层补点、零签名改动；用户侧 service 层）：
+
+| 操作点 | 操作名 | 操作者来源 | 对象（target） |
+| ---- | ---- | ---- | ---- |
+| `POST /api/admin/content/hide` | `admin.content.hide` | `req.getAttribute("userId")` | `contentId:<id>` |
+| `POST /api/admin/content/unhide` | `admin.content.unhide` | 同上 | `contentId:<id>` |
+| `POST /api/admin/media/restore` | `admin.media.restore` | 同上 | `mediaId:<id>` |
+| `POST /api/admin/comment/delete` | `admin.comment.delete` | 同上 | `commentId:<id>` |
+| `UserService.changePassword` | `user.changePassword` | 方法入参 `userId` | `userId:<id>` |
+| `UserService.changeUserName` | `user.changeUserName` | 同上 | `userId:<id>` |
+| `UserService.changePhone` | `user.changePhone` | 同上 | `userId:<id>`（**当前无 HTTP 入口**，仅 JUnit 覆盖） |
+
+- **断言口径（T8）**：**装配层 + 写失败守卫**归 JUnit（`LogUtilTest` = 第 4 输出端/专属 handler/配置键；`AuditLogTest` = 行形态纯函数 + 记录写向 audit logger + 抛异常 handler 下守卫吞掉异常）；**文件级留痕 + `audit.log` 与 `system`/`access` 互不污染**归 pytest `src/test/python/test_audit_log.py`（6 个可 HTTP 触达点各恰好一条 + 无敏感值）。
+- **级别与粒度标准**：`说明书/LOG_CONVENTION.md` 3.5（审计留痕口径）；审计行**不占** `system.log` 的 INFO 配额。
+
+### 6.22 业务里程碑 INFO 与统一脱敏出口（第二张清单 T9）
+
+- **目标**：让"业务成功了什么"可事后追溯（此前全仓 `INFO` 只有 5 处基础设施日志、**业务成功路径 0 处**），同时给"要记敏感字段"的场景一个唯一出口。
+- **输出端**：**不新建输出端**（走既有多输出端底座的 `system` 路：业务类 logger 经 root 下发 → `system.log`，阈值 `log.level` 默认 INFO）；请求线程内自动带 `req=`，可与 access 行按 `req` 串联。
+- **7 个补点**（一律"事务提交后、缓存同步前"= 落库即成功；**失败路径不记**，由既有 `SEVERE` 承载）：
+
+| 里程碑 | 记录点 | msg |
+| ---- | ---- | ---- |
+| 登录成功 | `user/service/UserService#doLogin`（三条 `login` 重载的唯一收口，含注册后的自动登录） | `登录成功, userId=<id>` |
+| 用户注册成功 | `UserService#registerAsUser` | `用户注册成功, userId=<id>` |
+| 内容发布 | `content/service/ContentService#addVideo` / `#addPost` | `添加视频成功, contentId=<id>, userId=<id>`（同构：添加动态成功…） |
+| 作者删除作品 | `ContentService#deleteContent` | `删除内容成功, contentId=<id>, userId=<id>` |
+| 关注 / 取关 | `follow/service/FollowService#follow` / `#unfollow` | `关注成功, userId=<id>, followedUserId=<id>`（同构：取关成功…） |
+
+- **与 6.21 审计的边界**：审计 = 管理端写操作 + 账号敏感变更（→ `audit.log`，专属 logger）；里程碑 = 非审计的业务状态迁移（→ `system.log`，业务 logger）——**零重叠**，文件级有断言（pytest 里里程碑行不出现在 `audit.log`，反之 `test_audit_log.py` 已证审计行不进 `system.log`）。
+- **明确不记**（同批评判结论）：点赞·取消点赞、评论发表·删除、作品编辑类（`update`/`mediaDelete`/`commentEnabled`/`replaceMedia`）——高频或常规写操作；管理端与账号敏感变更属 6.21。
+- **统一脱敏出口** = `util/StringUtil#maskForLog(field, value)`：按字段类型名 + **值形态**分派（当前仅 `phone`，仅通过 `phoneCheck` 时保留首 3 + 末 4），**fail-closed**（未登记字段名 / null / 空值 / 形态不符一律 `******`）；既有 `StringUtil.maskPhone` 保留为实现、经本出口调用（`UserService` 注册失败的既有 `SEVERE` 行已改走出口）。**不新建类、不做策略表 / 注解式脱敏**（全仓需脱敏字段仅 1 种、调用点 1 处）——扩展方式见 `LOG_CONVENTION` 3.7。
+- **断言口径（T9）**：**单测**归 JUnit——`src/test/java/com/itheima/util/LogProbe`（共享探针，`*Test` 命名不匹配故不会被 surefire 当用例执行；T11-B 起新增 `stackedRecords()` / `assertExactlyOneStacked(...)` 供"包装点即源头"契约断言）+ `UserServiceTest` / `ContentServiceTest` / `FollowServiceTest` 断言"成功恰一条 INFO / 失败零 INFO"、`StringUtilTest` 断言出口的 fail-closed 契约；**落盘 / 分流 / 无敏感值**归 pytest `src/test/python/test_milestone_log.py`（7 点各自恰好一条、"只落 `system.log`"、全文件不变式"无 11 位手机号明文"）。
+- **级别与粒度标准**：`说明书/LOG_CONVENTION.md` 3.2-必记③ / **3.6**（里程碑口径）/ **3.7**（脱敏出口）。
+
 ---
+
+### 6.23 事务基础设施异常与"包装点即源头"定栈（第二张清单 T11）
+
+- **问题**：`TransactionTemplate.execute` 的**自身步骤**（`getConnection` / `setAutoCommit` / `commit`）失败时**不记任何日志**，
+  只把异常包成 `DatabaseException("数据库操作失败")`；而 `DatabaseException ⊂ ServerException ⊂ BusinessException`
+  → 出口 `ExceptionFilter` 的 `BusinessException` 分支按"可预期业务拒绝"只记 `WARNING` **且不带堆栈**
+  → **非缓存业务路径的数据库不可达在全链没有任何堆栈**（T7 前既存缺口）。
+- **定案（判据唯一源 = `说明书/LOG_CONVENTION.md` §3.1 附加纪律 2）**：**"包装点即源头"** —— 包装成
+  `DatabaseException`/`ServerException` 的那一处记 `SEVERE` + 堆栈；下游吸收点/结论行/上下文行只记结论与业务标识。
+  `TransactionTemplate` 的 `catch (BusinessException)`（业务层已持栈）与 `catch (RuntimeException)`
+  （最终由 `ExceptionFilter`"未处理异常"或缓存吸收点带栈）**不记**，避免新双栈。
+- **持栈归属（重排后）**：业务链 = 业务层原地 `SEVERE` + `ExceptionFilter` 结论行；事务基础设施 = `TransactionTemplate`；
+  内容装载链 = DAO 级 `SQLException` / 基础设施失败 → `TransactionTemplate`，逃出模板的非业务异常 →
+  `ContentCache` 的 `catch (Exception)`（`WARNING`）；吸收点 `CacheAside` 全部去栈；
+  评论树链 = `CommentCache` 七个 `catch (SQLException)` 包装点；吸收点七个去栈（其中 `ensureRootsWindow` 外层按
+  "是否 `DatabaseException`"**拆 catch**：数据库侧去栈、Redis `CacheException` 侧持栈——该侧在全链无其它带栈载体）；
+  关注/点赞回填链 = loader 源头 `SEVERE`（**保留**，它同时是 answer/单读路径直达 `ExceptionFilter` 的唯一栈）
+  + 回填吸收点去栈 → **T7 登记的残余关闭**。
+- **例外**：包装点自身可为 `WARNING`（级别与持栈是两件事）；"吸收点即该链唯一捕获点"（吞掉型）必须持栈。
+- **覆盖边界**：`catch (Exception)`/`catch (RuntimeException)` 型吸收点去栈后，"逃出模板的非业务 RuntimeException"
+  （关停期 `IllegalStateException("连接池已关闭")`、编程错误）在该链无栈 —— 该失败已被自动吸收、对外可用性未受损
+  （§3.1-② 判 `WARNING`）；不引入"按类型分流"分支。
+
+- **同族业务 wrap 缺口（第 2 次提交 log2-T11-B，2026-09-23）**：8 处"包装成 `DatabaseException`/`ServerException` 但不记日志"的
+  业务 wrap 点已按同一定案收口——`CommentService.getRepliesForRoot` 2（`findMainById` / `getRepliesInTreeByRoot`）、`UserService.isAdmin` 1、
+  `FollowService.loadUserList` 1（关注/粉丝两个入口共用）、`CouponService` 4（`grabCoupon` 内外层 + 两个列表查询；该类**新增 `LOGGER` 字段**）。
+  逐点在 `throw` 前补 `SEVERE` + 堆栈，消息只放 id / size（`rootId` / `userId` / `ids.size()` / `couponId`），**不记 SQL 文本与参数**；
+  `CouponService` 的 `ConflictException("您已抢过该优惠券")` 属可预期拒绝 → **不补**（§3.1 附加纪律 1）。
+- **同批判"不补"**：9 处 `catch (Exception)` 紧跟 `catch (RuntimeException) { throw e; }` 的分支（`FollowCache` 5 / `LikeCacheService` 3 /
+  `TransactionTemplate` 1）**实际不可达**（动作体是 lambda，逃不出 checked 异常），沿用第 1 次提交对 `TransactionTemplate` 同型分支的裁决
+  （代码内已留注释）；另 4 处**非 catch 内、无根因**的防御式抛出（`UserService` 3 处 `rows==0` 校验 + `ContentCache` 的 `ServerException("未知内容类型")`）
+  不属"包装点"，范围外。
+- **断言口径（T11-B）**：8 处均由 JUnit 断言"**恰一条**带堆栈记录、级别 `SEVERE`、根因类型 `SQLException`"
+  （共享探针 `src/test/java/com/itheima/util/LogProbe` 新增 `stackedRecords()` / `assertExactlyOneStacked(...)`）；JUnit 616 → **620**。
+
+### 6.24 可预期业务拒绝的级别修正（日志第三张清单 T12）
+
+- **问题（NEEDS R-08 / R-18）**：`UserService` 的 `changePassword` / `changeUserName` / `changePhone` 三个敏感变更方法，
+  把业务方法内抛出的**可预期拒绝**（`ParamException` 400 / `PasswordIncorrectException` 401 / `ConflictException` 409）
+  与真失败一起收进同一个 `catch (BusinessException e)` → 记 **`SEVERE` + 堆栈** → 按 `log.error.level=SEVERE` 的阈值
+  **落进 `error.log`**（e2e 实测 401/409 各产生带栈记录：堆栈续行 47 行 = 46 行栈 + 1 空行，口径 = 记录行与下一条 `ts=` 行之间的行数），与 `LOG_CONVENTION.md` §3.1 附加纪律 1（"**`SEVERE` 必须可行动**"）不符。
+- **判据与形态（2026-09-24 定案）**：**按异常类型拆 catch**（`instanceof` 分流已否决）——
+  `catch (ParamException | PasswordIncorrectException | ConflictException e)` → `WARNING`、只带业务标识 `userId`、**不带栈**；
+  原 `catch (BusinessException e)` 降为**兜底**（`UserNotFoundException` 401 与 `rows==0` 的 `DatabaseException` 等真失败仍 `SEVERE` + 堆栈）；
+  `catch (SQLException e)` 分支不变（"包装点即源头"，T11 口径）。异常类型 / 文案 / 控制流 / 对外响应 / 事务语义**零变化**。
+- **覆盖与边界**：三处均拆；`UploadController` 3 处 `catch (BusinessException e)` **只做文件清理、不记日志**（非同族偏差、不动）；
+  `UserService.registerAndLogin` 的兜底行（`WARNING` 无栈）与 `ExceptionFilter` 的结论行口径（`WARNING`）本即合规、不在范围；
+  `UserNotFoundException`（401）**仍按真失败**记 `SEVERE` + 栈——它是"令牌指向的用户已不存在"的数据异常，不属可预期拒绝。
+- **副作用（实测）**：400/401/409 **不再落 `error.log`**（该端阈值 `SEVERE`），改由 `system.log` 的 `WARNING` 结论行（源头）+ `WARNING` 结论行（`ExceptionFilter`）承载；
+  调用点 159 → **162**（**+3** = 三个新 WARNING 分支；原 3 处 SEVERE 兜底仍是调用点、**计数不变**，仅覆盖面收窄）、WARNING 84 → **87**（级别语义修正，无新增能力）。
+- **断言口径（T12）**：**JUnit**（`UserServiceTest` + `LogProbe`）——三方法各断言"可预期拒绝 `WARNING` 恰一条、带栈记录 **0** 条、`SEVERE` **0** 条"，
+  真失败（`rows==0`）断言 `assertExactlyOneStacked(..., SEVERE, ..., DatabaseException.class)`；**文件级分流**归 pytest
+  `src/test/python/test_log_outputs.py`（新增用例：401 / 400 / 409 各按 `req=` 定位 → `system.log` 有 `WARNING` 结论行且无堆栈续行、`error.log` 该 `req` **0 条**）。
+  判据唯一源 = `说明书/LOG_CONVENTION.md` §3.1 附加纪律 1。
 
 ## 七、API 接口清单
 

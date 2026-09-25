@@ -4,6 +4,18 @@
         <welcome-file>index.html</welcome-file>
     </welcome-file-list>
 
+    <!-- T3（log-03，D3 唯一获批红线例外）：访问日志最外层 filter。只新增本注册，
+         既有 4 个 filter 的声明与映射顺序、welcome-file-list 一律不动。
+         位于最外层 = 计时与 reqId 覆盖最完整，reqId 由本 filter set/clear（LogContext）。 -->
+    <filter>
+        <filter-name>AccessLogFilter</filter-name>
+        <filter-class>com.itheima.filter.AccessLogFilter</filter-class>
+    </filter>
+    <filter-mapping>
+        <filter-name>AccessLogFilter</filter-name>
+        <url-pattern>/*</url-pattern>
+    </filter-mapping>
+
     <filter>
         <filter-name>ExceptionFilter</filter-name>
         <filter-class>com.itheima.filter.ExceptionFilter</filter-class>

@@ -95,7 +95,7 @@ public class IocContainer {
                 try {
                     disposable.destroy();
                 } catch (Exception e) {
-                    LOGGER.log(Level.SEVERE, "Bean destroy 失败: " + bean.getClass().getName(), e);
+                    LOGGER.log(Level.WARNING, "Bean destroy 失败: " + bean.getClass().getName(), e);
                 }
                 continue;
             }
@@ -104,7 +104,7 @@ public class IocContainer {
                 m.invoke(bean);
             } catch (NoSuchMethodException ignored) {
             } catch (Exception e) {
-                LOGGER.log(Level.SEVERE, "Bean shutdown 失败: " + bean.getClass().getName(), e);
+                LOGGER.log(Level.WARNING, "Bean shutdown 失败: " + bean.getClass().getName(), e);
             }
         }
     }

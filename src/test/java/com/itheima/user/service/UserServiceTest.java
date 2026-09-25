@@ -15,6 +15,8 @@ import com.itheima.user.model.command.RegisterCommand;
 import com.itheima.user.model.entity.User;
 import com.itheima.user.model.vo.LoginVO;
 import com.itheima.util.JwtUtil;
+import com.itheima.util.LogProbe;
+import com.itheima.util.LogUtil;
 import com.itheima.util.PasswordUtil;
 import com.itheima.util.TransactionTemplate;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,6 +25,12 @@ import org.mockito.ArgumentCaptor;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -119,6 +127,46 @@ class UserServiceTest {
         assertThrows(DatabaseException.class, () -> service.login("13800000001", "abc123"));
     }
 
+    // ------------------------------------------------------------------
+    // T9（log2-09）：成功路径里程碑 INFO——登录
+    // ------------------------------------------------------------------
+
+    @Test
+    void loginSuccessWritesExactlyOneMilestoneInfo() throws SQLException {
+        when(userDao.getUserForLoginByPhone(conn, "13800000001")).thenReturn(loginUser("abc123"));
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        LoginVO vo;
+        try {
+            vo = service.login("13800000001", "abc123");
+        } finally {
+            probe.detach();
+        }
+
+        assertNotNull(vo.getToken());
+        assertEquals(List.of("登录成功, userId=7"), probe.messagesAtLevel(Level.INFO),
+                "登录成功路径应恰有一条里程碑 INFO（请求级访问行由 AccessLogFilter 承担，此处只记业务里程碑）");
+        assertEquals(Level.INFO, probe.records().get(0).getLevel(), "里程碑用 INFO");
+        assertNull(probe.records().get(0).getThrown(), "成功路径不带堆栈");
+        assertFalse(probe.records().get(0).getMessage().contains("13800000001"),
+                "账号（手机号）不落盘——只记 userId");
+    }
+
+    @Test
+    void loginFailureWritesNoMilestoneInfo() throws SQLException {
+        when(userDao.getUserForLoginByPhone(conn, "13800000001")).thenReturn(loginUser("abc123"));
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        try {
+            assertThrows(PasswordIncorrectException.class, () -> service.login("13800000001", "wrong"));
+        } finally {
+            probe.detach();
+        }
+
+        assertTrue(probe.atLevel(Level.INFO).isEmpty(),
+                "失败路径不记 INFO（可预期业务拒绝由 ExceptionFilter 的 WARNING 结论行承载）");
+    }
+
     @Test
     void registerDuplicatePhoneThrowsDuplicatePhoneException() throws SQLException {
         when(userDao.isPhoneUsed(conn, "13800000001")).thenReturn(true);
@@ -148,6 +196,42 @@ class UserServiceTest {
         verify(userDao).addUser(eq(conn), eq("bob"), hashedCaptor.capture(), eq("13800000001"));
         assertNotEquals("abc123", hashedCaptor.getValue());
         assertTrue(PasswordUtil.isPasswordCorrect("abc123", hashedCaptor.getValue()));
+    }
+
+    // ------------------------------------------------------------------
+    // T9（log2-09）：成功路径里程碑 INFO——注册
+    // ------------------------------------------------------------------
+
+    @Test
+    void registerSuccessWritesExactlyOneMilestoneInfo() throws SQLException {
+        stubRegisterSuccess();
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        long id;
+        try {
+            id = service.registerAsUser(RegisterCommand.getInstance("13800000001", "abc123", "bob"));
+        } finally {
+            probe.detach();
+        }
+
+        assertEquals(42L, id);
+        assertEquals(List.of("用户注册成功, userId=42"), probe.messagesAtLevel(Level.INFO),
+                "注册提交成功 = 账号创建里程碑；**不记手机号/用户名**（只记 userId）");
+    }
+
+    @Test
+    void registerFailureWritesNoMilestoneInfo() throws SQLException {
+        when(userDao.isPhoneUsed(conn, "13800000001")).thenReturn(true);
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        try {
+            assertThrows(DuplicatePhoneException.class, () -> service.registerAsUser(
+                    RegisterCommand.getInstance("13800000001", "abc123", "bob")));
+        } finally {
+            probe.detach();
+        }
+
+        assertTrue(probe.atLevel(Level.INFO).isEmpty(), "注册失败不得留下成功里程碑");
     }
 
     // ------------------------------------------------------------------
@@ -332,9 +416,35 @@ class UserServiceTest {
         when(userDao.isPhoneUsed(conn, "13900000002")).thenReturn(false);
         when(userDao.updateUserPhone(conn, 7L, "13900000002")).thenReturn(1);
 
-        service.changePhone(7L, "13800000001", "13900000002");
+        // T8：该点**无 HTTP 入口**（e2e 覆盖不到）→ 在此断言"成功恰留一条审计记录"，补齐验收①的 7/7。
+        // 探针挂真实 audit logger、用完摘除；记录同时会经真实 FileHandler 落 JUnit 链路日志目录。
+        List<LogRecord> auditRecords = new ArrayList<>();
+        Handler probe = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                auditRecords.add(record);
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        Logger auditLogger = LogUtil.getAuditLogger();
+        auditLogger.addHandler(probe);
+        try {
+            service.changePhone(7L, "13800000001", "13900000002");
+        } finally {
+            auditLogger.removeHandler(probe);
+        }
 
         verify(userDao).updateUserPhone(conn, 7L, "13900000002");
+        assertEquals(1, auditRecords.size(), "changePhone 成功路径应恰有一条审计记录");
+        assertEquals("action=user.changePhone operatorId=7 target=userId:7 result=success",
+                auditRecords.get(0).getMessage(), "审计行口径见 AuditLog 类注释 / LOG_CONVENTION 3.5");
     }
 
     @Test
@@ -352,6 +462,143 @@ class UserServiceTest {
     @Test
     void isAdminSqlErrorWrapsDatabaseException() throws SQLException {
         when(userDao.getUserRole(conn, 7L)).thenThrow(new SQLException("db down"));
-        assertThrows(DatabaseException.class, () -> service.isAdmin(7L));
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        try {
+            assertThrows(DatabaseException.class, () -> service.isAdmin(7L));
+        } finally {
+            probe.detach();
+        }
+
+        // T11-B：包装点即源头——本链唯一的带堆栈记录（ExceptionFilter 侧只有不带栈的结论行）
+        LogProbe.assertExactlyOneStacked(probe, Level.SEVERE,
+                "查询用户角色失败, userId=7", SQLException.class);
+    }
+
+    // ------------------------------------------------------------------
+    // T12（log3-12）：可预期业务拒绝的级别修正——400/401/409 → WARNING 无栈（不再落 error.log）；
+    // 兜底真失败（UserNotFoundException / rows==0 的 DatabaseException）仍 SEVERE + 栈
+    // ------------------------------------------------------------------
+
+    @Test
+    void changePasswordExpectedRejectionsLogWarningWithoutStack() throws SQLException {
+        when(userDao.getUserForLoginById(conn, 7L)).thenReturn(loginUser("abc123"));
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        try {
+            // 401：旧密码错误（PasswordIncorrectException ⊂ AuthException）
+            assertThrows(PasswordIncorrectException.class, () -> service.changePassword(
+                    7L, new ChangePasswordCommand("13800000001", "old", "new1")));
+            // 400：手机号不匹配（ParamException）
+            assertThrows(ParamException.class, () -> service.changePassword(
+                    7L, new ChangePasswordCommand("13900000002", "abc123", "new1")));
+        } finally {
+            probe.detach();
+        }
+
+        assertEquals(List.of(
+                "修改密码失败（可预期拒绝）, userId=7",
+                "修改密码失败（可预期拒绝）, userId=7"), probe.messagesAtLevel(Level.WARNING),
+                "可预期拒绝（400/401）应各记一条 WARNING 结论行（带 userId 业务标识）");
+        assertTrue(probe.stackedRecords().isEmpty(), "可预期拒绝不得持栈（堆栈只留给真失败）");
+        assertTrue(probe.atLevel(Level.SEVERE).isEmpty(), "可预期拒绝不得再记 SEVERE（否则仍会落 error.log）");
+    }
+
+    @Test
+    void changePasswordRealFailureStillLogsSevereWithStack() throws SQLException {
+        when(userDao.getUserForLoginById(conn, 7L)).thenReturn(loginUser("abc123"));
+        when(userDao.updateUserPassword(eq(conn), eq(7L), anyString())).thenReturn(0);
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        try {
+            assertThrows(DatabaseException.class, () -> service.changePassword(
+                    7L, new ChangePasswordCommand("13800000001", "abc123", "new1")));
+        } finally {
+            probe.detach();
+        }
+
+        // T12 不破 T11 定栈：真失败（rows==0 → DatabaseException ⊂ ServerException，500 类）仍由兜底分支
+        // 记 SEVERE + 堆栈，且仍恰一条（ExceptionFilter 侧只有不带栈的结论行）
+        LogProbe.assertExactlyOneStacked(probe, Level.SEVERE,
+                "修改密码失败, userId=7", DatabaseException.class);
+    }
+
+    @Test
+    void changeUserNameConflictLogsWarningWithoutStack() throws SQLException {
+        when(userDao.isUserExist(conn, 7L)).thenReturn(true);
+        when(userDao.isUsernameUsed(conn, "newName")).thenReturn(true);
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        try {
+            // 409：用户名已被占用（ConflictException）
+            assertThrows(ConflictException.class, () -> service.changeUserName(7L, "newName"));
+        } finally {
+            probe.detach();
+        }
+
+        assertEquals(List.of("修改用户名失败（可预期拒绝）, userId=7"), probe.messagesAtLevel(Level.WARNING));
+        assertTrue(probe.stackedRecords().isEmpty(), "409 不得持栈");
+        assertTrue(probe.atLevel(Level.SEVERE).isEmpty(), "409 不得再记 SEVERE（否则仍会落 error.log）");
+    }
+
+    @Test
+    void changeUserNameRealFailureStillLogsSevereWithStack() throws SQLException {
+        when(userDao.isUserExist(conn, 7L)).thenReturn(true);
+        when(userDao.isUsernameUsed(conn, "newName")).thenReturn(false);
+        when(userDao.updateUserName(conn, 7L, "newName")).thenReturn(0);
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        try {
+            assertThrows(DatabaseException.class, () -> service.changeUserName(7L, "newName"));
+        } finally {
+            probe.detach();
+        }
+
+        LogProbe.assertExactlyOneStacked(probe, Level.SEVERE,
+                "修改用户名失败, userId=7", DatabaseException.class);
+    }
+
+    @Test
+    void changePhoneExpectedRejectionsLogWarningWithoutStack() throws SQLException {
+        User dbUser = new User(7L, "hash", "alice", "13800000001");
+        when(userDao.getUserForProfileById(conn, 7L)).thenReturn(dbUser);
+        when(userDao.isPhoneUsed(conn, "13900000002")).thenReturn(true);
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        try {
+            // 400：新手机号格式非法（InvalidPhoneException ⊂ ParamException）
+            assertThrows(InvalidPhoneException.class, () -> service.changePhone(7L, "13800000001", "123"));
+            // 400：新手机号与旧手机号相同（ParamException）
+            assertThrows(ParamException.class, () -> service.changePhone(7L, "13800000001", "13800000001"));
+            // 409：新手机号已被占用（DuplicatePhoneException ⊂ ConflictException）
+            assertThrows(DuplicatePhoneException.class, () -> service.changePhone(7L, "13800000001", "13900000002"));
+        } finally {
+            probe.detach();
+        }
+
+        assertEquals(List.of(
+                "修改手机号失败（可预期拒绝）, userId=7",
+                "修改手机号失败（可预期拒绝）, userId=7",
+                "修改手机号失败（可预期拒绝）, userId=7"), probe.messagesAtLevel(Level.WARNING));
+        assertTrue(probe.stackedRecords().isEmpty(), "可预期拒绝（400/409）不得持栈");
+        assertTrue(probe.atLevel(Level.SEVERE).isEmpty(), "可预期拒绝不得再记 SEVERE（否则仍会落 error.log）");
+    }
+
+    @Test
+    void changePhoneRealFailureStillLogsSevereWithStack() throws SQLException {
+        User dbUser = new User(7L, "hash", "alice", "13800000001");
+        when(userDao.getUserForProfileById(conn, 7L)).thenReturn(dbUser);
+        when(userDao.isPhoneUsed(conn, "13900000002")).thenReturn(false);
+        when(userDao.updateUserPhone(conn, 7L, "13900000002")).thenReturn(0);
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(UserService.class));
+        try {
+            assertThrows(DatabaseException.class, () -> service.changePhone(7L, "13800000001", "13900000002"));
+        } finally {
+            probe.detach();
+        }
+
+        LogProbe.assertExactlyOneStacked(probe, Level.SEVERE,
+                "修改手机号失败, userId=7", DatabaseException.class);
     }
 }

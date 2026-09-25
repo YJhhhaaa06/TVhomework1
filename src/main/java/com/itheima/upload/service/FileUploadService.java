@@ -33,11 +33,9 @@ public class FileUploadService {
 
         // 2. 生成文件名
         String fileName = UUID.randomUUID() + getSuffix(part);
-        LOGGER.fine("文件保存, fileName=" + fileName);
 
         // 3. 目录
         String basePath = getBasePath();
-        LOGGER.fine("文件保存, path=" + basePath);
         File dir = new File(basePath, type.getDir());
         if (!dir.exists()) dir.mkdirs();
 

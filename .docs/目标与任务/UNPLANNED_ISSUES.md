@@ -22,76 +22,17 @@
 
 | 编号 | 类别 | 问题 | 位置/证据 | 来源 | 状态 |
 |----|------|------|-----------|------|------|
-| U-11 | 观察（降级质量） | Redis 停机时 `/start` 推荐返回**空列表**（HTTP 200 `data:[]`），无 DB 兜底——`getRecommendByFilter` 依赖 Redis 索引（`ensureIndex` 懒重建需写 Redis、失败"本次推荐降级为空"；`readIndex` 失败"降级为空推荐"），索引不可读即无候选可批量装载。属**既有语义**（C 周期实现注释明写"Redis 异常降级为空/不 crash"），非 T1 引入；T1 熔断只是让"降级为空"来得更快。业务未 500，但"缓存失败不导致业务失败"在此处体现为"返回空推荐"而非"DB 兜底推荐"，用户可感知 | `ContentCache.ensureIndex`（懒重建失败 catch"降级为空"）；`ContentCache.readIndex`（catch"降级为空推荐"）；运行时实证：docker stop redis → /start 38B 空响应（2026-09-13） | 三期 T1（cache-01）运行时验证发现（2026-09-13）；2026-09-15 复查发现**加重面**（四期 NEEDS 4.1 的 N1：停机期间每次 /start 重试索引全量重建，逐请求 DB 全表查询，无失败退避） | 空推荐语义维持留池；**N1 加重面已随第四期 T5 落地**（`refactor(cache-05)`，2026-09-16——重建失败进程内冷却退避，停机期间零 DB 查询）；"停机返回 DB 兜底推荐"属对外行为变更，第四期 4.3 明确不做、留池待另行拍板（第四期已归档 2026-09-17） |
-| U-17 | 观察（能力缺失 / 限流） | **限流能力缺失**（2026-09-19 改写；原记为"超卖风险"）：抢购接口无用户级/接口级限流与排队，高并发下**无效请求直打 DB**（DB 压力与长尾延迟放大）。**前提已核实**：超卖与重复抢在 DB 层**已被阻止**——`coupon/dao/CouponDao.java:20` 为单语句条件更新（`UPDATE coupon SET stock = stock - 1 WHERE id = ? AND stock > 0 AND begin_time <= NOW() AND end_time >= NOW()`，InnoDB 行锁原子）+ `coupon_order` 唯一索引（1062 → "您已抢过该优惠券"）；故本项属**新能力建设**而非修缺陷 | `CouponService.grabCoupon()`（`deductStock` 条件更新 + `insertOrder` 唯一索引兜底）；`CouponDao.deductStock:20` | `BUSINESS_FLOW` 八节问题5（2026-07-23 登记；2026-09-18 T2 常青瘦身转出）；2026-09-19 第七期评估改写 | 待定（留池）：若做，形态 = 进程内限流（令牌桶等），**不引入第三方依赖、不引入 MQ**；当前无明确业务场景，故不排期。**2026-09-20 更新（T11 窗口）**：用户提出"攻击者可用脚本直打分页接口打 DB"的场景 → 本项**记入 T11 残余窗口**（不占 T11 范围），供下一窗口拍板；口径澄清：T11-C 改造把冷路径单请求成本从 **O(列表总量)** 降到 **O(页)**，属**缩小**攻击面，但"防脚本"的正解仍是限流，不由缓存形态承担 |
+| U-11 | 观察（降级质量） | Redis 停机时 `/start` 推荐返回**空列表**（HTTP 200 `data:[]`），**无 DB 兜底**——`getRecommendByFilter` 依赖 Redis 索引（`ensureIndex` 懒重建需写 Redis、失败"本次推荐降级为空"；`readIndex` 失败"降级为空推荐"），索引不可读即无候选可批量装载。属**既有语义**（实现注释明写"Redis 异常降级为空 / 不 crash"），业务未 500，但"缓存失败不导致业务失败"在此处体现为"返回空推荐"而非"DB 兜底推荐"，用户可感知 | `content/service/ContentCache.java` 的 `ensureIndex`（懒重建失败 catch"降级为空"）/ `readIndex`（catch"降级为空推荐"）；运行时实证：`docker stop redis` → `/start` 38B 空响应（2026-09-13） | `260921-prep-cleanup`/U-11（原三期 cache-01 运行时验证发现，2026-09-13） | **2026-09-21 裁决 = 维持现状**（立项评审 R-09）：不做"停机返回 DB 兜底推荐"（属对外行为变更）；"N1 加重面"（停机期间逐请求触发索引全量重建）已随第四期 T5 落地（重建失败进程内冷却退避） |
+| U-22 | 代码债 | **评论新增时缓存失效写在 DB 事务回调内**：`addComment` 的 `transactionTemplate.execute` 回调体内直接调 `contentCache.notifyCommentCountChanged(contentId)`——是缓存 **DEL（失效写）**、无嵌套装载，与 U-14 的"缓存读"**判据不同**。现状影响：失效发生在提交前（"先失效后提交"，并发读者可能在窗口内回填刚更新的计数，但 DB 为源真理 + Cache-Aside 读自愈，表现为计数短暂陈旧、非缺陷）；治本需把失效移到**提交后**，属**时序语义变更**，须先拍板 | `comment/service/CommentService.java` 的 `addComment`（execute 回调）→ 回调内 `notifyCommentCountChanged` | `260921-prep-cleanup`/U-22（第七期 T12 窗口全仓扫描发现，2026-09-20） | 留池（**2026-09-22 立项裁决：本周期不入**）：形态 = 将失效移到事务提交后（`addComment` 已在提交后做 `commentCache` 失效，可与之一并收口）；**不引入 MQ / 新依赖** |
+| U-24 | 观察（装载量） | `/profile`（含创作中心「我的投稿」）的装载侧是**全量 id 读 + 内存切片**：`ProfileService.getProfile` 事务内调 `ContentDao.findContentIdsByUser`（SQL **无 `LIMIT`**）取该作者**全部**内容 id，再在内存 `subList(offset, end)` 切出该页 → 单次成本 ∝ **该作者内容总量**（而非页大小）。与已治本的 `U-18`（T11-C）**完全同型**，只是换到 content 域 | `content/service/ProfileService.java:72-78`（`findContentIdsByUser` + 内存 `subList`）；`content/dao/ContentDao.java:185-197`（无 `LIMIT`/`OFFSET`） | `260921-prep-cleanup`/U-24（第七期 T19 窗口探索发现，2026-09-21） | 待定（留池）：形态同 `U-18`/T11-C —— DAO 补窗口 SQL（`ORDER BY create_time DESC, id DESC LIMIT ? OFFSET ?`）+ 独立 count（`countContentByUser` 已存在）；需先 `EXPLAIN` 评估 `user_id + create_time` 索引成本。**不动** `/feed` 的关注 ids 全量读（R-01 明确保留） |
+| U-25 | 观察（分页正确性） | `/search/keywordSearch` 的 SQL 排序为 `ORDER BY c.create_time DESC`（**无 id tie-breaker**），而 `/feed`、`/profile` 均为 `create_time DESC, id DESC` → 同一秒创建的多条内容在页间顺序**不确定**，offset 分页下跨页可能**重复或漏项**（不稳定排序漂移）。放大 chunk 只减少跨页次数、不消除风险；且前端 `chunkedList` 的 `seen` 去重会**掩盖**该后端缺陷（helper 注释已明写"去重只兜漂移，不替代后端『页间不重不漏』的正确性"） | `content/dao/ContentDao.java:272`（单字符 `LIKE` 分支）与 `:278`（`MATCH … AGAINST` 分支）——两处 `ORDER BY c.create_time DESC` 后均无 `, c.id DESC` | `260921-prep-cleanup`/U-25（第七期 T19 窗口探索发现，2026-09-21） | **已落地关闭（日志第三张清单 T15，2026-09-25）**：两分支补 `, c.id DESC`（与 feed/profile 同口径）。流转链 = 2026-09-22 立项裁决**暂时留池** → 2026-09-24 裁入本期（NEEDS **R-17**）→ T15 落地。**实测更正**：原文"验证手段依赖小信封"背后的隐含假设（该分支改动前恰好正确）不成立——LIKE 分支的次序**随执行计划变**（`LIMIT 0,1` 走 `idx_del_time` 反向索引扫描、**域级信封 `LIMIT 0,100` 翻为全表扫描 + `Using filesort`**），故两条分支用例**改动前均红**；用例 = `src/test/python/test_content_paging.py::TestSearchTiebreaker`（2 例） |
 
-| U-18 | 观察（装载量） | 关注/粉丝列表**装载路径仍为全量**：`ZSetCache` miss 单飞回填与 Redis 降级作答都走"DB 全量 loader + 全量 ZADD 回填"（`FollowDao.getAllFollowedUserIds`/`getFollowerUserIds` 无 LIMIT）；T7 只消除了**命中路径**的 `SMEMBERS` 全量回传与 String→Long 装箱（hit 为 `ZRANGE[start,stop]`+`ZCARD`，O(log n + N)）。与 R-01（索引全量读保留）同型：真解决需装载侧分页（DAO 分页 SQL / keyset）或分段回填，属独立改造 | `ZSetCache.getWindow`/`getMembers`（miss 与降级分支的 loader 全量）；`FollowCache.loadFollowingIds/loadFollowerIds`；`FollowDao`（无分页 SQL） | 第六期 T7 执行发现（2026-09-19，随 A1 落地显式登记） | **已处置 → T11-C**（2026-09-20 T11 窗口拍板）：形态 = **P1 前缀窗口装载**——ZSet 成员 = DB 按 id 升序的**前 W 个**（W = ZCARD）+ 新增 `partial:{数据key}` 标记（无标记 = 完整）；分页读按 `[W, offset+count)` 窗口装载、miss 走窗口装载、**降级改 DB 窗口直查不写回**（取代全量装载 + 内存切片）；`partial` 态下判定**未命中回落 DB**、`getMembers` 遇 `partial` **补齐**；写路径任一侧 `partial` → 双 DEL。**DDL**：`follow` 加 `idx_followed_user_user (followed_user_id, user_id)`（G9 闭环）。**边界（不在本项）**：`getFollowingIds` 的 feed 全量关注 ids 读路径（R-01 明确保留）；`follow`/`follower` 计数 key 口径不变。**✅ 已于 2026-09-20 T11-C 窗口落地**（拆 C-1 DDL + 窗口 DAO / C-2 前缀装载；`follow` 加 `idx_followed_user_user` 走 G9 闭环；JUnit 500/0/0/0 + pytest 145；残余竞态与两处实现层偏离见 `NEXT_CYCLE_TASKS.md` T11-C 执行回写） |
-| U-21 | 代码债 | **`FollowCache.getFollowerIds(long)` 成为死方法**：T11-A 删除 `FollowService` 的两个缺省全量重载后，**主代码已无调用方**（`src/main` 全量 grep 仅剩定义处；作对照 `getFollowingIds` 仍被 `FeedService:51` 使用）。**未随之删除属刻意克制**——本任务范围是 follow 域**接口口径**（删 Service 层缺省重载），连带删缓存层公共方法属越界；且 T11-C 要改的正是这批读路径方法，此时删除会与 C-2 的 `partial` 态改造打架 | `follow/service/FollowCache.java:154`；唯一引用 = `src/test/java/com/itheima/follow/service/FollowCacheTest.java:478`（`getFollowerIdsReturnsFollowersFromCacheOrDb`） | 第七期 T11-A 窗口（2026-09-20，执行回写 L1 记录） | **已关闭（2026-09-20 T11-C-2 执行，移出池）**：评估结论 = **删除**——C-2 引入 `partial` 态后它**仍无主代码调用方**（粉丝方向已无全量语义需求，分页读走窗口装载），故连同其唯一单测 `getFollowerIdsReturnsFollowersFromCacheOrDb` 一并删除；连带删除随之失去用途的私有 `loadFollowerIds`（粉丝方向全量 loader）。JUnit 用例数 43 → 50（该类 +8 新增 / −1 删除随本项）。编号不悬空 |
-| U-22 | 代码债 | **评论新增时缓存失效写在 DB 事务回调内**：`CommentService.addComment` 的 `transactionTemplate.execute` 回调体内直接调 `contentCache.notifyCommentCountChanged(contentId)`——是缓存 **DEL（失效写）**、无嵌套装载，与 U-14 的"缓存读"**判据不同**。现状影响：失效发生在提交前（"先失效后提交"，并发读者可能在窗口内回填刚更新的计数，但 DB 为源真理 + Cache-Aside 读自愈，表现为计数短暂陈旧、非缺陷）；治本需把失效移到**提交后**，属**时序语义变更**，须先拍板 | `comment/service/CommentService.java:175`（execute）→ `:200`（`notifyCommentCountChanged`）；T12 窗口全仓扫描（13 文件 / 56 处 execute、含"经私有方法间接调用"形态）命中的唯一"非读"形态 | 第七期 T12 窗口（2026-09-20）全仓扫描发现（未并入 T12，越界） | 待定（留池）：形态 = 将失效移到事务提交后（`addComment` 已在提交后做 `commentCache` 失效，可与之一并收口）；**不引入 MQ/新依赖** |
-| U-23 | 文档滞后 | `说明书/DATABASE.md`（手写建表语句）与 **3306 实际 DDL 大面积不符** | `_docs/说明书/DATABASE.md`：`users` 缺 `role`；`content` 缺 `comment_enabled` / `file_exists` / `last_verify_time`；`comment` 的文本列实为 `content`（该档写 `content` 但缺 `reply_count`）且缺 `idx_content_parent`；`content_media` 类型列实为 `type`；`follow` 缺 `idx_followed_user_user`；该档还**未收录** 3306 实有的 3 张遗留表（`video` / `videoinfo` / `comment_media`）。权威源 = `SHOW CREATE TABLE` 或 G9 备份 `.docs/DBbackups/20260920_163919/db.sql` | 第七期 **T15** 窗口（2026-09-20）文档一致性核对发现（**越出 T15 范围**：T15 只改常青文档；且该档 INDEX 标注"本机 / 敏感、**不追踪**"——改动不进 `git diff`、无 review 通道） | **待定（留池）**：可选去向 = ① 用 `SHOW CREATE TABLE` 重新生成该档 ② 加"**已过期、勿作建表依据、以 3306 为准**"抬头 ③ 废弃该档、指向 `DBbackups/`。**拍板前请勿照它建表**。2026-09-20 已登记，**该档未动** |
-| U-24 | 观察（装载量） | `/profile`（含创作中心「我的投稿」）的装载侧是**全量 id 读 + 内存切片**：`ProfileService.getProfile` 事务内调 `ContentDao.findContentIdsByUser`（SQL **无 `LIMIT`**）取该作者**全部**内容 id，再在内存 `subList(offset, end)` 切出该页 → 单次成本 ∝ **该作者内容总量**（而非页大小）。与池 **U-18**（已随 T11-C 治本）**完全同型**，只是换到 content 域；T19 把信封由 10 提到 100 后单次装载更重，但未动此路径（T19 红线：不改分页语义/返回集/排序） | `content/service/ProfileService.java:72-78`（`findContentIdsByUser` + 内存 `subList`）；`content/dao/ContentDao.java:185-197`（无 `LIMIT`/`OFFSET`） | 第七期 **T19** 窗口（2026-09-21）探索发现（L1 记录，**越出 T19 范围**：属装载侧改造而非分页口径） | 待定（留池）：形态同 T11-C —— DAO 补窗口 SQL（`ORDER BY create_time DESC, id DESC LIMIT ? OFFSET ?`）+ 独立 count（`countContentByUser` 已存在）；需先 `EXPLAIN` 评估 `user_id + create_time` 索引成本。**不动** `/feed` 的关注 ids 全量读（R-01 明确保留） |
-| U-25 | 观察（分页正确性） | `/search/keywordSearch` 的 SQL 排序为 `ORDER BY c.create_time DESC`（**无 id tie-breaker**），而 `/feed`、`/profile` 均为 `create_time DESC, id DESC` → 同一秒创建的多条内容在页间顺序**不确定**，offset 分页下跨页可能**重复或漏项**（不稳定排序漂移）。放大 chunk 只减少跨页次数、不消除风险；且前端 `chunkedList` 的 `seen` 去重会**掩盖**该后端缺陷（helper 注释已明写"去重只兜漂移，不替代后端 ‘页间不重不漏’ 的正确性"） | `content/dao/ContentDao.java:272`（单字符 `LIKE` 分支）与 `:278`（`MATCH … AGAINST` 分支）——两处 `ORDER BY c.create_time DESC` 后均无 `, c.id DESC` | 第七期 **T19** 窗口（2026-09-21）探索发现（L1 记录） | 待定（留池）：修法 = 两分支补 `, c.id DESC`（与 feed/profile 同口径；改变同秒内容的确定顺序，须先拍板）；**验证手段依赖小信封**（`pageSize=1/3` 逐页比对）——这也是 T19 裁定"不硬忽略 `pageSize`"的实证理由之一 |
-
-> **2026-09-20 T11-A 窗口登记（本窗口仅登记一项）**——池内存量 **2 → 3 条**：
-> - **新登记 `U-21`**：`FollowCache.getFollowerIds` 死方法（T11-A 删除 Service 层两个缺省全量重载后无主代码调用方）。**去向 = T11-C 窗口一并评估**（编号不悬空，见本行）。
-> - 其余两条口径不变：`U-11`（停机 `/start` 空推荐，待人拍板）/ `U-17`（限流能力，已挂 T11 残余窗口引用）。
-
-> 已消化/已修复项（U-05、U-08、U-09、U-10）已随各周期落地，2026-09-17 清理移出本档；**U-12（follow 域大集全量装载）已随第六期 T7 落地**（转 NEEDS N11 → T7；残留装载形态转 **U-18**）。U-13（评论树全量）已随第六期 **T8** 落地（2026-09-19：`/comment/show` 主楼分页 + 楼中楼整树、缓存结构不变；装载侧残留与命中路径读放大转 **U-20**）。
-
-> **2026-09-19 第七期处置结果（已执行）**——池由 9 条收敛为 **3 条**；移出项去向如下（编号不悬空）：
-> - **进 TASKS**：`U-14` → **T12**（事务边界同型未治点 2 处）；`U-16` → **T13**（注册后自动登录缺兜底）；`U-07` + `U-19` → **T14**（包层结构清扫：content↔comment 环 + 分页信封上移公共包；`U-07` 同时是 NEEDS 三节 **R-03** 的拍板点）。
-> - **进 NEEDS 4.2 / TASKS 预告**：`U-20`（评论命中路径整树反序列化）→ **T10** 评论分页（预告条目）。
-> - **移出本池（属方向内部工作）**：`U-15`（无统一请求/响应日志）→ 随**日志体系改造方向**立项时盘点。
-> - **已落地移出**：`U-12`（第六期 T7）、`U-13`（第六期 T8）。
-> - **改写后留池**：`U-17`（"超卖风险"前提不成立 → 改写为"限流能力缺失"，见本行）。
-> - **池内存量（3 条）**：`U-11` 停机 `/start` 空推荐（待人拍板）/ `U-17` 限流能力 / `U-18` 装载侧全量（待随 T10/T11 窗口评估）。
-
-> **2026-09-20 T11 窗口处置（已执行）**——池内存量 **3 → 2 条**（`U-18` 已处置），编号去向：
-> - **`U-18`（装载侧全量）→ T11-C**（P1 前缀窗口装载；DDL `follow` 加 `idx_followed_user_user` 走 G9 闭环）：本项正是 2026-09-19 留池时预留的"待随 T10/T11 窗口评估"，评估结论 = **并入 T11 治本**。边界：`getFollowingIds` 的 feed 全量关注 ids 读路径（R-01 保留）不在其内。
-> - **`U-17`（限流能力缺失）维持留池**，但新增引用：**记入 T11 残余窗口**（用户 2026-09-20 提出"脚本直打 DB"场景 → 供下一窗口拍板是否立项；形态仍建议进程内令牌桶、不引依赖）。
-> - **池内存量（2 条）**：`U-11` 停机 `/start` 空推荐（待人拍板）/ `U-17` 限流能力（已挂 T11 残余窗口引用）。
-> - **本窗口新登记（不占池）**：`N15` 残留未治部分 = `main.js` 路由注册硬编码（9 条 `register(...)` + import + 抽屉导航三处同改），记于 `NEXT_CYCLE_NEEDS.md` 4.1"候选去向"段，待前端结构改造同批处理。
-
-> **2026-09-20 T12 窗口处置（已执行）**——池内存量 **2 → 3 条**：
-> - **`U-14`（事务边界同型未治点 2 处）→ T12 ✅ 已完成**（2026-09-20）：`ContentService.search` 与 `FollowService.loadUserList` 的缓存读移出 DB 事务回调（前者逐 key `getContent` 一并换 `getContentsBatch`）；改造后用同一扫描脚本复查，回调内零缓存读。编号不悬空。
-> - **新登记 `U-22`**（见上表）：同一扫描发现 `CommentService.addComment` 回调内的缓存**失效写**（DEL、无嵌套装载）——与 U-14 判据不同（非读），故**不并入 T12**（越界），留池待人拍板"是否把失效移到提交后"（时序语义变更）。
-> - **`U-11` / `U-17` 维持留池**：口径不变（`U-17` 的 T11 残余窗口引用继续有效）。
-> - **`U-21`**：已于 T11-C-2 关闭（保留上表供追溯）。
-> - **池内存量（3 条）**：`U-11` 停机 `/start` 空推荐（待人拍板）/ `U-17` 限流能力 / `U-22` 评论新增的缓存失效写在事务回调内。
+> **本池的恢复经过（2026-09-21）**：池文件曾被 `6bff5d8`（"docs:ISSUES文档清理"）整体清空为 0 条，同时 `.docs/INDEX.md` 仍记载 6 条有效留池项 → 构成**文档内部矛盾**（第七期归档后的编号悬空）。经立项评审 **R-12 裁决 = 进入 ISSUE**：其中 `U-11` / `U-22` / `U-24` / `U-25` 恢复至本表；`U-23`（`说明书/DATABASE.md` 与 3306 实际 DDL 不符）**改排任务**（日志周期 **T5**：用 `SHOW CREATE TABLE` 重生成）；`U-17`（限流能力缺失）**移出**——用户将后续开**限流专项分支**处理，本周期不管、不进池。以上去向均已明确，**编号不悬空**。
 >
-> **2026-09-20 T11-C 窗口处置（已执行）**——池内存量 **2 → 2 条**（`U-18` 与 `U-21` 双双**关闭**，无新登记）：
-> - **`U-18`（装载侧全量）→ T11-C ✅ 已完成**：P1 前缀窗口装载落地——miss 只装载 `[0, offset+count)`、部分态只补 `[W, offset+count)`、降级改 **DB 窗口直查**（不装载不写回）；集合完整性由新增 `partial:{数据key}` 标记表达（`partial:` 与数据 key 同步续期）；配套三处 = 部分态判定未命中回落 DB、`getMembers` 部分态先补齐、写路径任一侧部分态三件套双 DEL。DDL `idx_followed_user_user(followed_user_id, user_id)` 走 G9 闭环（改前/改后备份 + 3307 重建 + 两库索引核验 + EXPLAIN `Using index` 无 filesort）。验证：JUnit 500/0/0/0 + pytest 145 + 全链 exit 0（含评审 1 条 🔴 修复后的复跑）。
-> - **`U-21`（`FollowCache.getFollowerIds` 死方法）→ T11-C-2 删除关闭**：本项 2026-09-20 T11-A 窗口预留的"T11-C 窗口评估"已履行，结论 = **删除**（C-2 改造后仍无主代码调用方，粉丝方向已无全量语义需求），连带删除其唯一单测与私有的粉丝方向全量 loader（`loadFollowerIds`）。编号不悬空。
-> - **`U-17`（限流能力缺失）维持留池**：T11 残余窗口引用继续有效——本改造把冷路径单请求成本从 O(总量) 降到 O(页)，属**缩小**攻击面，但"防脚本直打"的正解仍是限流。
-> - **`U-11`（停机 `/start` 空推荐）维持留池**：不属本窗口范围，待人拍板。
-> - **本窗口新登记（不占池）**：无。**本窗口新增的残余风险**（`getMembers` 补齐合并语义的并发竞态、部分态判定回落无独立统计事件）**不进本池**——它们是本任务设计取舍的已知边界，已如实登记在 `NEXT_CYCLE_TASKS.md` T11-C 执行回写的 G11 记录里，不构成新的"待决策项"。
-> - **池内存量（2 条）**：`U-11` 停机 `/start` 空推荐（待人拍板）/ `U-17` 限流能力（已挂 T11 残余窗口引用）。
+> **2026-09-22 立项处置（日志体系改造第二张清单）**：`U-26`（`tools/run_tests.py` 就绪等待 90s 余量偏紧致 `test all` 偶发假失败）**已排任务 → 本周期 T10**，故自本表移出（去向明确、编号不悬空）；`U-22` / `U-25` **裁决暂时留池**（本周期不入）；`U-24` 留池；`U-11` 维持"维持现状"。
+>
+> **2026-09-25 处置（日志第三张清单 T15）**：`U-25` **随 T15 落地关闭、自本表移出**（修法 = 两分支补 `, c.id DESC`；详见上表该行）。**当前有效留池项 = `U-11` / `U-22` / `U-24`**（三项均维持既有裁决）。
 
-> **2026-09-20 T13 窗口处置（已执行）**——池内存量不变（**3 条**），无新登记：
-> - **`U-16`（注册后自动登录缺兜底）→ T13 ✅ 已完成**（2026-09-20）：`LoginController.register` 的「注册 + 自动登录」编排下沉到新增的 `UserService.registerAndLogin`——注册事务提交后自动登录失败（用户查不到 / 密码不匹配 / 登录期 DB 异常）**不再抛错**，改返回 `token=null` 的 `LoginVO`（注册成功即成功），前端提示「注册成功，请手动登录」并切回登录 tab；**注册本身失败仍照旧抛错**（兜底不吞注册失败）。验证：JUnit 511/0/0/0 + pytest 145 + 全链 exit 0。编号不悬空（U-16 的登记行已于 2026-09-19 处置时移出本表，去向见上方"第七期处置结果"）。
-> - **`U-11` / `U-17` / `U-22` 维持留池**：口径不变（`U-17` 的 T11 残余窗口引用继续有效）。
-> - **池内存量（3 条）**：`U-11` 停机 `/start` 空推荐（待人拍板）/ `U-17` 限流能力（已挂 T11 残余窗口引用）/ `U-22` 评论新增的缓存失效写在事务回调内。
-
-> **2026-09-20 T14 窗口处置（已执行）**——池内存量不变（**3 条**），无新登记：
-> - **`U-07`（content↔comment 包层环）→ T14 ✅ 已完成**（2026-09-20）：R-03 拍板 = **保留现状 + 显式登记**——否决"拆共享组件"（全仓实测 **9 个**双向包环、该环 15 条边中仅 5 条属"组件错位"，其余为真业务互依，纯搬移无法单向化，且搬移会让 `content→comment` 边由 5 升 6）。环由"多周期复查仍在、无人处置"变为"**已登记、已接受**"，登记落 `常青/CURRENT_ARCHITECTURE.md` 4.1。编号不悬空。
-> - **`U-19`（分页信封同形二分）→ T14 ✅ 已完成**（2026-09-20）：新增 `com.itheima.common.model.dto.PageResult` 为全项目**唯一**信封，删除同形的 `content.model.dto.PageResult` 与 `follow.model.dto.FollowPageResult`；字段名与 `totalPages` 推导公式逐字段不变 → 前端零改动、pytest 分页断言一条未改写。编号不悬空。
-> - **同批消除 2 个包环（非池项，随 N14 落地）**：`content↔dao`、`dao↔user`——`dao/ResultMap` 删除，6 个 ResultSet→对象映射方法按域下沉到各自 DAO 的 `private static` 方法，基础包不再 import 业务域模型（原 5 条）。
-> - **`U-11` / `U-17` / `U-22` 维持留池**：口径不变（`U-17` 的 T11 残余窗口引用继续有效）。
-> - **池内存量（3 条）**：`U-11` 停机 `/start` 空推荐（待人拍板）/ `U-17` 限流能力（已挂 T11 残余窗口引用）/ `U-22` 评论新增的缓存失效写在事务回调内。
-
-> **2026-09-20 T15 窗口处置（已执行）**——池内存量 **3 → 4 条**（无关闭项，新登记 1 条）：
-> - **新登记 `U-23`**（见上表）：`说明书/DATABASE.md` 与 3306 实际 DDL 大面积不符。**该档未动**——T15 范围只含常青文档，且该档 INDEX 已标注"本机 / 敏感、**不追踪**"（改动不进 `git diff`、无 review 通道）。
-> - **T15 未关闭任何池项**：本任务对应的是 **N16 + N9（文档部分）**——二者是 NEEDS 4.1 候选编号（去向 = T15），**不属于本池**，故池存量不受其影响。
-> - **`U-11` / `U-17` / `U-22` 维持留池**：口径不变（`U-17` 的 T11 残余窗口引用继续有效）。
-> - **本窗口新登记（不占池）**：无。
-> - **池内存量（4 条）**：`U-11` 停机 `/start` 空推荐（待人拍板）/ `U-17` 限流能力（已挂 T11 残余窗口引用）/ `U-22` 评论新增的缓存失效写在事务回调内 / `U-23` `说明书/DATABASE.md` 与 3306 DDL 不符。
-
-> **2026-09-21 T19 窗口处置（已执行）**——池内存量 **4 → 6 条**（无关闭项，新登记 2 条）：
-> - **新登记 `U-24`**（见上表）：`/profile` 装载侧**全量 id 读 + 内存切片**——与已随 T11-C 治本的 `U-18` **同型**（换到 content 域）；T19 把信封由 10 提到 100 后单次成本更重，但本任务红线不含装载侧改造（只放开上限/信封口径），故只登记不治。
-> - **新登记 `U-25`**（见上表）：`/search/keywordSearch` 排序**缺 id tie-breaker**（feed/profile 均为 `create_time DESC, id DESC`）——offset 分页下同秒创建的内容可能页间重复/漏；且前端 `seen` 去重会**掩盖**该后端缺陷。修法极小（两分支补 `, c.id DESC`），但会改变同秒内容的确定顺序 → 须先拍板。
-> - **本窗口新登记（不占池）**：`comment` 域后续大改（可能含热度排序）→ 立 `NEXT_CYCLE_TASKS.md` 推后项 **T20**（用户 2026-09-21 拍板"后续开任务大改，现在不管"）。**红线提示**：其中"引入消息队列"触碰 **不引入 MQ**（异步只用进程内线程池）技术红线，须在该方向立项时先拍板放开或改走进程内线程池。
-> - **`U-11` / `U-17` / `U-22` / `U-23` 维持留池**：口径不变（`U-17` 的 T11 残余窗口引用继续有效）。
-> - **池内存量（6 条）**：`U-11` 停机 `/start` 空推荐（待人拍板）/ `U-17` 限流能力（已挂 T11 残余窗口引用）/ `U-22` 评论新增的缓存失效写在事务回调内 / `U-23` `说明书/DATABASE.md` 与 3306 DDL 不符 / `U-24` `/profile` 装载侧全量 id 读 / `U-25` `/search` 排序缺 id tie-breaker。
 
 ***
 

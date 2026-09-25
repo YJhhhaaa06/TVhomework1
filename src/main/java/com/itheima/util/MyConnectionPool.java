@@ -125,7 +125,7 @@ public class MyConnectionPool {
                     conn.close();
                 }
             } catch (SQLException e) {
-                LOGGER.log(Level.SEVERE, "关闭数据库连接失败", e);
+                LOGGER.log(Level.WARNING, "关闭数据库连接失败", e);
             }
         }
         pool.clear();
