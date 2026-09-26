@@ -1,7 +1,7 @@
 # 业务流程文档
 
-> 版本：2.6
-> 最后更新：2026-09-22（日志周期 T4 收尾：§1.1 Filter 链图补最外层 `AccessLogFilter`——访问日志，纯旁路、业务语义与权限矩阵零变化。上一版 2.5 = 2026-09-20 T15 文档与代码一致性清理：Filter 链补 `ExceptionFilter`、AuthFilter 精确名单补 `/content/update`·`/content/mediaDelete`·`/content/delete`、搜索端点更正为 `GET /search/keywordSearch`、公开接口补 `/comment/replies`。历史变更见 git 提交历史与 `NEXT_CYCLE_TASKS.md` 执行回写）
+> 版本：2.7
+> 最后更新：2026-09-26（feed1-20 T20 收尾：新增 §6.2 写扩散与收件箱重建——影子期只写不读，`/feed` 对外流程与权限矩阵**零变化**，本节为 Redis 侧派生副本的建立与二期切读门。上一版 2.6 = 2026-09-22 日志周期 T4 收尾：§1.1 Filter 链图补最外层 `AccessLogFilter`。历史变更见 git 提交历史与 `NEXT_CYCLE_TASKS.md` 执行回写）
 > 用途：保障重构时不破坏业务逻辑
 
 ---
@@ -1307,6 +1307,40 @@ GET /feed?page=1&token=xxx
     }
 }
 ```
+
+### 6.2 写扩散与收件箱重建（影子期：只写不读）
+
+> 一期「feed 推拉结合改造」的地基。**对外行为零变化**：`/feed` 仍走 6.1 的拉模式，收件箱只写不读；本节描述的是 Redis 侧的**派生副本**如何逐步建立，供二期切读评估。
+
+两层机制（都对业务链路**只降级、不抛出**；MQ 不可用不得阻断应用启动）：
+
+```
+发布（addVideo / addPost，事务提交后）
+        │ publish feed.push.content
+        ▼
+   feed.push.queue ─► FeedPushConsumer ─► 按作者粉丝窗口迭代（分页）
+                                            │  ZADD feed:inbox:{fanId} + EXPIRE
+                                            ▼
+                                  粉丝收件箱（Redis ZSet，member = score = contentId）
+
+关注 / 取关（事务提交后）
+        │ publish feed.rebuild.inbox（对象 = 发起方本人）
+        ▼
+  feed.rebuild.queue ─► FeedRebuildConsumer ─► DEL feed:inbox:{id} + DEL 完整态标记
+                                                → DB 重查（content ⋈ follow，与拉模式同一 SQL）
+                                                → 分批 ZADD + SET feed:inbox:full:{id}
+```
+
+| 机制 | 触发 | 产物 | 幂等 / 失败 |
+|------|------|------|-------------|
+| **写扩散**（fanout，增量） | 发布视频 / 动态（**事务提交后**投 MQ） | `feed:inbox:{fanId}` 追加 contentId + 滑动续期 TTL | `ZADD` 幂等；投递 / 写入失败只记日志、**绝不抛穿发布接口**；不写、不删完整态标记 |
+| **收件箱重建**（rebuild，全量 / 失效） | 关注 / 取关（**事务提交后**投 MQ，对象 = **发起方本人**） | 收件箱重算 + `feed:inbox:full:{id}` 完整态标记（`SET … EX feed.inbox.ttlMinutes`，默认 60min） | 三步 `DEL → DB 重查 → ZADD` 顺序**不可调换**；失败一律降级 ACK（仅载荷非法转死信）；`SET NX EX` 去重锁只是优化，锁超时交叉的产物 = 两次快照**并集**（只多不丢，由下次重建收口） |
+
+> 残余（已登记、一期无影响）：**fanout 的滑动续期只续收件箱、不续完整态标记** ⇒ 两者 TTL 可漂移；二期切读时统一续期口径。详见 `目标与任务/NEXT_CYCLE_TASKS.md` T19 段 G11 ③。
+
+- **真相源与派生**：收件箱 = **派生副本**，真相源 = `content` + `follow`（可重算、可重建自愈）；收件箱只存 DB 可重算的内容。
+- **完整性闸门**：`feed:inbox:full:{id}` **只由重建写**、`fanout` 从不触碰 ⇒ 只有"发生过关注 / 取关"的用户才有标记；**无标记 ⇒ 完整性未知 ⇒ 二期回退拉模式**（标记缺失 = 已知设计边界，不是缺陷）。
+- **二期切读门**：仅"标记存在"的收件箱可切换为读来源；一致性 / 覆盖率的测量由 **T20 只读工具** `tools/feed_shadow_check.py`（`tv.py feed-shadow`）承担——按"标记是否存在"分组，有标记者与拉模式 oracle 逐条比对。
 
 ---
 

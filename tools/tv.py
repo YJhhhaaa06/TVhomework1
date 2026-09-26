@@ -50,6 +50,7 @@ SUBCOMMANDS = [
     ("test", "tools/run_tests_report.py", "跑测试（默认 all；固定 test 环境）"),
     ("cleanup-orphan-media", "tools/cleanup_orphan_media.py", "孤儿媒体回收（仅 prod 环境）"),
     ("log-report", "tools/log_report.py", "日志消费报告（只读；req 追溯 / 耗时 / 错误率）"),
+    ("feed-shadow", "tools/feed_shadow_check.py", "feed 影子核对（只读；收件箱 vs 拉模式 oracle）"),
 ]
 CMD_TO_SCRIPT = {name: rel for name, rel, _ in SUBCOMMANDS}
 CMD_TO_DESC = {name: desc for name, _, desc in SUBCOMMANDS}

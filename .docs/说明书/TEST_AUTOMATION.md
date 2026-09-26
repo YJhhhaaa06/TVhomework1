@@ -282,6 +282,30 @@ pytest 阶段有整体超时刹车（T2，2026-09-05）：`subprocess.run(timeou
   - `src/test/python/test_feed_rebuild.py`（4 例 = 关注触发重建后收件箱完整态 + 与 **MySQL oracle 逐条相等** / 重建后 fanout 增量不破坏完整性 / 取关重建后不含该博主且仍标完整态 / `/feed` 拉模式哨兵）。
 - **"逐条相等"的 oracle 口径（T19）**：不拿应用自己的读路径当基准（那会"同样错就看不出来"），而是**独立复算**——`ZREVRANGE feed:inbox:{id} 0 -1` 的成员序列须**逐条等于**直连 MySQL 按 `content ⋈ follow`（`is_deleted=0` + `ORDER BY create_time DESC, id DESC`）算出的 id 序列，并另断言 `ZCARD` 与 oracle 长度相等、`EXISTS feed:inbox:full:{id}` = 1、标记 `TTL > 0`。该通道不可用时**一律 skip**（手段缺失，不代表能力回归）。
 
+### 4.8 feed 影子核对工具（`tools/feed_shadow_check.py`，feed1-20 T20）
+
+影子期（一期：RabbitMQ 基建 + 写扩散 + 收件箱重建，**只写不读**）里收件箱 `feed:inbox:{userId}` 无人消费，故需一个**只读**核对工具，在**真实 / 准真实数据**上回答"完整态覆盖率 + 完整态下与拉模式逐条一致率 + 偏差样本"——定位 = **二期"是否切读"的准入测量仪**（一期即时价值低：无人读、且偏差多为设计预期），此定位写在脚本头注释里。挂 `tv.py` 子命令 `feed-shadow`（第 9 项）。
+
+- **只读红线**：Redis 只发读命令（白名单 `PING` / `EXISTS` / `ZCARD` / `ZREVRANGE` / `TTL`；扫描走 `redis-cli --scan --pattern`，命令与 pattern 均硬编码），MySQL **只发单条 `SELECT`**（禁 `;` 多语句；另拒 `INTO OUTFILE` / `INTO DUMPFILE` / `FOR UPDATE` / `LOCK IN SHARE MODE` 等写或锁语义）；不写 / 不删 / 不改 Redis、DB、broker；报告只落 stdout（**不生成落盘文件**）。可证方式 = 代码级"单一 chokepoint"（**全部** Redis 命令经 `redis_cmd` 白名单，扫描走硬编码参数的 `redis_scan`；MySQL 经 `run_sql` 仅放行上述 SELECT）+ 运行前后 Redis key 列表 / `DBSIZE` 快照 diff + `git status` 无业务代码改动。注意：Redis 有并发写与 TTL 到期，**不能**断言"全局零变化"，正确口径 = "工具触碰的 key 集合前后不变 + 无新 key 可归因于工具"（同 §4.6 精神）。
+- **两通道**：Redis = 子进程 `docker exec redis redis-cli …`（**零新依赖**，同 §4.7）；MySQL = `mysql.exe` 子进程 + `tools/db_config.py` 的连接参数（经 `tv.py` 调用时被注入 `DB_*`，保证"声明环境 == 实际连接库"），密码走 `MYSQL_PWD` 环境变量（先例 `check_integrity.py`）。
+- **扫描与前缀排除**：`feed:inbox:full:` **以** `feed:inbox:` 开头（`CacheKeys` 已登记该重叠）⇒ 遍历 `feed:inbox:*` 时**必须显式排除**；本工具按"先判长前缀再判短前缀 + 尾段强制数字"双保险，并在报告里**显式展示"已排除标记 key 数"**。`feed:rebuild:lock:` 不匹配该 glob（`feed:inbox:` 是字面前缀），分类函数仍防御性排除。
+- **universe（覆盖"空但完整"）**：成员 key 的 userId **∪** 标记 key 的 userId。Redis 会删除空 ZSet ⇒"取关到空"后只剩标记、没有成员 key，仅扫成员前缀会漏（T19 用例 3 已证）。
+- **分组语义（核心）**：**[A] 有完整态标记** = 判定组，收件箱应与 oracle 逐条相等；**[B] 无标记** = **完整性未知、不是缺陷**（重建只在关注 / 取关时触发，fanout 从不写标记 ⇒ 未发生过关注变动的用户必然缺历史内容），只计数、**不判失败**——二期切读的闸门就是"标记存在"。
+- **核对口径（与 §4.7 的 T19 oracle 同源）**：`ZREVRANGE feed:inbox:{uid} 0 -1` 与直连 MySQL 按 `content ⋈ follow`（`is_deleted=0` + `ORDER BY create_time DESC, id DESC`）复算的 id 序列**逐条相等** + `ZCARD == len(oracle)` + 标记 `EXISTS == 1` + 标记 `TTL > 0`。关注者集合取 `follow` 表（DB 真相），不取缓存；**不拿应用自己的读路径当基准**。
+- **参数**：`--user-id <int>`（精查单用户）/ 缺省 = 全量扫描；`--json`；`--limit K`（opt-in，默认不限，超限截断并提示）；`--max-detail`；`--redis-container`；`--timeout`。**argparse 层面无任何写参数**。
+- **退出码**：0 = 核对完成且所有"有标记"收件箱一致（含存在无标记组、含**空 universe 零数据报告**）；1 = 存在"有标记但收件箱 ≠ oracle"；2 = 参数 / 通道错误（缺 docker、容器不可用、缺 mysql 客户端、连库失败、只读白名单拒绝——友好文案、**无 Traceback**）。标记 `TTL <= 0` 只入 `anomalies` 报告，**不置 1**。
+- **空 universe 是正常报告**（本机实测 `DBSIZE=0`）：exit 0 + 列出可能原因（尚无重建触发 / 收件箱已 TTL 回收 / 连错实例），不得当失败。
+- **典型用法**：
+
+  ```powershell
+  python tools\tv.py feed-shadow                       # 全量扫描（经统一入口，注入声明环境 DB_*）
+  python tools\feed_shadow_check.py --user-id 42       # 精查单个用户
+  python tools\feed_shadow_check.py --json             # 机器可读（直调本脚本，经 tv.py 会有横幅）
+  ```
+
+- **判读提示**：核对是**快照**测量——恰逢 fanout 在写或标记到期时"不一致"可能是瞬时；本工具**不加轮询重试**（轮询是 pytest 的手段，工具是测量仪），宜在低写入窗口执行。全量成本 ∝ 收件箱数 ×（4 次 `docker exec` + 1 次 mysql）⇒ 例行用 `--user-id`、全量用于周期 / 审计。
+- **验证边界（T20）**：本任务**不改业务代码**，故**未新增 pytest 用例**（归属判据同 §〇.2——工具属消费侧、不产生落盘副作用，同 §4.6 的 `log_report.py` 先例）；验收由**合成夹具**（`temp_script/t20_fixture_check.py`：分类与前缀排除 / 分组语义 / 逐条 diff / 退出码 / 白名单拒绝写命令 / 工具 SQL 与 T19 测试同口径）+ 真实冒烟 + 前后快照零写入 + 全量回归 `test all` exit 0 承担。
+
 ***
 
 ## 五、沙盒限制与踩坑记录（重要）
