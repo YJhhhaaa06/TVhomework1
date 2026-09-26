@@ -154,6 +154,33 @@ public final class AppConfig {
         return getLong("redis.breaker.cooldownMillis");
     }
 
+    // ===== RabbitMQ（T16 feed1-16：连接基础配置；连接管理/拓扑/消费框架见 T17）=====
+
+    // 与 db.*/redis.* 的 fail-fast 不同，MQ 为"可降级外部依赖"（不可用不得阻断启动），
+    // 故统一带默认值读取——键缺失/为空取本地容器约定值（容错口径对齐 log.*）。
+    // 默认值与 app.properties 保持一致：本机容器 rabbitmq / 5672（非 RabbitMQ 出厂 guest/guest）。
+
+    public static String getRabbitmqHost() {
+        return get("rabbitmq.host", "localhost");
+    }
+
+    public static int getRabbitmqPort() {
+        return getInt("rabbitmq.port", 5672);
+    }
+
+    public static String getRabbitmqUsername() {
+        return get("rabbitmq.username", "admin");
+    }
+
+    public static String getRabbitmqPassword() {
+        return get("rabbitmq.password", "admin123");
+    }
+
+    /** AMQP vhost（容器默认 "/"）。 */
+    public static String getRabbitmqVhost() {
+        return get("rabbitmq.vhost", "/");
+    }
+
     // ===== JWT =====
 
     public static String getJwtSecret() {

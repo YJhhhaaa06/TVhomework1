@@ -97,7 +97,11 @@ TEST_DB_URL = os.environ.get(
 
 # ---- 环境预检 / pytest 超时 ----
 REDIS_PORT = 6379  # 业务 app.properties 固定 localhost:6379，无环境变量覆盖
-EXIT_ENV_NOT_READY = 10   # 测试环境未就绪（3307/6379 探不通），秒级退出
+# T16（feed1-16）：RabbitMQ 纳入测试环境强依赖——T17 起的 MQ 对应用例在未起容器时必挂，
+# 预检快速失败优于"带病运行"；应用自身的 MQ 降级能力由 T17 单测覆盖（预检只约束测试环境）。
+# 容器名/端口约定 = rabbitmq / 5672（宿主映射一致），无环境变量覆盖（同 Redis 口径）。
+RABBITMQ_PORT = 5672
+EXIT_ENV_NOT_READY = 10   # 测试环境未就绪（3307/6379/5672 探不通），秒级退出
 EXIT_PYTEST_TIMEOUT = 11  # pytest 执行超时被杀
 # 用户决策（2026-09-05）：pytest 阶段正常仅 ~3s，大头在编译/部署/关停（不在刹车范围），
 # 60s 已是 ~20 倍裕量，足以切断卡死且几乎不误杀；TV_PYTEST_TIMEOUT 可覆盖（验证用短超时模拟挂起）
@@ -168,18 +172,19 @@ def app_ready() -> bool:
 
 
 def precheck_env() -> None:
-    """start 前纯 socket 探测测试库(3307)/Redis(6379)；不通即秒级快速失败（exit 10）。"""
+    """start 前纯 socket 探测测试库(3307)/Redis(6379)/RabbitMQ(5672)；不通即秒级快速失败（exit 10）。"""
     checks = [
         (TEST_DB_PORT, "MySQL 测试库(3307, TVDatabase_test)"),
         (str(REDIS_PORT), "Redis(6379)"),
+        (str(RABBITMQ_PORT), "RabbitMQ(5672)"),
     ]
     missing = [(port, name) for port, name in checks if not port_open(int(port))]
     if missing:
         for port, name in missing:
             log(f"测试环境未就绪: {name} 端口 {port} 不可达")
-        log("提示: 请先启动 docker mysql-test / redis 后重试（预检不阻塞、不影响未知进程）")
+        log("提示: 请先启动 docker mysql-test / redis / rabbitmq 后重试（预检不阻塞、不影响未知进程）")
         sys.exit(EXIT_ENV_NOT_READY)
-    log("测试环境预检通过: MySQL(3307) / Redis(6379) 可达")
+    log("测试环境预检通过: MySQL(3307) / Redis(6379) / RabbitMQ(5672) 可达")
 
 
 def run_hidden(cmd: list, **kwargs) -> subprocess.CompletedProcess:

@@ -111,6 +111,13 @@
             <version>4.13.1</version>
             <scope>test</scope>
         </dependency>
+        <!-- T16（feed1-16）：feed 推拉结合一期唯一依赖例外（用户批准 amqp-client + slf4j-api；
+             slf4j-api 1.7.36 由 amqp-client 传递引入，离线仓已有，不显式声明） -->
+        <dependency>
+            <groupId>com.rabbitmq</groupId>
+            <artifactId>amqp-client</artifactId>
+            <version>5.21.0</version>
+        </dependency>
     </dependencies>
 
     <build>

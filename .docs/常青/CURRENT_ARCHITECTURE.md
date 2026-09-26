@@ -31,6 +31,7 @@
 | 数据库访问 | 原生 JDBC | - |
 | 数据库 | MySQL | 8.0.33 驱动 |
 | 缓存 | Redis (Jedis) | 5.1.0 |
+| 消息队列 | RabbitMQ（amqp-client；feed 推拉结合一期基建，T16 起） | 5.21.0（容器 rabbitmq:4.3.6-management-alpine，5672/15672） |
 | 认证 | JWT | 4.4.0 |
 | 密码加密 | BCrypt (Spring Security Crypto) | 6.4.5 |
 | JSON | Jackson | 2.15.2 |

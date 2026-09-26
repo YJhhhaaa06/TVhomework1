@@ -17,7 +17,7 @@
 | 项    | 内容                                                                                                                  |
 | ---- | ------------------------------------------------------------------------------------------------------------------- |
 | 两层测试 | JUnit（`src/test/java`）= 服务层单元基准（mock，不碰 DB/HTTP）；pytest（`src/test/python`）= 端到端验收（真实 MySQL/Redis/Tomcat）。归属判据见 §〇.2 |
-| 测试环境 | 独立 Tomcat **18080**（与 IDEA 8080 隔离，端口不可覆盖）+ 独立测试库 Docker MySQL `TVDatabase_test`（127.0.0.1:3307）+ Redis（6379）       |
+| 测试环境 | 独立 Tomcat **18080**（与 IDEA 8080 隔离，端口不可覆盖）+ 独立测试库 Docker MySQL `TVDatabase_test`（127.0.0.1:3307）+ Redis（6379）+ RabbitMQ（5672，T16 起纳入预检；容器名 `rabbitmq`）       |
 | 数据隔离 | pytest 用例全部落在测试库 3307，生产库 TVDatabase 不再产生测试残留（见 §六）；媒体落独立测试目录 media-test（T2，与生产 stone 隔离），旧测试媒体只移不删地回收至 test_trash       |
 
 ### 快速上手
@@ -130,7 +130,7 @@ python tools\tv.py admin|cleanup|integrity|backup|init-test-db|test|cleanup-orph
 > 覆盖机制：上述路径均可在 `tools/run_tests*.py` 中通过同名 `TV_*` 环境变量覆盖（T1 落地，与 conftest.py 的 TV\_BASE\_URL 等先例一致）。HTTP 端口 18080/shutdown 18005 属安全隔离设计，**不可覆盖**。
 > 两个超时旋钮同样可覆盖：`TV_START_TIMEOUT`（就绪等待上限，默认 **180s**，T10）/ `TV_PYTEST_TIMEOUT`（pytest 整体刹车，默认 60s，T2）——见 §三 退出码 6 / 11。
 
-外部服务依赖：生产库 MySQL80（TVDatabase:3306）+ **独立测试库 Docker MySQL8.4（TVDatabase\_test:3307）** + Redis，均需运行中。
+外部服务依赖：生产库 MySQL80（TVDatabase:3306）+ **独立测试库 Docker MySQL8.4（TVDatabase\_test:3307）** + Redis + RabbitMQ（`rabbitmq` 容器，5672；T16 起），均需运行中。
 
 ***
 
@@ -160,7 +160,7 @@ python tools\run_tests.py stop     # 只关停独立 Tomcat
 | 7     | 停止失败且无法确认进程归属，需人工检查 |
 | 8     | 测试前置不满足（18080 未就绪）  |
 | 9     | 配置/挂载回读校验失败（server.xml 端口或 ROOT.war 媒体挂载改写后校验不符，拒绝启动） |
-| 10    | 测试环境未就绪（MySQL 3307 / Redis 6379 探测失败，秒级退出） |
+| 10    | 测试环境未就绪（MySQL 3307 / Redis 6379 / RabbitMQ 5672 探测失败，秒级退出） |
 | 11    | pytest 执行超时（默认 60s，`TV_PYTEST_TIMEOUT` 可覆盖）被强制终止 |
 | 12    | 媒体目录门禁拒绝（破坏权只信任硬编码白名单，任一失败 exit 12）：① 移动源（归一化后）不等于 run_tests.py 硬编码的 `DEFAULT_TEST_MEDIA_ROOT`（白名单）——env 覆盖到任何其它目录均无法移动、无人工确认通道；② 移动源命中生产媒体根（app.properties upload.path / 默认生产 stone 或其子目录）——白名单被人工改动指向生产时的第二道保险；③ 回收站落点（`TEST_TRASH_ROOT`）命中生产根或与移动源重叠/嵌套 |
 
@@ -190,7 +190,7 @@ pytest 阶段有整体超时刹车（T2，2026-09-05）：`subprocess.run(timeou
 
 - **就绪等待上限**（T10，2026-09-23）：**每 2s 探测一次**，上限**默认 180s**（`TV_START_TIMEOUT` 可覆盖）；到点仍未就绪 → `stop` + `exit 6`（退出码口径不变，日志仍为 `等待超时（<上限>s）`）。默认值依据 = **全量 `run.log` 实测（45 个就绪样本，三带分布）**：**40.1\~45.3s ×23**（主流，推断为 Tomcat 重展开 `webapps/ROOT` —— war 每次重建、约 8.2MB / 数百文件）/ **61.0\~65.4s ×4**（慢时段）/ **6.0\~6.6s ×18**（Tomcat 命中复用、未重展开）/ 1 次 **>90s** 触顶（即 T10 要消除的那次假失败）；**180s ≈ 最慢通过样本（65.4s）的 2.8 倍**，已落在抖动带之外（旧值 90s 仅 1.4 倍、正卡带内）。⚠️ "是否重展开"由 Tomcat 自己的 mtime 比较决定（两带并存），本窗口未追根因——不影响取值：上限要覆盖的是**慢带**。
 
-- **启动前环境预检**（T2，2026-09-05）：纯 socket 探测测试库 MySQL(3307) 与 Redis(6379)，不通即报「测试环境未就绪」并秒级退出（exit 10），不再空等至启动超时（6）。
+- **启动前环境预检**（T2，2026-09-05；T16 起扩展第三项 RabbitMQ(5672)）：纯 socket 探测测试库 MySQL(3307)、Redis(6379) 与 RabbitMQ(5672)，不通即报「测试环境未就绪」并秒级退出（exit 10），不再空等至启动超时（6）。应用自身的 MQ 降级能力不由预检负责（T17 单测覆盖），预检只约束测试环境。
 
 - 启动前检查：18080 若已有本应用则复用；若被未知程序占用则拒绝启动。
 
@@ -351,11 +351,12 @@ python tools\tv.py --env prod integrity                  # 本次检查生产库
    Test-Path 'D:\dev\DevTools\tomcat\apache-tomcat-10.1.54\bin\catalina.bat'
    ```
 
-2. 确认测试环境外部依赖就绪（3307 测试库 / 6379 Redis，T2 起 `start/all` 会自动预检并秒级报错）：
+2. 确认测试环境外部依赖就绪（3307 测试库 / 6379 Redis / 5672 RabbitMQ，T2 起 `start/all` 会自动预检并秒级报错；第三项 T16 起）：
 
    ```powershell
    Test-NetConnection 127.0.0.1 -Port 3307 | Select-Object TcpTestSucceeded
    Test-NetConnection 127.0.0.1 -Port 6379 | Select-Object TcpTestSucceeded
+   Test-NetConnection 127.0.0.1 -Port 5672 | Select-Object TcpTestSucceeded
    ```
 
 3. 确认 18080 空闲：
