@@ -1,10 +1,10 @@
 # 当前系统架构地图
 
-> 版本：3.20（2026-09-24 日志第三张清单 **T12 log3-12**：**可预期业务拒绝的级别修正**——`UserService` 的 `changePassword` / `changeUserName` / `changePhone`
+> 版本：3.21（2026-09-26 feed 推拉结合一期 **T17 feed1-17**：新增 `com.itheima.mq` 包——**RabbitMQ 基建**（连接管理 + 拓扑声明 push/rebuild/DLQ + publisher confirm 发布封装 + 消费框架含死信出口 + IoC 生命周期挂载 + 可降级与惰性重连）；影子期口径：对外行为零变化、`/feed` 读路径零改动、本任务不触业务代码；见 4.2 的 mq 包）
+> 上一版 3.20（2026-09-24 日志第三张清单 **T12 log3-12**：**可预期业务拒绝的级别修正**——`UserService` 的 `changePassword` / `changeUserName` / `changePhone`
 > 三处**按异常类型拆 catch**（`ParamException | PasswordIncorrectException | ConflictException` → `WARNING` **不带栈**；兜底 `catch (BusinessException e)` 与 `catch (SQLException e)` 保持 `SEVERE` + 堆栈），
 > 400/401/409 **不再落 `error.log`**；调用点 159 → **162**（+3 新 WARNING 分支）、SEVERE **63（计数不变**，兜底仍是 SEVERE 调用点、覆盖面收窄）、WARNING 84 → **87**；详见 6.24，判据 `说明书/LOG_CONVENTION.md` §3.1 附加纪律 1）
-> 上一版 3.19（2026-09-23 第二张清单 T11 **两批**：第 1 次提交 log2-11：**补齐事务基础设施异常的源头日志**（`TransactionTemplate` 的 `catch (SQLException)` 记 `SEVERE` + 堆栈）+ **"包装点即源头"定栈重排**（去栈 20 处、补源头 11 处、上下文行升级持栈 2 处、评审处置拆 catch 增 1 处持栈行），T7 登记的回填链双栈残余收口（调用点 139 → 151、SEVERE 44 → 55、WARNING 83 → 84）；第 2 次提交 log2-T11-B（同日）：**同族业务 wrap 缺口 8 处收口**（`CommentService` 2 / `UserService.isAdmin` 1 / `FollowService.loadUserList` 1 / `CouponService` 4——包装点补 `SEVERE` + 堆栈，"包装点即源头"口径下**无存量未合规点**，调用点 151 → **159**、SEVERE 55 → **63**、持 `LOGGER` 类 23 → **24**、级别零变化）；见 6.23，顺带修正本表 8 处陈旧行数）
-> 最后更新：2026-09-24
+> 最后更新：2026-09-26
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
 ---
@@ -31,7 +31,7 @@
 | 数据库访问 | 原生 JDBC | - |
 | 数据库 | MySQL | 8.0.33 驱动 |
 | 缓存 | Redis (Jedis) | 5.1.0 |
-| 消息队列 | RabbitMQ（amqp-client；feed 推拉结合一期基建，T16 起） | 5.21.0（容器 rabbitmq:4.3.6-management-alpine，5672/15672） |
+| 消息队列 | RabbitMQ（amqp-client；feed 推拉结合一期基建，T16 起；**feed1-17 起含连接管理 + 拓扑声明 + 发布确认 + 消费框架 + 生命周期挂载 + 可降级**） | 5.21.0（容器 rabbitmq:4.3.6-management-alpine，5672/15672） |
 | 认证 | JWT | 4.4.0 |
 | 密码加密 | BCrypt (Spring Security Crypto) | 6.4.5 |
 | JSON | Jackson | 2.15.2 |
@@ -94,6 +94,7 @@ com.itheima/
 ├── controller/             # 仅保留跨域基建：BaseServlet/BaseServletUtil/RequestParser/AppShutDownListener
 ├── common/                 # 跨域共享模型（T14 新增）：model/dto/PageResult —— 全项目唯一分页信封
 ├── cache/                  # 统一缓存基建：Redis 访问+熔断/JSON 序列化/统一 key 规范/单飞/三态空标记/写失败 DEL 降级/SetCache/ZSetCache
+├── mq/                     # 消息队列基建（feed1-17 新增）：连接管理/拓扑声明/发布确认/消费框架/生命周期挂载/可降级
 │
 ├── user/                   # 用户/认证域
 ├── content/                # 内容域：含首页/搜索/详情/关注流/主页读接口 + 共享缓存组件
@@ -220,6 +221,27 @@ com.itheima/
 | ZSetCache | 625 | 有序集合（ZSet）缓存基建（A1「缓存有序结构」落点）：命令层 ZSCORE/ZRANGE/ZADD，**score = 成员自身数值**（故 ZRANGE 天然按成员数值升序）；API 与 SetCache 同构（`isMember` / `getMembers` / `batchIsMember` / `writeZSet` 回填（空→`markEmpty` 含存在守卫）/ `loadViaSingleFlight` 降级不写回）+ **按序窗口读 `getWindow(key, offset, count, WindowLoader, totalLoader)`**——完整态一趟 pipeline `ZRANGE[start,stop]` + `ZCARD`（total 与页同源）；**T11-C 前缀窗口装载**（miss/部分态/降级/部分态三处配套的完整口径见 6.17）；探针续期精确 TTL（`partial:` 标记与数据 key 同步续期）、空标记不续；窗口装载单飞 key 带窗口指纹 `key@offset+count` 防不同页串用 |
 
 > 测试：`src/test/java/com/itheima/cache/` 9 类单测（mockStatic MyRedisPool + mock Jedis，不碰真实 Redis），用例清单以 `surefire-reports` 为准（见九节指针）。
+
+#### mq 包 — 消息队列基建（feed1-17 新增）
+
+> 归属：技术无关 MQ 基建放 `com.itheima.mq`；业务侧投递与消费（写扩散 / 重建）属 T18/T19，本包**不依赖任何业务域**，也不改 `/feed` 读路径与发布/关注接口语义。
+> **可降级**：RabbitMQ 不可用不得阻断应用启动与业务链路——连接失败只记日志并走降级，对外正确性不依赖推。
+
+| 类 | 行数 | 职责 |
+|----|------|------|
+| MqConnectionManager | 319 | **连接管理 + 生命周期**（`@Component` + `Initializable`/`Disposable`）：建连接 → confirm 发布 channel → 声明拓扑 → 通知监听器。`isAvailable()` 直读 `Connection.isOpen()`（本地读、无 I/O，断线自动 false）。**降级**：`init()` 全程不抛（IoC 会把 `init()` 异常包成 RuntimeException 上抛并**阻断 Tomcat 启动**），失败记 `WARNING` + 栈后返回；连接/握手超时封顶 2s（默认 60s 会阻塞启动线程）。**恢复** = 客户端 automatic/topology recovery（运行期断线，含自动恢复消费者）+ **惰性重连**（首次连不上 / 恢复失败：30s 冷却 + `tryLock`，并发下最多一个线程真试、其余立即短路返回，不排队不阻塞请求）。`destroy()` 顺序 = 发布 channel → 连接 → 消费线程池（守护线程），每步独立吞异常；`establish()` 在赋值后**二次检查 `shuttingDown`**、命中则自清本次连接（闭合关停竞态） |
+| MqTopologyDeclarer | 41 | **拓扑声明（幂等）**：3 交换机（`feed.push.exchange` / `feed.rebuild.exchange` 为 **topic**、`feed.dlx` 为 **direct**）+ 3 队列（`feed.push.queue` / `feed.rebuild.queue` 带死信参数、`feed.dlq` **不带**以防环）+ 3 绑定（`feed.push.#` / `feed.rebuild.#` / `feed.dlq`），全部 **durable** |
+| MqPublisher | 96 | **发布封装（publisher confirm）**：单 confirm channel + `synchronized` 串行「`basicPublish` + `waitForConfirms`」（`Channel` 非线程安全，确认需与在途发布序号对应）；消息 `deliveryMode=2` + `application/json`（broker 侧持久，应用重启不清）；**任何失败都只记日志并返回 false**——不可用时直接返回 false、既不访问 broker 也不记日志（避免每请求刷日志） |
+| MqConsumerContainer | 205 | **消费框架**：`register(queue, handler, prefetch)` → 连接可用后 per-queue channel + `basicQos` + `basicConsume(autoAck=false)`。**失败出口** = 回调最外层根捕获（非 Web 线程，`SEVERE` + 栈）→ `basicNack(requeue=false)` 转死信（一次性出队，**结构上不存在热循环**；一期不做重试退避，属三期）。「可用即启动」与「连接回调启动」两条时序都覆盖，消除 IoC `init()` 调用顺序依赖；`destroy()` best-effort 取消消费者并关 channel |
+| MqTopology | 68 | 拓扑 / 路由命名**唯一源**（对齐 `cache.CacheKeys` 范式）：交换机 / 队列 / 路由键 / 绑定模式常量 + `deadLetterArgs()` |
+| MqConnectionProvider | 34 | 连接与 channel 提供者**接缝接口**（单测 mock 点 + T18/T19 复用）：`isAvailable` / `ensureConnected` / `publisherChannel` / `newConsumerChannel` / `addConnectionListener` |
+| MqMessage | 23 | 发布载体 record（`exchange` / `routingKey` / `body`）+ `push()` / `rebuild()` 便利构造（`exchange` 字段为四期复用留口） |
+| MqMessageHandler | 21 | 消费回调接口（T18/T19 实现；抛出即转死信） |
+| MqConnectionListener | 18 | 连接建立回调接口（消除 IoC 初始化顺序依赖） |
+
+> **IoC 约束（实现要点）**：`MqPublisher` / `MqConsumerContainer` 的 `@InjectConstructor` 形参必须是**具体类 `MqConnectionManager`**——IoC 按**具体类**解析依赖（`beans.get(paramType)`），声明为接口会取不到 Bean 而硬 fail-fast；接口只用于「测试用第二构造器」（范式同 `cache.RedisAccess`）。
+> **日志口径**：消费线程是**首个"非 Web 线程"日志调用点**——回调最外层根捕获记 `SEVERE` + 栈（`说明书/LOG_CONVENTION.md` §3.1）；跨进程无 reqId 可传，故**不套** `LogContext.wrap`（该机制面向"提交任务到线程池"的 reqId 透传，MQ 库回调不是这种形态）。
+> 测试：`src/test/java/com/itheima/mq/` 4 类单测（mock `ConnectionFactory` / `Connection` / `Channel` + 受控时钟，**不依赖真实 broker**）。
 
 ### 4.3 业务域包（每域 controller/service/dao/model 分层）
 

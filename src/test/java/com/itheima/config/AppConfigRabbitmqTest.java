@@ -17,6 +17,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 五键经 AppConfig 五个 getter 绑定生效 + 键缺失/为空回退默认值（MQ 可降级：配置缺失不得让启动失败，
  * 容错口径对齐 log.*）。
  *
+ * <p>T17（feed1-17）追加：{@code rabbitmq.connection.timeoutMs}（连接/握手超时，必须封顶
+ * ——默认 60s 会把 Tomcat 启动线程阻塞住，违反"MQ 不可用不得阻断启动"）。
+ *
  * <p>测试策略（复用既有先例）：
  * <ul>
  *   <li>绑定用例：期望值直接从 classpath 的 app.properties 解析，与 AppConfig getter 同源比对
@@ -52,6 +55,17 @@ class AppConfigRabbitmqTest {
         assertEquals(propString("rabbitmq.username"), AppConfig.getRabbitmqUsername());
         assertEquals(propString("rabbitmq.password"), AppConfig.getRabbitmqPassword());
         assertEquals(propString("rabbitmq.vhost"), AppConfig.getRabbitmqVhost());
+        assertEquals(Integer.parseInt(propString("rabbitmq.connection.timeoutMs")),
+                AppConfig.getRabbitmqConnectionTimeoutMs());
+    }
+
+    @Test
+    void connectionTimeoutIsBoundedAndPositive() throws IOException {
+        int timeoutMs = Integer.parseInt(propString("rabbitmq.connection.timeoutMs"));
+
+        assertEquals(2000, timeoutMs, "本机默认 = 2000ms（T17）");
+        assertTrue(timeoutMs > 0 && timeoutMs <= 10_000,
+                "连接超时必须封顶且为正（默认 60s 会阻塞 Tomcat 启动线程）: " + timeoutMs);
     }
 
     @Test
@@ -72,6 +86,7 @@ class AppConfigRabbitmqTest {
             assertEquals("admin", AppConfig.getRabbitmqUsername());
             assertEquals("admin123", AppConfig.getRabbitmqPassword());
             assertEquals("/", AppConfig.getRabbitmqVhost());
+            assertEquals(2000, AppConfig.getRabbitmqConnectionTimeoutMs());
         } finally {
             replaceProps(originalProps);
         }
@@ -82,11 +97,13 @@ class AppConfigRabbitmqTest {
         Properties blank = new Properties();
         blank.setProperty("rabbitmq.host", "   ");
         blank.setProperty("rabbitmq.port", " ");
+        blank.setProperty("rabbitmq.connection.timeoutMs", " ");
         replaceProps(blank);
         try {
             assertEquals("localhost", AppConfig.getRabbitmqHost());
             assertEquals(5672, AppConfig.getRabbitmqPort());
             assertEquals("/", AppConfig.getRabbitmqVhost());
+            assertEquals(2000, AppConfig.getRabbitmqConnectionTimeoutMs());
         } finally {
             replaceProps(originalProps);
         }

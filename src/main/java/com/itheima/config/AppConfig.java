@@ -181,6 +181,16 @@ public final class AppConfig {
         return get("rabbitmq.vhost", "/");
     }
 
+    /**
+     * 连接 / 握手超时（毫秒，T17 feed1-17）。
+     *
+     * <p>必须封顶：{@code ConnectionFactory} 默认连接超时 60s，broker 不可用时会把
+     * Tomcat 启动线程阻塞 60s，违反"MQ 不可用不得阻断启动"。
+     */
+    public static int getRabbitmqConnectionTimeoutMs() {
+        return getInt("rabbitmq.connection.timeoutMs", 2000);
+    }
+
     // ===== JWT =====
 
     public static String getJwtSecret() {
