@@ -112,4 +112,32 @@ class CacheKeysTest {
         assertEquals("1", CacheKeys.EMPTY_MARKER_VALUE);
         assertEquals(60L, CacheKeys.EMPTY_MARKER_TTL_SECONDS);
     }
+
+    @Test
+    void feedInboxKeyUsesUserIdAndMapsToFeedDomain() {
+        // feed1-18（T18）：写扩散收件箱 key —— 生成与解析同源，归 FEED 域（含 empty/partial 解包）
+        assertEquals("feed:inbox:7", CacheKeys.feedInbox(7L));
+        assertEquals(CacheDomain.FEED, CacheKeys.domainOf(CacheKeys.feedInbox(7L)));
+        assertEquals(CacheDomain.FEED, CacheKeys.domainOf("empty:" + CacheKeys.feedInbox(7L)));
+        assertEquals(CacheDomain.FEED, CacheKeys.domainOf("partial:" + CacheKeys.feedInbox(7L)));
+    }
+
+    @Test
+    void feedInboxPrefixConstantIsPublicForScanMatch() {
+        assertEquals("feed:inbox:", CacheKeys.FEED_INBOX_PREFIX);
+        assertTrue(CacheKeys.feedInbox(7L).startsWith(CacheKeys.FEED_INBOX_PREFIX));
+    }
+
+    @Test
+    void feedPrefixDoesNotStealOtherDomains() {
+        // 红线：新增 feed: 判定不得改变既有前缀的归域（长前缀优先顺序未动、OTHER 兜底仍在最后）
+        assertEquals(CacheDomain.CONTENT, CacheKeys.domainOf(CacheKeys.content(1L)));
+        assertEquals(CacheDomain.CONTENT, CacheKeys.domainOf(CacheKeys.contentIndex(1, 2)));
+        assertEquals(CacheDomain.COMMENT, CacheKeys.domainOf(CacheKeys.contentCommentRoots(7L)));
+        assertEquals(CacheDomain.LIKE, CacheKeys.domainOf(CacheKeys.contentLikeCount(1L)));
+        assertEquals(CacheDomain.LIKE, CacheKeys.domainOf(CacheKeys.userLikeSet(7L)));
+        assertEquals(CacheDomain.FOLLOW, CacheKeys.domainOf(CacheKeys.userFollower(7L)));
+        assertEquals(CacheDomain.OTHER, CacheKeys.domainOf("unknown:key"));
+        assertEquals(CacheDomain.OTHER, CacheKeys.domainOf(null));
+    }
 }

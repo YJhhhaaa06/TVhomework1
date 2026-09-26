@@ -15,6 +15,7 @@ package com.itheima.cache;
  *       用户维度点赞成员 {@code user:likeSet}/{@code user:commentLikeSet}（第四期 T4 装载反转后新增，
  *       在 user:* 兜底之前归 LIKE）；</li>
  *   <li>{@link #FOLLOW}：关注关系 {@code user:following}/{@code user:follower}；</li>
+ *   <li>{@link #FEED}：写扩散收件箱 {@code feed:inbox:{userId}}（T18 feed1-18 新增）；</li>
  *   <li>{@link #OTHER}：未知前缀 / null 兜底。</li>
  * </ul>
  * {@code empty:{dataKey}} 空标记先解包到内层数据 key 再归域。
@@ -24,5 +25,6 @@ public enum CacheDomain {
     COMMENT,
     LIKE,
     FOLLOW,
+    FEED,
     OTHER
 }

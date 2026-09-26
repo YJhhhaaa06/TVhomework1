@@ -11,6 +11,7 @@ import com.itheima.exception.ForbiddenException;
 import com.itheima.exception.NotFoundException;
 import com.itheima.exception.ParamException;
 import com.itheima.exception.ServerException;
+import com.itheima.feed.service.FeedPushNotifier;
 import com.itheima.content.model.cache.ContentCacheDTO;
 import com.itheima.content.model.cache.CommentCacheDTO;
 import com.itheima.upload.model.command.UploadCommand;
@@ -52,6 +53,7 @@ class ContentServiceTest {
     private CommentCache commentCache;
     private ContentStatusFiller filler;
     private TransactionTemplate tt;
+    private FeedPushNotifier feedPushNotifier;
     private Connection conn;
     private ContentService service;
     /** 事务回调执行中标志（T12：断言缓存读发生在事务回调之外）。 */
@@ -69,10 +71,12 @@ class ContentServiceTest {
         commentCache = mock(CommentCache.class);
         filler = mock(ContentStatusFiller.class);
         tt = mock(TransactionTemplate.class);
+        feedPushNotifier = mock(FeedPushNotifier.class);
         conn = mock(Connection.class);
         inTransaction = new boolean[1];
         service = new ContentService(contentDao, contentMediaDao, commentDao,
-                contentLikeDao, commentService, likeService, contentCache, commentCache, filler, tt);
+                contentLikeDao, commentService, likeService, contentCache, commentCache, filler, tt,
+                feedPushNotifier);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             inTransaction[0] = true;
@@ -554,6 +558,47 @@ class ContentServiceTest {
         }
 
         assertTrue(probe.atLevel(Level.INFO).isEmpty(), "发布失败不得留下成功里程碑（失败由 SEVERE 承载）");
+    }
+
+    // ===== feed1-18（T18）：发布 → 写扩散投递（影子期，只写不读） =====
+
+    @Test
+    void addVideoPublishesFeedPushAfterCommit() throws SQLException {
+        UploadCommand uc = UploadCommand.asVideo("title", "desc", 7L, 1);
+        when(contentDao.addContent(conn, 7L, 1, "title", "desc", 1)).thenReturn(100L);
+        // 探针：投递点必须在事务回调之外（"提交后副作用"，与缓存同步同款口径；本项目无 afterCommit 机制）
+        doAnswer(invocation -> {
+            assertFalse(inTransaction[0], "写扩散投递应发生在事务提交之后");
+            return null;
+        }).when(feedPushNotifier).publishContentPublished(anyLong(), anyLong());
+
+        long id = service.addVideo(uc, "v.mp4", "c.png");
+
+        assertEquals(100L, id);
+        verify(feedPushNotifier).publishContentPublished(100L, 7L);
+    }
+
+    @Test
+    void addPostPublishesFeedPushAfterCommit() throws SQLException {
+        UploadCommand uc = UploadCommand.asPost("title", "desc", 7L, 0);
+        when(contentDao.addContent(conn, 7L, 2, "title", "desc", 0)).thenReturn(200L);
+
+        long id = service.addPost(uc, "c.png", List.of("i1.jpg"));
+
+        assertEquals(200L, id);
+        verify(feedPushNotifier).publishContentPublished(200L, 7L);
+        assertFalse(inTransaction[0]);
+    }
+
+    @Test
+    void addVideoDoesNotPublishWhenTransactionFails() throws SQLException {
+        UploadCommand uc = UploadCommand.asVideo("title", "desc", 7L, 1);
+        when(contentDao.addContent(conn, 7L, 1, "title", "desc", 1))
+                .thenThrow(new SQLException("db down"));
+
+        assertThrows(ServerException.class, () -> service.addVideo(uc, "v.mp4", "c.png"));
+
+        verify(feedPushNotifier, never()).publishContentPublished(anyLong(), anyLong());
     }
 
     // ===== 评论区开关（C2）=====

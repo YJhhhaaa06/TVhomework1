@@ -23,6 +23,9 @@ public final class CacheKeys {
     /** 内容索引 key 前缀：{@code content:index:}（生成、{@link #domainOf} 解析、SCAN 匹配同源，防漂移）。 */
     public static final String CONTENT_INDEX_PREFIX = "content:index:";
 
+    /** 写扩散收件箱 key 前缀：{@code feed:inbox:}（T18 新增；生成、{@link #domainOf} 解析同源，防漂移）。 */
+    public static final String FEED_INBOX_PREFIX = "feed:inbox:";
+
     private CacheKeys() {
     }
 
@@ -138,6 +141,24 @@ public final class CacheKeys {
     }
 
     /**
+     * 粉丝收件箱（写扩散，feed1-18）：{@code feed:inbox:{userId}}（ZSet&lt;contentId&gt;，**score = contentId**）。
+     *
+     * <p>score 取 contentId（自增单调）⇒ {@code ZRANGE} 升序 / 反向降序即"内容倒序"，与现
+     * {@code /feed} 拉模式 {@code ORDER BY create_time DESC, id DESC} 的次序口径一致。
+     *
+     * <p>语义（NEEDS 4.0 机制骨架）：**派生副本**——真相源是 {@code content} + {@code follow} 表，
+     * 收件箱可丢、可由重建（{@code DEL → DB 重查 → ZADD 合并}）自愈；fanout **永远写**
+     * （幂等 ZADD，不检查 key 是否存在）；**完整态标记只由重建写**（本 key 不参与）。
+     *
+     * <p>⚠️ 口径边界（为"形态二：收件箱表落库 + Redis 加速"留升级门，见 NEEDS 4.3 路线预告）：
+     * 本 key **只存 DB 可重算的内容**（contentId + 完整态标记），**不得塞"已读未读"这类
+     * 不可重算状态**——否则收件箱就从派生副本变成真相源，无法再靠重建自愈。
+     */
+    public static String feedInbox(long userId) {
+        return FEED_INBOX_PREFIX + userId;
+    }
+
+    /**
      * 数据 key → 统计域解析（T7 新增，key 生成与解析同源，唯一源收敛于本方法）。
      *
      * <p>注意前缀重叠：{@code content:} 是 {@code content:comments:} / {@code content:index:} /
@@ -149,7 +170,8 @@ public final class CacheKeys {
      * content:index 归 CONTENT（索引归内容域）；content:like* 与 comment:like* 归 LIKE；
      * content:comments 与 comment:* 归 COMMENT；content:{id} 归 CONTENT；
      * user:following 与 user:follower（user:* 兜底）归 FOLLOW；**user:like* 与 user:commentLike*
-     * （T4 装载反转后的用户维度点赞成员）在 user:* 兜底之前归 LIKE**；未知/null 归 OTHER。
+     * （T4 装载反转后的用户维度点赞成员）在 user:* 兜底之前归 LIKE**；{@code feed:inbox:{id}}
+     * 归 **FEED**（feed1-18 写扩散收件箱）；未知/null 归 OTHER。
      */
     public static CacheDomain domainOf(String dataKey) {
         if (dataKey == null) {
@@ -188,6 +210,11 @@ public final class CacheKeys {
         }
         if (dataKey.startsWith("user:")) {
             return CacheDomain.FOLLOW;
+        }
+        // feed: 与既有全部前缀无重叠（content: / comment: / user: / empty: / partial:），
+        // 但仍在 OTHER 兜底之前判定，与"生成与解析同源"的收敛口径一致
+        if (dataKey.startsWith("feed:")) {
+            return CacheDomain.FEED;
         }
         return CacheDomain.OTHER;
     }

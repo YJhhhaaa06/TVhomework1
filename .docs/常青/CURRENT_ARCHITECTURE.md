@@ -1,9 +1,7 @@
 # 当前系统架构地图
 
-> 版本：3.21（2026-09-26 feed 推拉结合一期 **T17 feed1-17**：新增 `com.itheima.mq` 包——**RabbitMQ 基建**（连接管理 + 拓扑声明 push/rebuild/DLQ + publisher confirm 发布封装 + 消费框架含死信出口 + IoC 生命周期挂载 + 可降级与惰性重连）；影子期口径：对外行为零变化、`/feed` 读路径零改动、本任务不触业务代码；见 4.2 的 mq 包）
-> 上一版 3.20（2026-09-24 日志第三张清单 **T12 log3-12**：**可预期业务拒绝的级别修正**——`UserService` 的 `changePassword` / `changeUserName` / `changePhone`
-> 三处**按异常类型拆 catch**（`ParamException | PasswordIncorrectException | ConflictException` → `WARNING` **不带栈**；兜底 `catch (BusinessException e)` 与 `catch (SQLException e)` 保持 `SEVERE` + 堆栈），
-> 400/401/409 **不再落 `error.log`**；调用点 159 → **162**（+3 新 WARNING 分支）、SEVERE **63（计数不变**，兜底仍是 SEVERE 调用点、覆盖面收窄）、WARNING 84 → **87**；详见 6.24，判据 `说明书/LOG_CONVENTION.md` §3.1 附加纪律 1）
+> 版本：3.22（2026-09-26 feed 推拉结合一期 **T18 feed1-18**：新增 **`com.itheima.feed` 业务域包**——`FeedPushNotifier`（投递封装，**绝不抛**）+ `FeedPushConsumer`（消费者，`@Component` + `Initializable` 挂载、抛异常一次性转死信）+ `FeedInboxCache`（窗口迭代取粉丝 → 单连接 pipeline 批量 `ZADD feed:inbox:{fanId}` + `EXPIRE`）+ `FeedPushMessage`（载荷 record）；投递点 = `ContentService.addVideo`/`addPost` **事务提交后**（`ContentService` 增一个构造依赖）；`CacheKeys` 增 `feedInbox` 与 `domainOf` → **FEED** 域；影子期口径：**只写不读**（`/feed` 读路径零改动）、对外行为零变化、投递/写入失败一律降级；见 4.3 的 feed 域与 6.2）
+> 上一版 3.21（2026-09-26 feed 推拉结合一期 **T17 feed1-17**：新增 `com.itheima.mq` 包——**RabbitMQ 基建**（连接管理 + 拓扑声明 push/rebuild/DLQ + publisher confirm 发布封装 + 消费框架含死信出口 + IoC 生命周期挂载 + 可降级与惰性重连）；影子期口径：对外行为零变化、`/feed` 读路径零改动、本任务不触业务代码；见 4.2 的 mq 包）
 > 最后更新：2026-09-26
 > 维护说明：每次架构改动后必须更新本文档——只改**被改动影响的事实章节** + 头部「最后更新」日期与版本号；**不设变更记录**（变更以 git 提交历史为准，message 规范见 `.docs/说明书/COMMIT_CONVENTION.md`，决策明细落 `目标与任务/*/NEXT_CYCLE_NEEDS.md` 4.0 与 TASKS 执行回写）。
 
@@ -80,7 +78,7 @@ untitled/
 
 ---
 
-## 四、Java 包结构（B 改造后：8 业务域 + 基建不动）
+## 四、Java 包结构（B 改造后：9 业务域 + 基建不动）
 
 ### 4.1 包总览
 
@@ -103,7 +101,8 @@ com.itheima/
 ├── comment/                # 评论域
 ├── coupon/                 # 优惠券域
 ├── upload/                 # 上传/媒体域
-└── admin/                  # 运维/审核域
+├── admin/                  # 运维/审核域
+└── feed/                   # feed 域（feed1-18 新增）：写扩散投递/消费者/收件箱窗口写（影子期只写不读）
 ```
 
 > 每域内部保留 `controller / service / dao / model` 分层子包，与既有技术层级命名一致（**行数口径 = `wc -l` 换行符数**，下表为 2026-09-20 T15 实测快照；仓库内部分 `.java` 末行无换行符，其 `wc -l` 比编辑器显示少 1 行；以实际代码为准）。
@@ -207,8 +206,8 @@ com.itheima/
 
 | 类 | 行数 | 职责 |
 |----|------|------|
-| CacheKeys | 193 | 统一 key 命名/生成规范（唯一源）+ 空标记常量（EMPTY_MARKER_TTL_SECONDS=60s）与**部分装载标记**常量（`PARTIAL_MARKER_VALUE`，T11-C）+ `domainOf` 统计域解析（长前缀优先；`empty:` / `partial:` 先解包到底层数据 key）+ `contentIndex(type, categoryId)` 索引 key 生成（前缀 `CONTENT_INDEX_PREFIX`，生成/解析/匹配三处同源）+ 计数/成员/关注各 key 工厂 |
-| CacheDomain | 27 | 统计分域枚举：CONTENT/COMMENT/LIKE/FOLLOW/OTHER（LIKE 域含用户维度点赞成员 key） |
+| CacheKeys | 220 | 统一 key 命名/生成规范（唯一源）+ 空标记常量（EMPTY_MARKER_TTL_SECONDS=60s）与**部分装载标记**常量（`PARTIAL_MARKER_VALUE`，T11-C）+ `domainOf` 统计域解析（长前缀优先；`empty:` / `partial:` 先解包到底层数据 key）+ `contentIndex(type, categoryId)` 索引 key 生成（前缀 `CONTENT_INDEX_PREFIX`，生成/解析/匹配三处同源）+ 计数/成员/关注各 key 工厂 + **`feedInbox(userId)`**（前缀 `FEED_INBOX_PREFIX="feed:inbox:"`，feed1-18 写扩散收件箱；注释内含"只存 DB 可重算内容"的升级门口径） |
+| CacheDomain | 29 | 统计分域枚举：CONTENT/COMMENT/LIKE/FOLLOW/**FEED**（feed1-18 新增，收件箱 `feed:inbox:{userId}`）/OTHER（LIKE 域含用户维度点赞成员 key） |
 | CacheStats | 130 | 观测统计组件：六类事件（HIT_DATA/HIT_EMPTY/MISS/LOAD/DEGRADE/WRITE_FAIL）AtomicLong 计数 + 分域分桶 + 惰性日志（每 N=1000 输出摘要），record 异常吞掉不影响主链路；DEGRADE=本次读未命中缓存、走 DB 兜底次数（含熔断快速失败） |
 | JacksonCodec | 64 | JSON 序列化（jackson-databind + jsr310），异常抛 CacheException；忽略未知字段（旧缓存 JSON 兼容，DTO 删/改名后仍可反序列化）、日期 ISO-8601（WRITE_DATES_AS_TIMESTAMPS 关闭） |
 | RedisAccess | 90 | 统一 Redis 访问封装：`execute`/`executeVoid` 回调式取还连接（支持同连接 pipeline/MULTI），Jedis 异常包装为 CacheException；唯一出入口接全局熔断（tryAcquire 拒绝即快速失败、finally 按成败回填） |
@@ -324,6 +323,19 @@ com.itheima/
 | dao | —（复用 content.ContentDao / comment.CommentDao，跨域 import） | 数据访问 |
 | model | vo/AdminContentVO（56）、audit/MediaAuditItem（87）/MediaAuditResult（88）/RestoreResult（49） | 管理端清单 VO + 媒体审计/恢复结果 |
 
+#### feed 域 — `com.itheima.feed`（feed1-18 新增：写扩散）
+
+| 层 | 类（行数） | 职责 |
+|----|------|------|
+| controller | —（无专属 controller） | 影子期**不新增任何接口**——`/feed` 读路径与发布 / 关注接口的响应与语义一概不变（读路径切换属二期） |
+| service | FeedPushNotifier（88）、FeedInboxCache（124）、FeedPushConsumer（79） | 写扩散三段 = **投递封装**（`publishContentPublished(contentId, authorId)`：`JacksonCodec` 序列化 + `MqPublisher` 发布；**任何失败都不抛**——序列化失败 WARNING 持栈、未确认只留默认不输出的 FINE、意外异常 SEVERE 兜底）+ **收件箱写**（`fanout`：`FollowCache.getFollowerWindow` **窗口迭代**取粉丝 → 同一 Jedis 连接、单次 pipeline 批量 `ZADD feed:inbox:{fanId}`（**score = contentId**）+ `EXPIRE`；**幂等、不 DEL、不检查存在性、不写完整态标记**；窗口读失败 / Redis 写失败一律降级不打穿，后者记 `WRITE_FAIL` 归 FEED 域）+ **消费者**（`@Component` + `Initializable.init()` 注册 `feed.push.queue`，`init()` 绝不抛；handler 收到非 `feed.push.content` → FINE 跳过，空 / 非法载荷 → 抛出由容器一次性转死信） |
+| dao | —（无，经 `follow.service.FollowCache` 取粉丝窗口） | 不直连 DAO：粉丝列表只走关注域缓存窗口读（**不新增全量粉丝读**，见 4.1 N3 口径） |
+| model | dto/FeedPushMessage（17） | MQ 载荷 record（`contentId` + `authorId`，**不含内容快照**——保住"收件箱可由 DB 重算"这一性质） |
+
+> **依赖与挂载**：`ContentService`（content 域）→ `FeedPushNotifier`；`FeedPushConsumer` → `FeedInboxCache` → `FollowCache`（follow 域）+ `RedisAccess` / `CacheStats`（cache 基建）。**无 `web.xml` / `@WebServlet` / IoC 扫描改动**——消费者经 `Initializable` 生命周期挂载（先例 = `AppShutDownListener` 的 `@WebListener`）。
+> **`@InjectConstructor` 形参一律具体类**（IoC 按具体类解析依赖；写接口会取不到 Bean 而 fail-fast，见 4.2 mq 包同一约束）。
+> 测试：`src/test/java/com/itheima/feed/service/` 3 类单测（mock `MqPublisher` / `MqConsumerContainer` / `FollowCache` / `RedisAccess` + mock `Jedis`/`Pipeline`，**不依赖真实 broker / Redis**），端到端归 `src/test/python/test_feed_push.py`。
+
 ---
 
 ## 五、数据库设计
@@ -415,16 +427,18 @@ com.itheima/
 | user:follower:{userId} | ZSet\<userId\>（score=id） | 谁关注了我（逻辑同 user:following） |
 | user:followCount:{userId} | String(int) | 我的关注数（独立计数 key，Cache-Aside，0 合法；写路径条件 INCRBY、冷 key no-op 由读回填） |
 | user:followerCount:{userId} | String(int) | 我的粉丝数（逻辑同 user:followCount） |
+| feed:inbox:{userId} | ZSet\<contentId\>（**score = contentId**） | **写扩散收件箱（feed1-18 新增）**：发布时 fanout 写入（幂等 ZADD + EXPIRE，**不检查存在性、不 DEL**）；score 单调 ⇒ 降序即内容倒序，与拉模式 `ORDER BY create_time DESC, id DESC` 同口径。TTL = `feed.inbox.ttlMinutes`（默认 60min，**写入即滑动续期**；二期增加读命中续期），到期**整条回收**。**派生副本**：真相源 = `content` + `follow` 表，可由重建（`DEL → DB 重查 → ZADD 合并`，T19）自愈；**一期影子期无人读它**；**无完整态标记**（只由重建写，T19） |
 
 > 索引 key 生成/解析/匹配同源：唯一源 = `CacheKeys.contentIndex(type, categoryId)`（前缀常量 `CONTENT_INDEX_PREFIX="content:index:"`），`domainOf` 解析与索引 SCAN 匹配引用同一前缀，业务包不自行拼接 key。
 > 旧 key（`content:like:{id}` / `comment:like:{id}`、内容/评论维度成员 `content:likeSet:{id}` / `comment:likeSet:{id}`）已随计数分离与成员反转停用，不双写，TTL 过期自然回收。
 > 一致性由 **启动全量重建 + 索引懒重建 + 业务显式失效（增删改/计数/门禁/隐藏恢复）+ Cache-Aside 读自愈** 承担，无周期性全库重载。
+> **收件箱升级门口径（NEEDS 4.3 二期路线预告）**：`feed:inbox:*` 只存 **DB 可重算的内容**（contentId + 完整态标记），**不得塞"已读未读"这类不可重算状态**——否则收件箱就从"派生副本"变成"真相源"，无法再靠重建自愈；保住这条，将来若采纳"收件箱表落库（真相源）+ Redis 加速"，升级是**加法**而非重写。
 
 ### 6.3 统计观测（CacheStats）
 
-- **组件**：`com.itheima.cache.CacheStats`（@Component，固定 `AtomicLong[5][6]` 计数数组，无锁无扩容）。纯计数与日志，不打任何新 Redis 命令、不改缓存读写语义。
+- **组件**：`com.itheima.cache.CacheStats`（@Component，固定 `AtomicLong[6][6]` 计数数组，无锁无扩容）。纯计数与日志，不打任何新 Redis 命令、不改缓存读写语义。
 - **六类事件**：HIT_DATA / HIT_EMPTY / MISS / LOAD / DEGRADE / WRITE_FAIL。
-- **分域分桶**：`CacheKeys.domainOf(String dataKey)` 唯一解析源——**长前缀优先**（content:index / content:comments 先于通用 content:；user:like* / user:commentLike* 先于通用 user:）；`empty:` 空标记与 `partial:` 部分装载标记（T11-C）先解包到底层数据 key 再归域；映射：content:index / content:{id}→CONTENT、content:like*/comment:like* / user:like*/user:commentLike*→LIKE、content:comments / comment:*→COMMENT、user:following / user:follower / user:followCount*（user:* 兜底）→FOLLOW、未知/null→OTHER。
+- **分域分桶**：`CacheKeys.domainOf(String dataKey)` 唯一解析源——**长前缀优先**（content:index / content:comments 先于通用 content:；user:like* / user:commentLike* 先于通用 user:）；`empty:` 空标记与 `partial:` 部分装载标记（T11-C）先解包到底层数据 key 再归域；映射：content:index / content:{id}→CONTENT、content:like*/comment:like* / user:like*/user:commentLike*→LIKE、content:comments / comment:*→COMMENT、user:following / user:follower / user:followCount*（user:* 兜底）→FOLLOW、**`feed:inbox:*`→FEED（feed1-18 新增；一期只在写失败时出现——读侧 HIT/MISS/DEGRADE 属二期切读）**、未知/null→OTHER。
 - **惰性日志输出**：每 N=1000 次记录输出一次各域摘要（INFO 单行）；不引入定时器、不新增 admin 端点。
 - **挂点**：CacheAside 自动打点（三态读 + 降级 + LOAD + 写失败）；SetCache / ZSetCache 自动打点；LikeCacheService / FollowCache 原生路径手动打点（批量记录粒度=每 (数据 key, 决策) 记一次）。
 - **红线段**：`record()` 自身异常吞掉记 WARNING，不影响主链路；统计不引入 MQ。

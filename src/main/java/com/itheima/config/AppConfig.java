@@ -229,6 +229,19 @@ public final class AppConfig {
         return getLong("cache.follow.ttlMinutes") * 60;
     }
 
+    /**
+     * 写扩散收件箱 TTL（feed1-18）：键 {@code feed.inbox.ttlMinutes}（默认 60 分钟）。
+     *
+     * <p>**带默认值**：收件箱是影子期派生副本（可丢、靠重建自愈），配置缺失不得让应用起不来
+     * （对齐 redis.* 与日志配置的容错口径；键存在但值非法照旧抛，fail-fast 语义不变）。
+     *
+     * <p>TTL 口径 = **整条收件箱**的活跃期（不是单条内容），读命中 / fanout 写入均滑动续期；
+     * 到期等价于"该用户关注的人近期未发内容且本人未读" → 整条回收，下次读或下次 fanout 重建。
+     */
+    public static long getFeedInboxTtlSeconds() {
+        return getLong("feed.inbox.ttlMinutes", 60L) * 60;
+    }
+
     // T5（cache-05）：索引懒重建失败冷却退避窗口（对齐熔断冷却先例 redis.breaker.cooldownMillis）
 
     public static long getContentIndexRebuildCooldownMillis() {
