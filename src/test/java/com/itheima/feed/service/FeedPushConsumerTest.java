@@ -34,21 +34,21 @@ import static org.mockito.Mockito.verify;
 /**
  * {@link FeedPushConsumer} 单测（feed1-18 T18）：注册 / init 不抛 / 解码委派 / 失败语义 / 通配前向兼容。
  *
- * <p>隔离手法：mock {@link MqConsumerContainer} 与 {@link FeedInboxCache}，{@link JacksonCodec} 用真实件
+ * <p>隔离手法：mock {@link MqConsumerContainer} 与 {@link FeedInboxWriter}，{@link JacksonCodec} 用真实件
  * （覆盖 record 的 JSON 往返），**不依赖真实 broker**。
  */
 class FeedPushConsumerTest {
 
     private MqConsumerContainer container;
-    private FeedInboxCache inboxCache;
+    private FeedInboxWriter inboxWriter;
     private FeedPushConsumer consumer;
     private LogProbe probe;
 
     @BeforeEach
     void setUp() {
         container = mock(MqConsumerContainer.class);
-        inboxCache = mock(FeedInboxCache.class);
-        consumer = new FeedPushConsumer(container, new JacksonCodec(), inboxCache);
+        inboxWriter = mock(FeedInboxWriter.class);
+        consumer = new FeedPushConsumer(container, new JacksonCodec(), inboxWriter);
         probe = LogProbe.attachTo(LogUtil.getLogger(FeedPushConsumer.class));
     }
 
@@ -83,7 +83,7 @@ class FeedPushConsumerTest {
     void handleDecodesPayloadAndFansOut() {
         consumer.handle(MqTopology.RK_PUSH_CONTENT, body(42L, 9L));
 
-        verify(inboxCache).fanout(42L, 9L);
+        verify(inboxWriter).fanout(42L, 9L);
     }
 
     @Test
@@ -91,7 +91,7 @@ class FeedPushConsumerTest {
         // 非法 JSON → 抛出（由容器根捕获记 SEVERE + 栈后一次性转死信），本类不吞、不二次记栈
         assertThrows(RuntimeException.class, () -> consumer.handle(MqTopology.RK_PUSH_CONTENT,
                 "{not-json".getBytes(StandardCharsets.UTF_8)));
-        verify(inboxCache, never()).fanout(anyLong(), anyLong());
+        verify(inboxWriter, never()).fanout(anyLong(), anyLong());
         assertTrue(probe.records().isEmpty(), "本类不重复记录消费失败（容器是持栈点）");
     }
 
@@ -101,7 +101,7 @@ class FeedPushConsumerTest {
                 () -> consumer.handle(MqTopology.RK_PUSH_CONTENT, null));
         assertThrows(IllegalArgumentException.class,
                 () -> consumer.handle(MqTopology.RK_PUSH_CONTENT, new byte[0]));
-        verify(inboxCache, never()).fanout(anyLong(), anyLong());
+        verify(inboxWriter, never()).fanout(anyLong(), anyLong());
     }
 
     @Test
@@ -109,7 +109,7 @@ class FeedPushConsumerTest {
         // feed.push.queue 以 feed.push.# 通配绑定：将来新增子类型会一并投到本队列 → 不误解析、不投死信
         assertDoesNotThrow(() -> consumer.handle("feed.push.other", body(1L, 2L)));
 
-        verify(inboxCache, never()).fanout(anyLong(), anyLong());
+        verify(inboxWriter, never()).fanout(anyLong(), anyLong());
         assertTrue(probe.atLevel(Level.WARNING).isEmpty());
     }
 

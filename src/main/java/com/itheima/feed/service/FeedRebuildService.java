@@ -27,7 +27,9 @@ import java.util.logging.Logger;
 /**
  * 收件箱重建（feed1-19 T19）：{@code DEL → DB 重查 → ZADD 合并} 三步，末尾写"完整态标记"。
  *
- * <p><b>机制与"无丢失窗口"论证</b>（NEEDS 4.0 机制骨架）：收件箱是**派生副本**，真相源是
+ * <p><b>机制与"无丢失窗口"论证</b>（NEEDS 4.0 机制骨架；**该论证的"fanout 增量写"前提自 feed2-21 T21
+ * 起对 Redis ZSet 不再存在**——fanout 改为写 DB 真相 + 失效 DEL，见下段。三步顺序红线本身不变，
+ * "先清后建 + 增量只并集"的结构在 Redis 读缓存与 T22 窗口重建上继续沿用）：收件箱是**派生副本**，真相源是
  * {@code content} + {@code follow} 表。保证不丢内容的正是**三步顺序**（红线，不得调换）：
  * 先 {@code DEL}、再 DB 重查、最后 ZADD。逐情形看——某条内容的 fanout 消息若在当前重建的 DB 重查
  * **之前**被消费，则它的落库必然发生在重查之前（投递点在事务提交后）⇒ 必被本次快照收录；
@@ -35,8 +37,11 @@ import java.util.logging.Logger;
  * 即 **DEL 之后的写只会"并集"到同一份快照上**（ZADD 可交换、成对无覆盖），故"先 DEL 后 ZADD"
  * 顺序不可交换——交换后（先查后 DEL）在"查完 → DEL"窗口内到达的 fanout 会被 DEL 抹掉而快照里没有。
  *
- * <p><b>fanout 与重建的关系</b>：fanout **永远写**（幂等 ZADD，不检查存在性、不写标记），
- * 重建**先清后建**并写标记；两者交错也不会丢成员（见上）。完整态标记**只由本类写**。
+ * <p><b>fanout 与重建的关系</b>（feed2-21 T21 更新）：fanout 自二期起**写 DB 真相（{@code feed_inbox}）
+ * + 写后失效（DEL 收件箱缓存三件套与完整态标记）**、不再写 Redis ZSet（见 {@link FeedInboxWriter}）；
+ * 本类仍是收件箱 **Redis 侧产物与完整态标记的唯一写入方**（T22 起窗口化 + 标记迁"窗口同步状态"落表）。
+ * 两者交错下"不丢成员"的论证（见上）对 Redis 读缓存继续成立（先清后建 + 增量只并集）；
+ * **DB 真相侧的完整性**以 T22 的窗口同步状态（{@code feed_inbox_sync} 表）为准。
  *
  * <p><b>并发去重</b>：{@code SET NX EX} + Lua CAS 释放（一期唯一分布式锁用法）。锁只是**去重优化**，
  * 不承担正确性：TTL（{@value #REBUILD_LOCK_TTL_SECONDS}s）到点后若真有并发重建交叉执行，最终产物是
@@ -62,7 +67,7 @@ public class FeedRebuildService {
     static final long REBUILD_LOCK_TTL_SECONDS = 60L;
 
     /**
-     * DB 重查分页大小（包内常量，与 {@link FeedInboxCache#FANOUT_BATCH} 同值同口径）：
+     * DB 重查分页大小（包内常量，与 {@link FeedInboxWriter#FANOUT_BATCH} 同值同口径）：
      * 复用拉模式同一 DAO 方法（{@code LIMIT/OFFSET}），**不足一页即到底**——与窗口迭代同终止口径，
      * 不依赖 count（防计数漂移）。
      */

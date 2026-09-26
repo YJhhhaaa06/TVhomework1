@@ -2,7 +2,9 @@ package com.itheima.config;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.LinkedHashSet;
 import java.util.Properties;
+import java.util.Set;
 
 /**
  * 应用配置：classpath 加载 app.properties，外部覆盖两级（优先级从高到低）：
@@ -240,6 +242,46 @@ public final class AppConfig {
      */
     public static long getFeedInboxTtlSeconds() {
         return getLong("feed.inbox.ttlMinutes", 60L) * 60;
+    }
+
+    // ===== feed 二期大V占位路由（feed2-21 T21）=====
+
+    /**
+     * 大V判定阈值（feed2-21 T21，**占位机制**）：作者粉丝数 ≥ 本值 ⇒ 视为大V。
+     *
+     * <p>**带默认值（10000）**：占位路由的可选参数，键缺失不得让应用起不来（对齐
+     * {@link #getFeedInboxTtlSeconds()} 的容错口径；键存在但值非法照旧抛，fail-fast 语义不变）。
+     * 阈值上下波动 / 掉粉补推等机制归三期。
+     */
+    public static int getFeedBigVThreshold() {
+        return getInt("feed.bigv.threshold", 10000);
+    }
+
+    /**
+     * 大V名单（feed2-21 T21，**占位机制**）：逗号分隔的用户 id 列表；键缺失 / 为空 → 空集合。
+     *
+     * <p>名单 = 显式指定的大V（不经粉丝数阈值判定，与阈值取"或"）；token 前后空白跳过（末位空项合法）。
+     * **非法 token 抛 {@link IllegalArgumentException}**（fail-fast，与既有数值解析失败口径一致，
+     * 参数名进消息便于定位）；名单维护机制归三期。
+     */
+    public static Set<Long> getFeedBigVUserIds() {
+        Set<Long> ids = new LinkedHashSet<>();
+        String raw = get("feed.bigv.userIds");
+        if (raw.isEmpty()) {
+            return ids;
+        }
+        for (String token : raw.split(",")) {
+            String t = token.trim();
+            if (t.isEmpty()) {
+                continue;
+            }
+            try {
+                ids.add(Long.parseLong(t));
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("feed.bigv.userIds 含非法用户 id: " + t, e);
+            }
+        }
+        return ids;
     }
 
     // T5（cache-05）：索引懒重建失败冷却退避窗口（对齐熔断冷却先例 redis.breaker.cooldownMillis）

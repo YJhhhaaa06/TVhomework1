@@ -14,7 +14,8 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 写扩散消费者（feed1-18 T18）：接收 {@code feed.push.queue} 上的内容发布事件，写各粉丝收件箱。
+ * 写扩散消费者（feed1-18 T18；feed2-21 T21 起落库侧改为 {@link FeedInboxWriter}）：接收
+ * {@code feed.push.queue} 上的内容发布事件，写各粉丝收件箱（DB 真相 + 缓存失效）。
  *
  * <p><b>挂载方式</b>：{@code @Component} + {@link Initializable}（**不动 web.xml / IoC 扫描**，
  * 先例 = {@code AppShutDownListener} 的 {@code @WebListener}）。{@code register} 可在
@@ -40,14 +41,14 @@ public class FeedPushConsumer implements Initializable {
 
     private final MqConsumerContainer container;
     private final JacksonCodec codec;
-    private final FeedInboxCache inboxCache;
+    private final FeedInboxWriter inboxWriter;
 
     @InjectConstructor
     public FeedPushConsumer(MqConsumerContainer container, JacksonCodec codec,
-                            FeedInboxCache inboxCache) {
+                            FeedInboxWriter inboxWriter) {
         this.container = container;
         this.codec = codec;
-        this.inboxCache = inboxCache;
+        this.inboxWriter = inboxWriter;
     }
 
     @Override
@@ -74,6 +75,6 @@ public class FeedPushConsumer implements Initializable {
             // 空载荷属"消息不可用"，抛出 → 容器转死信（保留证据，不静默丢弃）
             throw new IllegalArgumentException("写扩散消息载荷为空");
         }
-        inboxCache.fanout(message.contentId(), message.authorId());
+        inboxWriter.fanout(message.contentId(), message.authorId());
     }
 }

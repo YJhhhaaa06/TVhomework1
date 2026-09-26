@@ -162,18 +162,19 @@ public final class CacheKeys {
     }
 
     /**
-     * 粉丝收件箱（写扩散，feed1-18）：{@code feed:inbox:{userId}}（ZSet&lt;contentId&gt;，**score = contentId**）。
+     * 粉丝收件箱（写扩散，feed1-18；feed2-21 T21 起语义升级为**可降级读缓存**）：
+     * {@code feed:inbox:{userId}}（ZSet&lt;contentId&gt;，**score = contentId**）。
      *
-     * <p>score 取 contentId（自增单调）⇒ {@code ZRANGE} 升序 / 反向降序即"内容倒序"，与现
+     * <p>score 取 contentId（自增单调）⇒ {@code ZRANGE} 升序 / 反向降序即"内容倒序"，与
      * {@code /feed} 拉模式 {@code ORDER BY create_time DESC, id DESC} 的次序口径一致。
      *
-     * <p>语义（NEEDS 4.0 机制骨架）：**派生副本**——真相源是 {@code content} + {@code follow} 表，
-     * 收件箱可丢、可由重建（{@code DEL → DB 重查 → ZADD 合并}）自愈；fanout **永远写**
-     * （幂等 ZADD，不检查 key 是否存在）；**完整态标记只由重建写**（本 key 不参与）。
+     * <p>语义（NEEDS 4.0 写侧拍板）：**DB 真相 = {@code feed_inbox} 表**（T21 落库：写扩散 +
+     * 窗口重建的产物），本 key = 其上的**可降级读缓存**——重建（T19，T22 改窗口化）仍写本 key；
+     * **fanout（T21 起）不再写本项目**（单写 DB 真相 + 写后失效），只对相关粉丝 `DEL` 本 key
+     * 与完整态标记（读 miss 由 T23 回源 DB 并回填）。TTL（{@code feed.inbox.ttlMinutes}）仅为
+     * 缓存淘汰，**无正确性含义**（正确性以 DB 真相 + 窗口同步状态为准）。
      *
-     * <p>⚠️ 口径边界（为"形态二：收件箱表落库 + Redis 加速"留升级门，见 NEEDS 4.3 路线预告）：
-     * 本 key **只存 DB 可重算的内容**（contentId + 完整态标记），**不得塞"已读未读"这类
-     * 不可重算状态**——否则收件箱就从派生副本变成真相源，无法再靠重建自愈。
+     * <p>⚠️ 收纳边界（沿用）：本 key 只存 DB 可重算的内容，**不得塞"已读未读"这类不可重算状态**。
      */
     public static String feedInbox(long userId) {
         return FEED_INBOX_PREFIX + userId;
@@ -183,11 +184,14 @@ public final class CacheKeys {
      * 收件箱**完整态标记**：{@code feed:inbox:full:{userId}}（String，仅需 EXISTS 判断）。
      *
      * <p>语义（feed1-19 T19）：**key 存在 ⇒ 该收件箱是"重建产物"，内容完整**（可能为空集）；
-     * 不存在 ⇒ 只被 fanout 增量写过（或从未写），完整性未知 ⇒ 二期切读**回退拉模式**。
+     * 不存在 ⇒ 只被 fanout 增量写过（或从未写），完整性未知。
      *
-     * <p>写入方**只有重建**（{@code FeedRebuildService}）：重建的三步里第①步 DEL（含本标记）、
-     * 第③步 ZADD 全部写完后才 SET 本标记；**fanout 永不写、永不删本标记**——重建后到达的
-     * fanout 消息是"快照之后再发生的新内容"，追加进收件箱后完整性不变。
+     * <p>写入方**只有重建**（{@code FeedRebuildService}）：重建三步里第①步 DEL（含本标记）、
+     * 第③步 ZADD 全部写完后才 SET 本标记。
+     *
+     * <p>⚠️ **feed2-21 T21 起 fanout 会 DEL 本标记**（与 T19"fanout 永不触碰标记"口径的差异，
+     * 已登记任务回写）：一期标记是"派生副本完整性"的表述，二期起其数据（ZSet）被失效后残留必失真；
+     * 标记语义随 R-13 于 **T22 迁"窗口同步状态"落库**（{@code feed_inbox_sync} 表），本 key 随之退役。
      */
     public static String feedInboxFull(long userId) {
         return FEED_INBOX_FULL_PREFIX + userId;

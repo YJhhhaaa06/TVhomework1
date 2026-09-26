@@ -10,6 +10,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.Properties;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -122,6 +123,63 @@ class AppConfigTest {
         try {
             // 键存在但解析失败 → 照旧抛（fail-fast，不静默回退默认值）
             assertThrows(NumberFormatException.class, () -> AppConfig.getInt("t18.bad.int", 1));
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    // ===== feed 二期大V占位路由键（feed2-21 T21）=====
+
+    @Test
+    void feedBigVThresholdDefaultsToAppProperties() throws IOException {
+        String fromFile = propString("feed.bigv.threshold");
+        assertEquals(Integer.parseInt(fromFile), AppConfig.getFeedBigVThreshold());
+        assertEquals(10000, AppConfig.getFeedBigVThreshold(), "占位默认值（app.properties 与代码默认值一致）");
+    }
+
+    @Test
+    void feedBigVThresholdMissingKeyFallsBackToDefault() throws Exception {
+        Properties p = new Properties();
+        p.setProperty("feed.bigv.userIds", "");
+        replaceProps(p);
+        try {
+            assertEquals(10000, AppConfig.getFeedBigVThreshold(), "键缺失 → 带默认值读取（不 fail-fast）");
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    @Test
+    void feedBigVUserIdsParsesListAndToleratesBlankTokens() throws Exception {
+        Properties p = new Properties();
+        p.setProperty("feed.bigv.userIds", "7, 8 ,,9,");
+        replaceProps(p);
+        try {
+            assertEquals(Set.of(7L, 8L, 9L), AppConfig.getFeedBigVUserIds());
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    @Test
+    void feedBigVUserIdsEmptyOrMissingMeansNoList() throws Exception {
+        Properties p = new Properties();
+        p.setProperty("feed.bigv.userIds", "   ");
+        replaceProps(p);
+        try {
+            assertTrue(AppConfig.getFeedBigVUserIds().isEmpty());
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    @Test
+    void feedBigVUserIdsInvalidTokenFailsFast() throws Exception {
+        Properties p = new Properties();
+        p.setProperty("feed.bigv.userIds", "7,abc");
+        replaceProps(p);
+        try {
+            assertThrows(IllegalArgumentException.class, AppConfig::getFeedBigVUserIds);
         } finally {
             replaceProps(originalProps);
         }

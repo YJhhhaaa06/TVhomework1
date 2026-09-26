@@ -1,26 +1,25 @@
 # -*- coding: utf-8 -*-
 """
-test_feed_push.py - feed 写扩散（push 管线）端到端测试（feed1-18 T18）
+test_feed_push.py - feed 写扩散（push 管线）端到端测试（feed1-18 T18 建；feed2-21 T21 改写为落库语义）
 
-背景：T18 落地「发布 → MQ → 消费者 → 粉丝收件箱 ZADD」的写扩散链路（**影子期：只写不读**，
-`/feed` 读路径零改动）。本文件是该链路的**端到端证据**——收件箱在 Redis 里、应用侧无 HTTP 读接口，
-故直接读 Redis 断言（读通道见下）。
+背景：T21 起写扩散 = 「发布 → MQ → 消费者 → **落库 DB 真相表 `feed_inbox`** + 写后失效 DEL」
+（NEEDS 4.0 写侧拍板：单写 DB 真相 + 写后失效 + 读 miss 回源回填；**`/feed` 读路径仍为拉模式**，
+本期零改动）。本文件是该链路的**端到端证据**——断言直连测试库只读复算（收件箱尚无可读 HTTP 接口）。
 
 覆盖：
-  1. 粉丝视角：b 关注 a → a 发布图文 → **轮询**（最终一致窗口内收敛）收件箱
-     `feed:inbox:{b_id}` 含新 contentId，且 `score == contentId`；
-  2. 该收件箱 key 带 TTL（到期整条回收，不是单条内容过期）；
-  3. 非粉丝不受影响：全新用户（无关注关系）的收件箱既无该条、也不存在 inbox key；
-  4. 红线哨兵：`/feed` 拉模式响应信封口径不变，且能取到刚发布的内容（读路径零改动）。
+  1. 粉丝视角：b 关注 a → a 发布图文 → **轮询**（最终一致窗口内收敛）`feed_inbox` 出现 (b_id, contentId)；
+  2. 非粉丝不受影响：全新用户（无关注关系）在 `feed_inbox` 中零行；
+  3. 红线哨兵：`/feed` 拉模式响应信封口径不变，且能取到刚发布的内容（读路径零改动）。
 
 读取手段与跳过口径：
-  - **Redis**：`docker exec <容器> redis-cli <命令>` 子进程——Python 侧无 redis 依赖
-    （requirements 只有 pytest/requests），redis-cli 就在应用所连的同一容器内（db 0、无密码），
-    与既有 `mysql.exe` 子进程范式同构，**零新依赖**；官方口径见 `说明书/TEST_AUTOMATION.md` §4.7。
+  - **MySQL（独立 oracle）**：`mysql.exe` 子进程（沿 `test_feed_rebuild.py` / `test_content_paging.py`
+    既有先例），连接参数取 `run_tests.py` 注入的 `DB_*`。**只发 SELECT**，不写库。
   - **MQ 可达性**：按 `AppConfig` 同一覆盖链解析应用实际用的 `rabbitmq.port`
     （`RABBITMQ_PORT` 环境变量 > `app.properties`）；不可达即 skip。
-  - 两层 skip 只作用于**收件箱类断言**（用例 1~3）——**用例 4 不跳过**，故降级跑
+  - 两层 skip 只作用于**落库类断言**（用例 1~2）——**用例 3 不跳过**，故降级跑
     （`RABBITMQ_PORT=5699 python tools/tv.py test`）下仍能证明"发布与 `/feed` 业务链路不受影响"。
+  - **Redis 不再由本文件断言**：T21 起 fanout 只 DEL 缓存（不写），DEL 的 e2e 断言归
+    `test_feed_rebuild.py` 用例 2（"收敛后再发布"序列，规避重建晚于 DEL 的过渡期竞态）。
 
 数据自建自清：三个用户全部用 `testA_` 前缀临时注册（命中 tools/cleanup_data.py 的
 TEST_USERNAME_PREFIXES 白名单，命名 `testA_fpush_*`），不依赖 conftest 的 user_a/user_b
@@ -43,18 +42,20 @@ import conftest
 # 项目根（按 AppConfig 覆盖链解析应用实际使用的 MQ 端口用）
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-# 应用所连的 Redis 容器（app.properties 固定 localhost:6379 → 该容器，db 0、无密码）
-REDIS_CONTAINER = "redis"
-
-# 收件箱 key 前缀（须与 cache.CacheKeys.FEED_INBOX_PREFIX 同步）
-INBOX_PREFIX = "feed:inbox:"
+# 收件箱真相表（须与 main 侧 SQL / 迁移脚本同步）
+FEED_INBOX_TABLE = "feed_inbox"
 
 # 内容域信封字段集（唯一信封 common.model.dto.PageResult）
 _ENVELOPE_KEYS = {"list", "total", "page", "pageSize", "totalPages"}
 
-# 收敛窗口：MQ 投递 + 消费 + Redis 写在本地毫秒级完成；10s 上限只用于吸收抖动
+# 收敛窗口：MQ 投递 + 消费 + DB 落库在本地毫秒级完成；10s 上限只用于吸收抖动
 POLL_TIMEOUT_SECONDS = 10.0
 POLL_INTERVAL_SECONDS = 0.2
+
+_MYSQL_CANDIDATES = (
+    r"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe",
+    r"C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -84,12 +85,12 @@ def _follow(base_url, token, followed_user_id, action):
 
 
 def _post_content(base_url, token, title, test_files):
-    """POST /api/upload/post 建一条图文内容（真实写路径 = T18 的投递点），返回 contentId。"""
+    """POST /api/upload/post 建一条图文内容（真实写路径 = 投递点），返回 contentId。"""
     with open(test_files["cover"], "rb") as cf, open(test_files["image"], "rb") as imf:
         resp = requests.post(
             f"{base_url}/api/upload/post",
             headers={"token": token},
-            data={"title": title, "description": "feed1-18 写扩散用例", "categoryId": "0"},
+            data={"title": title, "description": "feed2-21 写扩散落库用例", "categoryId": "0"},
             files={
                 "cover": ("test_cover.png", cf, "image/png"),
                 "image": ("test_image.jpg", imf, "image/jpeg"),
@@ -122,44 +123,66 @@ def _feed(base_url, token, page=1, page_size=100):
 
 
 # ---------------------------------------------------------------------------
-# Redis 只读辅助（docker exec redis-cli）
+# MySQL 只读辅助（DB 真相断言：独立 oracle，不经过应用代码路径）
 # ---------------------------------------------------------------------------
 
-def _require_redis_container():
-    """docker / 容器不可用 → skip（读 Redis 是本文件的手段，不是被测能力）。"""
-    if shutil.which("docker") is None:
-        pytest.skip("docker 不可用，无法读 Redis 收件箱")
-    probe = subprocess.run(
-        ["docker", "exec", REDIS_CONTAINER, "redis-cli", "PING"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
-    )
-    if probe.returncode != 0 or probe.stdout.strip() != "PONG":
-        pytest.skip(f"容器 {REDIS_CONTAINER} 不可用，无法读 Redis 收件箱")
+def _mysql_path():
+    """定位 mysql 客户端（沿 test_content_paging.py / test_feed_rebuild.py 既有先例）。"""
+    found = shutil.which("mysql")
+    if found:
+        return Path(found)
+    for candidate in _MYSQL_CANDIDATES:
+        if Path(candidate).exists():
+            return Path(candidate)
+    return None
 
 
-def _redis_cli(*args):
-    """只读执行一条 redis-cli 命令并返回 stdout（已 strip）。"""
+def _run_sql(sql):
+    """直连测试库执行**只读** SQL（连接参数由 run_tests.py 注入的 DB_* 给出）。"""
+    mysql = _mysql_path()
+    cmd = [
+        str(mysql),
+        "--user=" + os.environ.get("DB_USER", "root"),
+        "--password=" + os.environ.get("DB_PASSWORD", "ROOT123"),
+        "--host=" + os.environ.get("DB_HOST", "127.0.0.1"),
+        "--port=" + os.environ.get("DB_PORT", "3307"),
+        "--database=" + os.environ.get("DB_NAME", "TVDatabase_test"),
+        "--batch",
+        "--skip-column-names",
+        "--default-character-set=utf8mb4",
+        "--execute",
+        sql,
+    ]
     proc = subprocess.run(
-        ["docker", "exec", REDIS_CONTAINER, "redis-cli", *[str(a) for a in args]],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+        cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120
     )
     if proc.returncode != 0:
-        raise RuntimeError("redis-cli 执行失败: " + (proc.stderr.strip() or proc.stdout.strip()))
+        raise RuntimeError("mysql 执行失败: " + (proc.stderr.strip() or proc.stdout.strip()))
     return proc.stdout.strip()
 
 
-def _zscore(key, member):
-    """ZSCORE；成员不存在返回 None（redis-cli 对 nil 输出空串，兼容加括号形态）。"""
-    out = _redis_cli("ZSCORE", key, member)
-    return None if out in ("", "(nil)") else float(out)
+def _require_mysql():
+    """oracle 通道不可用 → skip（直查 MySQL 是手段，不是被测能力）。"""
+    if _mysql_path() is None:
+        pytest.skip("mysql 客户端不可用，无法读收件箱真相表")
+    try:
+        _run_sql("SELECT 1")
+    except Exception as exc:      # noqa: BLE001 - 通道不可用一律 skip，避免误报失败
+        pytest.skip(f"测试库不可达，无法读收件箱真相表: {exc}")
 
 
-def _zcard(key):
-    return int(_redis_cli("ZCARD", key) or "0")
+def _db_inbox_has(fan_id, content_id):
+    """该粉丝收件箱（DB 真相）是否已含该内容（行数 == 1）。"""
+    out = _run_sql(
+        f"SELECT COUNT(*) FROM {FEED_INBOX_TABLE} "
+        f"WHERE user_id = {int(fan_id)} AND content_id = {int(content_id)}"
+    )
+    return out.strip() == "1"
 
 
-def _ttl(key):
-    return int(_redis_cli("TTL", key) or "-2")
+def _db_inbox_count(user_id):
+    out = _run_sql(f"SELECT COUNT(*) FROM {FEED_INBOX_TABLE} WHERE user_id = {int(user_id)}")
+    return int(out.strip() or "0")
 
 
 def _poll(predicate, timeout=POLL_TIMEOUT_SECONDS, interval=POLL_INTERVAL_SECONDS):
@@ -173,14 +196,14 @@ def _poll(predicate, timeout=POLL_TIMEOUT_SECONDS, interval=POLL_INTERVAL_SECOND
 
 
 # ---------------------------------------------------------------------------
-# 前置：MQ 可达性 / 收件箱类断言的 skip 口径
+# 前置：MQ 可达性 / 落库类断言的 skip 口径
 # ---------------------------------------------------------------------------
 
 def _app_mq_port():
     """应用实际使用的 MQ 端口：AppConfig 覆盖链 = 环境变量 `RABBITMQ_PORT` > `app.properties` 的 rabbitmq.port。
 
     降级跑（`RABBITMQ_PORT=5699 python tools/tv.py test`）把应用指向不可达端口，故必须按**同一**覆盖链
-    解析，才能判断"本次跑，写扩散链路是否可能产出收件箱"。
+    解析，才能判断"本次跑，写扩散链路是否可能产出落库"。
     """
     env_port = os.environ.get("RABBITMQ_PORT")
     if env_port:
@@ -194,7 +217,7 @@ def _app_mq_port():
 
 
 def _require_mq_reachable():
-    """MQ 不可达 → skip：写扩散靠 MQ 投递，降级跑下该链路本就不产出收件箱，超时失败不代表回归。"""
+    """MQ 不可达 → skip：写扩散靠 MQ 投递，降级跑下该链路本就不产出落库，超时失败不代表回归。"""
     port = _app_mq_port()
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=1):
@@ -204,9 +227,9 @@ def _require_mq_reachable():
 
 
 def _require_fanout_env():
-    """收件箱类断言的共同前置：MQ 可达（否则收件箱不会出现）+ Redis 可读（否则读不出断言）。"""
+    """落库类断言的共同前置：MQ 可达（否则 fanout 不会执行）+ MySQL 可读（否则读不出断言）。"""
     _require_mq_reachable()
-    _require_redis_container()
+    _require_mysql()
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +242,7 @@ def push_context(base_url, test_files):
 
     teardown：作者软删该内容 + 取关复原（本模块自建自清，不依赖外部会话用户状态）。
     **本 fixture 不做环境 skip**——发布与 `/feed` 在 MQ 降级时同样应正常，故前置检查放在
-    各"收件箱类断言"用例内（见 `_require_fanout_env`），以保证用例 4（读路径哨兵）在降级跑下仍执行。
+    各"落库类断言"用例内（见 `_require_fanout_env`），以保证用例 3（读路径哨兵）在降级跑下仍执行。
     """
     author = _register_fresh_user("author")
     fan = _register_fresh_user("fan")
@@ -230,7 +253,7 @@ def push_context(base_url, test_files):
 
     content_id = None
     try:
-        content_id = _post_content(base_url, author["token"], "feed1-18 写扩散用例", test_files)
+        content_id = _post_content(base_url, author["token"], "feed2-21 写扩散落库用例", test_files)
         yield {
             "author": author,
             "fan": fan,
@@ -245,46 +268,36 @@ def push_context(base_url, test_files):
 
 @pytest.mark.boundary
 class TestFeedPushFanout:
-    """T18：写扩散（影子期只写不读）——收件箱增量正确、非粉丝不受影响、读路径零改动。"""
+    """T21：写扩散落库（DB 真相）——粉丝收件箱增量落表、非粉丝不受影响、读路径零改动。"""
 
-    def test_fanout_writes_inbox_for_follower(self, push_context):
-        """粉丝收件箱在收敛窗口内出现新 contentId（最终一致）。"""
+    def test_fanout_writes_db_inbox_for_follower(self, push_context):
+        """粉丝收件箱（DB 真相 `feed_inbox`）在收敛窗口内出现新 contentId（最终一致）。"""
         _require_fanout_env()
-        key = INBOX_PREFIX + str(push_context["fan"]["id"])
+        fan_id = push_context["fan"]["id"]
         content_id = push_context["content_id"]
 
-        score = _poll(lambda: _zscore(key, content_id))
+        assert _poll(lambda: _db_inbox_has(fan_id, content_id)), (
+            f"粉丝收件箱未落库: user_id={fan_id}, contentId={content_id}, "
+            f"rows={_db_inbox_count(fan_id)}"
+        )
 
-        assert score is not None, f"粉丝收件箱未含新内容: key={key}, contentId={content_id}"
-        # score = contentId（自增单调 ⇒ 降序即内容倒序，与拉模式 ORDER BY create_time DESC, id DESC 同口径）
-        assert score == float(content_id), f"收件箱 score 应等于 contentId: {score}"
-
-    def test_inbox_key_carries_ttl(self, push_context):
-        """收件箱带 TTL（到期整条回收，不是单条内容过期）。"""
+    def test_non_follower_db_inbox_not_affected(self, push_context):
+        """非粉丝（无关注关系）的收件箱零行（fanout 不写无关用户）。"""
         _require_fanout_env()
-        key = INBOX_PREFIX + str(push_context["fan"]["id"])
-        content_id = push_context["content_id"]
-        assert _poll(lambda: _zscore(key, content_id)) is not None, "前置：收件箱应先收敛"
-
-        assert _ttl(key) > 0, f"收件箱应带正 TTL: TTL={_ttl(key)}"
-
-    def test_non_follower_inbox_not_affected(self, push_context):
-        """非粉丝（无关注关系）的收件箱既无该条、也不存在 inbox key。"""
-        _require_fanout_env()
-        fan_key = INBOX_PREFIX + str(push_context["fan"]["id"])
+        fan_id = push_context["fan"]["id"]
         content_id = push_context["content_id"]
         # 等 fanout 处理完（粉丝侧收敛 = 该消息已消费），再断言非粉丝侧
-        assert _poll(lambda: _zscore(fan_key, content_id)) is not None, "前置：收件箱应先收敛"
+        assert _poll(lambda: _db_inbox_has(fan_id, content_id)), "前置：粉丝收件箱应先落库"
 
-        stranger_key = INBOX_PREFIX + str(push_context["stranger"]["id"])
-        assert _zscore(stranger_key, content_id) is None, \
-            f"非粉丝收件箱不应含该内容: key={stranger_key}"
-        assert _zcard(stranger_key) == 0, f"非粉丝不应存在收件箱 key: key={stranger_key}"
+        stranger_id = push_context["stranger"]["id"]
+        assert _db_inbox_has(stranger_id, content_id) is False, \
+            f"非粉丝收件箱不应含该内容: user_id={stranger_id}"
+        assert _db_inbox_count(stranger_id) == 0, f"非粉丝不应有收件箱行: user_id={stranger_id}"
 
     def test_feed_read_path_unchanged(self, base_url, push_context):
         """红线哨兵：/feed 拉模式信封口径不变，且能取到刚发布的内容（读路径零改动）。
 
-        **不做环境 skip**：MQ / Redis 降级时本用例仍应通过——这正是"业务链路不依赖推"的证据。
+        **不做环境 skip**：MQ / MySQL 降级时本用例仍应通过——这正是"业务链路不依赖推"的证据。
         """
         body = _feed(base_url, push_context["fan"]["token"])
 

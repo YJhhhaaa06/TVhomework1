@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-test_feed_rebuild.py - feed 收件箱重建端到端测试（feed1-19 T19）
+test_feed_rebuild.py - feed 收件箱重建端到端测试（feed1-19 T19 建；feed2-21 T21 改写用例 2 为落库语义）
 
 背景：T19 落地「关注 / 取关 → rebuild 消息 → 消费者 → `DEL → DB 重查 → ZADD 合并` → 完整态标记」
 （**影子期：/feed 读路径零改动**，对外行为零变化）。本文件是该链路的**端到端证据**——
@@ -11,8 +11,9 @@ test_feed_rebuild.py - feed 收件箱重建端到端测试（feed1-19 T19）
      且其 id 序列（`ZREVRANGE`，成员 = contentId、score = contentId）与**独立 oracle**
      （直连 MySQL 按 `content ⋈ follow` 复算，`is_deleted=0` + `ORDER BY create_time DESC, id DESC`）
      **逐条相等**；`ZCARD` 与 oracle 长度相等；标记带 TTL。
-  2. 重建后 fanout 增量**不破坏完整性**：作者再发一条（此时已是粉丝 → 走 fanout 增量），
-     收件箱序列仍与 oracle（含新内容）逐条相等，且完整态标记**仍在**（fanout 不写、不删标记）。
+  2. 重建后 fanout（feed2-21 T21 起 = 写 DB 真相 + 写后失效）：作者再发一条（此时已是粉丝 →
+     走 fanout）⇒ `feed_inbox` 出现该条，且重建的 Redis 产物（收件箱缓存 + 完整态标记）**被 DEL**
+     （"收敛后再发布"序列，规避重建晚于 DEL 的过渡期竞态）。
   3. 取关触发重建：该博主内容从收件箱消失，收件箱重新等于"新 oracle"（此处为空集），仍标完整态
      （"空但完整"）。
   4. 红线哨兵：`/feed` 拉模式响应信封口径不变且能取到内容（读路径零改动）——**不做环境 skip**，
@@ -258,6 +259,15 @@ def _oracle_inbox_ids(fan_id):
     return [int(line.strip()) for line in _run_sql(sql).splitlines() if line.strip()]
 
 
+def _db_inbox_has(fan_id, content_id):
+    """fanout 落库收敛信号（feed2-21 T21）：DB 真相表 `feed_inbox` 是否已含该条（行数 == 1）。"""
+    out = _run_sql(
+        "SELECT COUNT(*) FROM feed_inbox "
+        f"WHERE user_id = {int(fan_id)} AND content_id = {int(content_id)}"
+    )
+    return out.strip() == "1"
+
+
 # ---------------------------------------------------------------------------
 # 前置：MQ 可达性 / 重建类断言的 skip 口径
 # ---------------------------------------------------------------------------
@@ -348,8 +358,12 @@ class TestFeedRebuild:
         assert _zcard(inbox) == len(expected), "收件箱基数应等于 oracle 长度（不重不漏）"
         assert _ttl(marker) > 0, f"完整态标记应带正 TTL: TTL={_ttl(marker)}"
 
-    def test_fanout_after_rebuild_keeps_inbox_complete(self, scenario, base_url, test_files):
-        """重建后到达的 fanout 增量：追加进收件箱，序列仍等于新 oracle，且标记仍在。"""
+    def test_fanout_after_rebuild_invalidates_cached_inbox(self, scenario, base_url, test_files):
+        """重建后再发布：fanout **写 DB 真相 + 使重建的 Redis 产物失效**（DEL 收件箱缓存与完整态标记）。
+
+        T21 起 fanout 不再写 Redis（单写 DB 真相 + 写后失效）；本用例以"重建收敛后再发布"序列，
+        规避"重建晚于 DEL 而重新写入缓存"的过渡期竞态（收敛 = 标记已写 = 重建最后一步已完成）。
+        """
         _require_rebuild_env()
         fan_id = scenario["fan"]["id"]
         author = scenario["author"]
@@ -359,15 +373,16 @@ class TestFeedRebuild:
         assert _poll(lambda: _exists(marker) == 1 and _inbox_ids(inbox) == _oracle_inbox_ids(fan_id)), \
             "前置：初次重建应先收敛"
 
-        second = _post_content(base_url, author["token"], "feed1-19 重建后增量", test_files)
+        second = _post_content(base_url, author["token"], "feed2-21 重建后失效", test_files)
         try:
-            expected = _oracle_inbox_ids(fan_id)      # 含新内容（此时已是粉丝 → 走 fanout 增量）
-            assert second in expected, "前置：oracle 应含第二条内容"
-            assert _poll(lambda: _inbox_ids(inbox) == expected), (
-                f"重建后增量未收敛: inbox={_inbox_ids(inbox)} oracle={expected}"
+            # fanout 落库（DB 真相出现该条）= "该消息已消费完"的收敛信号（轮询 DB，不经 Redis）
+            assert _poll(lambda: _db_inbox_has(fan_id, second)), (
+                f"fanout 未落库: feed_inbox 缺 (user_id={fan_id}, content_id={second})"
             )
-            assert _exists(marker) == 1, "fanout 增量不得清除完整态标记（快照之后再到达的内容不破坏完整性）"
-            assert _zcard(inbox) == len(expected)
+            # 写后失效：收件箱缓存与完整态标记均被 DEL（读 miss 由 T23 回源 DB 并回填）
+            assert _poll(lambda: _exists(inbox) == 0 and _exists(marker) == 0), (
+                f"fanout 应使重建产物失效: inboxExists={_exists(inbox)} markerExists={_exists(marker)}"
+            )
         finally:
             _delete_content(base_url, author["token"], second)
 

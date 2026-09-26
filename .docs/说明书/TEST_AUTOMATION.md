@@ -269,17 +269,17 @@ pytest 阶段有整体超时刹车（T2，2026-09-05）：`subprocess.run(timeou
 
 - **验证边界（T13）**：本任务**不改业务代码**，故**未新增 pytest 用例**（项目规则只约束业务改动；归属判据同 §〇.2——该工具是消费侧、不产生落盘副作用）；验收数字由**三方对账**承担：报告 ↔ **独立重算**（`ts=` 行数 / 结果码分布 / `slow` 计数）↔ **合成夹具**（`temp_script/t13_fixture_check.py`，23 项：轮转合并顺序 / 窗口 tail / 未识别与空行计数 / 4xx·5xx 分列 / slow 一致性 / 四端串联 / 只读性 / 非法参数）。**生产 / 本地直跑链路仍无实测数据**（`logs/` 现为空，属 R-11"已知缺口"）。
 
-### 4.7 读 Redis 做断言的通道（`docker exec redis-cli`，feed1-18 T18；feed1-19 T19 扩展）
+### 4.7 读 Redis 做断言的通道（`docker exec redis-cli`，feed1-18 T18；feed1-19 T19 扩展；feed2-21 T21 双通道）
 
-影子期写扩散（T18）与收件箱重建（T19）的产物 `feed:inbox:{userId}` / `feed:inbox:full:{userId}` **只存在于 Redis**（应用侧无 HTTP 读接口，且影子期红线要求 `/feed` 读路径零改动），故 pytest 需直读 Redis 才能断言。
+写扩散（T18）与收件箱重建（T19）的产物 `feed:inbox:{userId}` / `feed:inbox:full:{userId}` **只存在于 Redis**（应用侧无 HTTP 读接口，且红线要求 `/feed` 读路径零改动），故 pytest 需直读 Redis 才能断言。**feed2-21 T21 起**写扩散改为**落库 DB 真相表**（`feed_inbox`）+ 写后失效 DEL 缓存 ⇒ 断言走**双通道**：**MySQL 直读表**（落库）+ **Redis `EXISTS`**（失效 DEL）。
 
 - **手段 = 子进程 `docker exec <容器> redis-cli <命令>`**（容器名 `redis`；应用经 `app.properties` 固定连 `localhost:6379` = 该容器，db 0、无密码）。**零新依赖**——`src/test/python/requirements.txt` 保持 `pytest + requests` 两项，与既有 `mysql.exe` 子进程范式同构（先例 `test_content_paging.py` / `test_comment_delete.py` 的 `_mysql_path()` / `_run_sql()`）。
 - **本机已验证**：`docker exec redis redis-cli PING` → `PONG`。
 - **skip 口径（不误报失败）**：`docker` 不在 PATH、或容器不可用（`PING` 非 `PONG`）→ `pytest.skip("…无法读 Redis 收件箱")`——读通道是**手段**、不是被测能力。
 - **只读纪律**：只发读命令（`PING` / `ZSCORE` / `ZCARD` / `TTL` / **`EXISTS` / `ZREVRANGE`（T19 扩）**）；该通道**不得**用于写 Redis，写路径只能是被测应用自己的真实链路。同理，T19 新增的 **MySQL oracle 通道**（`mysql.exe` 子进程 + `run_tests.py` 注入的 `DB_*`）**只发 SELECT**。
 - **落地样例**：
-  - `src/test/python/test_feed_push.py`（4 例 = 粉丝收件箱增量收敛 / 收件箱带 TTL / 非粉丝不受影响 / `/feed` 拉模式口径哨兵）。
-  - `src/test/python/test_feed_rebuild.py`（4 例 = 关注触发重建后收件箱完整态 + 与 **MySQL oracle 逐条相等** / 重建后 fanout 增量不破坏完整性 / 取关重建后不含该博主且仍标完整态 / `/feed` 拉模式哨兵）。
+  - `src/test/python/test_feed_push.py`（**T21 改写为落库语义**：3 例 = 粉丝收件箱 **DB 落库**收敛（直读 `feed_inbox`）/ 非粉丝零行 / `/feed` 拉模式口径哨兵；Redis 侧不再由本文件断言——DEL 的 e2e 断言归下条"收敛后再发布"序列，规避重建晚于 DEL 的过渡期竞态）。
+  - `src/test/python/test_feed_rebuild.py`（4 例 = 关注触发重建后收件箱完整态 + 与 **MySQL oracle 逐条相等** / **T21 改写**：重建后 fanout 落库并使重建产物失效（`feed_inbox` 出现该条 + `EXISTS feed:inbox:{id}` 与标记均归 0）/ 取关重建后不含该博主且仍标完整态 / `/feed` 拉模式哨兵）。
 - **"逐条相等"的 oracle 口径（T19）**：不拿应用自己的读路径当基准（那会"同样错就看不出来"），而是**独立复算**——`ZREVRANGE feed:inbox:{id} 0 -1` 的成员序列须**逐条等于**直连 MySQL 按 `content ⋈ follow`（`is_deleted=0` + `ORDER BY create_time DESC, id DESC`）算出的 id 序列，并另断言 `ZCARD` 与 oracle 长度相等、`EXISTS feed:inbox:full:{id}` = 1、标记 `TTL > 0`。该通道不可用时**一律 skip**（手段缺失，不代表能力回归）。
 
 ### 4.8 feed 影子核对工具（`tools/feed_shadow_check.py`，feed1-20 T20）
