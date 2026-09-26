@@ -31,6 +31,7 @@ class FollowServiceTest {
     private UserDao userDao;
     private FollowCache followCache;
     private TransactionTemplate tt;
+    private InboxRebuildNotifier inboxRebuildNotifier;
     private Connection conn;
     private FollowService service;
     /** 事务回调执行中标志（T12：断言缓存读发生在事务回调之外）。 */
@@ -42,9 +43,10 @@ class FollowServiceTest {
         userDao = mock(UserDao.class);
         followCache = mock(FollowCache.class);
         tt = mock(TransactionTemplate.class);
+        inboxRebuildNotifier = mock(InboxRebuildNotifier.class);
         conn = mock(Connection.class);
         inTransaction = new boolean[1];
-        service = new FollowService(followDao, userDao, followCache, tt);
+        service = new FollowService(followDao, userDao, followCache, tt, inboxRebuildNotifier);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             inTransaction[0] = true;
@@ -101,6 +103,32 @@ class FollowServiceTest {
         verify(userDao, never()).updateFollowCount(any(), anyLong(), anyInt());
         verify(userDao, never()).updateFollowerCount(any(), anyLong(), anyInt());
         verify(followCache, never()).cacheFollow(anyLong(), anyLong());
+    }
+
+    // ===== feed1-19（T19）：关注 → 收件箱重建投递（影子期，只写不读） =====
+
+    @Test
+    void followPublishesInboxRebuildAfterCommit() throws SQLException {
+        when(followDao.isFollowing(conn, 7L, 8L)).thenReturn(false);
+        // 探针：投递点必须在事务回调之外（"提交后副作用"，与缓存双写同款口径；本项目无 afterCommit 机制）
+        doAnswer(invocation -> {
+            assertFalse(inTransaction[0], "收件箱重建投递应发生在事务提交之后");
+            return null;
+        }).when(inboxRebuildNotifier).publishInboxRebuild(anyLong());
+
+        service.follow(7L, 8L);
+
+        // 重建对象 = 发起方（自己收件箱失效），不是被关注的博主
+        verify(inboxRebuildNotifier).publishInboxRebuild(7L);
+    }
+
+    @Test
+    void followDoesNotPublishInboxRebuildWhenConflict() throws SQLException {
+        when(followDao.isFollowing(conn, 7L, 8L)).thenReturn(true);
+
+        assertThrows(ConflictException.class, () -> service.follow(7L, 8L));
+
+        verify(inboxRebuildNotifier, never()).publishInboxRebuild(anyLong());
     }
 
     // ===== T9（log2-09）：成功路径里程碑 INFO——关系状态迁移 =====
@@ -190,6 +218,31 @@ class FollowServiceTest {
         verify(userDao, never()).updateFollowCount(any(), anyLong(), anyInt());
         verify(userDao, never()).updateFollowerCount(any(), anyLong(), anyInt());
         verify(followCache, never()).cacheUnfollow(anyLong(), anyLong());
+    }
+
+    // ===== feed1-19（T19）：取关 → 收件箱重建投递（口径同 follow） =====
+
+    @Test
+    void unfollowPublishesInboxRebuildAfterCommit() throws SQLException {
+        when(followDao.isFollowing(conn, 7L, 8L)).thenReturn(true);
+        doAnswer(invocation -> {
+            assertFalse(inTransaction[0], "收件箱重建投递应发生在事务提交之后");
+            return null;
+        }).when(inboxRebuildNotifier).publishInboxRebuild(anyLong());
+
+        service.unfollow(7L, 8L);
+
+        // 取关同样令**自己**收件箱失效（该博主的内容须移出）
+        verify(inboxRebuildNotifier).publishInboxRebuild(7L);
+    }
+
+    @Test
+    void unfollowDoesNotPublishInboxRebuildWhenConflict() throws SQLException {
+        when(followDao.isFollowing(conn, 7L, 8L)).thenReturn(false);
+
+        assertThrows(ConflictException.class, () -> service.unfollow(7L, 8L));
+
+        verify(inboxRebuildNotifier, never()).publishInboxRebuild(anyLong());
     }
 
     // ===== 缺省读路径（T11-A：两个缺省重载已删除） =====

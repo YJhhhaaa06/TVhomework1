@@ -26,6 +26,27 @@ public final class CacheKeys {
     /** 写扩散收件箱 key 前缀：{@code feed:inbox:}（T18 新增；生成、{@link #domainOf} 解析同源，防漂移）。 */
     public static final String FEED_INBOX_PREFIX = "feed:inbox:";
 
+    /**
+     * 收件箱**完整态标记** key 前缀：{@code feed:inbox:full:}（T19 新增）。
+     *
+     * <p>⚠️ 与 {@link #FEED_INBOX_PREFIX} **前缀重叠**（本常量以它开头）：标记与成员集是**两类对象**，
+     * 任何按 {@code feed:inbox:*} 做的遍历 / 计数（如 T20 影子核对工具）**必须显式排除本前缀**，
+     * 否则会把"标记"当成一个收件箱。返回值 {@code null} 时视为"该收件箱未重建过（不完整）"。
+     */
+    public static final String FEED_INBOX_FULL_PREFIX = "feed:inbox:full:";
+
+    /** 完整态标记的固定值（T19，同 {@link #EMPTY_MARKER_VALUE}/{@link #PARTIAL_MARKER_VALUE} 仅需 EXISTS 判断）。 */
+    public static final String FEED_INBOX_FULL_MARKER_VALUE = "1";
+
+    /**
+     * 收件箱**重建去重锁** key 前缀：{@code feed:rebuild:lock:}（T19 新增）。
+     *
+     * <p>一期唯一的"分布式锁"用法（SET NX EX + Lua CAS 释放）；锁只是**去重优化**、不承担正确性——
+     * TTL 到点即视为可重入：若届时真有并发重建交叉执行，最终产物是**两次快照的并集**
+     * （**只多不丢**，多出的成员由下一次重建收口），见 {@code FeedRebuildService} 类注释与任务回写的残余登记。
+     */
+    public static final String FEED_REBUILD_LOCK_PREFIX = "feed:rebuild:lock:";
+
     private CacheKeys() {
     }
 
@@ -159,6 +180,25 @@ public final class CacheKeys {
     }
 
     /**
+     * 收件箱**完整态标记**：{@code feed:inbox:full:{userId}}（String，仅需 EXISTS 判断）。
+     *
+     * <p>语义（feed1-19 T19）：**key 存在 ⇒ 该收件箱是"重建产物"，内容完整**（可能为空集）；
+     * 不存在 ⇒ 只被 fanout 增量写过（或从未写），完整性未知 ⇒ 二期切读**回退拉模式**。
+     *
+     * <p>写入方**只有重建**（{@code FeedRebuildService}）：重建的三步里第①步 DEL（含本标记）、
+     * 第③步 ZADD 全部写完后才 SET 本标记；**fanout 永不写、永不删本标记**——重建后到达的
+     * fanout 消息是"快照之后再发生的新内容"，追加进收件箱后完整性不变。
+     */
+    public static String feedInboxFull(long userId) {
+        return FEED_INBOX_FULL_PREFIX + userId;
+    }
+
+    /** 收件箱重建去重锁：{@code feed:rebuild:lock:{userId}}（String，值 = 持有者 token，仅重建用）。 */
+    public static String feedRebuildLock(long userId) {
+        return FEED_REBUILD_LOCK_PREFIX + userId;
+    }
+
+    /**
      * 数据 key → 统计域解析（T7 新增，key 生成与解析同源，唯一源收敛于本方法）。
      *
      * <p>注意前缀重叠：{@code content:} 是 {@code content:comments:} / {@code content:index:} /
@@ -172,6 +212,11 @@ public final class CacheKeys {
      * user:following 与 user:follower（user:* 兜底）归 FOLLOW；**user:like* 与 user:commentLike*
      * （T4 装载反转后的用户维度点赞成员）在 user:* 兜底之前归 LIKE**；{@code feed:inbox:{id}}
      * 归 **FEED**（feed1-18 写扩散收件箱）；未知/null 归 OTHER。
+     *
+     * <p>FEED 域成员（feed1-19 T19 补）：{@code feed:inbox:{id}}（收件箱成员集）、
+     * {@code feed:inbox:full:{id}}（完整态标记）、{@code feed:rebuild:lock:{id}}（重建去重锁）
+     * ——三者均以 {@code feed:} 开头，**无需为本方法新增分支**；但注意标记与收件箱成员集
+     * **前缀重叠**（前者以 {@link #FEED_INBOX_PREFIX} 开头），按前缀遍历时须显式排除。
      */
     public static CacheDomain domainOf(String dataKey) {
         if (dataKey == null) {
@@ -212,7 +257,9 @@ public final class CacheKeys {
             return CacheDomain.FOLLOW;
         }
         // feed: 与既有全部前缀无重叠（content: / comment: / user: / empty: / partial:），
-        // 但仍在 OTHER 兜底之前判定，与"生成与解析同源"的收敛口径一致
+        // 但仍在 OTHER 兜底之前判定，与"生成与解析同源"的收敛口径一致。
+        // T19 起本分支覆盖三个成员：收件箱成员集 feed:inbox:{id}、完整态标记 feed:inbox:full:{id}、
+        // 重建锁 feed:rebuild:lock:{id}（均 FeedDomain）
         if (dataKey.startsWith("feed:")) {
             return CacheDomain.FEED;
         }

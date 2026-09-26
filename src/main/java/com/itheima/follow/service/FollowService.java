@@ -28,16 +28,19 @@ public class FollowService {
     private final UserDao userDao;
     private final FollowCache followCache;
     private final TransactionTemplate transactionTemplate;
+    private final InboxRebuildNotifier inboxRebuildNotifier;
     private static final Logger LOGGER =
             LogUtil.getLogger(FollowService.class);
 
     @InjectConstructor
     public FollowService(FollowDao followDao, UserDao userDao, FollowCache followCache,
-                         TransactionTemplate transactionTemplate) {
+                         TransactionTemplate transactionTemplate,
+                         InboxRebuildNotifier inboxRebuildNotifier) {
         this.followDao = followDao;
         this.userDao = userDao;
         this.followCache = followCache;
         this.transactionTemplate = transactionTemplate;
+        this.inboxRebuildNotifier = inboxRebuildNotifier;
     }
 
     public void follow(long userId, long followedUserId) {
@@ -64,6 +67,10 @@ public class FollowService {
         LOGGER.log(Level.INFO, "关注成功, userId=" + userId + ", followedUserId=" + followedUserId);
         // DB 提交后缓存双写（NEEDS 4.10：MULTI 原子，失败双 DEL 自愈，不影响主流程）
         followCache.cacheFollow(userId, followedUserId);
+        // feed1-19（T19）收件箱失效联动（影子期，只写不读）：关注改变了"我关注的博主集合"，
+        // 我自己的收件箱快照失效 → 提交后投递重建消息（同上属"提交后副作用"，**失败只降级**，
+        // InboxRebuildNotifier 内部不抛）——本方法的响应 / 返回值 / 既有语义一概不变。
+        inboxRebuildNotifier.publishInboxRebuild(userId);
     }
 
     /**
@@ -189,5 +196,7 @@ public class FollowService {
         LOGGER.log(Level.INFO, "取关成功, userId=" + userId + ", followedUserId=" + followedUserId);
         // DB 提交后缓存双写（SREM，失败双 DEL 自愈，不影响主流程）
         followCache.cacheUnfollow(userId, followedUserId);
+        // feed1-19（T19）收件箱失效联动：口径同 follow（提交后投递、失败只降级、语义零变化）
+        inboxRebuildNotifier.publishInboxRebuild(userId);
     }
 }

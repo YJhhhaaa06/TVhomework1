@@ -129,6 +129,29 @@ class CacheKeysTest {
     }
 
     @Test
+    void feedInboxFullMarkerKeyUsesUserIdAndMapsToFeedDomain() {
+        // feed1-19（T19）：完整态标记（只由重建写）——生成与解析同源、归 FEED 域；
+        // 注意它与 feed:inbox:{id} **前缀重叠**（feed:inbox:full:7 也以 feed:inbox: 开头）
+        assertEquals("feed:inbox:full:7", CacheKeys.feedInboxFull(7L));
+        assertEquals(CacheDomain.FEED, CacheKeys.domainOf(CacheKeys.feedInboxFull(7L)));
+        assertEquals(CacheDomain.FEED, CacheKeys.domainOf("empty:" + CacheKeys.feedInboxFull(7L)));
+        assertEquals("1", CacheKeys.FEED_INBOX_FULL_MARKER_VALUE);
+        assertTrue(CacheKeys.feedInboxFull(7L).startsWith(CacheKeys.FEED_INBOX_FULL_PREFIX));
+        assertTrue(CacheKeys.feedInboxFull(7L).startsWith(CacheKeys.FEED_INBOX_PREFIX),
+                "标记落在收件箱前缀内：按 feed:inbox:* 遍历时须显式排除本前缀（T20 核对工具口径）");
+    }
+
+    @Test
+    void feedRebuildLockKeyUsesUserIdAndMapsToFeedDomain() {
+        // feed1-19（T19）：重建去重锁（SET NX EX + Lua CAS 释放）
+        assertEquals("feed:rebuild:lock:7", CacheKeys.feedRebuildLock(7L));
+        assertEquals(CacheDomain.FEED, CacheKeys.domainOf(CacheKeys.feedRebuildLock(7L)));
+        assertTrue(CacheKeys.feedRebuildLock(7L).startsWith(CacheKeys.FEED_REBUILD_LOCK_PREFIX));
+        assertTrue(!CacheKeys.feedRebuildLock(7L).startsWith(CacheKeys.FEED_INBOX_PREFIX),
+                "锁不在收件箱命名空间内（不被 feed:inbox:* 遍历命中）");
+    }
+
+    @Test
     void feedPrefixDoesNotStealOtherDomains() {
         // 红线：新增 feed: 判定不得改变既有前缀的归域（长前缀优先顺序未动、OTHER 兜底仍在最后）
         assertEquals(CacheDomain.CONTENT, CacheKeys.domainOf(CacheKeys.content(1L)));
