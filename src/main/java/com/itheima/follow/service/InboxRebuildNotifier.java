@@ -19,7 +19,9 @@ import java.util.logging.Logger;
  *
  * <p><b>语义</b>（NEEDS 4.0 机制骨架）：关注（新博主的既有内容要进来）与取关（该博主的内容要出去）
  * 都会让本人收件箱的"关注者内容快照"失效 ⇒ 投一条 {@link InboxRebuildMessage}，
- * 由 {@code feed.rebuild.queue} 的消费者执行 {@code DEL → DB 重查 → ZADD 合并} 后标"完整态"。
+ * 由 {@code feed.rebuild.queue} 的消费者执行**窗口重建**（T22 起 = 单事务整窗替换
+ * {@code feed_inbox} + 写 {@code feed_inbox_sync}，随后失效读缓存；见
+ * {@code FeedRebuildService.rebuildInbox}）。
  *
  * <p><b>红线（影子期）</b>：本类**任何情况下都不抛异常**——投递失败只降级（该次重建缺失，
  * 由下次关注/取关或二期读触发兜底），**关注 / 取关接口的响应与语义一概不变**；也不触碰

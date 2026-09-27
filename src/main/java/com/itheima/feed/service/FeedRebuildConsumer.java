@@ -15,7 +15,8 @@ import java.util.logging.Logger;
 
 /**
  * 收件箱重建消费者（feed1-19 T19）：接收 {@code feed.rebuild.queue} 上的重建指令，驱动
- * {@link FeedRebuildService#rebuildInbox(long)} 执行三步重建。
+ * {@link FeedRebuildService#rebuildInbox(long)} 执行**窗口重建**（T22 起：单事务整窗替换
+ * {@code feed_inbox} 窗口 + 写 {@code feed_inbox_sync}，随后只失效读缓存）。
  *
  * <p><b>挂载方式</b>：{@code @Component} + {@link Initializable}（**不动 web.xml / IoC 扫描**，
  * 同 {@code FeedPushConsumer}）。{@code register} 可在 {@link MqConsumerContainer#init()} 前后

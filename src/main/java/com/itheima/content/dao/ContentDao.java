@@ -224,6 +224,56 @@ public class ContentDao {
         return ids;
     }
 
+    /**
+     * 每作者各取最近 {@code perAuthorLimit} 条内容 id（feed2-22 T22 窗口重算）：
+     * 每关注作者一个 {@code (SELECT … ORDER BY id DESC LIMIT ?)} 分支，`UNION ALL` 成一条语句
+     * （一趟往返；调用方按 {@code AUTHOR_BATCH} 切分作者列表以约束 SQL 长度）。
+     *
+     * <p><b>排序口径 = contentId（自增单调）</b>：{@code content.id} 自增 ⇒ id 越大发布越晚，
+     * 与拉模式 {@code ORDER BY create_time DESC, id DESC} 的运行期次序一致（同秒并列时
+     * id 即 tie-break），且与"排序 / 归并 / 裁剪全按 contentId"的收件箱层口径同源
+     * （{@code feed_inbox} 不存时间字段）。
+     *
+     * <p><b>不新增索引</b>：`idx_user_id (user_id)` 的 InnoDB 二级索引物理为 {@code (user_id, id)}
+     * 升序 ⇒ `WHERE user_id = ? ORDER BY id DESC LIMIT ?` 反向索引扫描、免 filesort；
+     * 且每分支 `LIMIT` 可提前终止（无软删时实际取数 ≈ K 行）。⚠️ `is_deleted` 不在该索引中，
+     * 需回表过滤 ⇒ **最坏上界仍为该作者的内容量**（大量软删时扫描放大），不是纯粹 ∝ K。
+     *
+     * <p>⚠️ `UNION ALL` 的外层顺序不保证（由调用方归并），且**不指定 author 归属**
+     * （每条 id 已唯一确定作者，调用方无需按作者分组）。
+     *
+     * @param userIds        作者 id 列表（空 / null 不发 SQL，返回空列表）
+     * @param perAuthorLimit 每作者保留条数 K（&lt;= 0 不发 SQL，返回空列表）
+     */
+    public List<Long> findRecentContentIdsByUsers(Connection conn, List<Long> userIds,
+                                                  int perAuthorLimit) throws SQLException {
+        if (userIds == null || userIds.isEmpty() || perAuthorLimit <= 0) {
+            return Collections.emptyList();
+        }
+        StringBuilder sql = new StringBuilder();
+        for (int i = 0; i < userIds.size(); i++) {
+            if (i > 0) {
+                sql.append(" UNION ALL ");
+            }
+            sql.append("(SELECT id FROM content WHERE user_id = ? AND is_deleted = 0"
+                    + " ORDER BY id DESC LIMIT ?)");
+        }
+        List<Long> ids = new ArrayList<>();
+        try (PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+            int idx = 1;
+            for (Long userId : userIds) {
+                pstmt.setLong(idx++, userId);
+                pstmt.setInt(idx++, perAuthorLimit);
+            }
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    ids.add(rs.getLong("id"));
+                }
+            }
+        }
+        return ids;
+    }
+
     public int countContentByUsers(Connection conn, List<Long> userIds) throws SQLException {
         if (userIds == null || userIds.isEmpty()) {
             return 0;

@@ -27,18 +27,6 @@ public final class CacheKeys {
     public static final String FEED_INBOX_PREFIX = "feed:inbox:";
 
     /**
-     * 收件箱**完整态标记** key 前缀：{@code feed:inbox:full:}（T19 新增）。
-     *
-     * <p>⚠️ 与 {@link #FEED_INBOX_PREFIX} **前缀重叠**（本常量以它开头）：标记与成员集是**两类对象**，
-     * 任何按 {@code feed:inbox:*} 做的遍历 / 计数（如 T20 影子核对工具）**必须显式排除本前缀**，
-     * 否则会把"标记"当成一个收件箱。返回值 {@code null} 时视为"该收件箱未重建过（不完整）"。
-     */
-    public static final String FEED_INBOX_FULL_PREFIX = "feed:inbox:full:";
-
-    /** 完整态标记的固定值（T19，同 {@link #EMPTY_MARKER_VALUE}/{@link #PARTIAL_MARKER_VALUE} 仅需 EXISTS 判断）。 */
-    public static final String FEED_INBOX_FULL_MARKER_VALUE = "1";
-
-    /**
      * 收件箱**重建去重锁** key 前缀：{@code feed:rebuild:lock:}（T19 新增）。
      *
      * <p>一期唯一的"分布式锁"用法（SET NX EX + Lua CAS 释放）；锁只是**去重优化**、不承担正确性——
@@ -169,10 +157,11 @@ public final class CacheKeys {
      * {@code /feed} 拉模式 {@code ORDER BY create_time DESC, id DESC} 的次序口径一致。
      *
      * <p>语义（NEEDS 4.0 写侧拍板）：**DB 真相 = {@code feed_inbox} 表**（T21 落库：写扩散 +
-     * 窗口重建的产物），本 key = 其上的**可降级读缓存**——重建（T19，T22 改窗口化）仍写本 key；
-     * **fanout（T21 起）不再写本项目**（单写 DB 真相 + 写后失效），只对相关粉丝 `DEL` 本 key
-     * 与完整态标记（读 miss 由 T23 回源 DB 并回填）。TTL（{@code feed.inbox.ttlMinutes}）仅为
-     * 缓存淘汰，**无正确性含义**（正确性以 DB 真相 + 窗口同步状态为准）。
+     * 窗口重建的产物），本 key = 其上的**可降级读缓存**——**fanout（T21 起）与重建（T22 起）
+     * 均不再写本 key**，二者统一为「单写 DB 真相 + 写后失效」，只对相关用户 `DEL` 本 key
+     * 与 `empty:` / `partial:` 标记（读 miss 由 T23 回源 DB 并回填）。TTL
+     * （{@code feed.inbox.ttlMinutes}）仅为缓存淘汰，**无正确性含义**（正确性以 DB 真相
+     * + 窗口同步状态 {@code feed_inbox_sync} 为准）。
      *
      * <p>⚠️ 收纳边界（沿用）：本 key 只存 DB 可重算的内容，**不得塞"已读未读"这类不可重算状态**。
      */
@@ -181,20 +170,17 @@ public final class CacheKeys {
     }
 
     /**
-     * 收件箱**完整态标记**：{@code feed:inbox:full:{userId}}（String，仅需 EXISTS 判断）。
+     * 收件箱读缓存的**失效三件套**（feed2-22 T22 新增）：数据 key + {@link #empty(String)} +
+     * {@link #partial(String)}，供**所有失效点**（fanout 写后失效 / 重建写后失效）统一引用。
      *
-     * <p>语义（feed1-19 T19）：**key 存在 ⇒ 该收件箱是"重建产物"，内容完整**（可能为空集）；
-     * 不存在 ⇒ 只被 fanout 增量写过（或从未写），完整性未知。
-     *
-     * <p>写入方**只有重建**（{@code FeedRebuildService}）：重建三步里第①步 DEL（含本标记）、
-     * 第③步 ZADD 全部写完后才 SET 本标记。
-     *
-     * <p>⚠️ **feed2-21 T21 起 fanout 会 DEL 本标记**（与 T19"fanout 永不触碰标记"口径的差异，
-     * 已登记任务回写）：一期标记是"派生副本完整性"的表述，二期起其数据（ZSet）被失效后残留必失真；
-     * 标记语义随 R-13 于 **T22 迁"窗口同步状态"落库**（{@code feed_inbox_sync} 表），本 key 随之退役。
+     * <p>为什么必须三件套一起删（既有约定，见 {@link #partial(String)} 的警示与
+     * {@code FollowCache#invalidateKeysQuietly} 先例）：数据 key 失效后残留的空标记会让读"假空"，
+     * 残留的 `partial:` 会把"前缀"误判为完整集合（静默漏成员）⇒ 收口为单一方法与单一调用点，
+     * 防两处失效集漂移。
      */
-    public static String feedInboxFull(long userId) {
-        return FEED_INBOX_FULL_PREFIX + userId;
+    public static String[] feedInboxCacheKeys(long userId) {
+        String inboxKey = feedInbox(userId);
+        return new String[]{inboxKey, empty(inboxKey), partial(inboxKey)};
     }
 
     /** 收件箱重建去重锁：{@code feed:rebuild:lock:{userId}}（String，值 = 持有者 token，仅重建用）。 */
@@ -217,10 +203,10 @@ public final class CacheKeys {
      * （T4 装载反转后的用户维度点赞成员）在 user:* 兜底之前归 LIKE**；{@code feed:inbox:{id}}
      * 归 **FEED**（feed1-18 写扩散收件箱）；未知/null 归 OTHER。
      *
-     * <p>FEED 域成员（feed1-19 T19 补）：{@code feed:inbox:{id}}（收件箱成员集）、
-     * {@code feed:inbox:full:{id}}（完整态标记）、{@code feed:rebuild:lock:{id}}（重建去重锁）
-     * ——三者均以 {@code feed:} 开头，**无需为本方法新增分支**；但注意标记与收件箱成员集
-     * **前缀重叠**（前者以 {@link #FEED_INBOX_PREFIX} 开头），按前缀遍历时须显式排除。
+     * <p>FEED 域成员（feed2-22 T22 收口）：{@code feed:inbox:{id}}（收件箱读缓存）、
+     * {@code feed:rebuild:lock:{id}}（重建去重锁）——两者均以 {@code feed:} 开头，**无需为本方法
+     * 新增分支**；一期完整态标记 {@code feed:inbox:full:{id}} 已随 T22 退役（语义迁
+     * {@code feed_inbox_sync} 表）。
      */
     public static CacheDomain domainOf(String dataKey) {
         if (dataKey == null) {
@@ -262,8 +248,8 @@ public final class CacheKeys {
         }
         // feed: 与既有全部前缀无重叠（content: / comment: / user: / empty: / partial:），
         // 但仍在 OTHER 兜底之前判定，与"生成与解析同源"的收敛口径一致。
-        // T19 起本分支覆盖三个成员：收件箱成员集 feed:inbox:{id}、完整态标记 feed:inbox:full:{id}、
-        // 重建锁 feed:rebuild:lock:{id}（均 FeedDomain）
+        // T19 起本分支覆盖收件箱成员集 feed:inbox:{id} 与重建锁 feed:rebuild:lock:{id}（均 FeedDomain）；
+        // 一期完整态标记 feed:inbox:full:{id} 已随 feed2-22 T22 退役（前缀判定不受影响）
         if (dataKey.startsWith("feed:")) {
             return CacheDomain.FEED;
         }

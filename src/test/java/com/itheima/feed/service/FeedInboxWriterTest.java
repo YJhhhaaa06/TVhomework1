@@ -118,11 +118,11 @@ class FeedInboxWriterTest {
 
         // ① DB 真相：一批粉丝 = 一条 INSERT IGNORE（含 contentId）
         verify(feedInboxDao).insertIgnoreBatch(conn, CONTENT, List.of(11L, 12L));
-        // ② 写后失效：一次 DEL 多键（每粉丝 4 键 = 收件箱缓存三件套 + 遗留完整态标记）
+        // ② 写后失效：一次 DEL 多键（每粉丝 3 键 = 收件箱缓存三件套；完整态标记已随 T22 退役）
         verify(jedis).del(CacheKeys.feedInbox(11L), CacheKeys.empty(CacheKeys.feedInbox(11L)),
-                CacheKeys.partial(CacheKeys.feedInbox(11L)), CacheKeys.feedInboxFull(11L),
+                CacheKeys.partial(CacheKeys.feedInbox(11L)),
                 CacheKeys.feedInbox(12L), CacheKeys.empty(CacheKeys.feedInbox(12L)),
-                CacheKeys.partial(CacheKeys.feedInbox(12L)), CacheKeys.feedInboxFull(12L));
+                CacheKeys.partial(CacheKeys.feedInbox(12L)));
         // 顺序红线：先 DB 真相、后缓存失效（读 miss 回源才有意义）
         assertEquals(List.of("DB", "DEL"), events);
         // 一批粉丝 = 一次 DB 连接 + 一次 Redis 连接（不是逐粉丝各借还一次）
@@ -179,14 +179,14 @@ class FeedInboxWriterTest {
 
     @Test
     void fanoutTouchesOnlyFeedInboxKeys() {
-        // 红线：不改读路径 —— 只碰 feed:inbox:* 及其派生标记（empty:/partial:/full:），不写 content:* / user:*
+        // 红线：不改读路径 —— 只碰 feed:inbox:* 及其派生标记（empty:/partial:），不写 content:* / user:*
         stubWindows(List.of(List.of(11L, 12L, 13L)));
 
         writer.fanout(CONTENT, AUTHOR);
 
         ArgumentCaptor<String[]> keys = ArgumentCaptor.forClass(String[].class);
         verify(jedis).del(keys.capture());
-        assertEquals(12, keys.getValue().length, "3 粉丝 × 4 键（三件套 + 标记）");
+        assertEquals(9, keys.getValue().length, "3 粉丝 × 3 键（三件套；完整态标记已随 T22 退役）");
         for (String key : keys.getValue()) {
             String dataKey = key.startsWith("empty:") ? key.substring("empty:".length())
                     : key.startsWith("partial:") ? key.substring("partial:".length()) : key;

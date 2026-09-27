@@ -129,16 +129,17 @@ class CacheKeysTest {
     }
 
     @Test
-    void feedInboxFullMarkerKeyUsesUserIdAndMapsToFeedDomain() {
-        // feed1-19（T19）：完整态标记（只由重建写）——生成与解析同源、归 FEED 域；
-        // 注意它与 feed:inbox:{id} **前缀重叠**（feed:inbox:full:7 也以 feed:inbox: 开头）
-        assertEquals("feed:inbox:full:7", CacheKeys.feedInboxFull(7L));
-        assertEquals(CacheDomain.FEED, CacheKeys.domainOf(CacheKeys.feedInboxFull(7L)));
-        assertEquals(CacheDomain.FEED, CacheKeys.domainOf("empty:" + CacheKeys.feedInboxFull(7L)));
-        assertEquals("1", CacheKeys.FEED_INBOX_FULL_MARKER_VALUE);
-        assertTrue(CacheKeys.feedInboxFull(7L).startsWith(CacheKeys.FEED_INBOX_FULL_PREFIX));
-        assertTrue(CacheKeys.feedInboxFull(7L).startsWith(CacheKeys.FEED_INBOX_PREFIX),
-                "标记落在收件箱前缀内：按 feed:inbox:* 遍历时须显式排除本前缀（T20 核对工具口径）");
+    void feedInboxCacheKeysReturnsThreePieceSet() {
+        // feed2-22（T22）：收件箱读缓存失效三件套（数据 key + empty: + partial:）——
+        // 重建侧与 fanout 侧共用同一来源，防两处失效集漂移
+        String[] keys = CacheKeys.feedInboxCacheKeys(7L);
+        assertEquals(3, keys.length);
+        assertEquals("feed:inbox:7", keys[0]);
+        assertEquals("empty:feed:inbox:7", keys[1]);
+        assertEquals("partial:feed:inbox:7", keys[2]);
+        for (String key : keys) {
+            assertEquals(CacheDomain.FEED, CacheKeys.domainOf(key), "三件套应全部归 FEED 域: " + key);
+        }
     }
 
     @Test

@@ -244,6 +244,39 @@ public final class AppConfig {
         return getLong("feed.inbox.ttlMinutes", 60L) * 60;
     }
 
+    // ===== feed 二期窗口重算（feed2-22 T22）=====
+
+    /**
+     * 窗口重算「每关注作者保留条数」K（feed2-22 T22）：键 {@code feed.inbox.windowPerAuthor}（默认 20）。
+     *
+     * <p>口径（NEEDS 4.0 机制拍板）：重建按**每关注作者最近 K 条**取样，再归并去重 →
+     * contentId 降序 → 裁剪到 {@link #getFeedInboxWindowMax()}；这把 T19 的"全量重算"
+     * （内存 ∝ 关注规模 × 内容量）改为**有界窗口**（内存 ∝ 关注数 × K），并保证长尾作者
+     * 不被高产作者挤空。
+     *
+     * <p>**带默认值（20）**：窗口参数偏离散取值的容错口径，键缺失不得让应用起不来
+     * （同 {@link #getFeedInboxTtlSeconds()}；键存在但值非法照旧抛，fail-fast 语义不变）。
+     * 阈值机制细化 / 活跃用户策略属三期。
+     */
+    public static int getFeedInboxWindowPerAuthor() {
+        return getInt("feed.inbox.windowPerAuthor", 20);
+    }
+
+    /**
+     * 窗口重算「总窗口上限」C（feed2-22 T22）：键 {@code feed.inbox.windowMax}（默认 200）。
+     *
+     * <p>归并去重后按 contentId 降序截断到 C——重建产物（{@code feed_inbox} 窗口 + 同步状态）
+     * 与读数均以此为界；**读侧的页级有界（总窗口 M）属 T23**，两者口径各自独立。
+     * 缺省值 200 与 fanout/重建的批量（200/批、`AUTHOR_BATCH`）同量级。
+     *
+     * <p>⚠️ **取值应保持在合理量级**：C 同时决定窗口落库的单条多行 `INSERT` 行数（占位符 = 2C）
+     * 与重建的内存峰值 ⇒ 误配成极大值会逼近 `max_allowed_packet` / 占位符上限而整体降级；
+     * 本方法不做上界校验（与既有数值配置的"缺省容错、非法抛"口径一致），由配置方自担。
+     */
+    public static int getFeedInboxWindowMax() {
+        return getInt("feed.inbox.windowMax", 200);
+    }
+
     // ===== feed 二期大V占位路由（feed2-21 T21）=====
 
     /**

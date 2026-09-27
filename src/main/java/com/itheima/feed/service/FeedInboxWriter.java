@@ -25,9 +25,9 @@ import java.util.logging.Logger;
  *
  * <p><b>与一期（T18）的差异</b>：一期写的是 Redis ZSet（派生副本）、永不 DEL；二期起 DB 表 = 时间线
  * 真相源，fanout **不再写 Redis**，只做失效——因此本批粉丝的 {@code feed:inbox:{fanId}} 缓存
- * （按既有约定**三件套**：数据 key + `empty:` + `partial:`）与遗留的 {@code feed:inbox:full:{fanId}}
- * 完整态标记**一并 DEL**（标记的数据被 DEL 后残留必失真——影子核对工具会把它误判为"有标记可比对"；
- * 标记语义本身随 R-13 于 T22 迁"窗口同步状态"落表。失效集口径见 {@link #deleteCacheKeys}）。
+ * （按既有约定**三件套**：数据 key + `empty:` + `partial:`）**一并 DEL**。失效集口径见
+ * {@link #deleteCacheKeys}（重组为 {@link CacheKeys#feedInboxCacheKeys(long)} 单一来源，
+ * 与重建侧写后失效同源）。
  *
  * <p><b>大V路由（单点）</b>：判定走 {@link FeedBigVRouter}（固定阈值 + 名单占位，fanout / 重建 / 读
  * 三处同源）——命中即**跳过本次写扩散**（大V内容由"大V发件箱"读时拉，T23），只记 FINE（常态路由，
@@ -38,7 +38,7 @@ import java.util.logging.Logger;
  * 装载量与页大小相关而非粉丝总量（治 U-18 同型隐患）。
  *
  * <p><b>每批三步</b>（顺序不可交换：先 DB 真相、后缓存失效）：① DB 批量 `INSERT IGNORE`（幂等，
- * 重复投递无副作用）→ ② 单命令批量 `DEL`（三件套 + 标记）；一轮窗口内 ① 借一次 DB 连接、
+ * 重复投递无副作用）→ ② 单命令批量 `DEL`（三件套）；一轮窗口内 ① 借一次 DB 连接、
  * ② 借一次 Redis 连接（不逐粉丝各借还一次）。
  *
  * <p><b>失败面</b>（契约"绝不抛"，末尾 SEVERE 兜底；消费侧一律降级 ACK，不转死信）：
@@ -189,24 +189,22 @@ public class FeedInboxWriter {
     }
 
     /**
-     * 单批缓存失效：一次 `DEL` 多键（每粉丝 **4 键** = 收件箱缓存 + 空标记 + 部分装载标记 + 遗留完整态标记）。
+     * 单批缓存失效：一次 `DEL` 多键（每粉丝 **3 键** = 收件箱缓存 + 空标记 + 部分装载标记，
+     * 口径收敛于 {@link CacheKeys#feedInboxCacheKeys(long)}，与重建侧写后失效同源）。
      *
-     * <p>失效集口径：收件箱缓存 `feed:inbox:{id}` 按本仓既有约定**三件套一起 DEL**（数据 key + `empty:` +
-     * `partial:`，先例 `FollowCache.invalidateKeysQuietly` / {@link CacheKeys#partial(String)} 的
-     * "写路径失效三件套"警示）——T23 的收件箱窗口读（Redis→DB→回填）将复用同一数据 key，
-     * 残留 `partial:` 会把"前缀"误判为完整集合（静默漏成员），故失效点（本方法）必须现在就把三件套删净。
+     * <p>失效集口径：按本仓既有约定**三件套一起 DEL**（数据 key + `empty:` + `partial:`，先例
+     * {@code FollowCache.invalidateKeysQuietly} / {@link CacheKeys#partial(String)} 的"写路径失效
+     * 三件套"警示）——T23 的收件箱窗口读（Redis→DB→回填）将复用同一数据 key，残留 `partial:`
+     * 会把"前缀"误判为完整集合（静默漏成员），故失效点（本方法）必须把三件套删净。
      *
-     * <p>完整态标记一并 DEL 的理由见类注释（与 T18/T19"fanout 永不触碰标记"口径的差异已登记任务回写）。
+     * <p>T21 时曾一并 DEL 一期完整态标记 {@code feed:inbox:full:{fanId}}；该标记已随
+     * **T22 退役**（语义迁 {@code feed_inbox_sync} 表），失效集随之降为三件套。
      */
     private static void deleteCacheKeys(Jedis jedis, List<Long> fanIds) {
-        String[] keys = new String[fanIds.size() * 4];
+        String[] keys = new String[fanIds.size() * 3];
         for (int i = 0; i < fanIds.size(); i++) {
-            long fanId = fanIds.get(i);
-            String inboxKey = CacheKeys.feedInbox(fanId);
-            keys[4 * i] = inboxKey;
-            keys[4 * i + 1] = CacheKeys.empty(inboxKey);
-            keys[4 * i + 2] = CacheKeys.partial(inboxKey);
-            keys[4 * i + 3] = CacheKeys.feedInboxFull(fanId);
+            String[] trio = CacheKeys.feedInboxCacheKeys(fanIds.get(i));
+            System.arraycopy(trio, 0, keys, 3 * i, trio.length);
         }
         jedis.del(keys);
     }
