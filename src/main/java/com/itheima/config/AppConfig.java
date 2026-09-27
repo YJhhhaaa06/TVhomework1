@@ -317,6 +317,55 @@ public final class AppConfig {
         return ids;
     }
 
+    // ===== feed 二期读侧两路归并（feed2-23 T23）=====
+
+    /**
+     * 读侧**总窗口上限** M（feed2-23 T23）：键 {@code feed.readWindowMax}（默认 300）。
+     *
+     * <p><b>三个"窗口"概念分立、不得互用</b>（NEEDS 4.0 对齐补录）：
+     * <ol>
+     *   <li>{@link #getFeedInboxWindowMax()} C=200 —— **表侧**：重建写入 {@code feed_inbox} 的每用户行数上限；</li>
+     *   <li>feed 域信封 {@code FeedController.FEED_PAGE_SIZE_*} = 100 —— **接口侧**：一次 HTTP 返回条数；</li>
+     *   <li>本方法 M=300 —— **读侧**：两路读（收件箱窗口 ∪ 大V发件箱窗口）归并去重降序后的**可见上限**，
+     *       亦即**深翻边界**（越过窗口 → 空页）。</li>
+     * </ol>
+     * 关系：单响应信封 ≤ M（100 → 3 页）；**C 与 M 各自独立**——改 C 会改表侧重建量与重建成本，
+     * 故二者不得复用同一键。
+     *
+     * <p>**带默认值（300）**：偏离散取值的容错口径，键缺失不得让应用起不来（同
+     * {@link #getFeedInboxWindowMax()}；键存在但值非法照旧抛，fail-fast 语义不变）。
+     * 读侧的表侧保留 / 容量策略归三期。
+     */
+    public static int getFeedReadWindowMax() {
+        return getInt("feed.readWindowMax", 300);
+    }
+
+    /**
+     * 大V发件箱「每作者最近条数」N（feed2-23 T23）：键 {@code feed.outbox.windowSize}（默认 20）。
+     *
+     * <p>大V内容**不落表**（反面对照：发件箱落表已判不做），读时按作者取最近 N 条 contentId
+     * 合成"发件箱窗口"。N 独立于重建的 {@link #getFeedInboxWindowPerAuthor()} K——两者服务不同层
+     * （K 决定表侧窗口取样，N 决定读时拉取深度），**不得复用同一键**。
+     *
+     * <p><b>带默认值（20）</b>：键缺失不得让应用起不来（同 {@link #getFeedInboxTtlSeconds()}）。
+     * 默认值与 K 同量级（两者都是"窗口粒度"参数，取值口径一致）。
+     */
+    public static int getFeedOutboxWindowSize() {
+        return getInt("feed.outbox.windowSize", 20);
+    }
+
+    /**
+     * 大V发件箱读缓存 TTL（feed2-23 T23）：键 {@code feed.outbox.ttlMinutes}（默认 60 分钟）。
+     *
+     * <p>形态对齐 {@link #getFeedInboxTtlSeconds()}（分钟 → 秒）；TTL 只作**缓存淘汰**、无正确性含义
+     * （正确性以 {@code content} 真相表为准；写后失效由 push 消费者负责）。
+     *
+     * <p>**带默认值（60）**：键缺失不得让应用起不来（同 {@link #getFeedInboxTtlSeconds()}）。
+     */
+    public static long getFeedOutboxTtlSeconds() {
+        return getLong("feed.outbox.ttlMinutes", 60L) * 60;
+    }
+
     // T5（cache-05）：索引懒重建失败冷却退避窗口（对齐熔断冷却先例 redis.breaker.cooldownMillis）
 
     public static long getContentIndexRebuildCooldownMillis() {

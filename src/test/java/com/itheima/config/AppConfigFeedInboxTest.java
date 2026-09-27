@@ -15,7 +15,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * feed1-18（T18）：写扩散收件箱 TTL 配置读取——{@code feed.inbox.ttlMinutes} → {@code getFeedInboxTtlSeconds()}；
  * feed2-22（T22）追加窗口重算参数——{@code feed.inbox.windowPerAuthor} → {@code getFeedInboxWindowPerAuthor()}、
- * {@code feed.inbox.windowMax} → {@code getFeedInboxWindowMax()}。
+ * {@code feed.inbox.windowMax} → {@code getFeedInboxWindowMax()}；
+ * feed2-23（T23）追加读侧参数——{@code feed.readWindowMax} → {@code getFeedReadWindowMax()}、
+ * {@code feed.outbox.windowSize} → {@code getFeedOutboxWindowSize()}、
+ * {@code feed.outbox.ttlMinutes} → {@code getFeedOutboxTtlSeconds()}。
  *
  * <p>两条契约：① 绑定 = classpath `app.properties` 的现值（秒口径 = 分钟 × 60）；
  * ② **键缺失 / 值为空 → 回退默认**（TTL 60 分钟 / K=20 / C=200）——收件箱是真相表的派生读缓存、
@@ -33,6 +36,11 @@ class AppConfigFeedInboxTest {
     /** 默认窗口参数（K / C），与 AppConfig.getFeedInboxWindowPerAuthor/Max() 的默认值同源。 */
     private static final int DEFAULT_WINDOW_PER_AUTHOR = 20;
     private static final int DEFAULT_WINDOW_MAX = 200;
+
+    /** T23 默认值：读侧总窗口 M / 发件箱每作者 N / 发件箱 TTL（分钟）。 */
+    private static final int DEFAULT_READ_WINDOW_MAX = 300;
+    private static final int DEFAULT_OUTBOX_WINDOW_SIZE = 20;
+    private static final long DEFAULT_OUTBOX_TTL_MINUTES = 60L;
 
     private static Properties originalProps;
 
@@ -102,6 +110,63 @@ class AppConfigFeedInboxTest {
         } finally {
             replaceProps(originalProps);
         }
+    }
+
+    // ===== feed2-23（T23）：读侧总窗口 M / 发件箱每作者 N / 发件箱 TTL =====
+
+    @Test
+    void readSideParamsBoundFromAppProperties() throws IOException {
+        assertEquals(Integer.parseInt(propString("feed.readWindowMax")), AppConfig.getFeedReadWindowMax());
+        assertEquals(Integer.parseInt(propString("feed.outbox.windowSize")), AppConfig.getFeedOutboxWindowSize());
+        assertEquals(Long.parseLong(propString("feed.outbox.ttlMinutes")) * 60,
+                AppConfig.getFeedOutboxTtlSeconds(), "TTL 秒口径 = 分钟 × 60");
+
+        assertTrue(AppConfig.getFeedReadWindowMax() > 0, "M 必须为正（0 会让可见窗口恒空）");
+        assertTrue(AppConfig.getFeedOutboxWindowSize() > 0, "N 必须为正（0 会让发件箱腿恒空）");
+        assertTrue(AppConfig.getFeedOutboxTtlSeconds() > 0, "TTL 必须为正（非正会让回填即过期）");
+    }
+
+    @Test
+    void readSideParamsFallBackToDefaultsWhenKeysMissing() throws Exception {
+        replaceProps(new Properties());
+        try {
+            assertEquals(DEFAULT_READ_WINDOW_MAX, AppConfig.getFeedReadWindowMax(),
+                    "键缺失应回退默认 M=300（可降级；不得 fail-fast）");
+            assertEquals(DEFAULT_OUTBOX_WINDOW_SIZE, AppConfig.getFeedOutboxWindowSize(),
+                    "键缺失应回退默认 N=20");
+            assertEquals(DEFAULT_OUTBOX_TTL_MINUTES * 60, AppConfig.getFeedOutboxTtlSeconds(),
+                    "键缺失应回退默认 60 分钟");
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    @Test
+    void blankReadSideKeysFallBackToDefaults() throws Exception {
+        Properties blank = new Properties();
+        blank.setProperty("feed.readWindowMax", "   ");
+        blank.setProperty("feed.outbox.windowSize", "   ");
+        blank.setProperty("feed.outbox.ttlMinutes", "   ");
+        replaceProps(blank);
+        try {
+            assertEquals(DEFAULT_READ_WINDOW_MAX, AppConfig.getFeedReadWindowMax());
+            assertEquals(DEFAULT_OUTBOX_WINDOW_SIZE, AppConfig.getFeedOutboxWindowSize());
+            assertEquals(DEFAULT_OUTBOX_TTL_MINUTES * 60, AppConfig.getFeedOutboxTtlSeconds());
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    /** 三个"窗口"概念分立：读侧 M 与表侧 C 各自独立取键（不得复用同一个键）。 */
+    @Test
+    void readWindowMaxIsIndependentFromInboxWindowMax() throws IOException {
+        String readMax = propString("feed.readWindowMax");
+        String inboxMax = propString("feed.inbox.windowMax");
+
+        assertTrue(!readMax.equals(inboxMax),
+                "M（读侧总窗口）与 C（表侧窗口）应各自独立：M=" + readMax + ", C=" + inboxMax);
+        assertEquals(DEFAULT_READ_WINDOW_MAX, AppConfig.getFeedReadWindowMax());
+        assertEquals(DEFAULT_WINDOW_MAX, AppConfig.getFeedInboxWindowMax());
     }
 
     // ===== 工具（同 AppConfigRabbitmqTest 先例）=====

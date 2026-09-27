@@ -3,8 +3,10 @@ package com.itheima.feed.service;
 import com.itheima.config.AppConfig;
 import com.itheima.exception.DatabaseException;
 import com.itheima.follow.service.FollowCache;
+import com.itheima.user.dao.UserDao;
 import com.itheima.util.LogProbe;
 import com.itheima.util.LogUtil;
+import com.itheima.util.TransactionTemplate;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -12,8 +14,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 
@@ -21,18 +26,23 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link FeedBigVRouter} 单测（feed2-21 T21）：名单命中 / 阈值边界 / 降级（fail-open）。
+ * {@link FeedBigVRouter} 单测（feed2-21 T21 单作者判定；feed2-23 T23 增批量判定）：名单命中 /
+ * 阈值边界 / 降级（fail-open）/ 批量单点（一条 SQL ∪ 名单、名单项不查 DB、SQL 失败只留名单项）。
  *
- * <p>隔离手法：mock {@link FollowCache}（粉丝数读取），**不依赖真实 Redis / DB**；
- * 配置经反射改写 {@code AppConfig.PROPS} 注入（沿 {@code AppConfigTest} 既有先例，
- * 用例后还原，不污染其它测试类）。
+ * <p>隔离手法：mock {@link FollowCache}（粉丝数读取）与 {@link UserDao} + {@link TransactionTemplate}
+ * （批量判定），**不依赖真实 Redis / DB**；配置经反射改写 {@code AppConfig.PROPS} 注入
+ * （沿 {@code AppConfigTest} 既有先例，用例后还原，不污染其它测试类）。
  */
 class FeedBigVRouterTest {
 
@@ -41,6 +51,9 @@ class FeedBigVRouterTest {
     private static Properties originalProps;
 
     private FollowCache followCache;
+    private UserDao userDao;
+    private TransactionTemplate tt;
+    private Connection conn;
     private FeedBigVRouter router;
     private LogProbe probe;
 
@@ -56,9 +69,16 @@ class FeedBigVRouterTest {
     }
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         followCache = mock(FollowCache.class);
-        router = new FeedBigVRouter(followCache);
+        userDao = mock(UserDao.class);
+        tt = mock(TransactionTemplate.class);
+        conn = mock(Connection.class);
+        router = new FeedBigVRouter(followCache, userDao, tt);
+        when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
+            TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
+            return action.execute(conn);
+        });
         probe = LogProbe.attachTo(LogUtil.getLogger(FeedBigVRouter.class));
     }
 
@@ -119,6 +139,58 @@ class FeedBigVRouterTest {
         assertEquals(1, warnings.size(), () -> "应恰一条 WARNING，实际: " + probe.records());
         assertTrue(warnings.getFirst().getMessage().contains("大V判定降级"));
         assertNull(warnings.getFirst().getThrown(), "源头（FollowCache.loadCount / 缓存层）已持栈 → 结论行不带栈");
+    }
+
+    // ==================== 批量判定（feed2-23 T23 读侧） ====================
+
+    @Test
+    void batchEmptyInputReturnsEmptyWithoutAnyQuery() throws SQLException {
+        assertTrue(router.isBigVBatch(null).isEmpty());
+        assertTrue(router.isBigVBatch(List.of()).isEmpty());
+
+        verify(userDao, never()).findUserIdsByMinFollowerCount(any(), anyList(), anyInt());
+        verify(followCache, never()).getFollowerCount(anyLong());
+    }
+
+    @Test
+    void batchAllListedSkipsDbQuery() throws Exception {
+        replaceProps(props("7, 8", "10000"));
+
+        Set<Long> bigVs = router.isBigVBatch(List.of(7L, 8L));
+
+        assertEquals(Set.of(7L, 8L), bigVs);
+        verify(userDao, never()).findUserIdsByMinFollowerCount(any(), anyList(), anyInt());
+        assertTrue(probe.atLevel(Level.WARNING).isEmpty());
+    }
+
+    @Test
+    void batchQueriesUnlistedAuthorsInOneSqlAndUnionsListed() throws Exception {
+        replaceProps(props("8", "100"));
+        when(userDao.findUserIdsByMinFollowerCount(conn, List.of(9L), 100)).thenReturn(List.of(9L));
+
+        Set<Long> bigVs = router.isBigVBatch(List.of(8L, 9L));
+
+        assertEquals(Set.of(8L, 9L), bigVs);
+        verify(userDao, times(1)).findUserIdsByMinFollowerCount(conn, List.of(9L), 100);
+    }
+
+    @Test
+    void batchDegradesToListedOnlyOnDbFailureWithoutDoubleStack() throws Exception {
+        replaceProps(props("8", "100"));
+        when(userDao.findUserIdsByMinFollowerCount(any(), anyList(), anyInt()))
+                .thenThrow(new SQLException("db down"));
+
+        Set<Long> bigVs = router.isBigVBatch(List.of(8L, 9L));
+
+        assertEquals(Set.of(8L), bigVs, "SQL 失败 ⇒ fail-open：只保留名单命中项（9 按普通作者处理）");
+
+        // 源头（事务回调）SEVERE + 栈恰一条；下游结论行 WARNING 恰一条、不带栈
+        LogProbe.assertExactlyOneStacked(probe, Level.SEVERE,
+                "大V批量判定查询失败, authorCount=1", SQLException.class);
+        List<LogRecord> warnings = probe.atLevel(Level.WARNING);
+        assertEquals(1, warnings.size(), () -> "应恰一条 WARNING，实际: " + probe.records());
+        assertTrue(warnings.getFirst().getMessage().contains("大V批量判定降级"));
+        assertNull(warnings.getFirst().getThrown(), "源头已持栈 → 结论行不带栈");
     }
 
     // ==================== 辅助 ====================

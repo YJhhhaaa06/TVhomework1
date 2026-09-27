@@ -5,7 +5,8 @@ test_feed_rebuild.py - feed 收件箱重建（窗口化）端到端测试
 
 背景：T22 起重建 = 「关注 / 取关 → rebuild 消息 → 消费者 → **单事务** `DELETE feed_inbox` +
 **每关注作者最近 K 条** → 归并去重降序 → 裁剪 C → `INSERT IGNORE` feed_inbox + upsert
-feed_inbox_sync」→ **提交后 DEL 收件箱读缓存三件套**（`/feed` 读路径仍为拉模式，零改动）。
+feed_inbox_sync」→ **提交后 DEL 收件箱读缓存三件套**（`/feed` 读路径自 **feed2-23 T23** 起已切
+**两路读**：收件箱腿 + 大V发件箱腿；本文件断言的**表侧产物口径不变**）。
 **重建不再写 Redis**（单写 DB 真相 + 写后失效；一期"完整态标记 `feed:inbox:full:`"已退役）。
 
 覆盖：
@@ -16,8 +17,9 @@ feed_inbox_sync」→ **提交后 DEL 收件箱读缓存三件套**（`/feed` �
      ⇒ `feed_inbox` 出现该条，且收件箱读缓存仍不存在（"收敛后再发布"序列，规避过渡期竞态）。
   3. 取关触发重建：该博主内容从窗口消失（窗口 == 新 oracle = 空集），`feed_inbox_sync` 仍在
      （"空但已同步"）。
-  4. 红线哨兵：`/feed` 拉模式响应信封口径不变且能取到内容（读路径零改动）——**不做环境 skip**，
-     故降级跑（`RABBITMQ_PORT=5699 python tools\tv.py test`）下仍能证明业务链路不依赖推。
+  4. 红线哨兵：`/feed` 响应信封口径不变且能取到内容（**T23 起读路径已切两路，信封与"取得到"
+     不变**）——**不做环境 skip**，故降级跑（`RABBITMQ_PORT=5699 python tools\tv.py test`）下仍能证明
+     业务链路不依赖推。
 
 读取手段与跳过口径：
   - **MySQL（独立 oracle 与真相断言）**：`mysql.exe` 子进程（沿 `test_content_paging.py` /
@@ -472,7 +474,7 @@ class TestFeedRebuildWindow:
         assert _db_synced(fan_id), "空窗口也应标为已同步（否则读侧会误判为未同步而回退拉模式）"
 
     def test_feed_read_path_unchanged(self, base_url, scenario):
-        """红线哨兵：/feed 拉模式信封口径不变，且能取到刚发布的内容（读路径零改动）。
+        """红线哨兵：/feed 信封口径不变，且能取到刚发布的内容（T23 起读路径已切两路，二者均不变）。
 
         **不做环境 skip**：MQ / Redis / DB oracle 降级时本用例仍应通过——这正是"业务链路不依赖推"的证据。
         """

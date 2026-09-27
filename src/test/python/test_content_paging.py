@@ -20,12 +20,17 @@ T19 把三域统一为「域级上限 100 + 域级信封 100」，前端只传 `
 
 数据：复用 conftest 的 user_a/user_b；feed 的非空场景用「b 关注 a」构造并在 finally 取关复原
 （409 = 已关注亦可继续，仅对本次新建的做复原）。不依赖其它用例执行顺序。
+
+⚠️ feed2-23 T23 起 `/feed` 为**异步可见窗口**（关注/取关只投递重建消息，见 `BUSINESS_FLOW` 6.1/6.2）
+⇒ "变更关注关系后立刻断言 `/feed`"的用例一律先**有界轮询**收敛（`_await_feed_non_empty`，上界 5s），
+否则会读到上一版窗口而误报（本文件第 4 项即此模式）。
 """
 
 import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -39,6 +44,11 @@ DOMAIN_PAGE_SIZE = 100
 # 内容相关域共用的信封字段集（唯一信封 common.model.dto.PageResult）
 _ENVELOPE_KEYS = {"list", "total", "page", "pageSize", "totalPages"}
 
+# 窗口收敛等待（feed2-23 T23 起 /feed 是**异步可见窗口**：关注/取关只投递重建消息，
+# 返回不代表窗口已刷新；判据见 BUSINESS_FLOW 6.1/6.2）
+_WINDOW_TIMEOUT_SECONDS = 5.0
+_WINDOW_INTERVAL_SECONDS = 0.1
+
 
 def _get(base_url, path, params, token=None):
     """GET 请求并返回响应 JSON；`token=None` 时不带鉴权头（search/profile 免登录）。"""
@@ -50,6 +60,23 @@ def _get(base_url, path, params, token=None):
 def _feed(base_url, token, **params):
     """GET /feed（未显式给出的分页参数不带在 URL 上）。"""
     return _get(base_url, "/feed", params, token)
+
+
+def _await_feed_non_empty(base_url, token, timeout=_WINDOW_TIMEOUT_SECONDS):
+    """**有界轮询** /feed 直到出现非空列表；返回最后一次响应 JSON。
+
+    feed2-23 T23 起 `/feed` = **有界窗口 + 两路读**，关注/取关只**投递重建消息**
+    （`BUSINESS_FLOW` 6.1/6.2）⇒ "关注返回"不蕴含"窗口已刷新"：紧接着读可能读到**上一版窗口**。
+    故凡"变更关注关系后立刻断言 /feed 内容"的用例都必须先轮询收敛（上界 5s）。
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        body = _feed(base_url, token)
+        if (body.get("data") or {}).get("list"):
+            return body
+        if time.monotonic() >= deadline:
+            return body
+        time.sleep(_WINDOW_INTERVAL_SECONDS)
 
 
 def _profile(base_url, user_id, **params):
@@ -114,11 +141,19 @@ class TestFeedPaging:
         _assert_envelope(body["data"], page=1, page_size=1, label="/feed 小信封")
 
     def test_default_equals_explicit_first_page(self, base_url, token_b, user_a_id):
-        """缺省 == 显式 `page=1&pageSize=100` 逐字节一致（**非空列表**才有判别力）。"""
+        """缺省 == 显式 `page=1&pageSize=100` 逐字节一致（**非空列表**才有判别力）。
+
+        ⚠️ feed2-23 T23 起 `/feed` 是**异步可见窗口**（关注只投递重建消息）⇒ 先**有界轮询**
+        等窗口收敛，再做逐字节比对；否则会读到"上一版（可能是空的）窗口"而误报。
+        """
         add = _follow(base_url, token_b, user_a_id, "add")
         assert add.get("code") in (200, 409), f"follow/add failed: {add}"
         added = add.get("code") == 200
         try:
+            waited = _await_feed_non_empty(base_url, token_b)
+            assert (waited.get("data") or {}).get("list"), \
+                f"关注后窗口未在 {_WINDOW_TIMEOUT_SECONDS}s 内出现内容: {waited}"
+
             default_body = _feed(base_url, token_b)
             explicit_body = _feed(base_url, token_b, page=1, pageSize=DOMAIN_PAGE_SIZE)
             assert default_body.get("code") == 200, f"/feed 缺省 failed: {default_body}"

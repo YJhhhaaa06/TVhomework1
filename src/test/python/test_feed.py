@@ -14,14 +14,23 @@ LikeService.batchIsContentLiked，含 miss 装载）从 DB 事务回调内**上�
 
 数据自建自清：临时用户用 testA_ 前缀（命中 cleanup_data.py 白名单），
 关注关系在 finally 中取关复原，断言不假设"b 完全无关注"（不依赖其它用例状态/执行顺序）。
+
+⚠️ feed2-23 T23 起 `/feed` = **有界窗口 + 两路读**，关注/取关只**投递重建消息**
+（`BUSINESS_FLOW` 6.1/6.2）⇒ "变更关注关系后立刻读"必须**有界轮询**收敛：本文件两处断言
+（关注后出现 / 取关后消失）均改为轮询版本，否则会读到上一版窗口而偶发误报。
 """
 
+import time
 import uuid
 
 import pytest
 import requests
 
 from conftest import USER_A, register_user
+
+# 窗口收敛等待（T23：异步可见窗口）
+_WINDOW_TIMEOUT_SECONDS = 5.0
+_WINDOW_INTERVAL_SECONDS = 0.1
 
 
 def _register_fresh_user():
@@ -57,6 +66,21 @@ def _follow(base_url, token, followed_user_id, action):
     return resp.json()
 
 
+def _await_feed(base_url, token, predicate, timeout=_WINDOW_TIMEOUT_SECONDS):
+    """**有界轮询** /feed 直到 `predicate(items)` 为真；返回最后一次 items（无论真假）。
+
+    T23 起 `/feed` 是异步可见窗口（关注/取关只投递重建消息）⇒ 变更关注关系后不能立即断言。
+    """
+    deadline = time.monotonic() + timeout
+    items = []
+    while True:
+        body = _get_feed(base_url, token, page=1, page_size=50)
+        items = (body.get("data") or {}).get("list") or []
+        if predicate(items) or time.monotonic() >= deadline:
+            return items
+        time.sleep(_WINDOW_INTERVAL_SECONDS)
+
+
 @pytest.mark.boundary
 class TestFeed:
 
@@ -79,12 +103,14 @@ class TestFeed:
         try:
             assert add_body.get("code") == 200, f"follow/add failed: {add_body}"
 
+            items = _await_feed(base_url, token_b, lambda it: any(
+                x.get("authorId") == user_a_id for x in it))
+            assert items, f"关注后 /feed 应在窗口收敛后出现内容: {items}"
+
             body = _get_feed(base_url, token_b, page=1, page_size=50)
             assert body.get("code") == 200, f"/feed failed: {body}"
-            data = body.get("data") or {}
-            items = data.get("list") or []
-            assert items, f"关注后 /feed 应有内容: {data}"
-            assert data.get("total", 0) >= 1, f"total 应 >= 1: {data}"
+            assert (body.get("data") or {}).get("total", 0) >= 1, \
+                f"total 应 >= 1: {body.get('data')}"
 
             mine = [it for it in items if it.get("authorId") == user_a_id]
             assert mine, f"/feed 应含被关注者 userA 的内容: {items}"
@@ -100,9 +126,8 @@ class TestFeed:
             remove_body = _follow(base_url, token_b, user_a_id, "remove")
             assert remove_body.get("code") == 200, f"follow/remove failed: {remove_body}"
 
-        # 取关复原后：被关注者的内容不再出现（不假设 b 完全无关注，避免依赖其它用例状态）
-        after = _get_feed(base_url, token_b, page=1, page_size=50)
-        assert after.get("code") == 200, f"/feed failed: {after}"
-        after_items = (after.get("data") or {}).get("list") or []
-        leftovers = [it.get("id") for it in after_items if it.get("authorId") == user_a_id]
-        assert leftovers == [], f"取关后 /feed 不应再含 userA 内容: {leftovers}"
+        # 取关复原后：轮询直到该博主内容消失（不假设 b 完全无关注，避免依赖其它用例状态）
+        leftovers = _await_feed(base_url, token_b, lambda it: all(
+            x.get("authorId") != user_a_id for x in it))
+        assert [it.get("id") for it in leftovers if it.get("authorId") == user_a_id] == [], \
+            f"取关后 /feed 不应再含 userA 内容: {leftovers}"

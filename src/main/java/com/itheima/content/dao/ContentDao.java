@@ -9,7 +9,9 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Component
 public class ContentDao {
@@ -272,6 +274,58 @@ public class ContentDao {
             }
         }
         return ids;
+    }
+
+    /**
+     * 每作者各取最近 {@code perAuthorLimit} 条内容 id，**并带回作者归属**（feed2-23 T23 大V发件箱批量回源）。
+     *
+     * <p>与 {@link #findRecentContentIdsByUsers} 的唯一差别：本方法在分支里多选一列
+     * {@code user_id AS author_id}（`idx_user_id` 物理为 {@code (user_id, id)}，该列随索引即可取到），
+     * 于是**一趟查询**即可按作者切分结果、直接用于逐作者缓存回填——避免"不回源就不知道 id 归谁"。
+     *
+     * <p><b>排序口径 = contentId 降序</b>（同 {@link #findRecentContentIdsByUsers}，
+     * 与 {@code feed_inbox} 不存时间字段的收件箱层口径同源）；⚠️ `UNION ALL` 的**外层顺序不保证**，
+     * 故本方法在 Java 侧对每个作者的结果**显式降序重排**，不依赖引擎的拼接顺序。
+     *
+     * <p>⚠️ `is_deleted` 不在 `idx_user_id` 中、需回表过滤 ⇒ 每分支最坏上界为该作者的内容量
+     * （同 {@link #findRecentContentIdsByUsers} 的登记口径）。
+     *
+     * @param authorIds      作者 id 列表（空 / null / {@code perAuthorLimit <= 0} 不发 SQL，返回空映射）
+     * @param perAuthorLimit 每作者保留条数 N
+     * @return 作者 id → 该作者最近 N 条 contentId（降序）；**无内容的作者不出现在返回映射中**
+     */
+    public Map<Long, List<Long>> findRecentContentIdsByAuthor(Connection conn, List<Long> authorIds,
+                                                             int perAuthorLimit) throws SQLException {
+        if (authorIds == null || authorIds.isEmpty() || perAuthorLimit <= 0) {
+            return Collections.emptyMap();
+        }
+        StringBuilder sql = new StringBuilder();
+        for (int i = 0; i < authorIds.size(); i++) {
+            if (i > 0) {
+                sql.append(" UNION ALL ");
+            }
+            sql.append("(SELECT user_id AS author_id, id FROM content WHERE user_id = ? AND is_deleted = 0"
+                    + " ORDER BY id DESC LIMIT ?)");
+        }
+        Map<Long, List<Long>> byAuthor = new LinkedHashMap<>();
+        try (PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+            int idx = 1;
+            for (Long authorId : authorIds) {
+                pstmt.setLong(idx++, authorId);
+                pstmt.setInt(idx++, perAuthorLimit);
+            }
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    byAuthor.computeIfAbsent(rs.getLong("author_id"), k -> new ArrayList<>())
+                            .add(rs.getLong("id"));
+                }
+            }
+        }
+        // UNION ALL 外层顺序不保证 ⇒ 显式降序重排（同时保证每作者内不重复）
+        for (List<Long> ids : byAuthor.values()) {
+            ids.sort(Collections.reverseOrder());
+        }
+        return byAuthor;
     }
 
     public int countContentByUsers(Connection conn, List<Long> userIds) throws SQLException {

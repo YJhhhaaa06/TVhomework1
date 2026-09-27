@@ -3,13 +3,14 @@
 test_feed_push.py - feed 写扩散（push 管线）端到端测试（feed1-18 T18 建；feed2-21 T21 改写为落库语义）
 
 背景：T21 起写扩散 = 「发布 → MQ → 消费者 → **落库 DB 真相表 `feed_inbox`** + 写后失效 DEL」
-（NEEDS 4.0 写侧拍板：单写 DB 真相 + 写后失效 + 读 miss 回源回填；**`/feed` 读路径仍为拉模式**，
-本期零改动）。本文件是该链路的**端到端证据**——断言直连测试库只读复算（收件箱尚无可读 HTTP 接口）。
+（NEEDS 4.0 写侧拍板：单写 DB 真相 + 写后失效 + 读 miss 回源回填；`/feed` 读路径自 **feed2-23 T23** 起
+已切**两路读**——收件箱腿 + 大V发件箱腿——本文件仍以 **DB 真相**为准做断言）。
+本文件是该链路的**端到端证据**——断言直连测试库只读复算。
 
 覆盖：
   1. 粉丝视角：b 关注 a → a 发布图文 → **轮询**（最终一致窗口内收敛）`feed_inbox` 出现 (b_id, contentId)；
   2. 非粉丝不受影响：全新用户（无关注关系）在 `feed_inbox` 中零行；
-  3. 红线哨兵：`/feed` 拉模式响应信封口径不变，且能取到刚发布的内容（读路径零改动）。
+  3. 红线哨兵：`/feed` 响应信封口径不变，且能取到刚发布的内容（信封与"取得到"是 T23 的不变量）。
 
 读取手段与跳过口径：
   - **MySQL（独立 oracle）**：`mysql.exe` 子进程（沿 `test_feed_rebuild.py` / `test_content_paging.py`
@@ -268,7 +269,7 @@ def push_context(base_url, test_files):
 
 @pytest.mark.boundary
 class TestFeedPushFanout:
-    """T21：写扩散落库（DB 真相）——粉丝收件箱增量落表、非粉丝不受影响、读路径零改动。"""
+    """T21：写扩散落库（DB 真相）——粉丝收件箱增量落表、非粉丝不受影响、读路径信封口径不变。"""
 
     def test_fanout_writes_db_inbox_for_follower(self, push_context):
         """粉丝收件箱（DB 真相 `feed_inbox`）在收敛窗口内出现新 contentId（最终一致）。"""
@@ -295,7 +296,7 @@ class TestFeedPushFanout:
         assert _db_inbox_count(stranger_id) == 0, f"非粉丝不应有收件箱行: user_id={stranger_id}"
 
     def test_feed_read_path_unchanged(self, base_url, push_context):
-        """红线哨兵：/feed 拉模式信封口径不变，且能取到刚发布的内容（读路径零改动）。
+        """红线哨兵：/feed 响应信封口径不变，且能取到刚发布的内容（切换前后一致）。
 
         **不做环境 skip**：MQ / MySQL 降级时本用例仍应通过——这正是"业务链路不依赖推"的证据。
         """

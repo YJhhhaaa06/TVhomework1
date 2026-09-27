@@ -41,6 +41,13 @@ import java.util.logging.Logger;
  * 重复投递无副作用）→ ② 单命令批量 `DEL`（三件套）；一轮窗口内 ① 借一次 DB 连接、
  * ② 借一次 Redis 连接（不逐粉丝各借还一次）。
  *
+ * <p><b>大V发件箱写后失效（feed2-23 T23）</b>：进入本方法**先**做一次
+ * {@code DEL feed:outbox:{authorId}}（两件套：数据 key + {@code empty:}，见
+ * {@link CacheKeys#feedOutboxCacheKeys(long)}），**无条件**且**位于大V判定之前**——大V分支命中即早退，
+ * 若把该失效放进后面的收件箱失效段，则大V发布**永不执行它**（读侧会一直读到旧发件箱内容）。
+ * 它与收件箱失效**共用**"首次失败即停用后续失效尝试"的开关（{@code delAbandoned} 由其返回值初始化），
+ * 以使一次 Redis 故障只留**一条**带堆栈记录（§3.1 附加纪律 2）。
+ *
  * <p><b>失败面</b>（契约"绝不抛"，末尾 SEVERE 兜底；消费侧一律降级 ACK，不转死信）：
  * <ul>
  *   <li>粉丝窗口读取失败 → 记 WARNING（结论行，源头持栈）并中止本次 fanout；</li>
@@ -104,13 +111,16 @@ public class FeedInboxWriter {
     }
 
     private void doFanout(long contentId, long authorId) {
+        // ① 大V发件箱写后失效（feed2-23 T23）：**无条件、且必须先于大V早退**——下面那个分支命中即
+        //    return，若把本步骤挪到收件箱失效段里，大V发布将永不动它（读侧一直读到旧发件箱）。
+        //    顺带把"Redis 是否可用"这一结果传给收件箱失效段，避免同一故障刷两条带栈记录。
+        boolean delAbandoned = !invalidateOutbox(authorId);
         if (bigVRouter.isBigV(authorId)) {
             // 大V内容不进粉丝收件箱（由"大V发件箱"读时拉，T23）——常态路由，FINE 即可
             LOGGER.fine("写扩散跳过大V, contentId=" + contentId + ", authorId=" + authorId);
             return;
         }
         long offset = 0L;
-        boolean delAbandoned = false;
         while (true) {
             ZSetCache.Window window;
             try {
@@ -138,6 +148,34 @@ public class FeedInboxWriter {
                 return;
             }
             offset += fanIds.size();
+        }
+    }
+
+    /**
+     * 大V发件箱写后失效（feed2-23 T23）：一次 `DEL` 两件套
+     * （{@link CacheKeys#feedOutboxCacheKeys(long)} = 数据 key + `empty:`）。
+     *
+     * <p>为什么无条件（对普通作者也执行）：outbox 缓存的读者只有"大V腿"，但**大V身份会变**
+     * （涨粉 / 掉粉）；若只在大V分支里失效，作者从大V降为普通后其 outbox 不再被发布刷新，
+     * 而读缓存又"命中即滑动续期"⇒ 重新升为大V时可能读到陈旧窗口。无条件失效把 key 的**内容新鲜度**
+     * 与"作者当前是否大V"解耦（代价 = 每次发布多一条 DEL，量级可忽略）。
+     *
+     * <p>失败面（与收件箱失效同口径）：捕获面取 {@link RuntimeException}（RedisAccess 还有非
+     * CacheException 的出口）→ **首次失败即持栈 WARNING + 打点一次**，返回 false 让调用方停用
+     * 后续失效尝试（本链唯一捕获点，故持栈；"不停写"——DB 真相一路继续）。
+     *
+     * @return true = 失效命令已发出；false = Redis 不可用（已记录，调用方应停止后续失效尝试）
+     */
+    private boolean invalidateOutbox(long authorId) {
+        try {
+            redis.executeVoid(jedis -> jedis.del(CacheKeys.feedOutboxCacheKeys(authorId)));
+            return true;
+        } catch (RuntimeException e) {
+            // 该链唯一捕获点 → 持栈 + 打点一次（不按批刷）
+            LOGGER.log(Level.WARNING, "写扩散大V发件箱缓存失效失败（读自愈兜底，DB 真相不受影响）, authorId="
+                    + authorId, e);
+            stats.record(CacheStats.Event.WRITE_FAIL, CacheKeys.feedOutbox(authorId));
+            return false;
         }
     }
 

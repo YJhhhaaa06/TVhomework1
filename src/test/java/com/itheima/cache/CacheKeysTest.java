@@ -143,6 +143,36 @@ class CacheKeysTest {
     }
 
     @Test
+    void feedOutboxKeyUsesAuthorIdAndMapsToFeedDomain() {
+        // feed2-23（T23）：大V发件箱读缓存 key —— 生成与解析同源，归 FEED 域（含 empty 解包）
+        assertEquals("feed:outbox:9", CacheKeys.feedOutbox(9L));
+        assertEquals(CacheDomain.FEED, CacheKeys.domainOf(CacheKeys.feedOutbox(9L)));
+        assertEquals(CacheDomain.FEED, CacheKeys.domainOf("empty:" + CacheKeys.feedOutbox(9L)));
+        assertTrue(CacheKeys.feedOutbox(9L).startsWith(CacheKeys.FEED_OUTBOX_PREFIX));
+    }
+
+    @Test
+    void feedOutboxCacheKeysReturnsTwoPieceSet() {
+        // feed2-23（T23）：发件箱失效**两件套**（数据 key + empty:）——
+        // outbox 恒为"该作者最近 N 条"这一有界窗口、无 partial 语义；empty: 用于吸收"无作品的大V"
+        String[] keys = CacheKeys.feedOutboxCacheKeys(9L);
+        assertEquals(2, keys.length);
+        assertEquals("feed:outbox:9", keys[0]);
+        assertEquals("empty:feed:outbox:9", keys[1]);
+        for (String key : keys) {
+            assertEquals(CacheDomain.FEED, CacheKeys.domainOf(key), "两件套应全部归 FEED 域: " + key);
+        }
+    }
+
+    @Test
+    void feedOutboxNamespaceIsDisjointFromInboxAndLock() {
+        String outbox = CacheKeys.feedOutbox(9L);
+        assertTrue(!outbox.startsWith(CacheKeys.FEED_INBOX_PREFIX), "发件箱不在收件箱命名空间内");
+        assertTrue(!outbox.startsWith(CacheKeys.FEED_REBUILD_LOCK_PREFIX), "发件箱不在重建锁命名空间内");
+        assertTrue(!CacheKeys.feedInbox(9L).startsWith(CacheKeys.FEED_OUTBOX_PREFIX), "反向也须不重叠");
+    }
+
+    @Test
     void feedRebuildLockKeyUsesUserIdAndMapsToFeedDomain() {
         // feed1-19（T19）：重建去重锁（SET NX EX + Lua CAS 释放）
         assertEquals("feed:rebuild:lock:7", CacheKeys.feedRebuildLock(7L));

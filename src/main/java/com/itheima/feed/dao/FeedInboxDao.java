@@ -4,11 +4,13 @@ import com.itheima.ioc.annotation.Component;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 收件箱窗口落库 DAO（feed2-21 T21；feed2-22 T22 增重建侧三方法）：写扩散把一条新内容写进
+ * 收件箱窗口落库 DAO（feed2-21 T21；feed2-22 T22 增重建侧三方法；feed2-23 T23 增读侧两方法）：写扩散把一条新内容写进
  * 作者每个粉丝的收件箱**DB 真相表** {@code feed_inbox}（{@code (user_id, content_id)} 唯一键
  * = 幂等去重 + 窗口读覆盖索引）；重建侧则**整窗替换**该用户的窗口行并维护
  * {@code feed_inbox_sync}（窗口同步状态，"存在即已同步"）。
@@ -122,5 +124,53 @@ public class FeedInboxDao {
             pstmt.setLong(1, userId);
             pstmt.executeUpdate();
         }
+    }
+
+    // ==================== 读侧（feed2-23 T23：同步闸门 + 窗口读取） ====================
+
+    /**
+     * 读态闸门：{@code userId} 的收件箱窗口**是否已同步**（feed2-23 T23）。
+     *
+     * <p>语义 = "存在即已同步"（T22 定义）：只有**重建**（关注 / 取关触发）会写入本表，而 fanout
+     * 只向 {@code feed_inbox} 追增新行、**从不写同步状态** ⇒ 没有本行 = **该用户从没成功重建过**，
+     * 其窗口要么为空、要么只有 fanout 散行（缺历史），**不可作为读源**（读侧回退既有纯拉）。
+     *
+     * <p>成本 = 一条 {@code uk_user} 唯一键点查（每请求一次；不做缓存——见 NEEDS 4.0 对齐补录）。
+     * 注意 `feed_inbox_sync` 行**只 upsert、从不删除**，故"曾同步 ⇒ 现在仍同步"恒成立。
+     *
+     * @return true = 已同步（窗口可读）
+     */
+    public boolean existsSync(Connection conn, long userId) throws SQLException {
+        String sql = "SELECT 1 FROM feed_inbox_sync WHERE user_id = ? LIMIT 1";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, userId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    /**
+     * 读某用户收件箱窗口的**全部** contentId（feed2-23 T23 收件箱腿的 DB 装载器）。
+     *
+     * <p>**升序**返回（{@code ORDER BY content_id}）：与 {@code feed:inbox:{id}} 缓存 ZSet 的
+     * score 序（score = contentId ⇒ ZRANGE 升序）**同向**，这样"缓存命中"与"回源回填"两条路径
+     * 的成员序一致，读侧统一做一次内存反序即可得到内容倒序。
+     *
+     * <p>范围 = 该用户窗口的**全量行**（表侧由重建裁剪到 C、fanout 只追增，故量级 ≈ C），
+     * 走 {@code uk_user_content(user_id, content_id)} 唯一键的索引区间扫描。
+     */
+    public List<Long> findInboxContentIds(Connection conn, long userId) throws SQLException {
+        String sql = "SELECT content_id FROM feed_inbox WHERE user_id = ? ORDER BY content_id";
+        List<Long> ids = new ArrayList<>();
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, userId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    ids.add(rs.getLong("content_id"));
+                }
+            }
+        }
+        return ids;
     }
 }

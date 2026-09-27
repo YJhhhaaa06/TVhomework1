@@ -187,6 +187,32 @@ public class UserDao {
         return result;
     }
 
+    //批量查"粉丝数 >= min"的用户子集（feed2-23 T23：读侧大V**批量判定**的数据面；名单命中项由调用方另行并入）
+    //T23：一条 SQL 取代"逐作者查粉丝数"（关注数无上限 ⇒ 逐作者串行是长链）；主键 IN + 列比较，无新索引
+    public List<Long> findUserIdsByMinFollowerCount(Connection conn, List<Long> ids, int minFollowerCount)
+            throws SQLException {
+        if (ids == null || ids.isEmpty()) return java.util.Collections.emptyList();
+        StringBuilder sql = new StringBuilder("SELECT id FROM users WHERE follower_count >= ? AND id IN (");
+        for (int i = 0; i < ids.size(); i++) {
+            if (i > 0) sql.append(", ");
+            sql.append("?");
+        }
+        sql.append(")");
+        List<Long> result = new java.util.ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            ps.setInt(1, minFollowerCount);
+            for (int i = 0; i < ids.size(); i++) {
+                ps.setLong(i + 2, ids.get(i));
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    result.add(rs.getLong("id"));
+                }
+            }
+        }
+        return result;
+    }
+
     //改
     //更新关注数（delta 为正表示+1关注，为负表示-1关注）
     public int updateFollowCount(Connection conn, long userId, int delta) throws SQLException {

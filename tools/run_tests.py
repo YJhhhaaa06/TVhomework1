@@ -105,7 +105,10 @@ EXIT_ENV_NOT_READY = 10   # 测试环境未就绪（3307/6379/5672 探不通）�
 EXIT_PYTEST_TIMEOUT = 11  # pytest 执行超时被杀
 # 用户决策（2026-09-05）：pytest 阶段正常仅 ~3s，大头在编译/部署/关停（不在刹车范围），
 # 60s 已是 ~20 倍裕量，足以切断卡死且几乎不误杀；TV_PYTEST_TIMEOUT 可覆盖（验证用短超时模拟挂起）
-PYTEST_TIMEOUT_SECONDS = int(os.environ.get("TV_PYTEST_TIMEOUT", "60"))
+#
+# ⚠️ feed2-23 T23 修正：该"~3s"前提已失真——pytest 全量实测 **56~62s**（用例增长 + 上传/轮询），
+# 60s 会**误杀正常跑**（exit=11、日志停在某个用例中途），故默认放宽到 180s（仍足以切断真卡死）。
+PYTEST_TIMEOUT_SECONDS = int(os.environ.get("TV_PYTEST_TIMEOUT", "180"))
 
 PID_FILE = CATALINA_BASE / "logs" / "tomcat.pid"
 RUN_LOG = CATALINA_BASE / "logs" / "run.log"

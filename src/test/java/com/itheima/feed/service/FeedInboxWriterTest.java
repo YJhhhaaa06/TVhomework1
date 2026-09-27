@@ -45,13 +45,15 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link FeedInboxWriter} 单测（feed2-21 T21；由 feed1-18 T18 的 FeedInboxCacheTest 改写）：
- * 窗口迭代 / DB 真相批量落库 / 写后失效 DEL / 大V跳过 / 三类降级 / FEED 域打点。
+ * {@link FeedInboxWriter} 单测（feed2-21 T21；由 feed1-18 T18 的 FeedInboxCacheTest 改写；
+ * feed2-23 T23 增"大V发件箱写后失效"）：窗口迭代 / DB 真相批量落库 / 写后失效 DEL（outbox + 收件箱）/
+ * 大V跳过 / 三类降级 / FEED 域打点。
  *
  * <p>隔离手法：mock {@link FollowCache}（窗口读）/ {@link FeedInboxDao}（落库）/ {@link TransactionTemplate}
  * （回调打到 mock {@link Connection}）/ {@link FeedBigVRouter}（大V判定）/ {@link RedisAccess}
  * （回调打到 mock {@link Jedis}），**不依赖真实 Redis / DB / broker**；{@link CacheStats} 用真实件，
- * 以便断言"FEED 域可辨"。交互序列记入 {@code events}，用于断言"先 DB 真相、后缓存失效"。
+ * 以便断言"FEED 域可辨"。交互序列记入 {@code events}，用于断言"outbox 失效最前、DB 真相在中、
+ * 收件箱失效在后"的顺序红线。
  */
 class FeedInboxWriterTest {
 
@@ -70,7 +72,7 @@ class FeedInboxWriterTest {
     private FeedInboxWriter writer;
     private LogProbe probe;
 
-    /** 交互序列（断言"先 DB 真相、后缓存失效"的顺序）。 */
+    /** 交互序列（断言"outbox 失效最前 → DB 真相 → 收件箱失效"的顺序红线）。 */
     private final List<String> events = Collections.synchronizedList(new ArrayList<>());
 
     @BeforeEach
@@ -95,6 +97,12 @@ class FeedInboxWriterTest {
                     TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
                     return action.execute(conn);
                 });
+        stubRedisDelSucceeds();
+    }
+
+    /** Redis 失效通道默认可用：每次 {@code executeVoid} 记一条 "DEL" 并执行回调。 */
+    @SuppressWarnings("unchecked")
+    private void stubRedisDelSucceeds() {
         doAnswer(inv -> {
             events.add("DEL");
             Consumer<Jedis> action = inv.getArgument(0);
@@ -111,23 +119,25 @@ class FeedInboxWriterTest {
     // ==================== 正常路径 ====================
 
     @Test
-    void fanoutWritesDbTruthThenInvalidatesCacheForEachFan() throws SQLException {
+    void fanoutInvalidatesOutboxThenWritesDbThenInvalidatesInbox() throws SQLException {
         stubWindows(List.of(List.of(11L, 12L)));
 
         writer.fanout(CONTENT, AUTHOR);
 
-        // ① DB 真相：一批粉丝 = 一条 INSERT IGNORE（含 contentId）
+        // ① outbox 写后失效（两件套）——**最前**，先于大V判定与落库
+        verify(jedis).del(CacheKeys.feedOutbox(AUTHOR), CacheKeys.empty(CacheKeys.feedOutbox(AUTHOR)));
+        // ② DB 真相：一批粉丝 = 一条 INSERT IGNORE（含 contentId）
         verify(feedInboxDao).insertIgnoreBatch(conn, CONTENT, List.of(11L, 12L));
-        // ② 写后失效：一次 DEL 多键（每粉丝 3 键 = 收件箱缓存三件套；完整态标记已随 T22 退役）
+        // ③ 收件箱写后失效：一次 DEL 多键（每粉丝 3 键 = 三件套；完整态标记已随 T22 退役）
         verify(jedis).del(CacheKeys.feedInbox(11L), CacheKeys.empty(CacheKeys.feedInbox(11L)),
                 CacheKeys.partial(CacheKeys.feedInbox(11L)),
                 CacheKeys.feedInbox(12L), CacheKeys.empty(CacheKeys.feedInbox(12L)),
                 CacheKeys.partial(CacheKeys.feedInbox(12L)));
-        // 顺序红线：先 DB 真相、后缓存失效（读 miss 回源才有意义）
-        assertEquals(List.of("DB", "DEL"), events);
-        // 一批粉丝 = 一次 DB 连接 + 一次 Redis 连接（不是逐粉丝各借还一次）
+        // 顺序红线：outbox 失效最前 → DB 真相 → 收件箱失效（读 miss 回源才有意义）
+        assertEquals(List.of("DEL", "DB", "DEL"), events);
+        // 一批粉丝 = 一次 DB 连接 + 两次 Redis 连接（outbox 一次、收件箱一次；不逐粉丝各借还）
         verify(transactionTemplate, times(1)).execute(any());
-        verify(redis, times(1)).executeVoid(any());
+        verify(redis, times(2)).executeVoid(any());
         assertEquals(0L, stats.count(CacheDomain.FEED, CacheStats.Event.WRITE_FAIL));
     }
 
@@ -149,8 +159,9 @@ class FeedInboxWriterTest {
         verify(feedInboxDao).insertIgnoreBatch(conn, CONTENT, second);
         verify(feedInboxDao).insertIgnoreBatch(conn, CONTENT, third);
         verify(transactionTemplate, times(3)).execute(any());
-        verify(redis, times(3)).executeVoid(any());
-        assertEquals(List.of("DB", "DEL", "DB", "DEL", "DB", "DEL"), events);
+        // 1 次 outbox 失效 + 3 次收件箱失效
+        verify(redis, times(4)).executeVoid(any());
+        assertEquals(List.of("DEL", "DB", "DEL", "DB", "DEL", "DB", "DEL"), events);
     }
 
     @Test
@@ -161,7 +172,9 @@ class FeedInboxWriterTest {
 
         verify(followCache, times(1)).getFollowerWindow(eq(AUTHOR), anyLong(), anyInt());
         verify(transactionTemplate, never()).execute(any());
-        verify(redis, never()).executeVoid(any());
+        // 窗口为空 ⇒ 无粉丝可失效；但 outbox 失效**照旧执行**（发表者本人的发件箱要先失效）
+        verify(jedis, times(1)).del(CacheKeys.feedOutboxCacheKeys(AUTHOR));
+        verify(redis, times(1)).executeVoid(any());
     }
 
     @Test
@@ -174,30 +187,38 @@ class FeedInboxWriterTest {
         verify(followCache).getFollowerWindow(AUTHOR, BATCH, BATCH);
         verify(followCache, times(2)).getFollowerWindow(eq(AUTHOR), anyLong(), anyInt());
         verify(transactionTemplate, times(1)).execute(any());
-        verify(redis, times(1)).executeVoid(any());
+        verify(redis, times(2)).executeVoid(any());   // outbox + 首批收件箱
     }
 
     @Test
-    void fanoutTouchesOnlyFeedInboxKeys() {
-        // 红线：不改读路径 —— 只碰 feed:inbox:* 及其派生标记（empty:/partial:），不写 content:* / user:*
+    void fanoutTouchesOnlyFeedKeys() {
+        // 红线：不改读路径 —— 只碰 feed:outbox:* / feed:inbox:* 及其派生标记（empty:/partial:），
+        //       不写 content:* / user:*
         stubWindows(List.of(List.of(11L, 12L, 13L)));
 
         writer.fanout(CONTENT, AUTHOR);
 
         ArgumentCaptor<String[]> keys = ArgumentCaptor.forClass(String[].class);
-        verify(jedis).del(keys.capture());
-        assertEquals(9, keys.getValue().length, "3 粉丝 × 3 键（三件套；完整态标记已随 T22 退役）");
-        for (String key : keys.getValue()) {
-            String dataKey = key.startsWith("empty:") ? key.substring("empty:".length())
-                    : key.startsWith("partial:") ? key.substring("partial:".length()) : key;
+        verify(jedis, times(2)).del(keys.capture());
+        List<String[]> calls = keys.getAllValues();
+
+        assertEquals(2, calls.get(0).length, "第一次 DEL = outbox 两件套");
+        for (String key : calls.get(0)) {
+            String dataKey = stripMarkerPrefix(key);
+            assertTrue(dataKey.startsWith(CacheKeys.FEED_OUTBOX_PREFIX), "越界 key: " + key);
+        }
+
+        assertEquals(9, calls.get(1).length, "第二次 DEL = 3 粉丝 × 3 键（三件套；完整态标记已随 T22 退役）");
+        for (String key : calls.get(1)) {
+            String dataKey = stripMarkerPrefix(key);
             assertTrue(dataKey.startsWith(CacheKeys.FEED_INBOX_PREFIX), "越界 key: " + key);
         }
     }
 
-    // ==================== 大V路由（T21） ====================
+    // ==================== 大V路由（T21；T23 补 outbox 失效顺序） ====================
 
     @Test
-    void fanoutSkipsBigVAuthorWithoutAnyDbOrCacheTouch() {
+    void fanoutInvalidatesOutboxBeforeBigVEarlyReturn() {
         when(bigVRouter.isBigV(AUTHOR)).thenReturn(true);
         // 防御：即使窗口可返回，也不得被读取（大V在窗口迭代之前就返回）
         stubWindows(List.of(List.of(11L)));
@@ -205,9 +226,11 @@ class FeedInboxWriterTest {
         writer.fanout(CONTENT, AUTHOR);
 
         verify(bigVRouter).isBigV(AUTHOR);
+        // T23 核心：大V发布**必须**失效自己的发件箱（这正是读侧唯一会读它的场景）
+        verify(jedis, times(1)).del(CacheKeys.feedOutboxCacheKeys(AUTHOR));
+        assertEquals(List.of("DEL"), events);
         verify(followCache, never()).getFollowerWindow(anyLong(), anyLong(), anyInt());
         verify(transactionTemplate, never()).execute(any());
-        verify(redis, never()).executeVoid(any());
         assertTrue(probe.atLevel(Level.WARNING).isEmpty(), "大V跳过属常态路由，不应记 WARNING");
     }
 
@@ -225,7 +248,7 @@ class FeedInboxWriterTest {
         assertTrue(warnings.getFirst().getMessage().contains("写扩散中止"));
         assertNull(warnings.getFirst().getThrown(), "源头（FollowCache.loadIds）已持栈 → 此处为结论行、不带栈");
         verify(transactionTemplate, never()).execute(any());
-        verify(redis, never()).executeVoid(any());
+        verify(redis, times(1)).executeVoid(any());   // 仅 outbox 失效（成功，无日志）
         assertEquals(0L, stats.count(CacheDomain.FEED, CacheStats.Event.WRITE_FAIL));
     }
 
@@ -240,7 +263,7 @@ class FeedInboxWriterTest {
 
         verify(followCache, times(1)).getFollowerWindow(eq(AUTHOR), anyLong(), anyInt());
         verify(transactionTemplate, times(1)).execute(any());
-        verify(redis, never()).executeVoid(any());
+        verify(redis, times(1)).executeVoid(any());   // 仅 outbox 失效（先于落库，已成功）
         List<LogRecord> severe = probe.atLevel(Level.SEVERE);
         assertEquals(1, severe.size(), () -> "应恰一条 SEVERE，实际: " + probe.records());
         assertNotNull(severe.getFirst().getThrown(), "落库失败是该链唯一捕获点 → 持栈");
@@ -251,9 +274,9 @@ class FeedInboxWriterTest {
     }
 
     @Test
-    void fanoutDegradesOnDelFailureAbandonsInvalidationButKeepsWritingDb() throws SQLException {
-        // DEL 失败不停写（DB 真相优先）：两批都落库；失效通道**首次失败即停用**（后续批次不再尝试），
-        // WARNING + 打点只记一次（不按批刷）
+    void fanoutOutboxDelFailureSuppressesLaterInvalidationWithOneStackedWarning() throws SQLException {
+        // 首次失效（outbox）就遇到 Redis 不可用 ⇒ 后续收件箱失效**不再尝试**（不放大依赖故障），
+        // 但 DB 真相一路写到底；WARNING + 打点只记一次
         List<Long> first = ids(1, BATCH);
         List<Long> second = ids(BATCH + 1, BATCH + 10);
         stubWindows(List.of(first, second));
@@ -264,12 +287,37 @@ class FeedInboxWriterTest {
         verify(feedInboxDao).insertIgnoreBatch(conn, CONTENT, first);
         verify(feedInboxDao).insertIgnoreBatch(conn, CONTENT, second);
         verify(transactionTemplate, times(2)).execute(any());
-        verify(redis, times(1)).executeVoid(any());   // 首次失败即停用失效通道（同 T18"不放大依赖故障"）
+        verify(redis, times(1)).executeVoid(any());
+        List<LogRecord> warnings = probe.atLevel(Level.WARNING);
+        assertEquals(1, warnings.size(), () -> "应恰一条 WARNING（首次），实际: " + probe.records());
+        assertTrue(warnings.getFirst().getMessage().contains("大V发件箱缓存失效失败"));
+        assertNotNull(warnings.getFirst().getThrown(), "该链唯一捕获点 → 必须持栈");
+        assertEquals(1L, stats.count(CacheDomain.FEED, CacheStats.Event.WRITE_FAIL), "批量失败记一次（不逐批刷）");
+    }
+
+    @Test
+    void fanoutAbandonsInboxInvalidationAfterFirstDelFailure() throws SQLException {
+        // outbox 失效成功、首批收件箱失效失败 ⇒ 后续批次的收件箱失效停用（DB 照写）
+        List<Long> first = ids(1, BATCH);
+        List<Long> second = ids(BATCH + 1, BATCH + 10);
+        stubWindows(List.of(first, second));
+        doAnswer(inv -> {
+            events.add("DEL");
+            Consumer<Jedis> action = inv.getArgument(0);
+            action.accept(jedis);
+            return null;
+        }).doThrow(new CacheException("redis down")).when(redis).executeVoid(any());
+
+        assertDoesNotThrow(() -> writer.fanout(CONTENT, AUTHOR));
+
+        verify(feedInboxDao).insertIgnoreBatch(conn, CONTENT, first);
+        verify(feedInboxDao).insertIgnoreBatch(conn, CONTENT, second);
+        verify(redis, times(2)).executeVoid(any());   // outbox + 首批收件箱（失败后停用）
         List<LogRecord> warnings = probe.atLevel(Level.WARNING);
         assertEquals(1, warnings.size(), () -> "应恰一条 WARNING（首次），实际: " + probe.records());
         assertTrue(warnings.getFirst().getMessage().contains("写扩散收件箱缓存失效失败"));
-        assertNotNull(warnings.getFirst().getThrown(), "DEL 失败是该链唯一捕获点 → 必须持栈");
-        assertEquals(1L, stats.count(CacheDomain.FEED, CacheStats.Event.WRITE_FAIL), "批量失败记一次（不逐批刷）");
+        assertNotNull(warnings.getFirst().getThrown(), "该链唯一捕获点 → 必须持栈");
+        assertEquals(1L, stats.count(CacheDomain.FEED, CacheStats.Event.WRITE_FAIL));
     }
 
     @Test
@@ -299,6 +347,17 @@ class FeedInboxWriterTest {
     /** 空窗口页（显式类型，避免 List.of() 嵌套泛型推断歧义）。 */
     private static List<Long> emptyPage() {
         return new ArrayList<>();
+    }
+
+    /** 剥掉 {@code empty:} / {@code partial:} 标记前缀，取回内层数据 key（越界断言用）。 */
+    private static String stripMarkerPrefix(String key) {
+        if (key.startsWith("empty:")) {
+            return key.substring("empty:".length());
+        }
+        if (key.startsWith("partial:")) {
+            return key.substring("partial:".length());
+        }
+        return key;
     }
 
     private static List<Long> ids(int fromInclusive, int toInclusive) {

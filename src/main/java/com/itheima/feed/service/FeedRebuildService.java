@@ -285,14 +285,19 @@ public class FeedRebuildService {
     }
 
     /**
-     * ④c 归并 → 去重 → contentId 降序 → 裁剪到 C。
+     * ④c 归并 → 去重 → contentId 降序 → 裁剪到上限（重建侧裁剪 C；读侧复用同一实现裁剪 M）。
      *
      * <p>排序口径 = **contentId**（{@code content.id} 自增单调 ⇒ id 越大越新；与
      * {@code feed_inbox} 不存时间字段、"排序 / 归并 / 裁剪全按 contentId"的收件箱层口径同源）。
-     * 内存 O(关注数 × K)、时间 O(N·K log(N·K))——规模增长后可换有界最小堆，本期取简单实现
+     * 内存 O(输入规模)、时间 O(N log N)——规模增长后可换有界最小堆，本期取简单实现
      * （去重用无序 {@link HashSet}：顺序由随后的排序决定，无需保插入序）。
+     *
+     * <p><b>包内可见（feed2-23 T23 由 {@code private} 放开）</b>：读侧 {@code FeedReadService}
+     * 把"收件箱窗口 ∪ 大V发件箱窗口"归并时**复用本方法**（上限传读侧总窗口 M），
+     * 使"去重 + contentId 降序 + 截断"这一口径**只有一份实现**、不得各自另写（口径漂移风险）。
+     * 放开仅涉可见性、**行为零变化**。
      */
-    private static List<Long> mergeDedupSortTrim(List<Long> raw, int windowMax) {
+    static List<Long> mergeDedupSortTrim(List<Long> raw, int windowMax) {
         if (raw.isEmpty()) {
             return Collections.emptyList();
         }
