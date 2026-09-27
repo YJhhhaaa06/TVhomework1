@@ -22,7 +22,9 @@ import java.util.Set;
  * 页级切片由调用方（{@code FeedService}）在结果上做，故**深翻天然只读窗口内**。
  *
  * <p><b>未同步 ⇒ 回退信号</b>：{@code feed_inbox_sync} 无该用户行时返回 {@code synced=false}，
- * 由调用方走既有纯拉（T23 内已接线；"MQ 不可用"这条触发属 T24）。
+ * 由调用方走既有纯拉。**"未同步"是回退的充分必要条件**——feed2-24 T24 裁决：**MQ 可用性不作触发**
+ * （读平面不依赖 MQ；MQ 故障期窗口陈旧落在 R-11 已登记的"异步可见 / 最终一致 / 有界"语义内，
+ * 而全域回退纯拉会把 push 平面故障放大成读平面 DB 负载尖峰——详见 `NEXT_CYCLE_NEEDS.md` 4.0 T24）。
  *
  * <p><b>归并口径单一来源</b>：直接复用重建侧的
  * {@link FeedRebuildService#mergeDedupSortTrim(List, int)}（去重 + contentId 降序 + 截断），

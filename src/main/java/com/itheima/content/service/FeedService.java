@@ -31,8 +31,9 @@ import java.util.logging.Logger;
  * </ul>
  * 两条路径的**内容装载完全共用**（{@link #renderPage}）：事务外批量读缓存 / 点赞，按原序跳过 null。
  *
- * <p><b>降级（纯拉）保留</b>：窗口不可信（未同步）时以纯拉作答——正确性优先、代价是慢；
- * "MQ 不可用"这条触发与对外语义登记属 T24。
+ * <p><b>降级（纯拉）保留</b>：窗口不可信（未同步）时以纯拉作答——正确性优先、代价是慢。
+ * 回退判定唯一来源 = {@link FeedReadService#readWindow}：**MQ 可用性不作触发**（feed2-24 T24 裁决——
+ * 读平面不依赖 MQ，全域回退会把 push 平面故障放大成读平面 DB 负载；窗口陈旧落在已登记的对外语义内）。
  */
 @Component
 public class FeedService {
