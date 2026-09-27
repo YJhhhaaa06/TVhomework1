@@ -31,6 +31,7 @@ import os
 import shutil
 import subprocess
 import time
+import uuid
 from pathlib import Path
 
 import pytest
@@ -213,6 +214,57 @@ class TestProfilePaging:
         assert json.dumps(default_page, sort_keys=True, ensure_ascii=False) == \
             json.dumps(explicit_body["data"]["contentPage"], sort_keys=True, ensure_ascii=False), \
             f"缺省与显式第一页应逐字节一致: {default_page}"
+
+    def test_pages_concatenate_without_overlap(self, base_url, test_files):
+        """U-24（feed2-25 T25，窗口装载）：pageSize=1 逐页取 → 跨页不重不漏、整体降序。
+
+        新建的作者发布 3 条内容，`/profile` 按窗口 SQL 装载（`ORDER BY id DESC LIMIT/OFFSET`）：
+        各页 id 互异、三页并集 = 发布的 3 条、顺序 = contentId 降序。
+        """
+        unique = uuid.uuid4().hex[:8]
+        suffix = str(int(unique, 16))[-8:].zfill(8)
+        reg = conftest.register_user(f"testA_u24_{unique}", f"137{suffix}", "abc123")
+        assert reg.get("code") == 200, f"注册临时作者失败: {reg}"
+        token = reg["data"]["token"]
+        author_id = reg["data"]["id"]
+
+        posted = []
+        try:
+            for i in range(3):
+                with open(test_files["cover"], "rb") as cf, open(test_files["image"], "rb") as imf:
+                    resp = requests.post(
+                        f"{base_url}/api/upload/post",
+                        headers={"token": token},
+                        data={"title": f"u24_paging_{unique}_{i}", "description": "U-24 分页",
+                              "categoryId": "0"},
+                        files={"cover": ("test_cover.png", cf, "image/png"),
+                               "image": ("test_image.jpg", imf, "image/jpeg")},
+                        timeout=30,
+                    )
+                body = resp.json()
+                assert body.get("code") == 200, f"图文上传失败: {body}"
+                posted.append(body["data"]["contentId"])
+
+            pages = []
+            for page in (1, 2, 3):
+                body = _profile(base_url, author_id, page=page, pageSize=1)
+                assert body.get("code") == 200, f"/profile page={page} failed: {body}"
+                env = body["data"]["contentPage"]
+                assert env["total"] == 3, f"total 应为 3: {env}"
+                ids = [it["id"] for it in env["list"]]
+                assert len(ids) == 1, f"pageSize=1 每页应 1 条: {env}"
+                pages.append(ids[0])
+
+            assert len(set(pages)) == 3, f"跨页不应重叠: {pages}"
+            assert set(pages) == set(posted), f"三页并集应为发布的 3 条: {pages} vs {posted}"
+            assert pages == sorted(posted, reverse=True), f"应整体按 contentId 降序: {pages}"
+        finally:
+            for cid in posted:
+                try:
+                    requests.post(f"{base_url}/content/delete", params={"contentId": cid},
+                                  headers={"token": token}, timeout=10)
+                except requests.RequestException:
+                    pass
 
 
 # ---------------------------------------------------------------------------

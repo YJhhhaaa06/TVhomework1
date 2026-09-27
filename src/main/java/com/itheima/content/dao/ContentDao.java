@@ -198,6 +198,46 @@ public class ContentDao {
         return ids;
     }
 
+    /**
+     * 按作者**分页窗口**取内容 id（feed2-25 T25，治 `U-24`）：替代"全量 id 读 + 内存切片"。
+     *
+     * <p><b>为什么用 contentId 排序</b>：{@code content.id} 自增 ⇒ id 越大发布越晚，与
+     * {@link #findContentIdsByUser} 的 {@code ORDER BY create_time DESC, id DESC} 运行期次序一致
+     * （同秒并列时 id 即 tie-break；T22 窗口已用只读 SQL 在 3306 / 3307 实测"每作者内 id 序与
+     * create_time, id 序**名次零不一致**"）。
+     *
+     * <p><b>不新增索引</b>：`idx_user_id (user_id)` 的 InnoDB 二级索引物理为 {@code (user_id, id)}
+     * 升序 ⇒ {@code WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?} 反向索引扫描、**免 filesort**，
+     * 成本 ∝ {@code offset + pageSize}（而非该作者内容总量）；若沿用 create_time 排序则需对该作者
+     * 全部行 filesort（无 {@code (user_id, create_time)} 索引）。
+     *
+     * <p>⚠ 与 {@link #findContentIdsByUser}（全量；{@code ContentCache} 改名级联失效仍需全量）并存，
+     * 调用方按需选择：分页装载用本方法，'取该作者全部 id' 用原方法。
+     *
+     * @param offset   起始偏移（&lt; 0 不发 SQL，返回空列表）
+     * @param pageSize 页大小（&lt;= 0 不发 SQL，返回空列表）
+     */
+    public List<Long> findContentIdsByUserWindow(Connection conn, long userId,
+                                                 int offset, int pageSize) throws SQLException {
+        if (offset < 0 || pageSize <= 0) {
+            return Collections.emptyList();
+        }
+        String sql = "SELECT c.id FROM content c WHERE c.user_id = ? AND c.is_deleted = 0"
+                + " ORDER BY c.id DESC LIMIT ? OFFSET ?";
+        List<Long> ids = new ArrayList<>();
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, userId);
+            pstmt.setInt(2, pageSize);
+            pstmt.setInt(3, offset);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    ids.add(rs.getLong("id"));
+                }
+            }
+        }
+        return ids;
+    }
+
     public List<Long> findContentIdsByUsers(Connection conn, List<Long> userIds, int offset, int pageSize) throws SQLException {
         if (userIds == null || userIds.isEmpty()) {
             return Collections.emptyList();

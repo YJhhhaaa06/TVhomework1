@@ -23,9 +23,9 @@ import java.util.logging.Logger;
  * {@code feed_inbox} + 写 {@code feed_inbox_sync}，随后失效读缓存；见
  * {@code FeedRebuildService.rebuildInbox}）。
  *
- * <p><b>红线（影子期）</b>：本类**任何情况下都不抛异常**——投递失败只降级（该次重建缺失，
- * 由下次关注/取关或二期读触发兜底），**关注 / 取关接口的响应与语义一概不变**；也不触碰
- * {@code /feed} 读路径（一期仍纯拉模式）。
+ * <p><b>红线</b>：本类**任何情况下都不抛异常**——投递失败只降级（该次重建缺失，
+ * 由下次关注 / 取关或读侧"未同步 ⇒ 回退纯拉"兜底），**关注 / 取关接口的响应与语义一概不变**；
+ * **不触碰 {@code /feed} 读路径**（读侧自 T23 起为两路读窗口，与本投递解耦）。
  *
  * <p><b>投递点口径</b>：由调用方（{@code FollowService}）在**事务提交之后**调用，位置与既有
  * "缓存双写"并列（先例：同方法的 {@code followCache.cacheFollow} / {@code cacheUnfollow}；
@@ -58,7 +58,10 @@ public class InboxRebuildNotifier {
      * 投递"收件箱需要重建"事件（只带 userId）。
      *
      * <p>幂等性说明：MQ 侧不保证只投一次（本期无重试，但客户端 automatic recovery 可能重发）；
-     * 接收侧重建设有 SET NX 去重锁且产物是同一份 DB 快照，故重复投递无副作用。
+     * 接收侧重建是**整窗重算同一窗口**（单事务清空 `feed_inbox` + 按当前关注关系重写窗口 +
+     * 写 `feed_inbox_sync`），且有 SET NX 去重锁 ⇒ **重复投递无副作用**。与并发 fanout 交错时，
+     * 结果为**并集**——相对本次有界快照"只多不丢"（fanout 只追增、窗口内此后不再有删除动作；
+     * 见 {@code FeedRebuildService} 的顺序红线论证与 NEEDS 4.0 T22 残余）。
      *
      * @param userId 收件箱归属者（= 关注 / 取关的**发起方**，不是被关注的博主）
      */
