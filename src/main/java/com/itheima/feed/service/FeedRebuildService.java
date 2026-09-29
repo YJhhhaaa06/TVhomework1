@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -40,7 +41,8 @@ import java.util.logging.Logger;
  * <ol>
  *   <li>② 读关注集：{@link FollowDao#getAllFollowedUserIds}（DB 口径，**不读缓存**——与拉模式
  *       / 核对 oracle 同源）；</li>
- *   <li>③ 排除大V：逐作者走 {@link FeedBigVRouter#isBigV}（**判定单点**，与 fanout / 读三处同源）
+ *   <li>③ 排除大V：**一次** {@link FeedBigVRouter#isBigVBatch} 对关注集求补集（**判定单点**，与 fanout /
+ *       读三处同源；feed3-T26 前是逐作者 {@code isBigV} ⇒ 判定次数曾 ∝ 关注数，现已与关注数无关）
  *       ——fanout 对大V作者跳过写扩散（其内容由"大V发件箱"读时拉，T23），重建若收录则同一内容
  *       两路都出 ⇒ 排除即"不与发件箱重复"；</li>
  *   <li>④ 单事务：<b>先清</b>（{@code DELETE FROM feed_inbox WHERE user_id=?}）→ 逐作者最近 K 重查
@@ -89,8 +91,9 @@ import java.util.logging.Logger;
  * DELETE 清掉且未被重查收录的 fanout 行，只可能是"已落在窗口外（超出该作者最近 K / 超总上限 C）/
  * 已软删 / 已升为大V"的内容 ⇒ 属**有界窗口的设计语义**，不是丢失；② 表侧非严格有界（fanout 只追加、
  * 不裁剪，两次重建之间可超 C）——属"容量裁剪弱化、表侧保留策略归三期"，读侧有界归 T23；
- * ③ 大V判定**逐作者串行**（∝ 关注数；Redis 故障时还各记一条 WARNING），happy-path 延迟同样 ∝ 关注数
- * ——批量 / 短路归三期，同 T21 已登记的"窗口读降级日志放大"口径；④ 大V判定在**写侧 fail-open** 时
+ * ③ 大V判定已由 feed3-T26 改为**一次批量**（单点内部分块多条 SQL、单事务）⇒ 不再 ∝ 关注数，也不再
+ * 因 Redis 故障逐作者各记一条 WARNING（判定已不走缓存，跑 DB 真值）；批量失败仍 fail-open（整批按普通作者）；
+ * ④ 大V判定在**写侧 fail-open** 时
  * 会把大V内容收进窗口，且**不会被主动清除**（须待下次关注 / 取关重建才清），期间表侧残留、对用户
  * 可见的重复由读侧按 contentId 去重兜底；⑤ 重建的 `DELETE` 会对该 user 的 `uk_user_content` 索引
  * 区间持范围锁至提交 ⇒ 与同 user 的并发 fanout `INSERT IGNORE` 互相阻塞（极端交叉下可能死锁），由
@@ -228,22 +231,34 @@ public class FeedRebuildService {
     }
 
     /**
-     * ③ 排除大V作者（判定单点 {@link FeedBigVRouter#isBigV}，与 fanout / 读同源）。
+     * ③ 排除大V作者（判定单点 {@link FeedBigVRouter#isBigVBatch}，与 fanout / 读同源）。
      *
      * <p>为什么排除：fanout 对大V作者**跳过写扩散**（其内容由"大V发件箱"读时拉，T23），
      * 重建若收录 ⇒ 同一内容在"收件箱窗口 ∪ 大V发件箱"两路都出（仅靠读侧按 contentId 去重兜底）
      * ⇒ 排除即"不与发件箱重复"。
      *
-     * <p>失败取向：{@code isBigV} 内部对粉丝数读取失败已 **fail-open 返回 false**（记 WARNING 结论行）
-     * ⇒ 此处按普通作者收录（"宁可多收录"，与 fanout"宁可多写"同向，残影由读侧去重兜底）。
-     * **配置非法**（{@code feed.bigv.userIds} 解析失败）会抛 {@code IllegalArgumentException} →
-     * 由调用链的 RuntimeException 兜底记录（fail-fast 语义不吞）。
+     * <p><b>形态（feed3-T26）</b>：**一次**批量判定 + **以关注集为主遍历求补集** ——
+     * ① 判定调用数与关注数无关（原先逐作者 {@code isBigV} 是 ∝ 关注数的串行链，且 Redis 故障时
+     * 各记一条 WARNING）；② **保持 {@code followedIds} 原序**（下游 {@code replaceWindow} 按
+     * {@code AUTHOR_BATCH} 切片、单测断言作者顺序，故不得用 {@code isBigVBatch} 的返回序直接拼接）。
+     *
+     * <p>失败取向：{@code isBigVBatch} 内部对 SQL 失败已 **fail-open 只保留名单项**（记 WARNING 结论行）
+     * ⇒ 补集 = 全部非名单作者，按普通作者收录（"宁可多收录"，与 fanout"宁可多写"同向，残影由读侧
+     * 去重兜底）。**配置非法**（名单 / 阈值 / 批量尺寸解析失败或批量非正数）会抛
+     * {@code IllegalArgumentException} → 由调用链的 RuntimeException 兜底记录（fail-fast 语义不吞）。
      */
     private List<Long> excludeBigV(List<Long> followedIds) {
+        if (followedIds.isEmpty()) {
+            return new ArrayList<>();                        // 空关注集：不进批量判定（也不读配置）
+        }
+        Set<Long> bigVs = bigVRouter.isBigVBatch(followedIds);            // 恰一次（单点内部按批分块）
+        if (bigVs.isEmpty()) {
+            return new ArrayList<>(followedIds);                          // 无大V：原序直接返回
+        }
         List<Long> authors = new ArrayList<>(followedIds.size());
         for (Long authorId : followedIds) {
-            if (!bigVRouter.isBigV(authorId)) {
-                authors.add(authorId);
+            if (!bigVs.contains(authorId)) {
+                authors.add(authorId);                                    // 补集，保持原序
             }
         }
         return authors;

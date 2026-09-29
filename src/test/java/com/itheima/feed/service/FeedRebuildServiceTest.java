@@ -29,6 +29,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -260,18 +261,31 @@ class FeedRebuildServiceTest {
     @Test
     void rebuildExcludesBigVAuthorsBeforeWindowQuery() throws SQLException {
         stubFollowing(List.of(AUTHOR_A, AUTHOR_B, AUTHOR_C));
-        when(bigVRouter.isBigV(AUTHOR_B)).thenReturn(true);
+        when(bigVRouter.isBigVBatch(List.of(AUTHOR_A, AUTHOR_B, AUTHOR_C)))
+                .thenReturn(Set.of(AUTHOR_B));
         stubWindow(List.of(42L));
 
         service.rebuildInbox(USER);
 
-        // 判定逐作者各一次（判定单点），且大V作者**不进窗口查询入参**（避免与"大V发件箱"重复）
-        verify(bigVRouter).isBigV(AUTHOR_A);
-        verify(bigVRouter).isBigV(AUTHOR_B);
-        verify(bigVRouter).isBigV(AUTHOR_C);
+        // feed3-T26：判定**恰一次批量**（不再逐作者），大V作者**不进窗口查询入参**，且**保持关注集原序**
+        verify(bigVRouter, times(1)).isBigVBatch(List.of(AUTHOR_A, AUTHOR_B, AUTHOR_C));
+        verify(bigVRouter, never()).isBigV(anyLong());
         verify(contentDao).findRecentContentIdsByUsers(conn, List.of(AUTHOR_A, AUTHOR_C), K);
         verify(contentDao, times(1)).findRecentContentIdsByUsers(eq(conn), anyList(), eq(K));
         assertEquals(List.of(42L), capturedWindow(), "窗口只由非大V作者的产物构成");
+    }
+
+    @Test
+    void rebuildJudgesBigVInOneBatchCallNotPerAuthor() throws SQLException {
+        // 验收证据（T26）：重建的大V判定次数与关注数无关——恰一次批量调用，绝不逐作者
+        List<Long> authors = ascending(100, 105);
+        stubFollowing(authors);
+        stubWindow(List.of());
+
+        service.rebuildInbox(USER);
+
+        verify(bigVRouter, times(1)).isBigVBatch(authors);
+        verify(bigVRouter, never()).isBigV(anyLong());
     }
 
     @Test
@@ -290,7 +304,7 @@ class FeedRebuildServiceTest {
     @Test
     void rebuildWritesSyncWhenAllAuthorsAreBigV() throws SQLException {
         stubFollowing(List.of(AUTHOR_A));
-        when(bigVRouter.isBigV(AUTHOR_A)).thenReturn(true);
+        when(bigVRouter.isBigVBatch(List.of(AUTHOR_A))).thenReturn(Set.of(AUTHOR_A));
 
         service.rebuildInbox(USER);
 
@@ -452,11 +466,11 @@ class FeedRebuildServiceTest {
         assertNotNull(severes.getFirst().getThrown(), "需人介入 → SEVERE + 栈");
     }
 
-    /** 配置非法（大V名单）会从判定单点抛 IllegalArgumentException —— 必须被兜底、不得穿透消费容器。 */
+    /** 配置非法（大V名单 / 阈值 / 批量尺寸）会从判定单点抛 IllegalArgumentException —— 必须被兜底、不得穿透消费容器。 */
     @Test
     void rebuildSwallowsBadBigVConfig() throws SQLException {
         stubFollowing(List.of(AUTHOR_A));
-        when(bigVRouter.isBigV(anyLong()))
+        when(bigVRouter.isBigVBatch(anyList()))
                 .thenThrow(new IllegalArgumentException("feed.bigv.userIds 含非法用户 id"));
 
         assertDoesNotThrow(() -> service.rebuildInbox(USER));

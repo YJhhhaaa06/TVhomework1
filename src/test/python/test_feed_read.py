@@ -287,7 +287,8 @@ def _oracle_read_window(fan_id):
       ① 收件箱腿 = `feed_inbox` 该用户全部行；
       ② 大V腿 = 关注的**大V作者**各自最近 N 条（`content.id` 降序，`is_deleted = 0`）；
       ③ 归并去重 → contentId 降序 → 截断到 M。
-    大V判定：阈值 / 名单与应用**同参**，粉丝数取 DB 真值（应用读侧批量判定同样走 DB ⇒ 同源）。
+    大V判定：阈值 / 名单与应用**同参**，粉丝数取 DB 真值（feed3-T26 起 fanout / 重建 / 读三处
+    判定口径**统一**为 `users.follower_count` DB 真值 ⇒ 与本 oracle 完全同源）。
     """
     read_max, outbox_n = _read_params()
     threshold, listed = _bigv_params()

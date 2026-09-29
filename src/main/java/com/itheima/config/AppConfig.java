@@ -317,6 +317,25 @@ public final class AppConfig {
         return ids;
     }
 
+    /**
+     * 大V批量判定的**单条 SQL 批量尺寸**（feed3-T26）：键 {@code feed.bigv.queryBatch}（默认 200）。
+     *
+     * <p><b>用途</b>：{@link com.itheima.feed.service.FeedBigVRouter#isBigVBatch(java.util.List)} 把待判作者
+     * 的 IN 列表按本值切分为多条 SQL——关注数无上限（重建 / 读侧都会带上整个关注集），单条巨型 IN 会
+     * 放大语句长度与占位符个数；默认 200 与 fanout 批量（200/批）及 {@link #getFeedInboxWindowMax()} 同量级。
+     *
+     * <p><b>容错口径</b>：键缺失 / 空 → 默认 200，不得让应用起不来（同 {@link #getFeedBigVThreshold()}）；
+     * 键存在但非数字照旧抛（fail-fast）。**取值必须为正数**——非正会让分块循环无法前进，
+     * 故由调用方在进入 fail-open 捕获之前校验并抛 {@link IllegalArgumentException}（见 {@code FeedBigVRouter}）。
+     *
+     * <p><b>与 T29 的边界</b>：本键属 T26 任务内生需求；T29「feed 域批量尺寸参数化」执行时应把本键标为
+     * "已参数化、不重复"，其范围收敛为 {@code FeedInboxWriter.FANOUT_BATCH} 与
+     * {@code FeedRebuildService.AUTHOR_BATCH}。
+     */
+    public static int getFeedBigVQueryBatch() {
+        return getInt("feed.bigv.queryBatch", 200);
+    }
+
     // ===== feed 二期读侧两路归并（feed2-23 T23）=====
 
     /**

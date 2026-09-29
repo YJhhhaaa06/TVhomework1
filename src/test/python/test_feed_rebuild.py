@@ -279,9 +279,10 @@ def _oracle_window_ids(fan_id):
     口径与应用同参（NEEDS 4.0 机制拍板）：关注者集合取自 `follow` 表（DB 真相，非缓存）→
     **每关注作者最近 K 条**（`id` 降序，id 自增即时间序）→ 归并去重 → contentId 降序 → 裁剪到 C；
     `is_deleted = 0`；并**排除大V作者**（`users.follower_count >= 阈值` 或命中名单）——
-    阈值 / 名单与应用同参，**粉丝数来源不同**（oracle = DB 真值 `users.follower_count`；
-    应用 = `FollowCache.getFollowerCount` 缓存读）。测试用的全新临时用户粉丝数远低于阈值，
-    两种来源下判定结果一致，故不产生分歧；该差异不影响本用例断言力。
+    阈值 / 名单与应用同参，**粉丝数来源亦同源**：feed3-T26 起应用写侧判定（重建 / fanout）与读侧
+    统一走 DB 真值 `users.follower_count`（此前写侧走 `FollowCache.getFollowerCount` 缓存读，
+    oracle 与应用的"来源不同"曾是潜在错位点，现已消除）。测试用的全新临时用户粉丝数远低于阈值，
+    判定结果一致，故不产生分歧；该一致性不影响本用例断言力。
     """
     per_author, window_max = _window_params()
     threshold, listed = _bigv_params()
