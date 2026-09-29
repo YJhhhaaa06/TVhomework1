@@ -84,10 +84,10 @@ class FeedRebuildServiceTest {
     private static final long AUTHOR_B = 9L;
     private static final long AUTHOR_C = 10L;
 
-    /** 窗口参数取自 app.properties（AppConfig 带默认值读取）：K=20 / C=200。 */
+    /** 窗口 / 批量参数取自 app.properties（AppConfig 带默认值读取）：K=20 / C=200 / 作者批量=50。 */
     private static final int K = AppConfig.getFeedInboxWindowPerAuthor();
     private static final int C = AppConfig.getFeedInboxWindowMax();
-    private static final int AUTHOR_BATCH = FeedRebuildService.AUTHOR_BATCH;
+    private static final int CONFIG_AUTHOR_BATCH = AppConfig.getFeedRebuildAuthorBatch();
     private static final int THREADS = 16;
 
     private static final String FOLLOW = "FOLLOW";
@@ -242,8 +242,8 @@ class FeedRebuildServiceTest {
 
     @Test
     void rebuildKeepsPerAuthorTopKAndBatchesAuthors() throws SQLException {
-        // 作者数 > AUTHOR_BATCH ⇒ 按批切分调用（每批一条 UNION ALL 语句），每批 limit 均为 K
-        List<Long> authors = ascending(100, 99 + AUTHOR_BATCH * 2 + 5);   // 105 个作者
+        // 作者数 > CONFIG_AUTHOR_BATCH ⇒ 按批切分调用（每批一条 UNION ALL 语句），每批 limit 均为 K
+        List<Long> authors = ascending(100, 99 + CONFIG_AUTHOR_BATCH * 2 + 5);   // 105 个作者
         stubFollowing(authors);
         stubWindow(List.of());
 
@@ -252,8 +252,8 @@ class FeedRebuildServiceTest {
         ArgumentCaptor<List<Long>> authorBatches = listCaptor();
         verify(contentDao, times(3)).findRecentContentIdsByUsers(eq(conn), authorBatches.capture(), eq(K));
         List<List<Long>> batches = authorBatches.getAllValues();
-        assertEquals(AUTHOR_BATCH, batches.get(0).size());
-        assertEquals(AUTHOR_BATCH, batches.get(1).size());
+        assertEquals(CONFIG_AUTHOR_BATCH, batches.get(0).size());
+        assertEquals(CONFIG_AUTHOR_BATCH, batches.get(1).size());
         assertEquals(5, batches.get(2).size());
         assertEquals(authors, concat(batches), "作者列表被完整切分、无重复无遗漏");
     }
@@ -556,7 +556,7 @@ class FeedRebuildServiceTest {
         });
     }
 
-    /** 窗口重查结果（连续调用按序返回；作者数 ≤ AUTHOR_BATCH 时只消耗一个）。 */
+    /** 窗口重查结果（连续调用按序返回；作者数 ≤ CONFIG_AUTHOR_BATCH 时只消耗一个）。 */
     private void stubWindow(List<Long> contentIds) throws SQLException {
         stubWindows(List.of(contentIds));
     }

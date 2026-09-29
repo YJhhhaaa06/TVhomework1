@@ -159,6 +159,10 @@ public class FeedInboxDao {
      *
      * <p>范围 = 该用户窗口的**全量行**（表侧由重建裁剪到 C、fanout 只追增，故量级 ≈ C），
      * 走 {@code uk_user_content(user_id, content_id)} 唯一键的索引区间扫描。
+     *
+     * <p>⚠️ **无 LIMIT**（feed3-T29 核算登记）：读侧最终只可见 M 条，但本查询会**装载该用户的全部行**，
+     * 再在内存里截断 ⇒ 若表侧膨胀（fanout 只追增、且该用户久未重建），装载量与 Redis ZSet 体积随之
+     * **无上界**。该残余 = `U-36`（`UNPLANNED_ISSUES.md`），修法（读侧加界）**不在 T29 范围**。
      */
     public List<Long> findInboxContentIds(Connection conn, long userId) throws SQLException {
         String sql = "SELECT content_id FROM feed_inbox WHERE user_id = ? ORDER BY content_id";

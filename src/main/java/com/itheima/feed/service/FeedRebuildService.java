@@ -46,7 +46,8 @@ import java.util.logging.Logger;
  *       ——fanout 对大V作者跳过写扩散（其内容由"大V发件箱"读时拉，T23），重建若收录则同一内容
  *       两路都出 ⇒ 排除即"不与发件箱重复"；</li>
  *   <li>④ 单事务：<b>先清</b>（{@code DELETE FROM feed_inbox WHERE user_id=?}）→ 逐作者最近 K 重查
- *       （{@link ContentDao#findRecentContentIdsByUsers}，按 {@value #AUTHOR_BATCH} 一批）→ 归并 /
+ *       （{@link ContentDao#findRecentContentIdsByUsers}，按 {@link AppConfig#getFeedRebuildAuthorBatch()}
+ *       一批；feed3-T29 前是包内常量 {@code AUTHOR_BATCH=50}）→ 归并 /
  *       去重 / 降序 / 裁剪 → {@code INSERT IGNORE}（空窗不发）→ upsert {@code feed_inbox_sync}
  *       （**空窗也写** = "空但已同步"）；</li>
  *   <li>⑤ 提交后 {@code DEL} 收件箱读缓存三件套（数据 key + {@code empty:} + {@code partial:}）。</li>
@@ -90,7 +91,11 @@ import java.util.logging.Logger;
  * 100% 证明**）——该语义不成立时的偏差由下次关注 / 取关重建或二期读态兜底收敛；**注意**：被本次
  * DELETE 清掉且未被重查收录的 fanout 行，只可能是"已落在窗口外（超出该作者最近 K / 超总上限 C）/
  * 已软删 / 已升为大V"的内容 ⇒ 属**有界窗口的设计语义**，不是丢失；② 表侧非严格有界（fanout 只追加、
- * 不裁剪，两次重建之间可超 C）——属"容量裁剪弱化、表侧保留策略归三期"，读侧有界归 T23；
+ * 不裁剪，两次重建之间可超 C）——**feed3-T29 已核算**：本类 ④a 的整窗替换（先清 + 重查 + `mergeDedupSortTrim`
+ * 到 C）**就是**"顺带裁剪"，故**本期不新增任何清理动作**（拍板 = 复用重建顺带裁剪、零新载体；**不做**
+ * 定期任务 / TTL，**不给 fanout 加删除**）。**残余（登记）** = **关注集稳定**（不再关注 / 取关）的用户在
+ * 两次重建之间行数可**线性增长**（读侧仍由 M 截断兜底、用户可见结果不变；表侧无上界）；其**后果**
+ * （读侧装载无 LIMIT ⇒ 读放大）已登记 `U-36`（`UNPLANNED_ISSUES.md`），修法不在本任务；
  * ③ 大V判定已由 feed3-T26 改为**一次批量**（单点内部分块多条 SQL、单事务）⇒ 不再 ∝ 关注数，也不再
  * 因 Redis 故障逐作者各记一条 WARNING（判定已不走缓存，跑 DB 真值）；批量失败仍 fail-open（整批按普通作者）；
  * ④ 大V判定在**写侧 fail-open** 时
@@ -106,12 +111,6 @@ public class FeedRebuildService {
 
     /** 重建锁 TTL（秒，包内常量，沿 mq 包"非必要不入配置"口径）：仅兜"进程猝死未释放"，到点即视为可重入。 */
     static final long REBUILD_LOCK_TTL_SECONDS = 60L;
-
-    /**
-     * 窗口重查的**作者批量**（包内常量）：每批一条 `UNION ALL` 语句（一趟往返），
-     * 用于约束 SQL 长度与绑定参数个数；与批量页大小同量级，不需按环境调参。
-     */
-    static final int AUTHOR_BATCH = 50;
 
     /** 锁释放：CAS（值等于自己的 token 才删）——避免误删他人已获得的锁。 */
     static final String RELEASE_LOCK_SCRIPT =
@@ -240,7 +239,7 @@ public class FeedRebuildService {
      * <p><b>形态（feed3-T26）</b>：**一次**批量判定 + **以关注集为主遍历求补集** ——
      * ① 判定调用数与关注数无关（原先逐作者 {@code isBigV} 是 ∝ 关注数的串行链，且 Redis 故障时
      * 各记一条 WARNING）；② **保持 {@code followedIds} 原序**（下游 {@code replaceWindow} 按
-     * {@code AUTHOR_BATCH} 切片、单测断言作者顺序，故不得用 {@code isBigVBatch} 的返回序直接拼接）。
+     * {@code feed.rebuild.authorBatch} 切片、单测断言作者顺序，故不得用 {@code isBigVBatch} 的返回序直接拼接）。
      *
      * <p>失败取向：{@code isBigVBatch} 内部对 SQL 失败已 **fail-open 只保留名单项**（记 WARNING 结论行）
      * ⇒ 补集 = 全部非名单作者，按普通作者收录（"宁可多收录"，与 fanout"宁可多写"同向，残影由读侧
@@ -275,12 +274,15 @@ public class FeedRebuildService {
      * 收件箱退化为"未同步"态 ⇒ 二期读回退拉模式，对外正确性不依赖推。
      */
     private void replaceWindow(long userId, List<Long> authors) {
+        // 作者批量在事务外取（feed3-T29：键 feed.rebuild.authorBatch，默认 50）；配置非法应 fail-fast 于
+        // 开事务之前，而非"回滚一次事务后再抛"。切片步长非正会死循环 ⇒ AppConfig 已做正数校验。
+        final int authorBatch = AppConfig.getFeedRebuildAuthorBatch();
         transactionTemplate.execute(conn -> {
             try {
                 feedInboxDao.deleteByUser(conn, userId);            // ④a 先清（事务内唯一删除）
                 List<Long> raw = new ArrayList<>();
-                for (int from = 0; from < authors.size(); from += AUTHOR_BATCH) {
-                    int to = Math.min(from + AUTHOR_BATCH, authors.size());
+                for (int from = 0; from < authors.size(); from += authorBatch) {
+                    int to = Math.min(from + authorBatch, authors.size());
                     raw.addAll(contentDao.findRecentContentIdsByUsers(conn, authors.subList(from, to),
                             AppConfig.getFeedInboxWindowPerAuthor()));   // ④b 逐作者最近 K
                 }

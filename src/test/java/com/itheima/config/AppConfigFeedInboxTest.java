@@ -10,6 +10,7 @@ import java.lang.reflect.Field;
 import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -18,7 +19,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code feed.inbox.windowMax} → {@code getFeedInboxWindowMax()}；
  * feed2-23（T23）追加读侧参数——{@code feed.readWindowMax} → {@code getFeedReadWindowMax()}、
  * {@code feed.outbox.windowSize} → {@code getFeedOutboxWindowSize()}、
- * {@code feed.outbox.ttlMinutes} → {@code getFeedOutboxTtlSeconds()}。
+ * {@code feed.outbox.ttlMinutes} → {@code getFeedOutboxTtlSeconds()}；
+ * feed3-T29 追加 feed 域批量尺寸——{@code feed.fanout.batch} → {@code getFeedFanoutBatch()}、
+ * {@code feed.rebuild.authorBatch} → {@code getFeedRebuildAuthorBatch()}（**非正数 fail-fast**——
+ * 这两个值分别是 fanout 迭代步长与重建切片步长，0 / 负数会让 fanout 空转、重建死循环）。
  *
  * <p>两条契约：① 绑定 = classpath `app.properties` 的现值（秒口径 = 分钟 × 60）；
  * ② **键缺失 / 值为空 → 回退默认**（TTL 60 分钟 / K=20 / C=200）——收件箱是真相表的派生读缓存、
@@ -41,6 +45,10 @@ class AppConfigFeedInboxTest {
     private static final int DEFAULT_READ_WINDOW_MAX = 300;
     private static final int DEFAULT_OUTBOX_WINDOW_SIZE = 20;
     private static final long DEFAULT_OUTBOX_TTL_MINUTES = 60L;
+
+    /** T29 默认值：写扩散粉丝窗口批量 / 重建作者批量。 */
+    private static final int DEFAULT_FANOUT_BATCH = 200;
+    private static final int DEFAULT_REBUILD_AUTHOR_BATCH = 50;
 
     private static Properties originalProps;
 
@@ -167,6 +175,60 @@ class AppConfigFeedInboxTest {
                 "M（读侧总窗口）与 C（表侧窗口）应各自独立：M=" + readMax + ", C=" + inboxMax);
         assertEquals(DEFAULT_READ_WINDOW_MAX, AppConfig.getFeedReadWindowMax());
         assertEquals(DEFAULT_WINDOW_MAX, AppConfig.getFeedInboxWindowMax());
+    }
+
+    // ===== feed3-T29：feed 域批量尺寸参数化（写扩散粉丝批量 / 重建作者批量）=====
+
+    @Test
+    void batchSizeParamsBoundFromAppProperties() throws IOException {
+        assertEquals(Integer.parseInt(propString("feed.fanout.batch")), AppConfig.getFeedFanoutBatch());
+        assertEquals(Integer.parseInt(propString("feed.rebuild.authorBatch")),
+                AppConfig.getFeedRebuildAuthorBatch());
+
+        assertTrue(AppConfig.getFeedFanoutBatch() > 0, "写扩散批量必须为正（0 会让 fanout 静默空转）");
+        assertTrue(AppConfig.getFeedRebuildAuthorBatch() > 0, "重建作者批量必须为正（0 会让切片死循环）");
+    }
+
+    @Test
+    void batchSizeParamsFallBackToDefaultsWhenKeysMissing() throws Exception {
+        replaceProps(new Properties());
+        try {
+            assertEquals(DEFAULT_FANOUT_BATCH, AppConfig.getFeedFanoutBatch(),
+                    "键缺失应回退默认 200（可降级；不得 fail-fast）");
+            assertEquals(DEFAULT_REBUILD_AUTHOR_BATCH, AppConfig.getFeedRebuildAuthorBatch(),
+                    "键缺失应回退默认 50");
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    @Test
+    void blankBatchSizeKeysFallBackToDefaults() throws Exception {
+        Properties blank = new Properties();
+        blank.setProperty("feed.fanout.batch", "   ");
+        blank.setProperty("feed.rebuild.authorBatch", "   ");
+        replaceProps(blank);
+        try {
+            assertEquals(DEFAULT_FANOUT_BATCH, AppConfig.getFeedFanoutBatch());
+            assertEquals(DEFAULT_REBUILD_AUTHOR_BATCH, AppConfig.getFeedRebuildAuthorBatch());
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    /** 非正数 fail-fast：0 / 负数分别是"fanout 静默空转"与"重建切片死循环"的成因。 */
+    @Test
+    void nonPositiveBatchSizeFailsFast() throws Exception {
+        Properties invalid = new Properties();
+        invalid.setProperty("feed.fanout.batch", "0");
+        invalid.setProperty("feed.rebuild.authorBatch", "-5");
+        replaceProps(invalid);
+        try {
+            assertThrows(IllegalArgumentException.class, AppConfig::getFeedFanoutBatch);
+            assertThrows(IllegalArgumentException.class, AppConfig::getFeedRebuildAuthorBatch);
+        } finally {
+            replaceProps(originalProps);
+        }
     }
 
     // ===== 工具（同 AppConfigRabbitmqTest 先例）=====

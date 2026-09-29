@@ -31,7 +31,7 @@ import java.util.logging.Logger;
  *
  * <p><b>为什么复用 {@link ZSetCache#getMembers} 而不用窗口读</b>：<br>
  * 1. {@code ZSetCache} 只有升序能力（{@code ZRANGE}），而 feed 需要"内容倒序"——本类取全量升序后
- * 做**一次内存反序**（窗口量级 ≈ C=200，成本可忽略），从而**完全不触碰** follow 域共享的
+ * 做**一次内存反序**（窗口量级 ≈ C=200，成本可忽略；⚠️ **feed3-T29**：该前提在**关注集稳定**（久未关注 / 取关 ⇒ 久未重建）的用户上**不成立**——`findInboxContentIds` **无 LIMIT**、整窗入 ZSet ⇒ 表侧膨胀即**读放大**，见 `U-36`），从而**完全不触碰** follow 域共享的
  * {@code ZSetCache}（零回归风险）；<br>
  * 2. 本键的写者只有本读路径（fanout / 重建**只 DEL 不写**）⇒ **{@code partial:} 前缀态永不产生**，
  * 于是"全量读即等于完整集合"成立（{@code getMembers} 的"部分态先补齐"分支退化为无害兜底）；<br>

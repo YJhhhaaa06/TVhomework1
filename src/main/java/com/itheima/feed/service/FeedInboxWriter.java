@@ -4,6 +4,7 @@ import com.itheima.cache.CacheKeys;
 import com.itheima.cache.CacheStats;
 import com.itheima.cache.RedisAccess;
 import com.itheima.cache.ZSetCache;
+import com.itheima.config.AppConfig;
 import com.itheima.exception.ServerException;
 import com.itheima.feed.dao.FeedInboxDao;
 import com.itheima.follow.service.FollowCache;
@@ -68,12 +69,6 @@ public class FeedInboxWriter {
 
     private static final Logger LOGGER = LogUtil.getLogger(FeedInboxWriter.class);
 
-    /**
-     * 粉丝窗口迭代批量（包内常量，对齐 mq 包"非必要不入配置"口径）：一期发布量低，
-     * 该值只影响"每轮 DB 查询 + DB/Redis 往返次数"，不需按环境调参；三期做阈值/活跃策略时再议。
-     */
-    static final int FANOUT_BATCH = 200;
-
     private final FollowCache followCache;
     private final FeedInboxDao feedInboxDao;
     private final TransactionTemplate transactionTemplate;
@@ -121,10 +116,13 @@ public class FeedInboxWriter {
             return;
         }
         long offset = 0L;
+        // 粉丝窗口迭代批量（feed3-T29：由配置提供——键 feed.fanout.batch，默认 200；非正数校验在 AppConfig）。
+        // 只影响"每轮 DB 查询 + DB/Redis 往返次数"，不改写扩散语义。
+        final int fanoutBatch = AppConfig.getFeedFanoutBatch();
         while (true) {
             ZSetCache.Window window;
             try {
-                window = followCache.getFollowerWindow(authorId, offset, FANOUT_BATCH);
+                window = followCache.getFollowerWindow(authorId, offset, fanoutBatch);
             } catch (RuntimeException e) {
                 // loader 的 DB 失败：源头已持 SEVERE + 栈（FollowCache.loadIds）→ 此处只记结论行（不带栈）
                 LOGGER.log(Level.WARNING, "写扩散中止（粉丝窗口读取失败，不影响发布）, contentId=" + contentId
@@ -143,7 +141,7 @@ public class FeedInboxWriter {
                 // DB 真相优先，落库一路继续到底，残留缓存由 TTL / 重建 / 下次写失效兜底）
                 delAbandoned = !delBatch(contentId, fanIds);
             }
-            if (fanIds.size() < FANOUT_BATCH) {
+            if (fanIds.size() < fanoutBatch) {
                 // 不足一批 = DB 已到底（ZSetCache 窗口装载的既有终止口径，不依赖 total，防计数漂移）
                 return;
             }

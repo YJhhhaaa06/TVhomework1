@@ -5,6 +5,7 @@ import com.itheima.cache.CacheKeys;
 import com.itheima.cache.CacheStats;
 import com.itheima.cache.RedisAccess;
 import com.itheima.cache.ZSetCache;
+import com.itheima.config.AppConfig;
 import com.itheima.exception.CacheException;
 import com.itheima.exception.DatabaseException;
 import com.itheima.feed.dao.FeedInboxDao;
@@ -59,7 +60,7 @@ class FeedInboxWriterTest {
 
     private static final long AUTHOR = 9L;
     private static final long CONTENT = 42L;
-    private static final int BATCH = FeedInboxWriter.FANOUT_BATCH;
+    private static final int BATCH = AppConfig.getFeedFanoutBatch();
 
     private FollowCache followCache;
     private FeedInboxDao feedInboxDao;

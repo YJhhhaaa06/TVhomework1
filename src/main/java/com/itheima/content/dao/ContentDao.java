@@ -269,7 +269,7 @@ public class ContentDao {
     /**
      * 每作者各取最近 {@code perAuthorLimit} 条内容 id（feed2-22 T22 窗口重算）：
      * 每关注作者一个 {@code (SELECT … ORDER BY id DESC LIMIT ?)} 分支，`UNION ALL` 成一条语句
-     * （一趟往返；调用方按 {@code AUTHOR_BATCH} 切分作者列表以约束 SQL 长度）。
+     * （一趟往返；调用方按 {@code feed.rebuild.authorBatch}（feed3-T29）切分作者列表以约束 SQL 长度）。
      *
      * <p><b>排序口径 = contentId（自增单调）</b>：{@code content.id} 自增 ⇒ id 越大发布越晚，
      * 与拉模式 {@code ORDER BY create_time DESC, id DESC} 的运行期次序一致（同秒并列时

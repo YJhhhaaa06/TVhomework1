@@ -267,7 +267,7 @@ public final class AppConfig {
      *
      * <p>归并去重后按 contentId 降序截断到 C——重建产物（{@code feed_inbox} 窗口 + 同步状态）
      * 与读数均以此为界；**读侧的页级有界（总窗口 M）属 T23**，两者口径各自独立。
-     * 缺省值 200 与 fanout/重建的批量（200/批、`AUTHOR_BATCH`）同量级。
+     * 缺省值 200 与批量尺寸（{@code feed.fanout.batch} 默认 200 / {@code feed.rebuild.authorBatch} 默认 50）同量级。
      *
      * <p>⚠️ **取值应保持在合理量级**：C 同时决定窗口落库的单条多行 `INSERT` 行数（占位符 = 2C）
      * 与重建的内存峰值 ⇒ 误配成极大值会逼近 `max_allowed_packet` / 占位符上限而整体降级；
@@ -322,15 +322,17 @@ public final class AppConfig {
      *
      * <p><b>用途</b>：{@link com.itheima.feed.service.FeedBigVRouter#isBigVBatch(java.util.List)} 把待判作者
      * 的 IN 列表按本值切分为多条 SQL——关注数无上限（重建 / 读侧都会带上整个关注集），单条巨型 IN 会
-     * 放大语句长度与占位符个数；默认 200 与 fanout 批量（200/批）及 {@link #getFeedInboxWindowMax()} 同量级。
+     * 放大语句长度与占位符个数；默认 200 与 {@link #getFeedFanoutBatch()}（200 = fanout 粉丝窗口批量）
+     * 及 {@link #getFeedInboxWindowMax()} 同量级。
      *
      * <p><b>容错口径</b>：键缺失 / 空 → 默认 200，不得让应用起不来（同 {@link #getFeedBigVThreshold()}）；
      * 键存在但非数字照旧抛（fail-fast）。**取值必须为正数**——非正会让分块循环无法前进，
      * 故由调用方在进入 fail-open 捕获之前校验并抛 {@link IllegalArgumentException}（见 {@code FeedBigVRouter}）。
      *
-     * <p><b>与 T29 的边界</b>：本键属 T26 任务内生需求；T29「feed 域批量尺寸参数化」执行时应把本键标为
-     * "已参数化、不重复"，其范围收敛为 {@code FeedInboxWriter.FANOUT_BATCH} 与
-     * {@code FeedRebuildService.AUTHOR_BATCH}。
+     * <p><b>与 T29 的边界</b>：本键属 T26 任务内生需求，标为**"已参数化、不重复"**；
+     * T29「feed 域批量尺寸参数化」**已落地（feed3-T29）**，其范围 = 新增
+     * {@link #getFeedFanoutBatch()}（{@code feed.fanout.batch}）与
+     * {@link #getFeedRebuildAuthorBatch()}（{@code feed.rebuild.authorBatch}）。
      */
     public static int getFeedBigVQueryBatch() {
         return getInt("feed.bigv.queryBatch", 200);
@@ -423,7 +425,7 @@ public final class AppConfig {
      *
      * <p>**带默认值（300）**：偏离散取值的容错口径，键缺失不得让应用起不来（同
      * {@link #getFeedInboxWindowMax()}；键存在但值非法照旧抛，fail-fast 语义不变）。
-     * 读侧的表侧保留 / 容量策略归三期。
+     * 读侧的表侧保留策略已随 **feed3-T29** 核算（= 复用重建顺带裁剪、本期不新增清理动作；残余含"读放大" = `U-36`）。
      */
     public static int getFeedReadWindowMax() {
         return getInt("feed.readWindowMax", 300);
@@ -453,6 +455,63 @@ public final class AppConfig {
      */
     public static long getFeedOutboxTtlSeconds() {
         return getLong("feed.outbox.ttlMinutes", 60L) * 60;
+    }
+
+    // ===== feed 三期批量尺寸参数化（feed3-T29）=====
+    //
+    // 口径（NEEDS `N7` 之 feed 部分 / `NEXT_CYCLE_TASKS.md` T29）：把 feed 域两处**写死的批量尺寸**
+    // 收进配置，与既有 `feed.*` 一致（**带默认值 + 环境变量 / -D 覆盖链**）。二者都是**执行参数**
+    // （影响每批 DB / Redis 往返次数与 SQL 长度），**不是判定输入**，故不入 `FeedBigVConfig` 热更快照
+    // （与 `feed.bigv.queryBatch` 同口径：改了要重启）。
+    //
+    // ⚠️ **必须在 app.properties 写键**：`AppConfig.load()` 只对**已存在的键**做 env / -D 覆盖
+    // （遍历 `PROPS.stringPropertyNames()`）——键只写在 Java 默认值里则**取不到环境变量覆盖**。
+    //
+    // 边界（`AppConfig#getFeedBigVQueryBatch` 的类注释已声明）：`feed.bigv.queryBatch` 属 T26 内生需求、
+    // **已参数化、不重复**；T29 的范围 = 下面这两个。
+
+    /**
+     * 写扩散**粉丝窗口迭代批量**（feed3-T29）：键 {@code feed.fanout.batch}（默认 200）。
+     *
+     * <p><b>用途</b>：{@link com.itheima.feed.service.FeedInboxWriter#fanout} 按本值把"作者的全部粉丝"
+     * 切成多轮窗口（{@code [offset, offset+BATCH)}）——每轮 = 一条多行 {@code INSERT IGNORE} +
+     * 一次单命令 {@code DEL}（三件套）。本值决定**每轮 DB / Redis 往返次数**与单条 INSERT 的占位符个数。
+     * 缺省 200 与 {@link #getFeedInboxWindowMax()} C 同量级。
+     *
+     * <p><b>容错口径</b>：键缺失 / 空 → 默认 200，不得让应用起不来；键存在但非数字 → 照旧抛（fail-fast）。
+     * **取值必须为正数**：非正会让 {@code getFollowerWindow} 取不到成员 ⇒ 写扩散**静默空转**
+     * （内容不落任何粉丝收件箱），故在本方法内 fail-fast 拦下（先例 = {@link #validateFeedBigVDowngradeRatio}）。
+     */
+    public static int getFeedFanoutBatch() {
+        return validatePositiveBatch("feed.fanout.batch", getInt("feed.fanout.batch", 200));
+    }
+
+    /**
+     * 重建**窗口重查的作者批量**（feed3-T29）：键 {@code feed.rebuild.authorBatch}（默认 50）。
+     *
+     * <p><b>用途</b>：{@link com.itheima.feed.service.FeedRebuildService} 把"排除大V后的关注作者集"
+     * 按本值切片，每片一条 {@code UNION ALL} 语句（一趟往返取各作者最近 K 条）——本值约束**单条 SQL 的
+     * 长度与绑定参数个数**（占位符 ≈ 作者数 × K）。
+     *
+     * <p><b>容错口径</b>：键缺失 / 空 → 默认 50；键存在但非数字 → 照旧抛（fail-fast）。
+     * **取值必须为正数**：切片循环用本值作步长（{@code from += batch}），非正会让重建**死循环**
+     * → 故在本方法内 fail-fast（先例 = {@link #validateFeedBigVDowngradeRatio}）。
+     */
+    public static int getFeedRebuildAuthorBatch() {
+        return validatePositiveBatch("feed.rebuild.authorBatch", getInt("feed.rebuild.authorBatch", 50));
+    }
+
+    /**
+     * 批量尺寸的**唯一正数校验口径**（feed3-T29；形态对齐 {@link #validateFeedBigVDowngradeRatio}）。
+     *
+     * <p>为什么必须校验而非沿用"缺省容错、非法抛"的宽松口径：这两个值都是**循环步长 / 窗口尺寸**，
+     * 非正数分别导致 fanout 静默空转、重建死循环——属"配置错就出事且难发现"的一类，宁可启动即拒。
+     */
+    private static int validatePositiveBatch(String key, int batch) {
+        if (batch <= 0) {
+            throw new IllegalArgumentException(key + " 必须为正数: " + batch);
+        }
+        return batch;
     }
 
     // T5（cache-05）：索引懒重建失败冷却退避窗口（对齐熔断冷却先例 redis.breaker.cooldownMillis）
