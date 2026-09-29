@@ -4,12 +4,10 @@ import com.itheima.cache.CacheDomain;
 import com.itheima.cache.CacheKeys;
 import com.itheima.cache.CacheStats;
 import com.itheima.cache.RedisAccess;
-import com.itheima.cache.ZSetCache;
 import com.itheima.config.AppConfig;
 import com.itheima.exception.CacheException;
-import com.itheima.exception.DatabaseException;
 import com.itheima.feed.dao.FeedInboxDao;
-import com.itheima.follow.service.FollowCache;
+import com.itheima.follow.dao.FollowDao;
 import com.itheima.util.LogProbe;
 import com.itheima.util.LogUtil;
 import com.itheima.util.TransactionTemplate;
@@ -17,6 +15,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
+import org.mockito.stubbing.OngoingStubbing;
 import redis.clients.jedis.Jedis;
 
 import java.sql.Connection;
@@ -39,6 +39,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -47,14 +48,16 @@ import static org.mockito.Mockito.when;
 
 /**
  * {@link FeedInboxWriter} 单测（feed2-21 T21；由 feed1-18 T18 的 FeedInboxCacheTest 改写；
- * feed2-23 T23 增"大V发件箱写后失效"）：窗口迭代 / DB 真相批量落库 / 写后失效 DEL（outbox + 收件箱）/
- * 大V跳过 / 三类降级 / FEED 域打点。
+ * feed2-23 T23 增"大V发件箱写后失效"；**feed3-T30 改写粉丝遍历隔离手法**：mock
+ * {@link FollowDao} 的 keyset 游标读（原 mock {@code FollowCache.getFollowerWindow} 的 offset 窗口））：
+ * 游标迭代 / DB 真相批量落库 / 写后失效 DEL（outbox + 收件箱）/ 大V跳过 / 各类降级 / FEED 域打点。
  *
- * <p>隔离手法：mock {@link FollowCache}（窗口读）/ {@link FeedInboxDao}（落库）/ {@link TransactionTemplate}
- * （回调打到 mock {@link Connection}）/ {@link FeedBigVRouter}（大V判定）/ {@link RedisAccess}
- * （回调打到 mock {@link Jedis}），**不依赖真实 Redis / DB / broker**；{@link CacheStats} 用真实件，
- * 以便断言"FEED 域可辨"。交互序列记入 {@code events}，用于断言"outbox 失效最前、DB 真相在中、
- * 收件箱失效在后"的顺序红线。
+ * <p>隔离手法：mock {@link FollowDao}（游标直读）/ {@link FeedInboxDao}（落库）/
+ * {@link TransactionTemplate}（回调打到 mock {@link Connection}）/ {@link FeedBigVRouter}（大V判定）/
+ * {@link RedisAccess}（回调打到 mock {@link Jedis}），**不依赖真实 Redis / DB / broker**；
+ * {@link CacheStats} 用真实件，以便断言"FEED 域可辨"。交互序列记入 {@code events}（读 + 写各记一条
+ * "DB"），用于断言"outbox 失效最前 → 游标读 → DB 真相 → 收件箱失效"的顺序红线；游标语义
+ * （严格递增、以首页末位 id 续游标而非 offset）由逐次 {@code verify} 的**精确实参**证。
  */
 class FeedInboxWriterTest {
 
@@ -62,7 +65,7 @@ class FeedInboxWriterTest {
     private static final long CONTENT = 42L;
     private static final int BATCH = AppConfig.getFeedFanoutBatch();
 
-    private FollowCache followCache;
+    private FollowDao followDao;
     private FeedInboxDao feedInboxDao;
     private TransactionTemplate transactionTemplate;
     private FeedBigVRouter bigVRouter;
@@ -73,13 +76,13 @@ class FeedInboxWriterTest {
     private FeedInboxWriter writer;
     private LogProbe probe;
 
-    /** 交互序列（断言"outbox 失效最前 → DB 真相 → 收件箱失效"的顺序红线）。 */
+    /** 交互序列（断言"outbox 失效最前 → 游标读 → DB 真相 → 收件箱失效"的顺序红线）。 */
     private final List<String> events = Collections.synchronizedList(new ArrayList<>());
 
     @BeforeEach
     @SuppressWarnings("unchecked")
     void setUp() {
-        followCache = mock(FollowCache.class);
+        followDao = mock(FollowDao.class);
         feedInboxDao = mock(FeedInboxDao.class);
         transactionTemplate = mock(TransactionTemplate.class);
         bigVRouter = mock(FeedBigVRouter.class);
@@ -89,7 +92,7 @@ class FeedInboxWriterTest {
         stats = new CacheStats();
         events.clear();
 
-        writer = new FeedInboxWriter(followCache, feedInboxDao, transactionTemplate, bigVRouter, redis, stats);
+        writer = new FeedInboxWriter(followDao, feedInboxDao, transactionTemplate, bigVRouter, redis, stats);
         probe = LogProbe.attachTo(LogUtil.getLogger(FeedInboxWriter.class));
 
         when(transactionTemplate.execute(any(TransactionTemplate.TransactionAction.class)))
@@ -120,82 +123,88 @@ class FeedInboxWriterTest {
     // ==================== 正常路径 ====================
 
     @Test
-    void fanoutInvalidatesOutboxThenWritesDbThenInvalidatesInbox() throws SQLException {
-        stubWindows(List.of(List.of(11L, 12L)));
+    void fanoutInvalidatesOutboxThenReadsCursorThenWritesDbThenInvalidatesInbox() throws SQLException {
+        stubPages(List.of(List.of(11L, 12L)));
 
         writer.fanout(CONTENT, AUTHOR);
 
-        // ① outbox 写后失效（两件套）——**最前**，先于大V判定与落库
-        verify(jedis).del(CacheKeys.feedOutbox(AUTHOR), CacheKeys.empty(CacheKeys.feedOutbox(AUTHOR)));
-        // ② DB 真相：一批粉丝 = 一条 INSERT IGNORE（含 contentId）
-        verify(feedInboxDao).insertIgnoreBatch(conn, CONTENT, List.of(11L, 12L));
-        // ③ 收件箱写后失效：一次 DEL 多键（每粉丝 3 键 = 三件套；完整态标记已随 T22 退役）
-        verify(jedis).del(CacheKeys.feedInbox(11L), CacheKeys.empty(CacheKeys.feedInbox(11L)),
+        // 顺序红线（跨 mock InOrder）：outbox 失效最前 → 游标读 → DB 真相落库 → 收件箱失效
+        InOrder inOrder = inOrder(jedis, followDao, feedInboxDao);
+        inOrder.verify(jedis).del(CacheKeys.feedOutbox(AUTHOR), CacheKeys.empty(CacheKeys.feedOutbox(AUTHOR)));
+        inOrder.verify(followDao).getFollowerUserIdsAfter(conn, AUTHOR, 0L, BATCH);
+        inOrder.verify(feedInboxDao).insertIgnoreBatch(conn, CONTENT, List.of(11L, 12L));
+        inOrder.verify(jedis).del(CacheKeys.feedInbox(11L), CacheKeys.empty(CacheKeys.feedInbox(11L)),
                 CacheKeys.partial(CacheKeys.feedInbox(11L)),
                 CacheKeys.feedInbox(12L), CacheKeys.empty(CacheKeys.feedInbox(12L)),
                 CacheKeys.partial(CacheKeys.feedInbox(12L)));
-        // 顺序红线：outbox 失效最前 → DB 真相 → 收件箱失效（读 miss 回源才有意义）
-        assertEquals(List.of("DEL", "DB", "DEL"), events);
-        // 一批粉丝 = 一次 DB 连接 + 两次 Redis 连接（outbox 一次、收件箱一次；不逐粉丝各借还）
-        verify(transactionTemplate, times(1)).execute(any());
+        // 收件箱写后失效：一次 DEL 多键（每粉丝 3 键 = 三件套；完整态标记已随 T22 退役）
+        assertEquals(List.of("DEL", "DB", "DB", "DEL"), events);
+        // 一批粉丝 = 读 / 写各一次 DB 连接 + 一次 Redis 连接（outbox）+ 一次 Redis 连接（收件箱）
+        verify(transactionTemplate, times(2)).execute(any());
         verify(redis, times(2)).executeVoid(any());
         assertEquals(0L, stats.count(CacheDomain.FEED, CacheStats.Event.WRITE_FAIL));
     }
 
     @Test
-    void fanoutIteratesAllWindowsUntilShortPage() throws SQLException {
-        List<Long> first = ids(1, BATCH);
-        List<Long> second = ids(BATCH + 1, BATCH * 2);
-        List<Long> third = ids(BATCH * 2 + 1, BATCH * 2 + 40);
-        stubWindows(List.of(first, second, third));
+    void fanoutIteratesAllPagesUntilShortPageByKeysetCursor() throws SQLException {
+        // 页内 id 带整体偏移（首页末位 = 10+BATCH）：游标必须取"末位 id"而非"已处理行数（offset）"
+        List<Long> first = ids(11, 10 + BATCH);
+        List<Long> second = ids(20 + BATCH, 19 + 2 * BATCH);
+        List<Long> third = ids(30 + 2 * BATCH, 30 + 2 * BATCH + 39);
+        stubPages(List.of(first, second, third));
 
         writer.fanout(CONTENT, AUTHOR);
 
-        verify(followCache).getFollowerWindow(AUTHOR, 0L, BATCH);
-        verify(followCache).getFollowerWindow(AUTHOR, BATCH, BATCH);
-        verify(followCache).getFollowerWindow(AUTHOR, (long) BATCH * 2, BATCH);
-        verify(followCache, times(3)).getFollowerWindow(eq(AUTHOR), anyLong(), eq(BATCH));
+        // keyset 游标严格递增（0 → 首页末位 → 次页末位），times(3)
+        verify(followDao).getFollowerUserIdsAfter(conn, AUTHOR, 0L, BATCH);
+        verify(followDao).getFollowerUserIdsAfter(conn, AUTHOR, 10L + BATCH, BATCH);
+        verify(followDao).getFollowerUserIdsAfter(conn, AUTHOR, 19L + 2 * BATCH, BATCH);
+        verify(followDao, times(3)).getFollowerUserIdsAfter(eq(conn), eq(AUTHOR), anyLong(), eq(BATCH));
         // 每批一条落库 + 一次失效；末批（40 条 < BATCH）也必须写完
         verify(feedInboxDao).insertIgnoreBatch(conn, CONTENT, first);
         verify(feedInboxDao).insertIgnoreBatch(conn, CONTENT, second);
         verify(feedInboxDao).insertIgnoreBatch(conn, CONTENT, third);
-        verify(transactionTemplate, times(3)).execute(any());
+        verify(transactionTemplate, times(6)).execute(any());   // 3 读 + 3 写
         // 1 次 outbox 失效 + 3 次收件箱失效
         verify(redis, times(4)).executeVoid(any());
-        assertEquals(List.of("DEL", "DB", "DEL", "DB", "DEL", "DB", "DEL"), events);
+        assertEquals(List.of("DEL",
+                "DB", "DB", "DEL",
+                "DB", "DB", "DEL",
+                "DB", "DB", "DEL"), events);
     }
 
     @Test
-    void fanoutStopsWhenFirstWindowEmpty() {
-        stubWindows(List.of(emptyPage()));
+    void fanoutStopsWhenFirstPageEmpty() throws SQLException {
+        stubPages(List.of(emptyPage()));
 
         writer.fanout(CONTENT, AUTHOR);
 
-        verify(followCache, times(1)).getFollowerWindow(eq(AUTHOR), anyLong(), anyInt());
-        verify(transactionTemplate, never()).execute(any());
-        // 窗口为空 ⇒ 无粉丝可失效；但 outbox 失效**照旧执行**（发表者本人的发件箱要先失效）
+        verify(followDao, times(1)).getFollowerUserIdsAfter(eq(conn), eq(AUTHOR), anyLong(), anyInt());
+        verify(feedInboxDao, never()).insertIgnoreBatch(any(), anyLong(), any());
+        verify(transactionTemplate, times(1)).execute(any());   // 仅一次游标读（无落库）
+        // 页为空 ⇒ 无粉丝可失效；但 outbox 失效**照旧执行**（发表者本人的发件箱要先失效）
         verify(jedis, times(1)).del(CacheKeys.feedOutboxCacheKeys(AUTHOR));
         verify(redis, times(1)).executeVoid(any());
     }
 
     @Test
-    void fanoutStopsAfterExactBatchFollowedByEmptyWindow() throws SQLException {
+    void fanoutStopsAfterExactBatchFollowedByEmptyPage() throws SQLException {
         // 边界：粉丝数恰为 BATCH 的整数倍 —— 靠"下一窗空"终止，不得死循环
-        stubWindows(List.of(ids(1, BATCH), List.of()));
+        stubPages(List.of(ids(1, BATCH), List.of()));
 
         writer.fanout(CONTENT, AUTHOR);
 
-        verify(followCache).getFollowerWindow(AUTHOR, BATCH, BATCH);
-        verify(followCache, times(2)).getFollowerWindow(eq(AUTHOR), anyLong(), anyInt());
-        verify(transactionTemplate, times(1)).execute(any());
+        verify(followDao).getFollowerUserIdsAfter(conn, AUTHOR, BATCH, BATCH);
+        verify(followDao, times(2)).getFollowerUserIdsAfter(eq(conn), eq(AUTHOR), anyLong(), anyInt());
+        verify(transactionTemplate, times(3)).execute(any());   // 2 读 + 1 写
         verify(redis, times(2)).executeVoid(any());   // outbox + 首批收件箱
     }
 
     @Test
-    void fanoutTouchesOnlyFeedKeys() {
+    void fanoutTouchesOnlyFeedKeys() throws SQLException {
         // 红线：不改读路径 —— 只碰 feed:outbox:* / feed:inbox:* 及其派生标记（empty:/partial:），
         //       不写 content:* / user:*
-        stubWindows(List.of(List.of(11L, 12L, 13L)));
+        stubPages(List.of(List.of(11L, 12L, 13L)));
 
         writer.fanout(CONTENT, AUTHOR);
 
@@ -219,10 +228,10 @@ class FeedInboxWriterTest {
     // ==================== 大V路由（T21；T23 补 outbox 失效顺序） ====================
 
     @Test
-    void fanoutInvalidatesOutboxBeforeBigVEarlyReturn() {
+    void fanoutInvalidatesOutboxBeforeBigVEarlyReturn() throws SQLException {
         when(bigVRouter.isBigV(AUTHOR)).thenReturn(true);
-        // 防御：即使窗口可返回，也不得被读取（大V在窗口迭代之前就返回）
-        stubWindows(List.of(List.of(11L)));
+        // 防御：即使游标可返回，也不得被读取（大V在游标迭代之前就返回）
+        stubPages(List.of(List.of(11L)));
 
         writer.fanout(CONTENT, AUTHOR);
 
@@ -230,7 +239,7 @@ class FeedInboxWriterTest {
         // T23 核心：大V发布**必须**失效自己的发件箱（这正是读侧唯一会读它的场景）
         verify(jedis, times(1)).del(CacheKeys.feedOutboxCacheKeys(AUTHOR));
         assertEquals(List.of("DEL"), events);
-        verify(followCache, never()).getFollowerWindow(anyLong(), anyLong(), anyInt());
+        verify(followDao, never()).getFollowerUserIdsAfter(any(), anyLong(), anyLong(), anyInt());
         verify(transactionTemplate, never()).execute(any());
         assertTrue(probe.atLevel(Level.WARNING).isEmpty(), "大V跳过属常态路由，不应记 WARNING");
     }
@@ -238,32 +247,38 @@ class FeedInboxWriterTest {
     // ==================== 降级路径 ====================
 
     @Test
-    void fanoutDegradesOnFollowerWindowFailureWithoutDoubleStack() {
-        when(followCache.getFollowerWindow(eq(AUTHOR), anyLong(), anyInt()))
-                .thenThrow(new DatabaseException("db down"));
+    void fanoutDegradesOnFollowerCursorFailureWithoutDoubleStack() throws SQLException {
+        when(followDao.getFollowerUserIdsAfter(any(), eq(AUTHOR), anyLong(), anyInt()))
+                .thenThrow(new SQLException("db down"));
 
         assertDoesNotThrow(() -> writer.fanout(CONTENT, AUTHOR));
 
+        // 源头（游标查询回调）持 SEVERE + 栈恰一条；结论行 WARNING 恰一条、不带栈
+        List<LogRecord> severe = probe.atLevel(Level.SEVERE);
+        assertEquals(1, severe.size(), () -> "应恰一条 SEVERE，实际: " + probe.records());
+        assertTrue(severe.getFirst().getMessage().contains("写扩散粉丝游标查询失败"));
+        assertNotNull(severe.getFirst().getThrown(), "游标读失败是该链唯一捕获点 → 持栈");
         List<LogRecord> warnings = probe.atLevel(Level.WARNING);
         assertEquals(1, warnings.size(), () -> "应恰一条 WARNING，实际: " + probe.records());
         assertTrue(warnings.getFirst().getMessage().contains("写扩散中止"));
-        assertNull(warnings.getFirst().getThrown(), "源头（FollowCache.loadIds）已持栈 → 此处为结论行、不带栈");
-        verify(transactionTemplate, never()).execute(any());
+        assertNull(warnings.getFirst().getThrown(), "源头已持栈 → 此处为结论行、不带栈");
+        verify(transactionTemplate, times(1)).execute(any());   // 仅一次失败的游标读
+        verify(feedInboxDao, never()).insertIgnoreBatch(any(), anyLong(), any());
         verify(redis, times(1)).executeVoid(any());   // 仅 outbox 失效（成功，无日志）
         assertEquals(0L, stats.count(CacheDomain.FEED, CacheStats.Event.WRITE_FAIL));
     }
 
     @Test
     void fanoutDegradesOnDbWriteFailureAndStopsIterating() throws SQLException {
-        // DB 全不可用时，不得把"窗口 DB 查 + 降级日志"按批数各刷一遍：首批落库失败即短路本次 fanout
-        stubWindows(List.of(ids(1, BATCH), ids(BATCH + 1, BATCH + 10)));
+        // DB 全不可用时，不得把"游标读 + 降级日志"按批数各刷一遍：首批落库失败即短路本次 fanout
+        stubPages(List.of(ids(1, BATCH), ids(BATCH + 1, BATCH + 10)));
         when(feedInboxDao.insertIgnoreBatch(eq(conn), eq(CONTENT), any()))
                 .thenThrow(new SQLException("db down"));
 
         assertDoesNotThrow(() -> writer.fanout(CONTENT, AUTHOR));
 
-        verify(followCache, times(1)).getFollowerWindow(eq(AUTHOR), anyLong(), anyInt());
-        verify(transactionTemplate, times(1)).execute(any());
+        verify(followDao, times(1)).getFollowerUserIdsAfter(eq(conn), eq(AUTHOR), anyLong(), anyInt());
+        verify(transactionTemplate, times(2)).execute(any());   // 1 读 + 1 失败写
         verify(redis, times(1)).executeVoid(any());   // 仅 outbox 失效（先于落库，已成功）
         List<LogRecord> severe = probe.atLevel(Level.SEVERE);
         assertEquals(1, severe.size(), () -> "应恰一条 SEVERE，实际: " + probe.records());
@@ -280,14 +295,14 @@ class FeedInboxWriterTest {
         // 但 DB 真相一路写到底；WARNING + 打点只记一次
         List<Long> first = ids(1, BATCH);
         List<Long> second = ids(BATCH + 1, BATCH + 10);
-        stubWindows(List.of(first, second));
+        stubPages(List.of(first, second));
         doThrow(new CacheException("redis down")).when(redis).executeVoid(any());
 
         assertDoesNotThrow(() -> writer.fanout(CONTENT, AUTHOR));
 
         verify(feedInboxDao).insertIgnoreBatch(conn, CONTENT, first);
         verify(feedInboxDao).insertIgnoreBatch(conn, CONTENT, second);
-        verify(transactionTemplate, times(2)).execute(any());
+        verify(transactionTemplate, times(4)).execute(any());   // 2 读 + 2 写
         verify(redis, times(1)).executeVoid(any());
         List<LogRecord> warnings = probe.atLevel(Level.WARNING);
         assertEquals(1, warnings.size(), () -> "应恰一条 WARNING（首次），实际: " + probe.records());
@@ -301,7 +316,7 @@ class FeedInboxWriterTest {
         // outbox 失效成功、首批收件箱失效失败 ⇒ 后续批次的收件箱失效停用（DB 照写）
         List<Long> first = ids(1, BATCH);
         List<Long> second = ids(BATCH + 1, BATCH + 10);
-        stubWindows(List.of(first, second));
+        stubPages(List.of(first, second));
         doAnswer(inv -> {
             events.add("DEL");
             Consumer<Jedis> action = inv.getArgument(0);
@@ -313,6 +328,7 @@ class FeedInboxWriterTest {
 
         verify(feedInboxDao).insertIgnoreBatch(conn, CONTENT, first);
         verify(feedInboxDao).insertIgnoreBatch(conn, CONTENT, second);
+        verify(transactionTemplate, times(4)).execute(any());   // 2 读 + 2 写
         verify(redis, times(2)).executeVoid(any());   // outbox + 首批收件箱（失败后停用）
         List<LogRecord> warnings = probe.atLevel(Level.WARNING);
         assertEquals(1, warnings.size(), () -> "应恰一条 WARNING（首次），实际: " + probe.records());
@@ -336,16 +352,16 @@ class FeedInboxWriterTest {
 
     // ==================== 辅助 ====================
 
-    private void stubWindows(List<List<Long>> pages) {
-        List<ZSetCache.Window> windows = new ArrayList<>();
+    /** 按调用顺序逐页返回（keyset 游标读；末次 stub 值会被重复返回，终止用例以空页/短页收束）。 */
+    private void stubPages(List<List<Long>> pages) throws SQLException {
+        OngoingStubbing<List<Long>> stub =
+                when(followDao.getFollowerUserIdsAfter(any(Connection.class), eq(AUTHOR), anyLong(), eq(BATCH)));
         for (List<Long> page : pages) {
-            windows.add(new ZSetCache.Window(page, page.size()));
+            stub = stub.thenReturn(page);
         }
-        when(followCache.getFollowerWindow(eq(AUTHOR), anyLong(), eq(BATCH)))
-                .thenReturn(windows.get(0), windows.subList(1, windows.size()).toArray(new ZSetCache.Window[0]));
     }
 
-    /** 空窗口页（显式类型，避免 List.of() 嵌套泛型推断歧义）。 */
+    /** 空页（显式类型，避免 List.of() 嵌套泛型推断歧义）。 */
     private static List<Long> emptyPage() {
         return new ArrayList<>();
     }

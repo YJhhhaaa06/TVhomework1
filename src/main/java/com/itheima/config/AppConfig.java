@@ -471,15 +471,16 @@ public final class AppConfig {
     // **已参数化、不重复**；T29 的范围 = 下面这两个。
 
     /**
-     * 写扩散**粉丝窗口迭代批量**（feed3-T29）：键 {@code feed.fanout.batch}（默认 200）。
+     * 写扩散**粉丝批量**（feed3-T29）：键 {@code feed.fanout.batch}（默认 200）。
      *
-     * <p><b>用途</b>：{@link com.itheima.feed.service.FeedInboxWriter#fanout} 按本值把"作者的全部粉丝"
-     * 切成多轮窗口（{@code [offset, offset+BATCH)}）——每轮 = 一条多行 {@code INSERT IGNORE} +
-     * 一次单命令 {@code DEL}（三件套）。本值决定**每轮 DB / Redis 往返次数**与单条 INSERT 的占位符个数。
+     * <p><b>用途</b>：{@link com.itheima.feed.service.FeedInboxWriter#fanout} 按本值**游标（keyset）分批**
+     * 取"作者的全部粉丝"（feed3-T30 起：{@code user_id > cursor} 升序一批，走
+     * {@code FollowDao#getFollowerUserIdsAfter}）——每轮 = 一批游标读 + 一条多行 {@code INSERT IGNORE}
+     * + 一次单命令 {@code DEL}（三件套）。本值决定**每轮 DB / Redis 往返次数**与单条 INSERT 的占位符个数。
      * 缺省 200 与 {@link #getFeedInboxWindowMax()} C 同量级。
      *
      * <p><b>容错口径</b>：键缺失 / 空 → 默认 200，不得让应用起不来；键存在但非数字 → 照旧抛（fail-fast）。
-     * **取值必须为正数**：非正会让 {@code getFollowerWindow} 取不到成员 ⇒ 写扩散**静默空转**
+     * **取值必须为正数**：非正会让游标取不到成员（{@code count <= 0} 直接返空）⇒ 写扩散**静默空转**
      * （内容不落任何粉丝收件箱），故在本方法内 fail-fast 拦下（先例 = {@link #validateFeedBigVDowngradeRatio}）。
      */
     public static int getFeedFanoutBatch() {

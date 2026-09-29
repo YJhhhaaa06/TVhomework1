@@ -10,17 +10,27 @@ test_feed_push.py - feed 写扩散（push 管线）端到端测试（feed1-18 T1
 覆盖：
   1. 粉丝视角：b 关注 a → a 发布图文 → **轮询**（最终一致窗口内收敛）`feed_inbox` 出现 (b_id, contentId)；
   2. 非粉丝不受影响：全新用户（无关注关系）在 `feed_inbox` 中零行；
-  3. 红线哨兵：`/feed` 响应信封口径不变，且能取到刚发布的内容（信封与"取得到"是 T23 的不变量）。
+  3. 红线哨兵：`/feed` 响应信封口径不变，且能取到刚发布的内容（信封与"取得到"是 T23 的不变量）；
+  4. （feed3-T30）fanout 游标直读**不再物化 `user:follower` zset**：发布并确认 fanout 已落库后，
+     `EXISTS user:follower:{author}` 仍为 0；**正向对照** = 调 `/follow/followers`（粉丝列表分页，
+     语义未变）后该 key 变 1 ⇒ 证明"该观测通道能测出物化"（不同观测结果 = 真差异，非通道失效）；
+  5. （feed3-T30）多页游标**不漏**：`FEED_FANOUT_BATCH` 小批量专跑下建 `2*batch` 个粉丝
+     （恰整数倍 ⇒ 满页 ×2 + 空尾页终止），发布后**每个**粉丝的 `feed_inbox` 都含该行
+     （"不重"由 JUnit 的游标严格递增断言承担——DB 侧 `INSERT IGNORE` 无法观测重复）。
 
 读取手段与跳过口径：
   - **MySQL（独立 oracle）**：`mysql.exe` 子进程（沿 `test_feed_rebuild.py` / `test_content_paging.py`
     既有先例），连接参数取 `run_tests.py` 注入的 `DB_*`。**只发 SELECT**，不写库。
   - **MQ 可达性**：按 `AppConfig` 同一覆盖链解析应用实际用的 `rabbitmq.port`
     （`RABBITMQ_PORT` 环境变量 > `app.properties`）；不可达即 skip。
-  - 两层 skip 只作用于**落库类断言**（用例 1~2）——**用例 3 不跳过**，故降级跑
+  - **Redis（只读 `EXISTS`）**：`docker exec <容器> redis-cli`（零新依赖；沿 `test_feed_read.py`
+    先例，docker / 容器不可用 ⇒ 该用例 skip）。
+  - 两层 skip 只作用于**落库类断言**（用例 1~2、4~5）——**用例 3 不跳过**，故降级跑
     （`RABBITMQ_PORT=5699 python tools/tv.py test`）下仍能证明"发布与 `/feed` 业务链路不受影响"。
-  - **Redis 不再由本文件断言**：T21 起 fanout 只 DEL 缓存（不写），DEL 的 e2e 断言归
-    `test_feed_rebuild.py` 用例 2（"收敛后再发布"序列，规避重建晚于 DEL 的过渡期竞态）。
+  - 用例 5 另需 `FEED_FANOUT_BATCH` 设为小值（默认 200 跑法下 skip；专跑 =
+    `FEED_FANOUT_BATCH=2 python tools/tv.py test all`）。
+  - **收件箱 DEL 的 Redis 断言不在本文件**：归 `test_feed_rebuild.py` 用例 2（"收敛后再发布"序列，
+    规避重建晚于 DEL 的过渡期竞态）。
 
 数据自建自清：三个用户全部用 `testA_` 前缀临时注册（命中 tools/cleanup_data.py 的
 TEST_USERNAME_PREFIXES 白名单，命名 `testA_fpush_*`），不依赖 conftest 的 user_a/user_b
@@ -45,6 +55,12 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 # 收件箱真相表（须与 main 侧 SQL / 迁移脚本同步）
 FEED_INBOX_TABLE = "feed_inbox"
+
+# 应用所连的 Redis 容器（app.properties 固定 localhost:6379 → 该容器，db 0、无密码；沿 test_feed_read.py）
+REDIS_CONTAINER = "redis"
+
+# 粉丝列表缓存 key 前缀（feed3-T30 观测"fanout 是否物化粉丝 zset"）
+FOLLOWER_PREFIX = "user:follower:"
 
 # 内容域信封字段集（唯一信封 common.model.dto.PageResult）
 _ENVELOPE_KEYS = {"list", "total", "page", "pageSize", "totalPages"}
@@ -117,6 +133,17 @@ def _feed(base_url, token, page=1, page_size=100):
     resp = requests.get(
         f"{base_url}/feed",
         params={"page": page, "pageSize": page_size},
+        headers={"token": token},
+        timeout=10,
+    )
+    return resp.json()
+
+
+def _followers(base_url, token, user_id):
+    """GET /follow/followers?userId=..（粉丝列表分页；feed3-T30 用作"物化观测通道"的正向对照）。"""
+    resp = requests.get(
+        f"{base_url}/follow/followers",
+        params={"userId": user_id},
         headers={"token": token},
         timeout=10,
     )
@@ -197,6 +224,37 @@ def _poll(predicate, timeout=POLL_TIMEOUT_SECONDS, interval=POLL_INTERVAL_SECOND
 
 
 # ---------------------------------------------------------------------------
+# Redis 只读辅助（feed3-T30：docker exec redis-cli；零新依赖，沿 test_feed_read.py 先例）
+# ---------------------------------------------------------------------------
+
+def _require_redis_container():
+    """docker / 容器不可用 → skip（读 Redis 是本文件的手段，不是被测能力）。"""
+    if shutil.which("docker") is None:
+        pytest.skip("docker 不可用，无法读 Redis 缓存")
+    probe = subprocess.run(
+        ["docker", "exec", REDIS_CONTAINER, "redis-cli", "PING"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+    )
+    if probe.returncode != 0 or probe.stdout.strip() != "PONG":
+        pytest.skip(f"容器 {REDIS_CONTAINER} 不可用，无法读 Redis 缓存")
+
+
+def _redis_cli(*args):
+    """只读执行一条 redis-cli 命令并返回 stdout（已 strip）。"""
+    proc = subprocess.run(
+        ["docker", "exec", REDIS_CONTAINER, "redis-cli", *[str(a) for a in args]],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError("redis-cli 执行失败: " + (proc.stderr.strip() or proc.stdout.strip()))
+    return proc.stdout.strip()
+
+
+def _exists(key):
+    return int(_redis_cli("EXISTS", key) or "0")
+
+
+# ---------------------------------------------------------------------------
 # 前置：MQ 可达性 / 落库类断言的 skip 口径
 # ---------------------------------------------------------------------------
 
@@ -225,6 +283,22 @@ def _require_mq_reachable():
             return
     except OSError:
         pytest.skip(f"应用配置的 RabbitMQ(127.0.0.1:{port}) 不可达（降级跑），跳过写扩散 e2e 用例")
+
+
+def _app_fanout_batch():
+    """应用实际使用的 fanout 批量：覆盖链 = `FEED_FANOUT_BATCH` > `app.properties` 的 feed.fanout.batch。
+
+    与 `_app_mq_port` 同型：只有按**同一覆盖链**解析，才能判断"本次跑"是否处于小批量（多页游标）状态。
+    """
+    env_value = os.environ.get("FEED_FANOUT_BATCH")
+    if env_value:
+        return int(env_value)
+    props = _PROJECT_ROOT / "src" / "main" / "resources" / "app.properties"
+    for line in props.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("feed.fanout.batch="):
+            return int(line.split("=", 1)[1].strip())
+    return 200
 
 
 def _require_fanout_env():
@@ -309,3 +383,81 @@ class TestFeedPushFanout:
                if it.get("authorId") == push_context["author"]["id"]]
         assert push_context["content_id"] in ids, \
             f"/feed 应取到刚发布内容 {push_context['content_id']}: {ids}"
+
+
+@pytest.mark.boundary
+class TestFeedFanoutCursor:
+    """feed3-T30：fanout 粉丝遍历改**游标（keyset）直读 DB**——不再物化 `user:follower` zset、
+    多页游标不漏（批量 = `feed.fanout.batch`，默认 200；多页用例需小批量专跑）。"""
+
+    def test_fanout_does_not_materialize_follower_zset(self, base_url, test_files):
+        """发布触发 fanout 落库后，`user:follower:{author}` 仍不存在；调粉丝列表后才出现（正向对照）。
+
+        观测口径：全新作者 + 全新粉丝 ⇒ 前置 key 必为 0；发布并**确认 fanout 落库**（否则断言无意义）
+        后仍为 0 = fanout 未物化；随后调 `/follow/followers`（分页路径语义未变）令 key 出现
+        ⇒ 证明"该观测通道能测出物化"，排除"读了错误 key"式的假绿。
+        """
+        _require_fanout_env()
+        _require_redis_container()
+
+        author = _register_fresh_user("curator")
+        fan = _register_fresh_user("curfan")
+        content_id = None
+        follower_key = FOLLOWER_PREFIX + str(author["id"])
+        try:
+            add = _follow(base_url, fan["token"], author["id"], "add")
+            assert add.get("code") == 200, f"follow/add failed: {add}"
+            # 前置：全新作者的粉丝 zset 不存在（关注的双写探针只会 DEL、不创建）
+            assert _exists(follower_key) == 0, f"前置：粉丝 zset 不应存在: {follower_key}"
+
+            content_id = _post_content(base_url, author["token"], "feed3-T30 游标直读用例", test_files)
+            assert _poll(lambda: _db_inbox_has(fan["id"], content_id)), (
+                f"前置：fanout 应先落库（否则本轮断言无意义）: user_id={fan['id']}, contentId={content_id}"
+            )
+            # T30 核心：fanout 已执行（落库为证）而粉丝 zset 仍未被物化
+            assert _exists(follower_key) == 0, (
+                f"fanout 不得物化 {follower_key}（游标直读不回填缓存）"
+            )
+
+            # 正向对照：粉丝列表分页仍走原窗口 + 回填路径（语义未变）⇒ 该 key 应出现
+            body = _followers(base_url, fan["token"], author["id"])
+            assert body.get("code") == 200, f"/follow/followers failed: {body}"
+            assert _poll(lambda: _exists(follower_key) == 1), (
+                f"粉丝列表读后应物化 {follower_key}（证明观测通道能测出物化）"
+            )
+        finally:
+            if content_id is not None:
+                _delete_content(base_url, author["token"], content_id)
+            _follow(base_url, fan["token"], author["id"], "remove")
+
+    def test_fanout_keyset_multi_page_covers_all_followers(self, base_url, test_files):
+        """多页游标不漏：`2*batch` 个粉丝（恰整数倍 ⇒ 满页×2 + 空尾页终止）全部收到该内容。
+
+        默认批量（200）下 skip——需 `FEED_FANOUT_BATCH` 小批量专跑
+        （`FEED_FANOUT_BATCH=2 python tools/tv.py test all`）。"不重"由 JUnit 的游标严格递增断言承担
+        （DB 侧 `INSERT IGNORE` 无法观测重复）。
+        """
+        _require_fanout_env()
+        batch = _app_fanout_batch()
+        if batch > 5:
+            pytest.skip(
+                f"默认批量 {batch} 过大，多页游标需小批量专跑："
+                f"FEED_FANOUT_BATCH=2 python tools/tv.py test all"
+            )
+
+        author = _register_fresh_user("curmulti")
+        fans = [_register_fresh_user(f"curfan{i}") for i in range(2 * batch)]
+        content_id = None
+        try:
+            for fan in fans:
+                add = _follow(base_url, fan["token"], author["id"], "add")
+                assert add.get("code") == 200, f"follow/add failed: {add}"
+            content_id = _post_content(base_url, author["token"], "feed3-T30 多页游标用例", test_files)
+            missing = [fan["id"] for fan in fans
+                       if not _poll(lambda f=fan: _db_inbox_has(f["id"], content_id), timeout=20.0)]
+            assert not missing, f"多页游标不得漏粉丝: missing={missing}, batch={batch}"
+        finally:
+            if content_id is not None:
+                _delete_content(base_url, author["token"], content_id)
+            for fan in fans:
+                _follow(base_url, fan["token"], author["id"], "remove")

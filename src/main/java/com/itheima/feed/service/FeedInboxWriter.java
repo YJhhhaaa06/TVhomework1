@@ -3,11 +3,10 @@ package com.itheima.feed.service;
 import com.itheima.cache.CacheKeys;
 import com.itheima.cache.CacheStats;
 import com.itheima.cache.RedisAccess;
-import com.itheima.cache.ZSetCache;
 import com.itheima.config.AppConfig;
 import com.itheima.exception.ServerException;
 import com.itheima.feed.dao.FeedInboxDao;
-import com.itheima.follow.service.FollowCache;
+import com.itheima.follow.dao.FollowDao;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.util.LogUtil;
@@ -34,13 +33,20 @@ import java.util.logging.Logger;
  * 三处同源）——命中即**跳过本次写扩散**（大V内容由"大V发件箱"读时拉，T23），只记 FINE（常态路由，
  * 无需人介入）。
  *
- * <p><b>粉丝列表读法</b>（一期红线沿用）：**不新增全量粉丝读**，一律走
- * {@link FollowCache#getFollowerWindow} 的窗口迭代（{@code [offset, offset+BATCH)}），
- * 装载量与页大小相关而非粉丝总量（治 U-18 同型隐患）。
+ * <p><b>粉丝列表读法</b>（feed3-T30 改写；一期红线"不新增全量粉丝读"沿用）：**游标（keyset）直读
+ * DB、不回填缓存**——逐批 {@link FollowDao#getFollowerUserIdsAfter}（{@code user_id > cursor} 升序
+ * 取一批，走既有 {@code idx_followed_user_user}、免 filesort；返回不足批 = DB 已到底），装载量只与
+ * 批大小相关而非粉丝总量；**不再触碰** {@code FollowCache.getFollowerWindow} ⇒ 发布路径**不再物化
+ * `user:follower` zset**（治 N6 的被动装载；该窗口读的唯一剩余调用方 = 粉丝列表分页，语义零改动）。
  *
- * <p><b>每批三步</b>（顺序不可交换：先 DB 真相、后缓存失效）：① DB 批量 `INSERT IGNORE`（幂等，
- * 重复投递无副作用）→ ② 单命令批量 `DEL`（三件套）；一轮窗口内 ① 借一次 DB 连接、
- * ② 借一次 Redis 连接（不逐粉丝各借还一次）。
+ * <p><b>游标并发口径（登记）</b>：游标严格递增（{@code user_id > cursor}）⇒ 同一遍历**不重**，
+ * 也不受并发插入 / 删除引起的行位移影响（对照 OFFSET 的重复 / 跳行）；遍历期间**新增关注**若其
+ * {@code user_id} ≤ 当前游标则本轮可能漏——由其关注动作触发的收件箱重建兜底；遍历期间**取关者**
+ * 可能仍被写入（与旧窗口快照口径一致）——由下次重建清理（"只多不丢"不变量不破）。
+ *
+ * <p><b>每批三步</b>（顺序不可交换：先 DB 真相、后缓存失效）：① 游标读一批粉丝（DB）→ ② DB 批量
+ * `INSERT IGNORE`（幂等，重复投递无副作用）→ ③ 单命令批量 `DEL`（三件套）；一轮批内读 / 写各借一次
+ * DB 连接、失效借一次 Redis 连接（不逐粉丝各借还一次）。
  *
  * <p><b>大V发件箱写后失效（feed2-23 T23）</b>：进入本方法**先**做一次
  * {@code DEL feed:outbox:{authorId}}（两件套：数据 key + {@code empty:}，见
@@ -51,7 +57,7 @@ import java.util.logging.Logger;
  *
  * <p><b>失败面</b>（契约"绝不抛"，末尾 SEVERE 兜底；消费侧一律降级 ACK，不转死信）：
  * <ul>
- *   <li>粉丝窗口读取失败 → 记 WARNING（结论行，源头持栈）并中止本次 fanout；</li>
+ *   <li>粉丝游标读取失败 → 记 WARNING（结论行，源头持栈）并中止本次 fanout；</li>
  *   <li>DB 落库失败 → 记 WARNING（结论行，源头持栈）并**短路**本次 fanout（同旧 Redis 写失败口径：
  *       外部依赖整体不可用时不得把"窗口 DB 查 + 降级日志"按批数各刷一遍）；未落库的粉丝由后续重建 /
  *       丢消息兜底路径自愈（可靠性加固属三期）；</li>
@@ -60,8 +66,9 @@ import java.util.logging.Logger;
  *       "不放大依赖故障"取向）；落库一路继续到底，残留缓存由 TTL / 重建 / 下次写失效兜底。</li>
  * </ul>
  *
- * <p><b>日志与打点口径</b>：窗口 / DB 两类失败里源头（{@code FollowCache.loadIds} / 事务回调）已持
- * SEVERE + 栈（§3.1 附加纪律 2）——本类只补结论行、不带栈；DEL 失败是本链唯一捕获点 → 持栈。
+ * <p><b>日志与打点口径</b>：游标读 / DB 落库两类失败里源头（本类事务回调——
+ * {@code readFollowerBatch} / {@code insertBatch}）已持 SEVERE + 栈（§3.1 附加纪律 2）——本类
+ * 只补结论行、不带栈；DEL 失败是本链唯一捕获点 → 持栈。
  * 打点：DEL 失败记 {@code WRITE_FAIL}，dataKey 取本批首个收件箱 key ⇒ 归 **FEED** 域。
  */
 @Component
@@ -69,7 +76,7 @@ public class FeedInboxWriter {
 
     private static final Logger LOGGER = LogUtil.getLogger(FeedInboxWriter.class);
 
-    private final FollowCache followCache;
+    private final FollowDao followDao;
     private final FeedInboxDao feedInboxDao;
     private final TransactionTemplate transactionTemplate;
     private final FeedBigVRouter bigVRouter;
@@ -77,10 +84,10 @@ public class FeedInboxWriter {
     private final CacheStats stats;
 
     @InjectConstructor
-    public FeedInboxWriter(FollowCache followCache, FeedInboxDao feedInboxDao,
+    public FeedInboxWriter(FollowDao followDao, FeedInboxDao feedInboxDao,
                            TransactionTemplate transactionTemplate, FeedBigVRouter bigVRouter,
                            RedisAccess redis, CacheStats stats) {
-        this.followCache = followCache;
+        this.followDao = followDao;
         this.feedInboxDao = feedInboxDao;
         this.transactionTemplate = transactionTemplate;
         this.bigVRouter = bigVRouter;
@@ -115,21 +122,20 @@ public class FeedInboxWriter {
             LOGGER.fine("写扩散跳过大V, contentId=" + contentId + ", authorId=" + authorId);
             return;
         }
-        long offset = 0L;
-        // 粉丝窗口迭代批量（feed3-T29：由配置提供——键 feed.fanout.batch，默认 200；非正数校验在 AppConfig）。
+        long cursor = 0L;   // keyset 游标：users.id 为正 ⇒ user_id > 0 覆盖全体粉丝
+        // 粉丝游标迭代批量（feed3-T29：由配置提供——键 feed.fanout.batch，默认 200；非正数校验在 AppConfig）。
         // 只影响"每轮 DB 查询 + DB/Redis 往返次数"，不改写扩散语义。
         final int fanoutBatch = AppConfig.getFeedFanoutBatch();
         while (true) {
-            ZSetCache.Window window;
+            List<Long> fanIds;
             try {
-                window = followCache.getFollowerWindow(authorId, offset, fanoutBatch);
+                fanIds = readFollowerBatch(authorId, cursor, fanoutBatch);
             } catch (RuntimeException e) {
-                // loader 的 DB 失败：源头已持 SEVERE + 栈（FollowCache.loadIds）→ 此处只记结论行（不带栈）
-                LOGGER.log(Level.WARNING, "写扩散中止（粉丝窗口读取失败，不影响发布）, contentId=" + contentId
-                        + ", authorId=" + authorId + ", offset=" + offset);
+                // 游标查询的 DB 失败：源头回调已持 SEVERE + 栈 → 此处只记结论行（不带栈）
+                LOGGER.log(Level.WARNING, "写扩散中止（粉丝游标读取失败，不影响发布）, contentId=" + contentId
+                        + ", authorId=" + authorId + ", cursor=" + cursor);
                 return;
             }
-            List<Long> fanIds = window.getIds();
             if (fanIds.isEmpty()) {
                 return;
             }
@@ -142,11 +148,31 @@ public class FeedInboxWriter {
                 delAbandoned = !delBatch(contentId, fanIds);
             }
             if (fanIds.size() < fanoutBatch) {
-                // 不足一批 = DB 已到底（ZSetCache 窗口装载的既有终止口径，不依赖 total，防计数漂移）
+                // 不足一批 = DB 已到底（游标窗口的既有终止口径，不依赖 total，防计数漂移）
                 return;
             }
-            offset += fanIds.size();
+            cursor = fanIds.get(fanIds.size() - 1);   // 末位 id 作下一页游标（keyset：严格递增 ⇒ 不重）
         }
+    }
+
+    /**
+     * 单批粉丝游标读（feed3-T30）：keyset 直读 DB、**不回填缓存**——{@code user_id > cursor} 升序取
+     * {@code batch} 行（走既有 {@code idx_followed_user_user}，免 filesort；返回不足批 = DB 已到底）。
+     *
+     * <p>SQLException 在本链唯一捕获点（回调即源头，§3.1 附加纪律 2）记 SEVERE + 栈后包
+     * {@link ServerException}；调用方只补结论行（不带栈）。读与写各自独立事务连接借还（不合并）。
+     */
+    private List<Long> readFollowerBatch(long authorId, long cursor, int batch) {
+        return transactionTemplate.execute(conn -> {
+            try {
+                return followDao.getFollowerUserIdsAfter(conn, authorId, cursor, batch);
+            } catch (SQLException e) {
+                // 该链唯一捕获点（包装点即源头）：SEVERE + 栈；明细只记 authorId/cursor/批量
+                LOGGER.log(Level.SEVERE, "写扩散粉丝游标查询失败, authorId=" + authorId
+                        + ", cursor=" + cursor + ", batch=" + batch, e);
+                throw new ServerException("写扩散粉丝游标查询失败");
+            }
+        });
     }
 
     /**
