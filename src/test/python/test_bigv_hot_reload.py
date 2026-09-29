@@ -20,6 +20,8 @@ test_bigv_hot_reload.py - 大V名单 / 阈值**外置文件热更**端到端留�
   ② 文件 = 名单含 A ⇒ A 大V：发 c2 ⇒ `feed_inbox` **无** (F, c2) 且 `/feed` **有** c2；
   ③ 文件 = 名单清空 ⇒ A 又普通：发 c3 ⇒ `feed_inbox` **有** (F, c3)。
 ②③ 即"**不重启**改文件 ⇒ 判定翻转"。
+阶段 ② 另带**消费进度哨兵**（第三位作者，全程非大V）：先用它走同一条 fanout 管道并确认落库，
+证明"**此刻**消费链是通的" ⇒ 排除"c2 未落库只是 MQ 消费慢"这一竞争解释（负向断言的经典假绿）。
 
 跑法（须显式给出配置文件路径；未给 ⇒ 本文件整体 skip）：
   FEED_BIGV_CONFIGFILE=<可写路径> python tools\\tv.py test
@@ -266,9 +268,10 @@ def test_hot_reload_flips_bigv_decision_without_restart(base_url, test_files):
     config_file = _config_file()
     _require_mysql()
 
-    author = _register_fresh_user("author")
-    fan = _register_fresh_user("fan")
-    content_ids = []
+    author = _register_fresh_user("author")     # 判定会翻转的作者
+    fan = _register_fresh_user("fan")           # 关注 author 与 probe
+    probe = _register_fresh_user("probe")       # 哨兵作者：**全程都不是大V**
+    created = []                                # [(token, content_id)]
 
     try:
         # ---- 阶段 0：文件 = 默认参数（与 app.properties 等价，故全程不影响其它用例）----
@@ -280,7 +283,7 @@ def test_hot_reload_flips_bigv_decision_without_restart(base_url, test_files):
 
         # ---- 阶段 ①：作者非大V ⇒ 发布内容应写入粉丝收件箱 ----
         c1 = _post_content(base_url, author["token"], "pytest_bigv_hotreload_1", test_files)
-        content_ids.append(c1)
+        created.append((author["token"], c1))
         assert _poll(lambda: _inbox_has(fan["id"], c1) > 0), (
             "配置文件=默认参数时作者应判为非大V、内容应进粉丝收件箱（fanout 未落库）"
         )
@@ -289,12 +292,24 @@ def test_hot_reload_flips_bigv_decision_without_restart(base_url, test_files):
         _write_config(config_file, _DEFAULT_BIGV_THRESHOLD, [author["id"]])
         _wait_reload_window()
 
+        # **消费进度哨兵**：先用一位"确定非大V"的作者走同一条 fanout 管道，证明**此刻**消费链是通的
+        # —— 否则下面"c2 未落库"可能只是 MQ 消费慢，而不是判定翻转（负向断言的经典假绿）。
+        # 哨兵作者先关注、等窗口重建完成，再发布 ⇒ 该内容只可能由 fanout 写入（重建时它还不存在）。
+        assert _follow(base_url, fan["token"], probe["id"]).get("code") == 200, "关注哨兵作者失败"
+        assert _poll(lambda: _is_synced(fan["id"])), "哨兵触发的窗口重建未在超时内完成"
+        c_probe = _post_content(base_url, probe["token"], "pytest_bigv_hotreload_probe", test_files)
+        created.append((probe["token"], c_probe))
+        assert _poll(lambda: _inbox_has(fan["id"], c_probe) > 0), (
+            "哨兵失败：同刻普通作者的内容都未落库 ⇒ fanout 消费链异常，"
+            "本阶段的'无行'不能作为热更结论"
+        )
+
         c2 = _post_content(base_url, author["token"], "pytest_bigv_hotreload_2", test_files)
-        content_ids.append(c2)
+        created.append((author["token"], c2))
         time.sleep(ABSENCE_CONFIRM_SECONDS)          # 负向断言：给它足够时间"本该落库却没落"
         assert _inbox_has(fan["id"], c2) == 0, (
-            "改文件（不重启）后作者应判为大V ⇒ 其内容不得写入粉丝收件箱；"
-            "落库说明热更未生效"
+            "改文件（不重启）后作者应判为大V ⇒ 其内容不得写入粉丝收件箱"
+            "（同刻哨兵已证明消费链正常，故排除'消费慢'）"
         )
         assert c2 in _feed_ids(base_url, fan["token"]), (
             "大V内容应仍对粉丝可见（来自大V发件箱腿）——否则说明是发布失败而非判定翻转"
@@ -305,15 +320,15 @@ def test_hot_reload_flips_bigv_decision_without_restart(base_url, test_files):
         _wait_reload_window()
 
         c3 = _post_content(base_url, author["token"], "pytest_bigv_hotreload_3", test_files)
-        content_ids.append(c3)
+        created.append((author["token"], c3))
         assert _poll(lambda: _inbox_has(fan["id"], c3) > 0), (
             "清空名单（不重启）后作者应重判为普通 ⇒ 内容应重新写入粉丝收件箱"
         )
 
     finally:
-        for content_id in content_ids:
+        for token, content_id in created:
             try:
-                _delete_content(base_url, author["token"], content_id)
+                _delete_content(base_url, token, content_id)
             except Exception:      # noqa: BLE001 - 清理失败不掩盖用例结论
                 pass
         # 恢复为"未启用外部文件"（等价默认跑法），避免影响同批次其它用例
