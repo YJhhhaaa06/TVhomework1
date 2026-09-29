@@ -1,6 +1,7 @@
 package com.itheima.feed.service;
 
 import com.itheima.config.AppConfig;
+import com.itheima.config.FeedBigVConfig;
 import com.itheima.follow.service.FollowCache;
 import com.itheima.user.dao.UserDao;
 import com.itheima.util.LogProbe;
@@ -79,7 +80,9 @@ class FeedBigVRouterTest {
         userDao = mock(UserDao.class);
         tt = mock(TransactionTemplate.class);
         conn = mock(Connection.class);
-        router = new FeedBigVRouter(userDao, tt);
+        // feed3-T27-A：取值收敛到 FeedBigVConfig 单点；本测试**不配**外部热更文件
+        // ⇒ 该单点每次现读 AppConfig 静态值 ⇒ 上面 replaceProps 的口径与改造前逐字一致
+        router = new FeedBigVRouter(userDao, tt, new FeedBigVConfig());
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             return action.execute(conn);

@@ -336,6 +336,40 @@ public final class AppConfig {
         return getInt("feed.bigv.queryBatch", 200);
     }
 
+    // ===== feed 三期大V名单 / 阈值热更（feed3-T27-A）=====
+
+    /**
+     * 大V名单 / 阈值**外部热更文件**路径（feed3-T27-A）：键 {@code feed.bigv.configFile}（**默认空 = 不启用**）。
+     *
+     * <p><b>语义</b>：非空 ⇒ 由 {@link FeedBigVConfig} 读取该文件（Properties 格式，键名与本档
+     * {@code feed.bigv.threshold} / {@code feed.bigv.userIds} 一致）并在**不重启进程**的前提下热更；
+     * **空 ⇒ 完全不启用外部文件**，判定值退回本类静态读取（{@link #getFeedBigVThreshold()} /
+     * {@link #getFeedBigVUserIds()}）——默认留空保证既有跑法（含 e2e 用环境变量覆盖的留证手法）**零影响**。
+     *
+     * <p><b>为什么路径也配置化</b>（用户要求，2026-09-29）：便于**生产（本地环境）与测试环境隔离**——
+     * 跑测试时可经 {@code FEED_BIGV_CONFIGFILE} 指向测试专用清单，无需改代码。
+     * 覆盖链沿用本类两级（环境变量 → JVM 系统属性 → {@code app.properties}）。
+     *
+     * <p><b>容错口径</b>：键缺失 / 空 → 空串（不 fail-fast）；路径指向的文件不存在 / 不可读 / 内容非法 ⇒
+     * 由 {@link FeedBigVConfig} **沿用上次快照（首次则回退本类静态值）+ 告警**，不得让应用起不来。
+     */
+    public static String getFeedBigVConfigFile() {
+        return get("feed.bigv.configFile", "");
+    }
+
+    /**
+     * 大V热更文件的**检查节流窗口**（毫秒，feed3-T27-A）：键 {@code feed.bigv.refreshMillis}（默认 5000）。
+     *
+     * <p><b>口径</b>：{@link FeedBigVConfig} 在**每次取值时**惰性检查是否已过本窗口——过了才重读文件并解析
+     * （该类**不依赖 mtime**，靠"过窗口即全量重读"保证不漏检，见其类注释）。本值即名单 / 阈值改动的
+     * **生效延迟上界**（不是固定后台轮询周期），故对外**不得承诺"改完立即生效"**。
+     *
+     * <p>{@code 0} = 每次取值都检查（测试用）；键缺失 / 空 → 默认 5000，不得让应用起不来。
+     */
+    public static long getFeedBigVRefreshMillis() {
+        return getLong("feed.bigv.refreshMillis", 5000L);
+    }
+
     // ===== feed 二期读侧两路归并（feed2-23 T23）=====
 
     /**

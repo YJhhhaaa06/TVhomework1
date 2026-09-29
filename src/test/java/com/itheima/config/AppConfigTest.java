@@ -185,6 +185,31 @@ class AppConfigTest {
         }
     }
 
+    // ===== feed 三期大V热更键（feed3-T27-A）=====
+
+    @Test
+    void feedBigVConfigFileDefaultsToEmptyAndIsConfigurable() throws Exception {
+        assertEquals("", propString("feed.bigv.configFile"),
+                "app.properties 应留空 = 默认不启用外部热更文件（既有跑法零影响）");
+
+        Properties p = new Properties();
+        p.setProperty("feed.bigv.configFile", "/tmp/bigv-test.properties");
+        replaceProps(p);
+        try {
+            assertEquals("/tmp/bigv-test.properties", AppConfig.getFeedBigVConfigFile(),
+                    "键存在 ⇒ 原样返回（测试可经 FEED_BIGV_CONFIGFILE 指向测试清单）");
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    @Test
+    void feedBigVRefreshMillisDefaultsToAppProperties() throws Exception {
+        String fromFile = propString("feed.bigv.refreshMillis");
+        assertEquals(Long.parseLong(fromFile), AppConfig.getFeedBigVRefreshMillis());
+        assertEquals(5000L, AppConfig.getFeedBigVRefreshMillis(), "默认值与 app.properties 一致");
+    }
+
     // ===== 工具 =====
 
     private static String propString(String key) throws IOException {
