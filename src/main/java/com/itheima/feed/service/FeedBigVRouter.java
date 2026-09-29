@@ -19,21 +19,27 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 大V路由单点（feed2-21 T21 立；feed3-T26 口径统一 + 写侧批量判定）：判定"该作者是否大V"的
- * **唯一判定点**——固定阈值 + 名单。
+ * 大V路由单点（feed2-21 T21 立；feed3-T26 口径统一 + 写侧批量判定；feed3-T28-A 并入滞回状态表）：
+ * 判定"该作者是否大V"的**唯一判定点（读侧）**——**名单 ∪ 自动大V状态表 ∪ 粉丝数 ≥ 阈值**。
  *
  * <p><b>为什么单点</b>：同一判定被三处消费——fanout 写扩散（大V内容**不进**粉丝收件箱）、
  * 窗口重建（排除大V作者）、两路读的"大V发件箱"腿（读谁的发件箱）；三处若各自实现阈值 / 名单，
- * 口径必然漂移。
+ * 口径必然漂移。**写侧**的滞回判规则只在 {@link com.itheima.user.service.AutoBigVStateService}
+ * 表达（两处，不重叠）。
  *
- * <p><b>判定口径（feed3-T26 统一；feed3-T27-A 起取值收敛）</b>：阈值 / 名单**不直读 {@link AppConfig}**，
- * 一律经 {@link FeedBigVConfig#current()} 取**不可变快照**——该单点负责"值从哪来、何时刷新"（支持外部
- * 文件热更，见其类注释），本类不再承担。键仍为 {@code app.properties} 的 {@code feed.bigv.*}：
+ * <p><b>判定口径（feed3-T26 统一；feed3-T27-A 取值收敛；feed3-T28-A 加状态表）</b>：阈值 / 名单
+ * **不直读 {@link AppConfig}**，一律经 {@link FeedBigVConfig#current()} 取**不可变快照**——该单点负责
+ * "值从哪来、何时刷新"（支持外部文件热更，见其类注释），本类不再承担。键仍为 {@code app.properties}
+ * 的 {@code feed.bigv.*}：
  * <ol>
  *   <li>名单命中（{@code feed.bigv.userIds}）⇒ 大V（显式指定，不经阈值、也不进 SQL 的 IN 列表）；</li>
+ *   <li>否则**自动大V状态表命中**（{@code auto_bigv}，feed3-T28-A：滞回判定的产物——作者曾达线升为大V，
+ *       掉粉后仍在带内未降级）⇒ 大V（同样是显式事实，不进粉丝数 IN 列表）；</li>
  *   <li>否则粉丝数（**DB 真值** {@code users.follower_count}，按 {@code feed.bigv.queryBatch} **分块多条 SQL**批量判定）
  *       {@code >=} 阈值（{@code feed.bigv.threshold}，默认 10000）⇒ 大V。</li>
  * </ol>
+ * 第 ③ 路**必须保留**：冷启动 / 历史数据未入状态表时，已达标作者不得被"没有状态行"突然降级；
+ * 状态表只负责"曾达线、现处带内"的作者不翻转（滞回收益 = 带内作者仍按大V早退 ⇒ fanout 写扩散归零）。
  *
  * <p><b>口径统一为此改了两次</b>（NEEDS 4.0 T26 拍板，方向 = 全链统一到 DB 真值）：
  * <ul>
@@ -99,14 +105,21 @@ public class FeedBigVRouter {
 
     /**
      * **批量**判定：返回 {@code authorIds} 中属于大V的子集（fanout / 重建 / 读三处共用；feed3-T26 起
-     * 单作者入口亦委派至此 ⇒ 本方法是判定规则的**唯一实现**）。
+     * 单作者入口亦委派至此 ⇒ 本方法是**读侧**判定规则的**唯一实现**）。
      *
      * <p><b>形态</b>：名单项先在 Java 侧并入（**命中名单者不再进 IN 列表**，少查一批）；其余按
-     * {@link AppConfig#getFeedBigVQueryBatch()} 分块，**同一事务**内逐块调用
-     * {@code UserDao#findUserIdsByMinFollowerCount}（{@code follower_count >= 阈值 AND id IN (…)}）。
+     * {@link AppConfig#getFeedBigVQueryBatch()} 分块，**同一事务**内逐块发**两条** SQL：
+     * ① {@code UserDao#findAutoBigVUserIdsIn}（feed3-T28-A：自动大V状态表命中，**滞回产物**）；
+     * ② {@code UserDao#findUserIdsByMinFollowerCount}（{@code follower_count >= 阈值 AND id IN (…)}）。
      * 结果并入 {@link LinkedHashSet}（插入序 = 入参序，便于调用方按需复用顺序，但**调用方保序不依赖本序**）。
      *
-     * <p><b>失败面</b>：见类注释（整批 fail-open 只保留名单项；配置非法向上抛）。
+     * <p><b>为何两条 SQL 而非一条子查询</b>（窗口内取舍，已登记）：状态表与 {@code users} 是两张表，
+     * 合成一条要写 {@code id IN (SELECT …)} 子查询——往返同为一次，但语句与执行计划更难读，且把
+     * "滞回状态"这一**独立事实源**埋进阈值 SQL 里；保持两路各自可读、可单独 EXPLAIN 复核更划算
+     * （两张表都按主键 IN 覆盖索引取数）。
+     * 状态表命中者**不再从** ② 的 IN 列表剔除：并集结果相同，剔除只换来一次 list 重建（不值得）。
+     *
+     * <p><b>失败面</b>：见类注释（**任一条、任一块** SQL 失败 ⇒ 整批 fail-open 只保留名单项；配置非法向上抛）。
      *
      * @param authorIds 待判定作者（空 / null → 空集，且**不读任何配置、不发 SQL**）
      * @return 其中的大V子集（**不含**非大V）
@@ -115,7 +128,7 @@ public class FeedBigVRouter {
         if (authorIds == null || authorIds.isEmpty()) {
             return Collections.emptySet();
         }
-        // 取值单点（feed3-T27-A）：阈值 + 名单来自**同一快照**（同批热更，不会出现"新名单 + 旧阈值"）
+        // 取值单点（feed3-T27-A）：阈值 + 名单 + 滞回系数来自**同一快照**（同批热更，不会有"新名单 + 旧阈值"）
         FeedBigVConfig.Snapshot active = bigVConfig.current();
         Set<Long> listed = active.userIds();
         Set<Long> bigVs = new LinkedHashSet<>();
@@ -128,6 +141,7 @@ public class FeedBigVRouter {
             }
         }
         if (toQuery.isEmpty()) {
+            // 全部名单命中 ⇒ 无需任何 SQL（状态表也查不出增量信息）
             return bigVs;
         }
         int threshold = active.threshold();
@@ -144,7 +158,11 @@ public class FeedBigVRouter {
                     List<Long> found = new ArrayList<>(toQuery.size());
                     for (int from = 0; from < toQuery.size(); from += batch) {
                         int to = Math.min(from + batch, toQuery.size());
-                        found.addAll(userDao.findUserIdsByMinFollowerCount(conn, toQuery.subList(from, to), threshold));
+                        List<Long> chunk = toQuery.subList(from, to);
+                        // ③-① 自动大V状态表（feed3-T28-A 滞回：曾达线升为大V、掉粉后仍在带内者）
+                        found.addAll(userDao.findAutoBigVUserIdsIn(conn, chunk));
+                        // ③-② 粉丝数 ≥ 阈值（DB 真值；冷启动 / 历史数据未入状态表时的兜底路径）
+                        found.addAll(userDao.findUserIdsByMinFollowerCount(conn, chunk, threshold));
                     }
                     return found;
                 } catch (SQLException e) {
@@ -155,7 +173,7 @@ public class FeedBigVRouter {
             }));
         } catch (RuntimeException e) {
             // 源头已持栈 → 此处只记结论行、不带栈；fail-open 整批只保留名单项（见方法注释）
-            LOGGER.log(Level.WARNING, "大V判定降级（粉丝数查询失败，按普通作者处理，名单项保留）, authorCount="
+            LOGGER.log(Level.WARNING, "大V判定降级（状态表/粉丝数查询失败，按普通作者处理，名单项保留）, authorCount="
                     + toQuery.size());
         }
         return bigVs;

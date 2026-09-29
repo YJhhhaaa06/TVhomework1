@@ -4,6 +4,7 @@ import com.itheima.cache.ZSetCache;
 import com.itheima.follow.dao.FollowDao;
 import com.itheima.common.model.dto.PageResult;
 import com.itheima.user.dao.UserDao;
+import com.itheima.user.service.AutoBigVStateService;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.ServerException;
 import com.itheima.user.model.entity.User;
@@ -12,6 +13,7 @@ import com.itheima.util.LogUtil;
 import com.itheima.util.TransactionTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -32,6 +34,7 @@ class FollowServiceTest {
     private FollowCache followCache;
     private TransactionTemplate tt;
     private InboxRebuildNotifier inboxRebuildNotifier;
+    private AutoBigVStateService autoBigVState;
     private Connection conn;
     private FollowService service;
     /** 事务回调执行中标志（T12：断言缓存读发生在事务回调之外）。 */
@@ -44,9 +47,13 @@ class FollowServiceTest {
         followCache = mock(FollowCache.class);
         tt = mock(TransactionTemplate.class);
         inboxRebuildNotifier = mock(InboxRebuildNotifier.class);
+        autoBigVState = mock(AutoBigVStateService.class);
         conn = mock(Connection.class);
         inTransaction = new boolean[1];
-        service = new FollowService(followDao, userDao, followCache, tt, inboxRebuildNotifier);
+        service = new FollowService(followDao, userDao, followCache, tt, inboxRebuildNotifier, autoBigVState);
+        // feed3-T28-A：默认"状态未迁移"（真实实现从不返回 null；本类用例只关心调用点与日志分流）
+        when(autoBigVState.evaluate(any(Connection.class), anyLong()))
+                .thenReturn(AutoBigVStateService.Transition.NONE);
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             inTransaction[0] = true;
@@ -162,6 +169,60 @@ class FollowServiceTest {
         assertTrue(probe.atLevel(Level.INFO).isEmpty(), "重复关注属可预期业务拒绝，不得记成功里程碑");
     }
 
+    // ===== feed3-T28-A：滞回判定落在关注事务内（写侧单点，user 域）+ 提交后记状态迁移 =====
+
+    @Test
+    void followEvaluatesAutoBigVStateInsideTransactionAfterCountUpdate() throws SQLException {
+        when(followDao.isFollowing(conn, 7L, 8L)).thenReturn(false);
+        doAnswer(invocation -> {
+            assertTrue(inTransaction[0], "滞回判定必须与 updateFollowerCount 同事务（fail-atomic）");
+            return AutoBigVStateService.Transition.NONE;
+        }).when(autoBigVState).evaluate(conn, 8L);
+
+        service.follow(7L, 8L);
+
+        // 判定对象 = **被关注者**（粉丝数变化者），不是发起方；顺序 = 先计数、后判定
+        InOrder inOrder = inOrder(userDao, autoBigVState);
+        inOrder.verify(userDao).updateFollowerCount(conn, 8L, 1);
+        inOrder.verify(autoBigVState).evaluate(conn, 8L);
+    }
+
+    @Test
+    void followWritesUpgradeTransitionInfoAfterCommit() throws SQLException {
+        when(followDao.isFollowing(conn, 7L, 8L)).thenReturn(false);
+        when(autoBigVState.evaluate(conn, 8L)).thenReturn(AutoBigVStateService.Transition.UPGRADED);
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(FollowService.class));
+        try {
+            service.follow(7L, 8L);
+        } finally {
+            probe.detach();
+        }
+
+        assertEquals(List.of("关注成功, userId=7, followedUserId=8",
+                        "自动大V状态迁移, followedUserId=8, transition=UPGRADED"),
+                probe.messagesAtLevel(Level.INFO),
+                "状态迁移行与关系里程碑同为提交后记录（顺序 = 代码序）");
+    }
+
+    @Test
+    void followFailureInAutoBigVStateMaintenanceRollsBackWholeOperation() throws SQLException {
+        when(followDao.isFollowing(conn, 7L, 8L)).thenReturn(false);
+        // 维护失败由 AutoBigVStateService 包装为 ServerException（其源头持 SEVERE + 栈）⇒ 事务整体回滚
+        when(autoBigVState.evaluate(conn, 8L)).thenThrow(new ServerException("自动大V状态维护失败"));
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(FollowService.class));
+        try {
+            assertThrows(ServerException.class, () -> service.follow(7L, 8L));
+        } finally {
+            probe.detach();
+        }
+
+        verify(followCache, never()).cacheFollow(anyLong(), anyLong());
+        verify(inboxRebuildNotifier, never()).publishInboxRebuild(anyLong());
+        assertTrue(probe.atLevel(Level.INFO).isEmpty(), "事务未提交 ⇒ 关系里程碑与状态迁移行都不得出现");
+    }
+
     // ===== unfollow =====
 
     @Test
@@ -218,6 +279,41 @@ class FollowServiceTest {
         verify(userDao, never()).updateFollowCount(any(), anyLong(), anyInt());
         verify(userDao, never()).updateFollowerCount(any(), anyLong(), anyInt());
         verify(followCache, never()).cacheUnfollow(anyLong(), anyLong());
+    }
+
+    // ===== feed3-T28-A：掉粉是滞回"降级"的唯一触发源（口径同 follow） =====
+
+    @Test
+    void unfollowEvaluatesAutoBigVStateInsideTransactionAfterCountUpdate() throws SQLException {
+        when(followDao.isFollowing(conn, 7L, 8L)).thenReturn(true);
+        doAnswer(invocation -> {
+            assertTrue(inTransaction[0], "滞回判定必须与 updateFollowerCount 同事务（fail-atomic）");
+            return AutoBigVStateService.Transition.NONE;
+        }).when(autoBigVState).evaluate(conn, 8L);
+
+        service.unfollow(7L, 8L);
+
+        InOrder inOrder = inOrder(userDao, autoBigVState);
+        inOrder.verify(userDao).updateFollowerCount(conn, 8L, -1);
+        inOrder.verify(autoBigVState).evaluate(conn, 8L);
+    }
+
+    @Test
+    void unfollowWritesDowngradeTransitionInfoAfterCommit() throws SQLException {
+        when(followDao.isFollowing(conn, 7L, 8L)).thenReturn(true);
+        when(autoBigVState.evaluate(conn, 8L)).thenReturn(AutoBigVStateService.Transition.DOWNGRADED);
+
+        LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(FollowService.class));
+        try {
+            service.unfollow(7L, 8L);
+        } finally {
+            probe.detach();
+        }
+
+        assertEquals(List.of("取关成功, userId=7, followedUserId=8",
+                        "自动大V状态迁移, followedUserId=8, transition=DOWNGRADED"),
+                probe.messagesAtLevel(Level.INFO),
+                "降级行 = feed3-T28-B 补推的同源信号，运维据此追溯谁在何时脱离大V");
     }
 
     // ===== feed1-19（T19）：取关 → 收件箱重建投递（口径同 follow） =====

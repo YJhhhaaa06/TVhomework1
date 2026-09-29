@@ -27,7 +27,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 /**
  * {@link FeedBigVConfig} 单测（feed3-T27-A）：**未启用外部文件**时的静态读语义 / **外部文件覆盖** /
  * **不重启热更** / 节流窗口 / **坏值整批拒绝（不覆盖好值）** / 文件缺失与路径非法一律回落且不抛 /
- * 失败告警按状态迁移只记一条 / 快照不可变。
+ * 失败告警按状态迁移只记一条 / 快照不可变；**feed3-T28-A** 增：**滞回系数**（外部文件覆盖 / 缺键回落
+ * 静态系数 / 越界整批拒绝）与阈值 / 名单同批换入。
  *
  * <p><b>隔离手法</b>：全程用 {@link TempDir} 里的真实小文件（不 mock 文件系统）＋反射改写
  * {@code AppConfig.PROPS} 注入键值（沿 {@code AppConfigTest} / {@code FeedBigVRouterTest} 先例，
@@ -151,6 +152,44 @@ class FeedBigVConfigTest {
                 "快照的名单必须不可变");
     }
 
+    // ==================== 滞回系数（feed3-T28-A：与阈值 / 名单同批换入） ====================
+
+    @Test
+    void downgradeRatioFromExternalFileOverridesStaticValue() throws Exception {
+        Path file = writeConfig("feed.bigv.threshold=50\nfeed.bigv.downgradeRatio=0.5\n");
+        replaceProps(configPropsWithRatio(file, 5000L, "0.9"));
+
+        FeedBigVConfig config = new FeedBigVConfig();
+
+        assertEquals(0.5, config.current().downgradeRatio(), 1e-9,
+                "文件写了系数 ⇒ 覆盖静态值（滞回系数是判定输入）");
+    }
+
+    @Test
+    void missingRatioKeyInFileFallsBackToStaticValue() throws Exception {
+        Path file = writeConfig("feed.bigv.threshold=50\nfeed.bigv.userIds=9\n");
+        replaceProps(configPropsWithRatio(file, 0L, "0.9"));
+
+        assertEquals(0.9, new FeedBigVConfig().current().downgradeRatio(), 1e-9,
+                "文件缺键 = 覆盖语义（该键回落静态值），不是半更新");
+    }
+
+    @Test
+    void invalidRatioInFileKeepsPreviousSnapshot() throws Exception {
+        Path file = writeConfig("feed.bigv.threshold=50\nfeed.bigv.downgradeRatio=0.5\n");
+        replaceProps(configPropsWithRatio(file, 0L, "0.9"));
+        FeedBigVConfig config = new FeedBigVConfig();
+        assertEquals(0.5, config.current().downgradeRatio(), 1e-9);
+
+        Files.writeString(file, "feed.bigv.threshold=80\nfeed.bigv.downgradeRatio=1.5\n");
+
+        FeedBigVConfig.Snapshot kept = config.current();
+        assertEquals(50, kept.threshold(), "系数越界 ⇒ 整批拒绝（阈值也不生效），沿用上次快照");
+        assertEquals(0.5, kept.downgradeRatio(), 1e-9);
+        assertEquals(1, probe.atLevel(Level.WARNING).size());
+        assertNotNull(probe.atLevel(Level.WARNING).getFirst().getThrown(), "失败记录持栈");
+    }
+
     // ==================== 坏值不覆盖好值 ====================
 
     @Test
@@ -251,6 +290,13 @@ class FeedBigVConfigTest {
         Properties p = staticProps("7", "100");
         p.setProperty("feed.bigv.configFile", file.toString());
         p.setProperty("feed.bigv.refreshMillis", String.valueOf(refreshMillis));
+        return p;
+    }
+
+    /** 同上，另注入静态降级系数（feed3-T28-A：验证"文件缺键 → 回落静态系数"）。 */
+    private static Properties configPropsWithRatio(Path file, long refreshMillis, String staticRatio) {
+        Properties p = configProps(file, refreshMillis);
+        p.setProperty("feed.bigv.downgradeRatio", staticRatio);
         return p;
     }
 

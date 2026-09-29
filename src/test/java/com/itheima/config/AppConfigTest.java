@@ -210,6 +210,53 @@ class AppConfigTest {
         assertEquals(5000L, AppConfig.getFeedBigVRefreshMillis(), "默认值与 app.properties 一致");
     }
 
+    // ===== feed 三期大V滞回键（feed3-T28-A）=====
+
+    @Test
+    void feedBigVDowngradeRatioDefaultsToAppProperties() throws Exception {
+        String fromFile = propString("feed.bigv.downgradeRatio");
+        assertEquals(Double.parseDouble(fromFile), AppConfig.getFeedBigVDowngradeRatio());
+        assertEquals(0.8, AppConfig.getFeedBigVDowngradeRatio(), "默认值与 app.properties 一致");
+    }
+
+    @Test
+    void feedBigVDowngradeRatioMissingKeyFallsBackToDefault() throws Exception {
+        replaceProps(new Properties());
+        try {
+            assertEquals(0.8, AppConfig.getFeedBigVDowngradeRatio(), "键缺失 → 带默认值读取（不 fail-fast）");
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    @Test
+    void feedBigVDowngradeRatioAcceptsOneAsEquivalentOff() throws Exception {
+        Properties p = new Properties();
+        p.setProperty("feed.bigv.downgradeRatio", "1.0");
+        replaceProps(p);
+        try {
+            assertEquals(1.0, AppConfig.getFeedBigVDowngradeRatio(),
+                    "1.0 = 滞回等价关闭（降级线等于升级线）；既有 FEED_BIGV_THRESHOLD=1 留证手法依赖本取值合法");
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    @Test
+    void feedBigVDowngradeRatioOutOfRangeFailsFast() throws Exception {
+        for (String bad : new String[]{"1.5", "0", "-0.1", "abc", "NaN", "Infinity"}) {
+            Properties p = new Properties();
+            p.setProperty("feed.bigv.downgradeRatio", bad);
+            replaceProps(p);
+            try {
+                assertThrows(IllegalArgumentException.class, AppConfig::getFeedBigVDowngradeRatio,
+                        "系数必须在 (0, 1]：" + bad);
+            } finally {
+                replaceProps(originalProps);
+            }
+        }
+    }
+
     // ===== 工具 =====
 
     private static String propString(String key) throws IOException {

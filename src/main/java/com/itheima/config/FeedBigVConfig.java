@@ -17,9 +17,10 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 大V「名单 + 阈值」的**取值单点**（feed3-T27-A）：判定侧不再直读 {@link AppConfig}，一律经本类取
- * **不可变快照**。本类只解决"**值从哪来、何时刷新**"；判定规则（名单命中 / {@code >=} 阈值 /
- * fail-open）仍**只在** {@link com.itheima.feed.service.FeedBigVRouter} 表达——职责不重叠。
+ * 大V「名单 + 阈值 + 滞回系数」的**取值单点**（feed3-T27-A；feed3-T28-A 并入系数）：判定侧不再直读
+ * {@link AppConfig}，一律经本类取**不可变快照**。本类只解决"**值从哪来、何时刷新**"；判定规则仍只在
+ * **两处**表达——读侧 {@link com.itheima.feed.service.FeedBigVRouter}（名单 ∪ 状态表 ∪ 阈值）、写侧
+ * {@link com.itheima.user.service.AutoBigVStateService}（滞回升降级线）——职责不重叠。
  *
  * <p><b>为什么要有这一层</b>（feed3-T27 拍板，见 NEEDS 4.0）：T26 之后判定单点已统一，但取值仍散调
  * {@code AppConfig}。把取值收敛到本类后，将来把载体从"外部文件"换成"配置表 + 版本轮询"只需换**本类的
@@ -33,7 +34,7 @@ import java.util.logging.Logger;
  *   <li><b>默认留空 ⇒ 完全不启用外部文件</b>，{@link #current()} 每次现读 {@link AppConfig} 静态值，
  *       行为与 T27-A 之前**完全一致**（含"配置非法照旧向上抛"的 fail-fast 语义与既有 e2e 留证手法）；</li>
  *   <li>文件格式 = {@link Properties}（键名同 {@code app.properties} 的 {@code feed.bigv.threshold} /
- *       {@code feed.bigv.userIds}）——运维心智一致、零新依赖。</li>
+ *       {@code feed.bigv.userIds} / {@code feed.bigv.downgradeRatio}）——运维心智一致、零新依赖。</li>
  * </ol>
  *
  * <p><b>热更机制 = 取值时惰性检查 + 节流窗口</b>（不引入后台线程：零线程、零关停、零生命周期管理）：
@@ -44,12 +45,13 @@ import java.util.logging.Logger;
  *
  * <p><b>原子性与坏值</b>：
  * <ul>
- *   <li><b>整批换入</b>——一次读取产出一个 {@link Snapshot}，阈值与名单**同批**替换，调用方永远看不到
- *       "新名单 + 旧阈值"；</li>
+ *   <li><b>整批换入</b>——一次读取产出一个 {@link Snapshot}，阈值 / 名单 / 滞回系数**同批**替换，
+ *       调用方永远看不到"新名单 + 旧阈值"或"新阈值 + 旧系数"；</li>
  *   <li><b>文件内缺键 = 覆盖语义</b>（该键回落 {@link AppConfig} 静态值），不是半更新——半更新的真正来源
  *       （读到写了一半的文件）由**写入侧**用 {@code 临时文件 + ATOMIC_MOVE} 消除，读侧不加锁；</li>
- *   <li><b>坏值不覆盖好值</b>——文件不存在 / 不可读 / 阈值非数字 / 名单含非法 id ⇒ **整批拒绝**、
- *       沿用上次快照（首次则回落静态值），**绝不产生只更新了一半的快照**。</li>
+ *   <li><b>坏值不覆盖好值</b>——文件不存在 / 不可读 / 阈值非数字 / 名单含非法 id / 系数越界
+ *       （{@code (0, 1]} 之外）⇒ **整批拒绝**、沿用上次快照（首次则回落静态值），
+ *       **绝不产生只更新了一半的快照**。</li>
  * </ul>
  *
  * <p><b>失败告警按"状态迁移"记</b>：同一失败原因持续存在（如路径已配但文件一直没建）只在**首次**记一条
@@ -69,10 +71,13 @@ public class FeedBigVConfig {
     private static final long DEFAULT_REFRESH_MILLIS = 5000L;
 
     /**
-     * 一次完整读取的产物：阈值与名单**同批**换入（构造即深拷贝 + 不可变）——
+     * 一次完整读取的产物：阈值 / 名单 / 滞回系数**同批**换入（构造即深拷贝 + 不可变）——
      * 调用方拿到的快照不会随后续热更而改变。
+     *
+     * <p>{@code downgradeRatio} 自 feed3-T28-A 起并入本快照：它是**判定输入**（降级线 = 系数 × 阈值），
+     * 与阈值同批换入才不会出现"新阈值 + 旧系数"的半更新。
      */
-    public record Snapshot(int threshold, Set<Long> userIds) {
+    public record Snapshot(int threshold, Set<Long> userIds, double downgradeRatio) {
         public Snapshot {
             userIds = Collections.unmodifiableSet(new LinkedHashSet<>(userIds));
         }
@@ -116,7 +121,8 @@ public class FeedBigVConfig {
 
     /** 静态配置快照：口径 = 改造前 {@code FeedBigVRouter} 直读 {@link AppConfig}（非法值照旧向上抛）。 */
     private static Snapshot fromAppConfig() {
-        return new Snapshot(AppConfig.getFeedBigVThreshold(), AppConfig.getFeedBigVUserIds());
+        return new Snapshot(AppConfig.getFeedBigVThreshold(), AppConfig.getFeedBigVUserIds(),
+                AppConfig.getFeedBigVDowngradeRatio());
     }
 
     // ==================== 内部实现 ====================
@@ -179,6 +185,7 @@ public class FeedBigVConfig {
 
         int threshold = AppConfig.getFeedBigVThreshold();
         Set<Long> userIds = AppConfig.getFeedBigVUserIds();
+        double downgradeRatio = AppConfig.getFeedBigVDowngradeRatio();
 
         String rawThreshold = props.getProperty("feed.bigv.threshold");
         if (rawThreshold != null && !rawThreshold.trim().isEmpty()) {
@@ -188,7 +195,12 @@ public class FeedBigVConfig {
         if (rawIds != null && !rawIds.trim().isEmpty()) {
             userIds = parseUserIds(rawIds);
         }
-        return new Snapshot(threshold, userIds);
+        String rawRatio = props.getProperty("feed.bigv.downgradeRatio");
+        if (rawRatio != null && !rawRatio.trim().isEmpty()) {
+            // 校验口径复用 AppConfig 的单一实现（同包包可见）——静态键与文件键两处规则不漂移
+            downgradeRatio = AppConfig.validateFeedBigVDowngradeRatio(Double.parseDouble(rawRatio.trim()));
+        }
+        return new Snapshot(threshold, userIds, downgradeRatio);
     }
 
     /** 名单解析口径与 {@link AppConfig#getFeedBigVUserIds()} 一致（跳过空 token；非法 token 抛）。 */

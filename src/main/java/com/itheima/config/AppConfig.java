@@ -370,6 +370,42 @@ public final class AppConfig {
         return getLong("feed.bigv.refreshMillis", 5000L);
     }
 
+    // ===== feed 三期大V滞回判定（feed3-T28-A）=====
+
+    /** 滞回降级系数键缺失 / 空时的兜底（与 {@code app.properties} 同值）。 */
+    private static final double DEFAULT_FEED_BIGV_DOWNGRADE_RATIO = 0.8;
+
+    /**
+     * 大V滞回判定的**降级系数**（feed3-T28-A）：键 {@code feed.bigv.downgradeRatio}（默认 0.8）。
+     *
+     * <p><b>语义</b>：升级线 = 粉丝数 {@code >=} 阈值、降级线 = 粉丝数 {@code < 系数 × 阈值}；两线之间
+     * （{@code [系数×阈值, 阈值)}）**状态不翻转**（滞回）。系数设 {@code 1.0} ⇒ 降级线等于升级线 ⇒
+     * 滞回**等价关闭**（行为与 T28-A 之前一致，既有 {@code FEED_BIGV_THRESHOLD=1} 留证手法不受影响）。
+     *
+     * <p><b>为什么进快照</b>：系数是**判定输入**（写侧滞回维护据此决定升降级），故与阈值 / 名单**同批**
+     * 进 {@link FeedBigVConfig} 的不可变快照；外部热更文件的同名键可覆盖本静态值。
+     *
+     * <p><b>合法区间 = {@code (0, 1]}，越界抛 {@link IllegalArgumentException}</b>（fail-fast，与
+     * {@link #getFeedBigVUserIds()} 同口径）：{@code > 1} 会让降级线高于升级线（带内必翻转、滞回反向失效），
+     * {@code <= 0} 会让降级永不发生（状态表只增不减）。键缺失 / 空 → 默认 0.8。
+     */
+    public static double getFeedBigVDowngradeRatio() {
+        String raw = get("feed.bigv.downgradeRatio");
+        double ratio = raw.isEmpty() ? DEFAULT_FEED_BIGV_DOWNGRADE_RATIO : Double.parseDouble(raw);
+        return validateFeedBigVDowngradeRatio(ratio);
+    }
+
+    /**
+     * 滞回降级系数的**唯一校验口径**（包可见：{@link FeedBigVConfig} 解析外部热更文件时复用，
+     * 避免"静态键"与"文件键"两处规则漂移）：合法区间 = {@code (0, 1]}；越界 / 非有限数 ⇒ 抛。
+     */
+    static double validateFeedBigVDowngradeRatio(double ratio) {
+        if (!(ratio > 0.0) || ratio > 1.0) {
+            throw new IllegalArgumentException("feed.bigv.downgradeRatio 必须在 (0, 1] 区间: " + ratio);
+        }
+        return ratio;
+    }
+
     // ===== feed 二期读侧两路归并（feed2-23 T23）=====
 
     /**

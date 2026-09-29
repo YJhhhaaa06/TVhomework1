@@ -213,6 +213,53 @@ public class UserDao {
         return result;
     }
 
+    // ===== 自动大V状态表 auto_bigv（feed3-T28-A 滞回判定；**存在即自动大V**）=====
+    // 升级 = INSERT IGNORE、降级 = DELETE；两者的 **affected rows** 就是"本次是否真发生状态迁移"的
+    // edge 信号（写入方按"返回 true 即 edge"分流，不用"比较 before/after 计数"——并发下后者会重复触发）。
+    // 读侧批量判定走 PK IN 点查（无新索引：PK(user_id) 即覆盖索引）。
+
+    //升级（幂等）：首次写入返回 true；已在表中（状态本就是自动大V）返回 false
+    public boolean insertAutoBigV(Connection conn, long userId) throws SQLException {
+        String sql = "insert ignore into auto_bigv(user_id) values(?)";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, userId);
+            return pstmt.executeUpdate() == 1;
+        }
+    }
+
+    //降级（幂等）：删到行返回 true（本次真降级）；无行返回 false（本就不是自动大V）
+    public boolean deleteAutoBigV(Connection conn, long userId) throws SQLException {
+        String sql = "delete from auto_bigv where user_id=?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, userId);
+            return pstmt.executeUpdate() == 1;
+        }
+    }
+
+    //批量取"在自动大V状态表中"的用户子集（feed3-T28-A：读侧判定合并的第三路输入；
+    //调用方按 feed.bigv.queryBatch 分块，与 findUserIdsByMinFollowerCount 同口径）
+    public List<Long> findAutoBigVUserIdsIn(Connection conn, List<Long> ids) throws SQLException {
+        if (ids == null || ids.isEmpty()) return java.util.Collections.emptyList();
+        StringBuilder sql = new StringBuilder("SELECT user_id FROM auto_bigv WHERE user_id IN (");
+        for (int i = 0; i < ids.size(); i++) {
+            if (i > 0) sql.append(", ");
+            sql.append("?");
+        }
+        sql.append(")");
+        List<Long> result = new java.util.ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            for (int i = 0; i < ids.size(); i++) {
+                ps.setLong(i + 1, ids.get(i));
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    result.add(rs.getLong("user_id"));
+                }
+            }
+        }
+        return result;
+    }
+
     //改
     //更新关注数（delta 为正表示+1关注，为负表示-1关注）
     public int updateFollowCount(Connection conn, long userId, int delta) throws SQLException {

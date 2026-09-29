@@ -11,7 +11,9 @@
     3. 孤儿 comment_like（comment_id 指向不存在的 comment）。
     4. 测试用户（T5，2026-09-08）：username 命中 TEST_USERNAME_PREFIXES
        白名单前缀的 users，以及它们的 content / comment / comment_like /
-       content_like / content_media / follow / coupon_order 关联。
+       content_like / content_media / follow / coupon_order / auto_bigv 关联。
+       （auto_bigv = feed3-T28-A 自动大V状态表：测试用户作为被关注者时的滞回产物，
+       低阈值留证跑法会写入 ⇒ 必须级联，否则残留状态行会让后续默认参数跑法仍判其为大V。）
        （关联表均无指向 users 的外键，须显式级联删除，见 db.sql。）
        seed 用户（一号员工/内部人员等中文名）天然不命中白名单，不受影响。
        注意：删除测试用户对非测试内容/评论的点赞、关注等关联会造成这些
@@ -179,7 +181,7 @@ def main() -> int:
     user_comment_ids: list[int] = []
     user_related = {
         "content_media": 0, "content_like": 0, "comment": 0,
-        "comment_like": 0, "coupon_order": 0, "follow": 0,
+        "comment_like": 0, "coupon_order": 0, "follow": 0, "auto_bigv": 0,
     }
     if test_user_ids:
         uids_sel = ",".join(str(i) for i in test_user_ids)
@@ -206,6 +208,8 @@ def main() -> int:
         user_related["follow"] = int(run_sql(
             mysql, f"SELECT COUNT(*) FROM follow WHERE user_id IN ({uids_sel}) "
                    f"OR followed_user_id IN ({uids_sel})").strip() or "0")
+        user_related["auto_bigv"] = int(run_sql(
+            mysql, f"SELECT COUNT(*) FROM auto_bigv WHERE user_id IN ({uids_sel})").strip() or "0")
 
     def count_related(table: str, column: str) -> int:
         if not test_ids:
@@ -250,6 +254,7 @@ def main() -> int:
     print(f"  关联 comment_like: {user_related['comment_like']} 条")
     print(f"  关联 coupon_order: {user_related['coupon_order']} 条")
     print(f"  关联 follow: {user_related['follow']} 条")
+    print(f"  关联 auto_bigv: {user_related['auto_bigv']} 条")
     print(f"遗留表: video={legacy_info.get('video', 0)} 行, videoinfo={legacy_info.get('videoinfo', 0)} 行"
           + ("（本次将 DROP）" if args.drop_legacy else "（未选择 DROP）"))
 
@@ -306,6 +311,10 @@ DELETE FROM content_media WHERE content_id IN ({ucids});
 DELETE FROM content WHERE user_id IN ({uids});
 DELETE FROM coupon_order WHERE user_id IN ({uids});
 DELETE FROM follow WHERE user_id IN ({uids}) OR followed_user_id IN ({uids});
+-- feed3-T28-A：自动大V状态表（滞回产物）亦须级联——测试用户是 follow/unfollow 的被关注者，
+-- 低阈值留证跑法（FEED_BIGV_THRESHOLD=1）会为其写入状态行；残留会让后续默认参数跑法把这些用户
+-- 仍判为大V（状态表是持久状态，不随配置回退自动清理）
+DELETE FROM auto_bigv WHERE user_id IN ({uids});
 DELETE FROM users WHERE id IN ({uids});
 COMMIT;
 """
@@ -353,6 +362,7 @@ COMMIT;
         f"| 关联 comment_like | {user_related['comment_like']} | - |",
         f"| 关联 coupon_order | {user_related['coupon_order']} | - |",
         f"| 关联 follow | {user_related['follow']} | - |",
+        f"| 关联 auto_bigv（feed3-T28-A 滞回状态） | {user_related['auto_bigv']} | - |",
         f"| DROP 遗留表 | {len(dropped)} | {dropped} |",
         "",
     ]

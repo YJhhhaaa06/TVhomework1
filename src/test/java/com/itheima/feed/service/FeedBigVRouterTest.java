@@ -43,7 +43,9 @@ import static org.mockito.Mockito.when;
 /**
  * {@link FeedBigVRouter} 单测（feed2-21 T21 单作者判定；feed2-23 T23 增批量判定；feed3-T26 口径统一
  * + 写侧批量）：名单命中 / 阈值边界 / 降级（fail-open）/ 批量单点（分块多条 SQL ∪ 名单、名单项不查 DB、
- * SQL 失败只留名单项）/ **单作者委派** / **分块** / **批量尺寸非法 fail-fast**。
+ * SQL 失败只留名单项）/ **单作者委派** / **分块** / **批量尺寸非法 fail-fast** /
+ * **feed3-T28-A 判定合并**（名单 ∪ 自动大V状态表 ∪ 阈值：状态表命中即大V、与阈值同批分块、
+ * 状态表失败同样整批 fail-open）。
  *
  * <p>隔离手法（feed3-T26）：mock {@link UserDao} + {@link TransactionTemplate}（批量判定的数据面），
  * **不依赖真实 Redis / DB**——判定口径已统一到 DB 真值，本类**不再触 {@link FollowCache}**（该 mock 仅留作
@@ -177,6 +179,7 @@ class FeedBigVRouterTest {
         assertTrue(router.isBigVBatch(List.of()).isEmpty());
 
         verify(userDao, never()).findUserIdsByMinFollowerCount(any(), anyList(), anyInt());
+        verify(userDao, never()).findAutoBigVUserIdsIn(any(), anyList());
         verify(followCache, never()).getFollowerCount(anyLong());
     }
 
@@ -188,6 +191,7 @@ class FeedBigVRouterTest {
 
         assertEquals(Set.of(7L, 8L), bigVs);
         verify(userDao, never()).findUserIdsByMinFollowerCount(any(), anyList(), anyInt());
+        verify(userDao, never()).findAutoBigVUserIdsIn(any(), anyList());
         assertTrue(probe.atLevel(Level.WARNING).isEmpty());
     }
 
@@ -218,6 +222,61 @@ class FeedBigVRouterTest {
         assertEquals(1, warnings.size(), () -> "应恰一条 WARNING，实际: " + probe.records());
         assertTrue(warnings.getFirst().getMessage().contains("大V判定降级"));
         assertNull(warnings.getFirst().getThrown(), "源头已持栈 → 结论行不带栈");
+    }
+
+    // ==================== 判定合并：自动大V状态表（feed3-T28-A） ====================
+
+    @Test
+    void stateTableHitIsBigVWithoutThresholdHit() throws Exception {
+        replaceProps(props("", "100"));
+        when(userDao.findAutoBigVUserIdsIn(conn, List.of(9L))).thenReturn(List.of(9L));
+        when(userDao.findUserIdsByMinFollowerCount(conn, List.of(9L), 100)).thenReturn(List.of());
+
+        assertTrue(router.isBigV(9L), "状态表命中（滞回产物）⇒ 大V，与粉丝数是否达线无关（带内不翻转）");
+
+        verify(userDao).findAutoBigVUserIdsIn(conn, List.of(9L));
+        verify(followCache, never()).getFollowerCount(anyLong());
+    }
+
+    @Test
+    void listedStateAndThresholdInputsAreUnioned() throws Exception {
+        replaceProps(props("7", "100"));
+        when(userDao.findAutoBigVUserIdsIn(conn, List.of(8L, 9L))).thenReturn(List.of(8L));
+        when(userDao.findUserIdsByMinFollowerCount(conn, List.of(8L, 9L), 100)).thenReturn(List.of(9L));
+
+        Set<Long> bigVs = router.isBigVBatch(List.of(7L, 8L, 9L));
+
+        assertEquals(Set.of(7L, 8L, 9L), bigVs,
+                "三路并集：名单（7）+ 状态表（8）+ 阈值（9）；名单项不进 IN 列表");
+    }
+
+    @Test
+    void stateTableQuerySplitsIntoChunksSameAsThresholdQuery() throws Exception {
+        replaceProps(props("", "100", "2"));
+        when(userDao.findAutoBigVUserIdsIn(any(), anyList())).thenReturn(List.of());
+        when(userDao.findUserIdsByMinFollowerCount(any(), anyList(), anyInt())).thenReturn(List.of());
+
+        router.isBigVBatch(List.of(1L, 2L, 3L, 4L, 5L));
+
+        ArgumentCaptor<List<Long>> stateChunks = chunkCaptor();
+        verify(userDao, times(3)).findAutoBigVUserIdsIn(eq(conn), stateChunks.capture());
+        assertEquals(List.of(List.of(1L, 2L), List.of(3L, 4L), List.of(5L)), stateChunks.getAllValues(),
+                "状态表与阈值同批尺寸、同序分块（同一事务内 ⇒ 跨块无时序偏差）");
+    }
+
+    @Test
+    void stateTableQueryFailureFailsOpenWholeBatchKeepingListedOnly() throws Exception {
+        replaceProps(props("8", "100"));
+        when(userDao.findAutoBigVUserIdsIn(any(), anyList())).thenThrow(new SQLException("db down"));
+        when(userDao.findUserIdsByMinFollowerCount(any(), anyList(), anyInt())).thenReturn(List.of(9L));
+
+        Set<Long> bigVs = router.isBigVBatch(List.of(8L, 9L));
+
+        assertEquals(Set.of(8L), bigVs,
+                "状态表查询失败 ⇒ 整批 all-or-nothing fail-open（不回并已成功的阈值路，避免半批口径）");
+        LogProbe.assertExactlyOneStacked(probe, Level.SEVERE,
+                "大V批量判定查询失败, authorCount=1", SQLException.class);
+        assertEquals(1, probe.atLevel(Level.WARNING).size(), "恰一条结论行 WARNING");
     }
 
     // ==================== 分块（feed3-T26） ====================
