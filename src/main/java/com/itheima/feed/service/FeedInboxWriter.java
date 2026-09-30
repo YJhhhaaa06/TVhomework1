@@ -4,6 +4,7 @@ import com.itheima.cache.CacheKeys;
 import com.itheima.cache.CacheStats;
 import com.itheima.cache.RedisAccess;
 import com.itheima.config.AppConfig;
+import com.itheima.content.dao.ContentDao;
 import com.itheima.exception.ServerException;
 import com.itheima.feed.dao.FeedInboxDao;
 import com.itheima.follow.dao.FollowDao;
@@ -14,7 +15,9 @@ import com.itheima.util.TransactionTemplate;
 import redis.clients.jedis.Jedis;
 
 import java.sql.SQLException;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -32,6 +35,13 @@ import java.util.logging.Logger;
  * <p><b>大V路由（单点）</b>：判定走 {@link FeedBigVRouter}（固定阈值 + 名单占位，fanout / 重建 / 读
  * 三处同源）——命中即**跳过本次写扩散**（大V内容由"大V发件箱"读时拉，T23），只记 FINE（常态路由，
  * 无需人介入）。
+ *
+ * <p><b>降级补推（feed3-T28-B）</b>：第二个公开入口 {@link #backfillAuthor(long)} ——作者由大V降为
+ * 普通（滞回判定 edge）后，把其**最近 K 条**内容补写进**现任粉丝**收件箱（"复用 fanout 形态"：
+ * 同一条游标迭代 + `INSERT IGNORE` + 写后失效三件套）。与 fanout 的两处差别：① 消费时**复查**
+ * 大V（已重升级 ⇒ 早退，可见性由发件箱腿保证，不造无谓上行残影行）；② **不失效发件箱缓存**
+ * （补推不产生新内容，且发件箱缓存的新鲜度已由"每次发布无条件 DEL"与作者身份解耦）。
+ * 补推**零删除**、重复投递幂等（唯一键 + IGNORE）；失败只降级（缺口补偿统一归 feed3-T33）。
  *
  * <p><b>粉丝列表读法</b>（feed3-T30 改写；一期红线"不新增全量粉丝读"沿用）：**游标（keyset）直读
  * DB、不回填缓存**——逐批 {@link FollowDao#getFollowerUserIdsAfter}（{@code user_id > cursor} 升序
@@ -78,17 +88,20 @@ public class FeedInboxWriter {
 
     private final FollowDao followDao;
     private final FeedInboxDao feedInboxDao;
+    /** 降级补推取"作者最近 K 条内容"（feed3-T28-B；feed → content 依赖已存在，非新包边）。 */
+    private final ContentDao contentDao;
     private final TransactionTemplate transactionTemplate;
     private final FeedBigVRouter bigVRouter;
     private final RedisAccess redis;
     private final CacheStats stats;
 
     @InjectConstructor
-    public FeedInboxWriter(FollowDao followDao, FeedInboxDao feedInboxDao,
+    public FeedInboxWriter(FollowDao followDao, FeedInboxDao feedInboxDao, ContentDao contentDao,
                            TransactionTemplate transactionTemplate, FeedBigVRouter bigVRouter,
                            RedisAccess redis, CacheStats stats) {
         this.followDao = followDao;
         this.feedInboxDao = feedInboxDao;
+        this.contentDao = contentDao;
         this.transactionTemplate = transactionTemplate;
         this.bigVRouter = bigVRouter;
         this.redis = redis;
@@ -145,7 +158,7 @@ public class FeedInboxWriter {
             if (!delAbandoned) {
                 // 首次 DEL 失败即视为"缓存不可用"，后续批次不再尝试（同 T18"不放大依赖故障"取向；
                 // DB 真相优先，落库一路继续到底，残留缓存由 TTL / 重建 / 下次写失效兜底）
-                delAbandoned = !delBatch(contentId, fanIds);
+                delAbandoned = !delInboxBatch("contentId=" + contentId, fanIds);
             }
             if (fanIds.size() < fanoutBatch) {
                 // 不足一批 = DB 已到底（游标窗口的既有终止口径，不依赖 total，防计数漂移）
@@ -158,6 +171,7 @@ public class FeedInboxWriter {
     /**
      * 单批粉丝游标读（feed3-T30）：keyset 直读 DB、**不回填缓存**——{@code user_id > cursor} 升序取
      * {@code batch} 行（走既有 {@code idx_followed_user_user}，免 filesort；返回不足批 = DB 已到底）。
+     * fanout 与降级补推（feed3-T28-B）**共用**本次遍历语义。
      *
      * <p>SQLException 在本链唯一捕获点（回调即源头，§3.1 附加纪律 2）记 SEVERE + 栈后包
      * {@link ServerException}；调用方只补结论行（不带栈）。读与写各自独立事务连接借还（不合并）。
@@ -173,6 +187,148 @@ public class FeedInboxWriter {
                 throw new ServerException("写扩散粉丝游标查询失败");
             }
         });
+    }
+
+    // ==================== 降级补推（feed3-T28-B） ====================
+
+    /**
+     * 降级补推：把作者（由大V降为普通）的**最近 K 条**内容补写进其**现任粉丝**收件箱。
+     *
+     * <p><b>形态 = "复用 fanout"</b>（NEEDS 4.0 T28 拍板④）：同一条粉丝游标迭代 + `INSERT IGNORE` +
+     * 写后失效三件套；K = {@link AppConfig#getFeedInboxWindowPerAuthor()}（默认 20，与重建 / 发件箱
+     * 窗口 N 同量级 ⇒ 降级前后可见性范围一致）。
+     *
+     * <p><b>零删除</b>：只追增，不触碰二期"fanout 只追增 ⇒ 只多不丢"不变量；`INSERT IGNORE` 幂等
+     * （MQ automatic recovery 重发无副作用）。**不依赖**粉丝的下一次关注 / 取关。
+     *
+     * <p><b>消费时复查大V</b>：若消费时刻作者**已重新升级**（降级后又被关注回线）⇒ 跳过——可见性
+     * 由"大V发件箱腿"保证（N == K 同量级），不产生无谓的上行残影行；再次降级会有新 edge、新补推。
+     *
+     * <p><b>失败面</b>（契约"绝不抛"，末尾 SEVERE 兜底；补推失败只降级，缺口补偿统一归 feed3-T33）：
+     * <ul>
+     *   <li>存量内容读取失败 → 结论行 WARNING（不带栈；源头回调已持 SEVERE + 栈）并中止；</li>
+     *   <li>粉丝游标读取失败 → 记 WARNING（结论行）并中止（口径同 fanout）；</li>
+     *   <li>落库失败 → 记 WARNING（结论行，源头持栈）并**短路**本次补推（同"外部依赖整体不可用
+     *       不按批刷日志"口径）；</li>
+     *   <li>缓存失效 DEL 失败 → **不停写**（DB 真相优先）：首次记 WARNING + 打点一次（不按批刷）
+     *       并停用后续批次的失效尝试。</li>
+     * </ul>
+     *
+     * @param authorId 降级的作者（现任粉丝 = 消费时刻 {@code follow} 表中其关注者集合）
+     */
+    public void backfillAuthor(long authorId) {
+        try {
+            doBackfill(authorId);
+        } catch (RuntimeException e) {
+            // 契约"绝不抛"的最后兜底：不得让异常穿透消费容器去转死信（需人介入 → SEVERE + 栈）
+            LOGGER.log(Level.SEVERE, "降级补推异常（已兜底，不影响关注/取关）, authorId=" + authorId, e);
+        }
+    }
+
+    private void doBackfill(long authorId) {
+        // 消费时复查（与 fanout 早退同形）：降级后又被关注回线 ⇒ 本批补推无必要（发件箱腿保证可见）
+        if (bigVRouter.isBigV(authorId)) {
+            LOGGER.fine("降级补推跳过（消费时作者已是大V，由发件箱腿保证可见）, authorId=" + authorId);
+            return;
+        }
+        List<Long> contentIds;
+        try {
+            contentIds = loadRecentContentIds(authorId);
+        } catch (ServerException e) {
+            // 源头（查询回调 / TransactionTemplate）已持 SEVERE + 栈 → 此处只记结论行、不带栈
+            LOGGER.log(Level.WARNING, "降级补推中止（存量内容读取失败，降级）, authorId=" + authorId);
+            return;
+        }
+        if (contentIds.isEmpty()) {
+            // 无存量内容 ⇒ 无行可补（不读粉丝、不发 SQL、不失效缓存）
+            return;
+        }
+        long cursor = 0L;   // keyset 游标：users.id 为正 ⇒ user_id > 0 覆盖全体粉丝
+        // 批量尺寸复用 fanout 的执行参数（feed.fanout.batch，默认 200）：只影响往返次数，不改语义
+        final int fanoutBatch = AppConfig.getFeedFanoutBatch();
+        boolean delAbandoned = false;
+        while (true) {
+            List<Long> fanIds;
+            try {
+                fanIds = readFollowerBatch(authorId, cursor, fanoutBatch);
+            } catch (RuntimeException e) {
+                // 游标查询的 DB 失败：源头回调已持 SEVERE + 栈 → 此处只记结论行（不带栈）
+                LOGGER.log(Level.WARNING, "降级补推中止（粉丝游标读取失败，降级）, authorId=" + authorId
+                        + ", cursor=" + cursor);
+                return;
+            }
+            if (fanIds.isEmpty()) {
+                return;
+            }
+            if (!insertBackfillBatch(authorId, contentIds, fanIds)) {
+                return;
+            }
+            if (!delAbandoned) {
+                // 首次 DEL 失败即视为"缓存不可用"，后续批次不再尝试（同 fanout 口径）
+                delAbandoned = !delInboxBatch("authorId=" + authorId, fanIds);
+            }
+            if (fanIds.size() < fanoutBatch) {
+                // 不足一批 = DB 已到底（游标窗口的既有终止口径）
+                return;
+            }
+            cursor = fanIds.get(fanIds.size() - 1);
+        }
+    }
+
+    /**
+     * 取作者最近 K 条内容 id（{@code is_deleted = 0}，降序；K = 重建 / 收件箱窗口口径）。
+     *
+     * <p>SQLException 在本链唯一捕获点（回调即源头，§3.1 附加纪律 2）记 SEVERE + 栈后包
+     * {@link ServerException}；调用方只补结论行（不带栈）。
+     */
+    private List<Long> loadRecentContentIds(long authorId) {
+        int perAuthorLimit = AppConfig.getFeedInboxWindowPerAuthor();
+        return transactionTemplate.execute(conn -> {
+            try {
+                Map<Long, List<Long>> byAuthor =
+                        contentDao.findRecentContentIdsByAuthor(conn, List.of(authorId), perAuthorLimit);
+                List<Long> ids = byAuthor.get(authorId);
+                return (ids != null) ? ids : Collections.emptyList();
+            } catch (SQLException e) {
+                // 该链唯一捕获点（包装点即源头）：SEVERE + 栈；明细只记 authorId / K
+                LOGGER.log(Level.SEVERE, "降级补推存量内容查询失败, authorId=" + authorId
+                        + ", perAuthorLimit=" + perAuthorLimit, e);
+                throw new ServerException("降级补推存量内容查询失败");
+            }
+        });
+    }
+
+    /**
+     * 单批补推落库（独立事务连接借还）：**同一事务内逐内容** {@code INSERT IGNORE}（K 条语句 / 批，
+     * 单条参数规模 = 2 × 批量 ≤ 400——按内容而非按"粉丝 × 内容"对拼条，避免放大单条语句规模）。
+     *
+     * <p>SQLException 在本链唯一捕获点（回调即源头）记 SEVERE + 栈后包 {@link ServerException}；
+     * 调用方只补结论行（不带栈）。任一条失败 ⇒ 整批回滚（同"一批同生共死"口径）。
+     *
+     * @return true = 本批已提交；false = 落库失败（已记结论行，调用方应短路本次补推）
+     */
+    private boolean insertBackfillBatch(long authorId, List<Long> contentIds, List<Long> fanIds) {
+        try {
+            transactionTemplate.execute(conn -> {
+                try {
+                    for (Long contentId : contentIds) {
+                        feedInboxDao.insertIgnoreBatch(conn, contentId, fanIds);
+                    }
+                    return null;
+                } catch (SQLException e) {
+                    // 该链唯一捕获点（包装点即源头，§3.1 附加纪律 2）：SEVERE + 栈；明细只记规模
+                    LOGGER.log(Level.SEVERE, "降级补推收件箱落库失败, authorId=" + authorId
+                            + ", contentCount=" + contentIds.size() + ", fanCount=" + fanIds.size(), e);
+                    throw new ServerException("降级补推收件箱落库失败");
+                }
+            });
+            return true;
+        } catch (ServerException e) {
+            // 源头（回调内 / TransactionTemplate）已持 SEVERE + 栈 → 此处只记结论行、不带栈
+            LOGGER.log(Level.WARNING, "降级补推中止（收件箱落库失败，降级）, authorId=" + authorId
+                    + ", fanCount=" + fanIds.size());
+            return false;
+        }
     }
 
     /**
@@ -204,11 +360,13 @@ public class FeedInboxWriter {
     }
 
     /**
-     * 单批缓存失效（首次失败即持栈 WARNING + 打点一次，之后调用方停用本通道）。
+     * 单批缓存失效（首次失败即持栈 WARNING + 打点一次，之后调用方停用本通道）——fanout（一条内容一批
+     * 粉丝）与补推（K 条内容一批粉丝，{@code taskLabel} 带 authorId）共用。
      *
+     * @param taskLabel 结论行业务标识片段（{@code contentId=…} / {@code authorId=…}）；只放标识、不含值快照
      * @return true = 本批失效命令已发出；false = Redis 不可用（已记录，调用方应停止后续失效尝试）
      */
-    private boolean delBatch(long contentId, List<Long> fanIds) {
+    private boolean delInboxBatch(String taskLabel, List<Long> fanIds) {
         try {
             redis.executeVoid(jedis -> deleteCacheKeys(jedis, fanIds));
             return true;
@@ -217,8 +375,8 @@ public class FeedInboxWriter {
             // （如 action 为 null 的 IAE、熔断判断在 try 之外）——若逃出去会触发末尾 SEVERE 兜底、
             // 使"DEL 失败不停写"失效（先例 FeedRebuildService.tryAcquireLock 同口径）。
             // DEL 失败 = 本链唯一捕获点 → 持栈 + 打点一次（不按批刷）
-            LOGGER.log(Level.WARNING, "写扩散收件箱缓存失效失败（读自愈兜底，DB 真相不受影响）, contentId="
-                    + contentId + ", fanCount=" + fanIds.size(), e);
+            LOGGER.log(Level.WARNING, "写扩散收件箱缓存失效失败（读自愈兜底，DB 真相不受影响）, "
+                    + taskLabel + ", fanCount=" + fanIds.size(), e);
             stats.record(CacheStats.Event.WRITE_FAIL, CacheKeys.feedInbox(fanIds.get(0)));
             return false;
         }

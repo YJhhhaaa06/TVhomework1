@@ -2,6 +2,7 @@ package com.itheima.feed.service;
 
 import com.itheima.cache.JacksonCodec;
 import com.itheima.feed.model.dto.FeedPushMessage;
+import com.itheima.follow.model.dto.AuthorBackfillMessage;
 import com.itheima.ioc.Initializable;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;
@@ -14,8 +15,10 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * 写扩散消费者（feed1-18 T18；feed2-21 T21 起落库侧改为 {@link FeedInboxWriter}）：接收
- * {@code feed.push.queue} 上的内容发布事件，写各粉丝收件箱（DB 真相 + 缓存失效）。
+ * 写扩散消费者（feed1-18 T18；feed2-21 T21 起落库侧改为 {@link FeedInboxWriter}；feed3-T28-B 增
+ * 降级补推分发）：接收 {@code feed.push.queue} 上的消息，按路由键分发——
+ * {@code feed.push.content}（内容发布事件）写各粉丝收件箱；{@code feed.push.backfill}（降级补推任务，
+ * feed3-T28-B）把作者最近 K 条内容补写进其现任粉丝收件箱（{@link FeedInboxWriter#backfillAuthor(long)}）。
  *
  * <p><b>挂载方式</b>：{@code @Component} + {@link Initializable}（**不动 web.xml / IoC 扫描**，
  * 先例 = {@code AppShutDownListener} 的 {@code @WebListener}）。{@code register} 可在
@@ -31,7 +34,7 @@ import java.util.logging.Logger;
  * 本类**不重复记栈**（§3.1 附加纪律 2：一次失败只允许一条带堆栈的记录）。
  *
  * <p><b>通配绑定前向兼容</b>：{@code feed.push.queue} 以 {@code feed.push.#} 通配绑定，
- * 将来新增消息子类型会一并投递到本队列 → 非 {@code feed.push.content} 的消息只记 FINE 诊断后跳过，
+ * 将来新增消息子类型会一并投递到本队列 → 未登记的路由键只记 FINE 诊断后跳过，
  * 不做误解析（也不投死信，避免未知类型在 DLQ 堆积）。
  */
 @Component
@@ -65,16 +68,28 @@ public class FeedPushConsumer implements Initializable {
      * 消费回调（MQ 消费线程，非 Web 线程；由容器保证手动 ack / 失败转死信）。
      */
     void handle(String routingKey, byte[] body) {
-        if (!MqTopology.RK_PUSH_CONTENT.equals(routingKey)) {
-            LOGGER.fine("写扩散收到非内容发布消息，跳过: routingKey=" + routingKey);
+        if (MqTopology.RK_PUSH_CONTENT.equals(routingKey)) {
+            FeedPushMessage message = decode(body, FeedPushMessage.class, "写扩散消息载荷为空");
+            inboxWriter.fanout(message.contentId(), message.authorId());
             return;
         }
+        if (MqTopology.RK_PUSH_BACKFILL.equals(routingKey)) {
+            // feed3-T28-B：降级补推任务（同族消息，动作交 FeedInboxWriter.backfillAuthor）
+            AuthorBackfillMessage message = decode(body, AuthorBackfillMessage.class, "降级补推消息载荷为空");
+            inboxWriter.backfillAuthor(message.authorId());
+            return;
+        }
+        LOGGER.fine("写扩散收到非内容发布消息，跳过: routingKey=" + routingKey);
+    }
+
+    /** 解码载荷：空载荷 / 非法 JSON ⇒ 返回 null ⇒ 抛出（由容器转死信，本类不吞、不二次记栈）。 */
+    private <T> T decode(byte[] body, Class<T> type, String emptyPayloadMessage) {
         String json = (body == null) ? null : new String(body, StandardCharsets.UTF_8);
-        FeedPushMessage message = codec.fromJson(json, FeedPushMessage.class);
+        T message = codec.fromJson(json, type);
         if (message == null) {
             // 空载荷属"消息不可用"，抛出 → 容器转死信（保留证据，不静默丢弃）
-            throw new IllegalArgumentException("写扩散消息载荷为空");
+            throw new IllegalArgumentException(emptyPayloadMessage);
         }
-        inboxWriter.fanout(message.contentId(), message.authorId());
+        return message;
     }
 }

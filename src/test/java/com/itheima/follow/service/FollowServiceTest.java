@@ -35,6 +35,7 @@ class FollowServiceTest {
     private TransactionTemplate tt;
     private InboxRebuildNotifier inboxRebuildNotifier;
     private AutoBigVStateService autoBigVState;
+    private AuthorBackfillNotifier authorBackfillNotifier;
     private Connection conn;
     private FollowService service;
     /** 事务回调执行中标志（T12：断言缓存读发生在事务回调之外）。 */
@@ -48,9 +49,11 @@ class FollowServiceTest {
         tt = mock(TransactionTemplate.class);
         inboxRebuildNotifier = mock(InboxRebuildNotifier.class);
         autoBigVState = mock(AutoBigVStateService.class);
+        authorBackfillNotifier = mock(AuthorBackfillNotifier.class);
         conn = mock(Connection.class);
         inTransaction = new boolean[1];
-        service = new FollowService(followDao, userDao, followCache, tt, inboxRebuildNotifier, autoBigVState);
+        service = new FollowService(followDao, userDao, followCache, tt, inboxRebuildNotifier,
+                autoBigVState, authorBackfillNotifier);
         // feed3-T28-A：默认"状态未迁移"（真实实现从不返回 null；本类用例只关心调用点与日志分流）
         when(autoBigVState.evaluate(any(Connection.class), anyLong()))
                 .thenReturn(AutoBigVStateService.Transition.NONE);
@@ -99,6 +102,8 @@ class FollowServiceTest {
         verify(userDao).updateFollowCount(conn, 7L, 1);
         verify(userDao).updateFollowerCount(conn, 8L, 1);
         verify(followCache).cacheFollow(7L, 8L);
+        // feed3-T28-B：无状态迁移（NONE）⇒ 不投补推（绝大多数请求零投递开销）
+        verify(authorBackfillNotifier, never()).publishAuthorBackfill(anyLong());
     }
 
     @Test
@@ -203,6 +208,24 @@ class FollowServiceTest {
                         "自动大V状态迁移, followedUserId=8, transition=UPGRADED"),
                 probe.messagesAtLevel(Level.INFO),
                 "状态迁移行与关系里程碑同为提交后记录（顺序 = 代码序）");
+        // feed3-T28-B：补推只认 DOWNGRADED（升级不是补推触发点）
+        verify(authorBackfillNotifier, never()).publishAuthorBackfill(anyLong());
+    }
+
+    @Test
+    void followPublishesBackfillOnDowngradeAfterCommit() throws SQLException {
+        // 配置漂移（阈值上移等）可让关注路径也产出 DOWNGRADED ⇒ 两处同口径投递（见 handleBigVTransition 注释）
+        when(followDao.isFollowing(conn, 7L, 8L)).thenReturn(false);
+        when(autoBigVState.evaluate(conn, 8L)).thenReturn(AutoBigVStateService.Transition.DOWNGRADED);
+        doAnswer(invocation -> {
+            assertFalse(inTransaction[0], "补推投递应发生在事务提交之后");
+            return null;
+        }).when(authorBackfillNotifier).publishAuthorBackfill(anyLong());
+
+        service.follow(7L, 8L);
+
+        // 补推对象 = **被关注者**（降级的作者），不是发起方
+        verify(authorBackfillNotifier).publishAuthorBackfill(8L);
     }
 
     @Test
@@ -220,6 +243,7 @@ class FollowServiceTest {
 
         verify(followCache, never()).cacheFollow(anyLong(), anyLong());
         verify(inboxRebuildNotifier, never()).publishInboxRebuild(anyLong());
+        verify(authorBackfillNotifier, never()).publishAuthorBackfill(anyLong());
         assertTrue(probe.atLevel(Level.INFO).isEmpty(), "事务未提交 ⇒ 关系里程碑与状态迁移行都不得出现");
     }
 
@@ -253,6 +277,8 @@ class FollowServiceTest {
         verify(userDao).updateFollowCount(conn, 7L, -1);
         verify(userDao).updateFollowerCount(conn, 8L, -1);
         verify(followCache).cacheUnfollow(7L, 8L);
+        // feed3-T28-B：无状态迁移（NONE）⇒ 不投补推
+        verify(authorBackfillNotifier, never()).publishAuthorBackfill(anyLong());
     }
 
     @Test
@@ -302,6 +328,10 @@ class FollowServiceTest {
     void unfollowWritesDowngradeTransitionInfoAfterCommit() throws SQLException {
         when(followDao.isFollowing(conn, 7L, 8L)).thenReturn(true);
         when(autoBigVState.evaluate(conn, 8L)).thenReturn(AutoBigVStateService.Transition.DOWNGRADED);
+        doAnswer(invocation -> {
+            assertFalse(inTransaction[0], "补推投递应发生在事务提交之后（不阻塞取关 RT）");
+            return null;
+        }).when(authorBackfillNotifier).publishAuthorBackfill(anyLong());
 
         LogProbe probe = LogProbe.attachTo(LogUtil.getLogger(FollowService.class));
         try {
@@ -314,6 +344,8 @@ class FollowServiceTest {
                         "自动大V状态迁移, followedUserId=8, transition=DOWNGRADED"),
                 probe.messagesAtLevel(Level.INFO),
                 "降级行 = feed3-T28-B 补推的同源信号，运维据此追溯谁在何时脱离大V");
+        // feed3-T28-B：降级 edge ⇒ 投补推（只带降级作者 id；掉粉是降级的唯一现实触发源）
+        verify(authorBackfillNotifier).publishAuthorBackfill(8L);
     }
 
     // ===== feed1-19（T19）：取关 → 收件箱重建投递（口径同 follow） =====

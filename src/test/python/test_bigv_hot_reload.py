@@ -25,7 +25,10 @@ test_bigv_hot_reload.py - 大V名单 / 阈值**外置文件热更**端到端留�
 
 跑法（须显式给出配置文件路径；未给 ⇒ 本文件整体 skip）：
   FEED_BIGV_CONFIGFILE=<可写路径> python tools\\tv.py test
-  可选 FEED_BIGV_REFRESHMILIS=<毫秒> 缩小节流窗口以加速（不设则按配置等满窗口）。
+  可选 FEED_BIGV_REFRESHMILLIS=<毫秒> 缩小节流窗口以加速（不设则按配置等满窗口）。
+  ⚠️ 拼写提醒（feed3-T28-B 修复）：本常量原写作 `FEED_BIGV_REFRESHMILIS`（少一个 L），
+  与 AppConfig 由键名 `feed.bigv.refreshMillis` 推导出的环境变量名 `FEED_BIGV_REFRESHMILLIS`
+  **不一致** ⇒ 应用侧从未生效（测试等 1.3s、应用仍按 5000ms 节流 ⇒ 假失败）；现按正确名读取。
 例（Windows Git Bash）：
   FEED_BIGV_CONFIGFILE=D:/javaproject/VideoPlatform/TVhomework1/temp_script/bigv-hotreload.properties \\
     python tools/tv.py test
@@ -56,7 +59,7 @@ import conftest
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 CONFIG_FILE_ENV = "FEED_BIGV_CONFIGFILE"
-REFRESH_ENV = "FEED_BIGV_REFRESHMILIS"
+REFRESH_ENV = "FEED_BIGV_REFRESHMILLIS"   # 与 AppConfig 的 key->env 推导一致（旧拼写少一个 L、应用侧不生效；T28-B 修正）
 
 # app.properties 默认值兜底（与 AppConfig 的带默认值读取同源）
 _DEFAULT_BIGV_THRESHOLD = 10000

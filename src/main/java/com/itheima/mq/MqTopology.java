@@ -45,6 +45,14 @@ public final class MqTopology {
     /** 内容发布事件路由键。 */
     public static final String RK_PUSH_CONTENT = "feed.push.content";
 
+    /**
+     * 降级补推任务路由键（feed3-T28-B）：作者由大V降为普通（滞回 edge）⇒ 补推其最近 K 条内容到
+     * 现任粉丝收件箱。**走 push 家族**（"非必要不入配置"口径）：补推 = 一次"按作者的历史内容写扩散"，
+     * 与 {@link #RK_PUSH_CONTENT} 同族、同由 {@code FeedPushConsumer} 分发；{@code feed.push.#}
+     * 通配绑定已覆盖本键，**无需新增交换机 / 队列 / 绑定**（同理无需改 {@code MqTopologyDeclarer}）。
+     */
+    public static final String RK_PUSH_BACKFILL = "feed.push.backfill";
+
     /** 收件箱重建任务路由键。 */
     public static final String RK_REBUILD_INBOX = "feed.rebuild.inbox";
 

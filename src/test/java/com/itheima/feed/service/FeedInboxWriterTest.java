@@ -5,6 +5,7 @@ import com.itheima.cache.CacheKeys;
 import com.itheima.cache.CacheStats;
 import com.itheima.cache.RedisAccess;
 import com.itheima.config.AppConfig;
+import com.itheima.content.dao.ContentDao;
 import com.itheima.exception.CacheException;
 import com.itheima.feed.dao.FeedInboxDao;
 import com.itheima.follow.dao.FollowDao;
@@ -24,6 +25,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -64,9 +66,12 @@ class FeedInboxWriterTest {
     private static final long AUTHOR = 9L;
     private static final long CONTENT = 42L;
     private static final int BATCH = AppConfig.getFeedFanoutBatch();
+    /** 补推"作者最近 K 条"的 K（= 重建每作者窗口口径，默认 20）。 */
+    private static final int K = AppConfig.getFeedInboxWindowPerAuthor();
 
     private FollowDao followDao;
     private FeedInboxDao feedInboxDao;
+    private ContentDao contentDao;
     private TransactionTemplate transactionTemplate;
     private FeedBigVRouter bigVRouter;
     private RedisAccess redis;
@@ -84,6 +89,7 @@ class FeedInboxWriterTest {
     void setUp() {
         followDao = mock(FollowDao.class);
         feedInboxDao = mock(FeedInboxDao.class);
+        contentDao = mock(ContentDao.class);
         transactionTemplate = mock(TransactionTemplate.class);
         bigVRouter = mock(FeedBigVRouter.class);
         redis = mock(RedisAccess.class);
@@ -92,7 +98,8 @@ class FeedInboxWriterTest {
         stats = new CacheStats();
         events.clear();
 
-        writer = new FeedInboxWriter(followDao, feedInboxDao, transactionTemplate, bigVRouter, redis, stats);
+        writer = new FeedInboxWriter(followDao, feedInboxDao, contentDao, transactionTemplate,
+                bigVRouter, redis, stats);
         probe = LogProbe.attachTo(LogUtil.getLogger(FeedInboxWriter.class));
 
         when(transactionTemplate.execute(any(TransactionTemplate.TransactionAction.class)))
@@ -348,6 +355,162 @@ class FeedInboxWriterTest {
         assertEquals(1, severe.size(), () -> "应恰一条 SEVERE，实际: " + probe.records());
         assertTrue(severe.getFirst().getMessage().contains("写扩散异常（已兜底"));
         assertNotNull(severe.getFirst().getThrown());
+    }
+
+    // ==================== 降级补推（feed3-T28-B） ====================
+
+    @Test
+    void backfillWritesRecentContentsToFanBatchesByCursorAndInvalidatesInboxOnly() throws SQLException {
+        List<Long> first = ids(11, 10 + BATCH);      // 满批 ⇒ 续游标
+        List<Long> second = ids(20 + BATCH, 25 + BATCH);
+        stubPages(List.of(first, second));
+        when(contentDao.findRecentContentIdsByAuthor(conn, List.of(AUTHOR), K))
+                .thenReturn(Map.of(AUTHOR, List.of(101L, 100L)));
+
+        writer.backfillAuthor(AUTHOR);
+
+        // 存量内容一次查询（K = 收件箱每作者窗口口径）
+        verify(contentDao).findRecentContentIdsByAuthor(conn, List.of(AUTHOR), K);
+        // keyset 游标严格递增（0 → 首页末位），每批**逐内容** INSERT IGNORE（K 条语句 / 批）
+        verify(followDao).getFollowerUserIdsAfter(conn, AUTHOR, 0L, BATCH);
+        verify(followDao).getFollowerUserIdsAfter(conn, AUTHOR, 10L + BATCH, BATCH);
+        verify(feedInboxDao).insertIgnoreBatch(conn, 101L, first);
+        verify(feedInboxDao).insertIgnoreBatch(conn, 100L, first);
+        verify(feedInboxDao).insertIgnoreBatch(conn, 101L, second);
+        verify(feedInboxDao).insertIgnoreBatch(conn, 100L, second);
+        // 每批一次收件箱失效（三件套，只碰 feed:inbox:*）——**不失效发件箱缓存**（补推不产生新内容）
+        ArgumentCaptor<String[]> keysCaptor = ArgumentCaptor.forClass(String[].class);
+        verify(jedis, times(2)).del(keysCaptor.capture());
+        List<String[]> delCalls = keysCaptor.getAllValues();
+        assertEquals(3 * first.size(), delCalls.get(0).length, "首批 DEL = 200 粉丝 × 3 键（三件套）");
+        assertEquals(3 * second.size(), delCalls.get(1).length, "次批 DEL = 6 粉丝 × 3 键");
+        for (String[] call : delCalls) {
+            for (String key : call) {
+                assertTrue(stripMarkerPrefix(key).startsWith(CacheKeys.FEED_INBOX_PREFIX), "越界 key: " + key);
+            }
+        }
+        verify(jedis, never()).del(CacheKeys.feedOutboxCacheKeys(AUTHOR));
+        assertEquals(List.of("DB", "DB", "DB", "DEL", "DB", "DB", "DEL"), events);
+        assertEquals(0L, stats.count(CacheDomain.FEED, CacheStats.Event.WRITE_FAIL));
+        assertTrue(probe.atLevel(Level.WARNING).isEmpty());
+    }
+
+    @Test
+    void backfillSkipsWhenAuthorIsBigVAgainAtConsumeTime() throws SQLException {
+        // 降级后又被关注回线（消费时已重升级）⇒ 早退：可见性由发件箱腿保证，不造无谓残影行
+        when(bigVRouter.isBigV(AUTHOR)).thenReturn(true);
+
+        writer.backfillAuthor(AUTHOR);
+
+        verify(contentDao, never()).findRecentContentIdsByAuthor(any(), any(), anyInt());
+        verify(followDao, never()).getFollowerUserIdsAfter(any(), anyLong(), anyLong(), anyInt());
+        verify(feedInboxDao, never()).insertIgnoreBatch(any(), anyLong(), any());
+        verify(redis, never()).executeVoid(any());
+        assertTrue(probe.atLevel(Level.WARNING).isEmpty(), "跳过属常态路由，不应记 WARNING");
+    }
+
+    @Test
+    void backfillNoOpWhenAuthorHasNoContent() throws SQLException {
+        when(contentDao.findRecentContentIdsByAuthor(conn, List.of(AUTHOR), K))
+                .thenReturn(Map.of());
+
+        writer.backfillAuthor(AUTHOR);
+
+        // 无存量内容 ⇒ 不读粉丝、不发落库、不失效缓存（只一次内容查询事务）
+        verify(transactionTemplate, times(1)).execute(any());
+        verify(followDao, never()).getFollowerUserIdsAfter(any(), anyLong(), anyLong(), anyInt());
+        verify(feedInboxDao, never()).insertIgnoreBatch(any(), anyLong(), any());
+        verify(redis, never()).executeVoid(any());
+    }
+
+    @Test
+    void backfillDegradesOnContentLoadFailureWithoutDoubleStack() throws SQLException {
+        when(contentDao.findRecentContentIdsByAuthor(any(), any(), anyInt()))
+                .thenThrow(new SQLException("db down"));
+
+        assertDoesNotThrow(() -> writer.backfillAuthor(AUTHOR));
+
+        assertSingleStackedSevere("降级补推存量内容查询失败");
+        assertTrue(probe.atLevel(Level.WARNING).getFirst().getMessage().contains("降级补推中止（存量内容读取失败"));
+        verify(followDao, never()).getFollowerUserIdsAfter(any(), anyLong(), anyLong(), anyInt());
+        verify(redis, never()).executeVoid(any());
+    }
+
+    @Test
+    void backfillDegradesOnCursorFailureWithoutDoubleStack() throws SQLException {
+        when(contentDao.findRecentContentIdsByAuthor(conn, List.of(AUTHOR), K))
+                .thenReturn(Map.of(AUTHOR, List.of(101L)));
+        when(followDao.getFollowerUserIdsAfter(any(), eq(AUTHOR), anyLong(), anyInt()))
+                .thenThrow(new SQLException("db down"));
+
+        assertDoesNotThrow(() -> writer.backfillAuthor(AUTHOR));
+
+        assertSingleStackedSevere("写扩散粉丝游标查询失败");
+        assertTrue(probe.atLevel(Level.WARNING).getFirst().getMessage().contains("降级补推中止（粉丝游标读取失败"));
+        verify(feedInboxDao, never()).insertIgnoreBatch(any(), anyLong(), any());
+        verify(redis, never()).executeVoid(any());
+    }
+
+    @Test
+    void backfillDegradesOnDbWriteFailureAndStopsIterating() throws SQLException {
+        stubPages(List.of(ids(1, BATCH), ids(BATCH + 1, BATCH + 10)));
+        when(contentDao.findRecentContentIdsByAuthor(conn, List.of(AUTHOR), K))
+                .thenReturn(Map.of(AUTHOR, List.of(101L)));
+        when(feedInboxDao.insertIgnoreBatch(eq(conn), anyLong(), any()))
+                .thenThrow(new SQLException("db down"));
+
+        assertDoesNotThrow(() -> writer.backfillAuthor(AUTHOR));
+
+        // 首批落库失败即短路（不按批刷日志）：只读了一页、无任何 DEL
+        verify(followDao, times(1)).getFollowerUserIdsAfter(eq(conn), eq(AUTHOR), anyLong(), anyInt());
+        verify(redis, never()).executeVoid(any());
+        assertSingleStackedSevere("降级补推收件箱落库失败");
+        assertTrue(probe.atLevel(Level.WARNING).getFirst().getMessage().contains("降级补推中止（收件箱落库失败"));
+    }
+
+    @Test
+    void backfillAbandonsInboxInvalidationAfterFirstDelFailureButKeepsWriting() throws SQLException {
+        List<Long> first = ids(1, BATCH);
+        List<Long> second = ids(BATCH + 1, BATCH + 10);
+        stubPages(List.of(first, second));
+        when(contentDao.findRecentContentIdsByAuthor(conn, List.of(AUTHOR), K))
+                .thenReturn(Map.of(AUTHOR, List.of(101L)));
+        doThrow(new CacheException("redis down")).when(redis).executeVoid(any());
+
+        assertDoesNotThrow(() -> writer.backfillAuthor(AUTHOR));
+
+        // DB 真相优先：两批都写完；DEL 只尝试一次（首次失败即停用），打点一次
+        verify(feedInboxDao).insertIgnoreBatch(conn, 101L, first);
+        verify(feedInboxDao).insertIgnoreBatch(conn, 101L, second);
+        verify(redis, times(1)).executeVoid(any());
+        assertEquals(1L, stats.count(CacheDomain.FEED, CacheStats.Event.WRITE_FAIL), "批量失败记一次（不逐批刷）");
+        List<LogRecord> warnings = probe.atLevel(Level.WARNING);
+        assertEquals(1, warnings.size(), () -> "应恰一条 WARNING（首次），实际: " + probe.records());
+        assertTrue(warnings.getFirst().getMessage().contains("写扩散收件箱缓存失效失败"));
+        assertTrue(warnings.getFirst().getMessage().contains("authorId=" + AUTHOR), "结论行须带 authorId 标识");
+        assertNotNull(warnings.getFirst().getThrown(), "该链唯一捕获点 → 必须持栈");
+    }
+
+    @Test
+    void backfillNeverThrowsOnUnexpectedError() {
+        // 契约"绝不抛"的最后兜底：异常不得穿透消费容器去转死信
+        when(bigVRouter.isBigV(AUTHOR)).thenThrow(new IllegalStateException("boom"));
+
+        assertDoesNotThrow(() -> writer.backfillAuthor(AUTHOR));
+
+        List<LogRecord> severe = probe.atLevel(Level.SEVERE);
+        assertEquals(1, severe.size(), () -> "应恰一条 SEVERE，实际: " + probe.records());
+        assertTrue(severe.getFirst().getMessage().contains("降级补推异常（已兜底"));
+        assertNotNull(severe.getFirst().getThrown());
+    }
+
+    /** 断言"恰一条 SEVERE、含指定文案、持栈"——补推链各类失败共用的源头持栈口径。 */
+    private void assertSingleStackedSevere(String messageFragment) {
+        List<LogRecord> severe = probe.atLevel(Level.SEVERE);
+        assertEquals(1, severe.size(), () -> "应恰一条 SEVERE，实际: " + probe.records());
+        assertTrue(severe.getFirst().getMessage().contains(messageFragment),
+                "SEVERE 文案: " + severe.getFirst().getMessage());
+        assertNotNull(severe.getFirst().getThrown(), "源头（包装点）是该链唯一捕获点 → 持栈");
     }
 
     // ==================== 辅助 ====================

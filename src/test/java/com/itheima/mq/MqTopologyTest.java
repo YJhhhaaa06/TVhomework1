@@ -55,6 +55,7 @@ class MqTopologyTest {
         names.add(MqTopology.QUEUE_REBUILD);
         names.add(MqTopology.QUEUE_DLQ);
         names.add(MqTopology.RK_PUSH_CONTENT);
+        names.add(MqTopology.RK_PUSH_BACKFILL);
         names.add(MqTopology.RK_REBUILD_INBOX);
         names.add(MqTopology.RK_DLQ);
         names.add(MqTopology.BIND_PUSH_ALL);

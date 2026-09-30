@@ -2,6 +2,7 @@ package com.itheima.feed.service;
 
 import com.itheima.cache.JacksonCodec;
 import com.itheima.feed.model.dto.FeedPushMessage;
+import com.itheima.follow.model.dto.AuthorBackfillMessage;
 import com.itheima.mq.MqConsumerContainer;
 import com.itheima.mq.MqMessageHandler;
 import com.itheima.mq.MqTopology;
@@ -84,6 +85,34 @@ class FeedPushConsumerTest {
         consumer.handle(MqTopology.RK_PUSH_CONTENT, body(42L, 9L));
 
         verify(inboxWriter).fanout(42L, 9L);
+        verify(inboxWriter, never()).backfillAuthor(anyLong());
+    }
+
+    // ===== feed3-T28-B：同族的"降级补推"路由键（feed.push.backfill） =====
+
+    @Test
+    void handleDispatchesBackfillMessageToBackfillAuthor() {
+        consumer.handle(MqTopology.RK_PUSH_BACKFILL, backfillBody(9L));
+
+        verify(inboxWriter).backfillAuthor(9L);
+        verify(inboxWriter, never()).fanout(anyLong(), anyLong());
+    }
+
+    @Test
+    void handleRejectsMalformedBackfillJson() {
+        assertThrows(RuntimeException.class, () -> consumer.handle(MqTopology.RK_PUSH_BACKFILL,
+                "{not-json".getBytes(StandardCharsets.UTF_8)));
+        verify(inboxWriter, never()).backfillAuthor(anyLong());
+        assertTrue(probe.records().isEmpty(), "本类不重复记录消费失败（容器是持栈点）");
+    }
+
+    @Test
+    void handleRejectsEmptyBackfillBody() {
+        assertThrows(IllegalArgumentException.class,
+                () -> consumer.handle(MqTopology.RK_PUSH_BACKFILL, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> consumer.handle(MqTopology.RK_PUSH_BACKFILL, new byte[0]));
+        verify(inboxWriter, never()).backfillAuthor(anyLong());
     }
 
     @Test
@@ -115,6 +144,11 @@ class FeedPushConsumerTest {
 
     private static byte[] body(long contentId, long authorId) {
         String json = new JacksonCodec().toJson(new FeedPushMessage(contentId, authorId));
+        return json.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static byte[] backfillBody(long authorId) {
+        String json = new JacksonCodec().toJson(new AuthorBackfillMessage(authorId));
         return json.getBytes(StandardCharsets.UTF_8);
     }
 }
