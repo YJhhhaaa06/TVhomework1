@@ -22,7 +22,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code feed.outbox.ttlMinutes} → {@code getFeedOutboxTtlSeconds()}；
  * feed3-T29 追加 feed 域批量尺寸——{@code feed.fanout.batch} → {@code getFeedFanoutBatch()}、
  * {@code feed.rebuild.authorBatch} → {@code getFeedRebuildAuthorBatch()}（**非正数 fail-fast**——
- * 这两个值分别是 fanout 迭代步长与重建切片步长，0 / 负数会让 fanout 空转、重建死循环）。
+ * 这两个值分别是 fanout 迭代步长与重建切片步长，0 / 负数会让 fanout 空转、重建死循环）；
+ * feed3-T31 追加异步投递参数——{@code feed.delivery.queueCapacity} → {@code getFeedDeliveryQueueCapacity()}、
+ * {@code feed.delivery.drainTimeoutMillis} → {@code getFeedDeliveryDrainTimeoutMillis()}（**非正数 fail-fast**——
+ * 非正分别等价"投递永远无法入队"与"关停等待无上界"）。
  *
  * <p>两条契约：① 绑定 = classpath `app.properties` 的现值（秒口径 = 分钟 × 60）；
  * ② **键缺失 / 值为空 → 回退默认**（TTL 60 分钟 / K=20 / C=200）——收件箱是真相表的派生读缓存、
@@ -49,6 +52,10 @@ class AppConfigFeedInboxTest {
     /** T29 默认值：写扩散粉丝窗口批量 / 重建作者批量。 */
     private static final int DEFAULT_FANOUT_BATCH = 200;
     private static final int DEFAULT_REBUILD_AUTHOR_BATCH = 50;
+
+    /** T31 默认值：投递队列容量 / 关停 drain 上界（毫秒）。 */
+    private static final int DEFAULT_DELIVERY_QUEUE_CAPACITY = 1000;
+    private static final long DEFAULT_DELIVERY_DRAIN_MILLIS = 5000L;
 
     private static Properties originalProps;
 
@@ -226,6 +233,78 @@ class AppConfigFeedInboxTest {
         try {
             assertThrows(IllegalArgumentException.class, AppConfig::getFeedFanoutBatch);
             assertThrows(IllegalArgumentException.class, AppConfig::getFeedRebuildAuthorBatch);
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    // ===== feed 三期异步投递（feed3-T31）=====
+
+    @Test
+    void deliveryParamsBoundFromAppProperties() throws IOException {
+        assertEquals(Integer.parseInt(propString("feed.delivery.queueCapacity")),
+                AppConfig.getFeedDeliveryQueueCapacity());
+        assertEquals(Long.parseLong(propString("feed.delivery.drainTimeoutMillis")),
+                AppConfig.getFeedDeliveryDrainTimeoutMillis());
+
+        assertTrue(AppConfig.getFeedDeliveryQueueCapacity() > 0,
+                "队列容量必须为正（非正 = 投递永远无法入队）");
+        assertTrue(AppConfig.getFeedDeliveryDrainTimeoutMillis() > 0,
+                "drain 上界必须为正（非正 = 关停等待无上界 / 永不等待）");
+    }
+
+    @Test
+    void deliveryParamsFallBackToDefaultsWhenKeysMissing() throws Exception {
+        replaceProps(new Properties());
+        try {
+            assertEquals(DEFAULT_DELIVERY_QUEUE_CAPACITY, AppConfig.getFeedDeliveryQueueCapacity(),
+                    "键缺失应回退默认 1000（可降级；不得 fail-fast）");
+            assertEquals(DEFAULT_DELIVERY_DRAIN_MILLIS, AppConfig.getFeedDeliveryDrainTimeoutMillis(),
+                    "键缺失应回退默认 5000");
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    @Test
+    void blankDeliveryKeysFallBackToDefaults() throws Exception {
+        Properties blank = new Properties();
+        blank.setProperty("feed.delivery.queueCapacity", "   ");
+        blank.setProperty("feed.delivery.drainTimeoutMillis", "   ");
+        replaceProps(blank);
+        try {
+            assertEquals(DEFAULT_DELIVERY_QUEUE_CAPACITY, AppConfig.getFeedDeliveryQueueCapacity());
+            assertEquals(DEFAULT_DELIVERY_DRAIN_MILLIS, AppConfig.getFeedDeliveryDrainTimeoutMillis());
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    /** 非正数 fail-fast：0 / 负数分别是"投递永远无法入队"与"关停等待无上界"的成因。 */
+    @Test
+    void nonPositiveDeliveryParamsFailFast() throws Exception {
+        Properties invalid = new Properties();
+        invalid.setProperty("feed.delivery.queueCapacity", "0");
+        invalid.setProperty("feed.delivery.drainTimeoutMillis", "-5");
+        replaceProps(invalid);
+        try {
+            assertThrows(IllegalArgumentException.class, AppConfig::getFeedDeliveryQueueCapacity);
+            assertThrows(IllegalArgumentException.class, AppConfig::getFeedDeliveryDrainTimeoutMillis);
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    /** 键存在但非数字 → 照旧抛（fail-fast 家族口径，javadoc 承诺；评审 🟢 补例）。 */
+    @Test
+    void nonNumericDeliveryParamsFailFast() throws Exception {
+        Properties invalid = new Properties();
+        invalid.setProperty("feed.delivery.queueCapacity", "abc");
+        invalid.setProperty("feed.delivery.drainTimeoutMillis", "1.5");
+        replaceProps(invalid);
+        try {
+            assertThrows(NumberFormatException.class, AppConfig::getFeedDeliveryQueueCapacity);
+            assertThrows(NumberFormatException.class, AppConfig::getFeedDeliveryDrainTimeoutMillis);
         } finally {
             replaceProps(originalProps);
         }

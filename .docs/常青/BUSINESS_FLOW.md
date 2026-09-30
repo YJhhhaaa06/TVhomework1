@@ -1,7 +1,8 @@
 # 业务流程文档
 
-> 版本：2.17
-> 最后更新：2026-09-30（feed3-T30 **fanout 粉丝遍历改游标（keyset）直读 DB、不回填缓存**：§6.2 机制图与表格中"按粉丝窗口迭代（分页，200/批）"改为**按粉丝游标（keyset）直读 DB 迭代**（`FollowDao.getFollowerUserIdsAfter`：`user_id > cursor` 升序一批、批量 = `feed.fanout.batch` 默认 200、返回不足批 = 到底；**不回填缓存** ⇒ **发布路径不再物化 `user:follower` zset**，治 `N6` 的被动装载）；粉丝列表分页的缓存语义**零改动**（`FollowCache.getFollowerWindow` 的唯一剩余调用方 = 分页）；并发口径 = **不重**（游标严格递增）、遍历期间新增关注（id ≤ 游标）可能漏由其关注触发的重建兜底、取关者可能被多写由下次重建清理（"只多不丢"不变量不破）；`/feed` 契约、大V路由、outbox 失效顺序、分页端点一概不变——**对外业务语义零变化**；无 DDL / 无新索引 / 无新依赖 / 无新配置键）
+> 版本：2.18
+> 最后更新：2026-09-30（feed3-T31 **异步投递：专用投递线程池 + 有界队列**：§6.2 两条投递链（发布 → push / 关注·取关 → rebuild）的「publish + 确认等待（最长 5s）」**移出 Web 请求线程**，经新增 `mq.MqDeliveryDispatcher`（单 worker + `feed.delivery.queueCapacity` 默认 1000 的有界队列）在后台 `mq-delivery` 线程完成——**发布 / 关注·取关接口 RT 不再受 MQ 慢 / 不可达影响**（治 `N8`）；队列满 / 已关停 ⇒ 新投递**丢弃 + 记 WARNING**（降级，丢失面 = NEEDS 4.3 残余②既有口径，收件箱重建兜底）；关停时**有界 drain**（`feed.delivery.drainTimeoutMillis` 默认 5000ms，超时丢弃剩余——不挂住 Tomcat）；投递序 = 提交序（单 worker FIFO）；日志点 / 级别 / 消息一概不变（根捕获随任务体走、`req=` 经 `LogContext.wrap` 串联）；**对外业务语义零变化**（投递失败只降级的既有契约不动；无 DDL / 无新依赖；confirm 串行不改、不承诺吞吐提升——吞吐面留池 `U-34`））
+> 上一版 2.17 = 2026-09-30（feed3-T30 **fanout 粉丝遍历改游标（keyset）直读 DB、不回填缓存**：§6.2 机制图与表格中"按粉丝窗口迭代（分页，200/批）"改为**按粉丝游标（keyset）直读 DB 迭代**（`FollowDao.getFollowerUserIdsAfter`：`user_id > cursor` 升序一批、批量 = `feed.fanout.batch` 默认 200、返回不足批 = 到底；**不回填缓存** ⇒ **发布路径不再物化 `user:follower` zset**，治 `N6` 的被动装载）；粉丝列表分页的缓存语义**零改动**（`FollowCache.getFollowerWindow` 的唯一剩余调用方 = 分页）；并发口径 = **不重**（游标严格递增）、遍历期间新增关注（id ≤ 游标）可能漏由其关注触发的重建兜底、取关者可能被多写由下次重建清理（"只多不丢"不变量不破）；`/feed` 契约、大V路由、outbox 失效顺序、分页端点一概不变——**对外业务语义零变化**；无 DDL / 无新索引 / 无新依赖 / 无新配置键）
 > 上一版 2.16 = 2026-09-29（feed3-T29 **表侧保留核算 + feed 域批量尺寸参数化**：§6.2「写扩散与收件箱窗口」补 **表侧保留核算结论**——「复用重建顺带裁剪」**已**满足（重建整窗替换把每用户行数裁到 C，并清掉窗口外 / 软删 / 已升为大V 的行），故**本期不新增任何清理动作**（拍板：**不给 fanout 加删除、不做定期清理任务 / TTL**）；唯一缺口 = **关注集稳定**（不再关注 / 取关）的用户在两次重建之间 fanout 只追增 ⇒ 表侧行数可**线性增长**，但**对用户可见结果无影响**（读侧归并截到 M=300 兜底）；该膨胀的**后果（读侧装载无 LIMIT ⇒ 读放大）**登记 `U-36`（**修法不在本期**，建议 = 读侧加界）。另 **批量尺寸参数化**：`feed.fanout.batch`（默认 200）/ `feed.rebuild.authorBatch`（默认 50）替下两个包内常量（带默认值 + env / `-D` 覆盖链、**非正数 fail-fast**）——**业务语义零变化**（只改"每批往返次数"与"单条 SQL 长度"，窗口口径、判定与 `/feed` 契约一概不变）。
 > 上一版 2.15 = 2026-09-29（feed3-T28-A **大V滞回判定能力**：§6.2「大V判定路由」由**无状态读时求值**升级为**带滞回的判定**——升级线 `粉丝数 >= 阈值`、降级线 `粉丝数 < 系数 × 阈值`（新增键 `feed.bigv.downgradeRatio`，默认 0.8，与阈值 / 名单**同批**进 `config.FeedBigVConfig` 快照、可经外置文件热更；设 `1.0` ⇒ **等价关闭**滞回），两线之间（带内）**状态不翻转**；**判定输入扩为三路并集 = 名单 ∪ 自动大V状态表（新表 `auto_bigv`，存在即自动大V）∪ 粉丝数 ≥ 阈值**（三路都读，第三路兜底使冷启动 / 历史数据未入表时已达标作者**不被突然降级**）；**状态维护随"粉丝数变更事件"发生**——关注 / 取关在**同一事务内**（`updateFollowerCount` 之后）升（`INSERT IGNORE`）或降（`DELETE`），**`affected rows` 即 edge 信号**（"本次是否真迁移"；同作者并发被 `users` 行锁串行 ⇒ **恰一次**；降级信号供 T28-B 补推）；`/feed` 契约、"大V内容不进收件箱"、接口 URL / 信封**一概不变**；残余见 §6.2（**配置驱动的批量穿越 / 回退不产生清理动作** / 滞回**只覆盖已有状态行**的作者）。
 > 上一版 2.14 = 2026-09-29（feed3-T27-A **大V名单 / 阈值热更能力**：§6.2「大V判定路由」补**取值收敛到单点 `config.FeedBigVConfig`** 与外置文件热更口径（`feed.bigv.configFile` **默认留空 = 不启用**（空时每次现读静态键）/ `feed.bigv.refreshMillis` 节流窗口默认 5000ms / **坏值整批拒绝、沿用上次快照** / 跑测试经 `FEED_BIGV_CONFIGFILE` 指向测试清单做环境隔离）——**改文件不重启即可生效**（生效延迟上界 = 节流窗口）；**业务流程与对外语义零变化**：判定规则、`/feed` 契约、"大V内容不进收件箱"均不变，改的只是"值从哪来、何时刷新"。
@@ -1340,7 +1341,9 @@ GET /feed?page=1&token=xxx
 }
 ```
 
-### 6.2 写扩散与收件箱窗口（二期写侧：落表真相 + 写后失效 + 窗口重建 + 大V占位路由；**feed 三期 T28-A 加：大V滞回判定 + 自动大V状态表维护**；**feed 三期 T29 加：表侧保留核算（复用重建顺带裁剪）+ 批量尺寸参数化（`feed.fanout.batch` / `feed.rebuild.authorBatch`）**）
+### 6.2 写扩散与收件箱窗口（二期写侧：落表真相 + 写后失效 + 窗口重建 + 大V占位路由；**feed 三期 T28-A 加：大V滞回判定 + 自动大V状态表维护**；**feed 三期 T29 加：表侧保留核算（复用重建顺带裁剪）+ 批量尺寸参数化（`feed.fanout.batch` / `feed.rebuild.authorBatch`）**；**feed 三期 T31 加：投递链异步化（投递线程池 + 有界队列）**）
+
+> **异步投递（feed3-T31）**：图中两条「publish」均已改为**经投递线程池异步投递**——Web 线程只做入队（非阻塞），「序列化 + publish + 确认等待（最长 5s）」在后台 `mq-delivery` 单 worker 上执行 ⇒ **发布 / 关注·取关接口 RT 不再受 MQ 慢 / 不可达影响**。队列满（容量 `feed.delivery.queueCapacity` 默认 1000）/ 线程池已关停 ⇒ 新投递**丢弃 + 记 WARNING**（降级，不影响接口；丢失面 = NEEDS 4.3 残余②既有口径，收件箱重建兜底）；关停时**有界 drain**（`feed.delivery.drainTimeoutMillis` 默认 5000ms，超时丢弃剩余并记 WARNING——不挂住 Tomcat）。**投递序 = 提交序**（单 worker FIFO）；投递失败只降级的既有契约、`MqPublisher` 绝不抛契约、confirm 串行（一期拍板）一概不变。
 
 > feed 二期「切读」的**写侧**（feed2-21 T21 落表 + **feed2-22 T22 重建窗口化与同步状态**；**读侧已由 feed2-23 T23 切读，见 6.1**）。本节描述写侧如何维护 **DB 时间线真相源（有界窗口）** 与可降级读缓存；**读写一致性口径** = 单写 DB 真相 + **写后失效 DEL** + 读 miss 回源回填。
 > **feed3-T28-A 补充（滞回判定）**：大V身份由**无状态读时求值**改为**带状态**——关注 / 取关改变被关注者粉丝数时，在**同一事务内**维护「自动大V状态表」`auto_bigv`（存在即自动大V）：`粉丝数 >= 阈值` ⇒ `INSERT IGNORE`、`粉丝数 < 系数 × 阈值` ⇒ `DELETE`，**带内不动**（滞回）；`affected rows == 1` 即"本次真迁移"（edge，降级信号交 T28-B 补推）。判定（读侧）仍单点，但输入变为**三路并集**。
@@ -1349,8 +1352,8 @@ GET /feed?page=1&token=xxx
 
 ```
 发布（addVideo / addPost，事务提交后）
-        │ publish feed.push.content
-        ▼
+        │ 入队投递线程池（feed3-T31：Web 线程不阻塞）
+        ▼ 后台 worker 异步 publish feed.push.content
    feed.push.queue ─► FeedPushConsumer ─► FeedInboxWriter.doFanout
                                             │
                                             ├─ ⓪ DEL feed:outbox:{authorId} 两件套  ← 写后失效（**无条件、先于大V判定**；T23）
@@ -1363,8 +1366,8 @@ GET /feed?page=1&token=xxx
                         （feed:inbox / empty: / partial:）
 
 关注 / 取关（事务提交后）
-        │ publish feed.rebuild.inbox（对象 = 发起方本人）
-        ▼
+        │ 入队投递线程池（feed3-T31：Web 线程不阻塞）
+        ▼ 后台 worker 异步 publish feed.rebuild.inbox（对象 = 发起方本人）
   feed.rebuild.queue ─► FeedRebuildConsumer ─► 读关注集 → 排除大V作者（一次批量求补集、保关注集原序）
                                                 │
                                                 ▼ 单事务（T22）
@@ -1387,6 +1390,7 @@ GET /feed?page=1&token=xxx
 - **分层（T21 起，T22 收口，T23 读侧落地）**：`feed_inbox` 表 = **时间线真相源**（只存 DB 可重算的内容）；`feed:inbox:*` = **可降级读缓存**（TTL 仅为淘汰、无正确性含义）。写侧一致性 = **单写 DB 真相 + 写后失效 DEL**（**fanout 与重建同范式，都不写缓存**）；**读 miss 回源 DB 并回填自 T23 起生效**（收件箱腿）。
 - **窗口有界**：重建产物有界（每作者 K，总上限 C；K/C = `feed.inbox.windowPerAuthor` 默认 20 / `feed.inbox.windowMax` 默认 200）；fanout 只追加 ⇒ 两次重建之间表可超 C（**读侧自 T23 起在归并后截断到读侧总窗口 M = `feed.readWindowMax` 默认 300**）。**表侧保留（feed3-T29 核算结论）= 复用重建顺带裁剪、零新载体**：重建整窗替换**就是**"顺带裁剪"（每用户裁到 C，并清掉窗口外 / 软删 / 已升为大V 的行）⇒ **本期不新增任何清理动作**（**不做定期任务 / TTL、不给 fanout 加删除**）；**残余** = **关注集稳定**（不再关注 / 取关）的用户在两次重建之间行数可**线性增长**，且其**后果（读侧装载无 LIMIT ⇒ 读放大）**登记 **`U-36`**（修法 = 读侧加界，不在本期）。
 - **批量尺寸（feed3-T29）**：`feed.fanout.batch`（默认 200，fanout 粉丝窗口迭代批量）/ `feed.rebuild.authorBatch`（默认 50，重建窗口重查的作者批量）——二者为**执行参数**（只影响每批往返次数与单条 SQL 长度），**不入 `FeedBigVConfig` 热更快照**、改了要重启；**非正数 fail-fast**（非正分别导致 fanout 静默空转 / 重建切片死循环）；键**必须写进 `app.properties`** 才能被 env / `-D` 覆盖。
+- **投递链异步化（feed3-T31）**：发布 / 关注·取关的「publish + 确认等待」经 `mq.MqDeliveryDispatcher`（**单 worker** + 有界队列，`mq-delivery` 守护线程）在后台完成，**接口 RT 不再等 confirm（最长 5s）**——治 `N8`。**队列满 / 已关停 ⇒ 丢弃 + 记 WARNING**（降级；丢失面 = NEEDS 4.3 残余②既有口径，收件箱重建兜底；**不用 `CallerRunsPolicy`**——那会把 confirm 拉回 Web 线程）；**关停有界 drain**（`feed.delivery.drainTimeoutMillis` 默认 5000ms，超时 `shutdownNow` 丢弃剩余并记 WARNING——不挂住 Tomcat 关停）；配置键 `feed.delivery.queueCapacity`（默认 1000）/ `feed.delivery.drainTimeoutMillis`（默认 5000），**非正数 fail-fast**、键**必须写进 `app.properties`**（同 T29 口径）。**投递序 = 提交序**（单 worker FIFO）；**降级语义零变更**（`MqPublisher` 绝不抛契约不动；日志点 / 级别 / 消息一概不变，根捕获随任务体走、`req=` 经 `LogContext.wrap` 串联）；**不承诺吞吐提升**（confirm 串行不改，吞吐面 = 多 channel 留池 `U-34`）。
 - **fanout 粉丝遍历（feed3-T30）**：**游标（keyset）直读 DB、不回填缓存**——`FollowDao.getFollowerUserIdsAfter`（`WHERE followed_user_id = ? AND user_id > ? ORDER BY user_id LIMIT ?`，复用 `idx_followed_user_user`、免 filesort）；起点 0、末位 id 续游标、"空页 / 不足批"终止 ⇒ **发布路径不再物化 `user:follower` zset**（粉丝列表分页的缓存语义**零改动**——`getFollowerWindow` 的唯一剩余调用方 = 分页）。并发口径：**不重**（游标严格递增）；遍历期间新增关注（id ≤ 游标）可能漏 ⇒ 由其关注触发的重建兜底；取关者可能被多写 ⇒ 下次重建清理（"只多不丢"不变量不破）。
 - **三个"窗口"分立（T23 对齐补录）**：C = 表侧重建量（200）／单响应信封 = 接口侧（100）／M = 读侧可见上限（300）——**不得互用**（改 C 会改表侧重建量与成本）。
 - **窗口同步状态**：`feed_inbox_sync` 表（T21 建表、**T22 起写入**）——**存在即已同步**（与窗口替换**同一事务**、空窗也写；`sync_time` 只作诊断），替代一期"完整态标记"作读态闸门；一期 Redis 标记 `feed:inbox:full:` 随 T22 退役。**读态闸门已由 T23 落地**（每请求一条 `uk_user` 点查；**无行 ⇒ `FeedService` 回退纯拉**；**feed2-24 T24 裁决：MQ 可用性不作读侧触发**——对外语义登记见 6.1「对外语义」，理由见 `NEXT_CYCLE_NEEDS.md` 4.0 T24）。

@@ -503,16 +503,62 @@ public final class AppConfig {
     }
 
     /**
-     * 批量尺寸的**唯一正数校验口径**（feed3-T29；形态对齐 {@link #validateFeedBigVDowngradeRatio}）。
+     * 批量尺寸的**唯一正数校验口径**（feed3-T29；形态对齐 {@link #validateFeedBigVDowngradeRatio}；
+     * feed3-T31 起亦复用于投递队列容量——同为"非正即功能空转"的一类）。
      *
-     * <p>为什么必须校验而非沿用"缺省容错、非法抛"的宽松口径：这两个值都是**循环步长 / 窗口尺寸**，
-     * 非正数分别导致 fanout 静默空转、重建死循环——属"配置错就出事且难发现"的一类，宁可启动即拒。
+     * <p>为什么必须校验而非沿用"缺省容错、非法抛"的宽松口径：这些值都是**循环步长 / 窗口尺寸 / 容量**，
+     * 非正数分别导致 fanout 静默空转、重建死循环、投递永远无法入队——属"配置错就出事且难发现"的一类，宁可启动即拒。
      */
     private static int validatePositiveBatch(String key, int batch) {
         if (batch <= 0) {
             throw new IllegalArgumentException(key + " 必须为正数: " + batch);
         }
         return batch;
+    }
+
+    // ===== feed 三期异步投递（feed3-T31）=====
+
+    /**
+     * 投递线程池的**有界队列容量**（feed3-T31）：键 {@code feed.delivery.queueCapacity}（默认 1000）。
+     *
+     * <p><b>用途</b>：{@link com.itheima.mq.MqDeliveryDispatcher} 的 {@code ArrayBlockingQueue} 长度——
+     * 发布 / 关注·取关的「publish + 确认等待」移入后台单 worker 后，队列是 Web 线程与 MQ 速度差之间的
+     * 缓冲带。队列满 = MQ 慢（confirm 堆积）超出缓冲 ⇒ 新投递**丢弃 + 记 WARNING**（降级，不影响业务；
+     * 丢失面 = NEEDS 4.3 残余②既有口径，由收件箱重建兜底）。
+     *
+     * <p><b>容错口径</b>：键缺失 / 空 → 默认 1000，不得让应用起不来；键存在但非数字 → 照旧抛（fail-fast）。
+     * **取值必须为正数**：非正会让投递永远无法入队（等价投递功能整体失效），故在本方法内 fail-fast 拦下
+     * （复用 {@link #validatePositiveBatch}，先例 = T29 批量尺寸）。
+     */
+    public static int getFeedDeliveryQueueCapacity() {
+        return validatePositiveBatch("feed.delivery.queueCapacity", getInt("feed.delivery.queueCapacity", 1000));
+    }
+
+    /**
+     * 投递线程池的**关停 drain 上界**（毫秒，feed3-T31）：键 {@code feed.delivery.drainTimeoutMillis}（默认 5000）。
+     *
+     * <p><b>用途</b>：应用关停时 {@link com.itheima.mq.MqDeliveryDispatcher#destroy()} 先停收新任务，
+     * 再在本上界内等 worker 投完队列存量；超时 ⇒ {@code shutdownNow()} 丢弃剩余并记 WARNING。
+     * "队列未投完即退出"的可接受性 = NEEDS 4.3 残余②（关停期队列内消息丢失与"投递失败只降级"同口径）；
+     * 上界必须存在的原因：**不得挂住 Tomcat 关停**（T31 红线）。
+     *
+     * <p><b>容错口径</b>：键缺失 / 空 → 默认 5000；键存在但非数字 → 照旧抛（fail-fast）。
+     * **取值必须为正数**：非正 = drain 无上界（挂住关停）或永不等待（存量必丢），故在本方法内 fail-fast。
+     */
+    public static long getFeedDeliveryDrainTimeoutMillis() {
+        return validatePositiveMillis("feed.delivery.drainTimeoutMillis",
+                getLong("feed.delivery.drainTimeoutMillis", 5000L));
+    }
+
+    /**
+     * 毫秒级时长参数的**唯一正数校验口径**（feed3-T31；形态对齐 {@link #validatePositiveBatch}）：
+     * 非正 = 关停等待无上界（挂住 Tomcat 关停）或永不等待，宁可启动即拒。
+     */
+    private static long validatePositiveMillis(String key, long millis) {
+        if (millis <= 0) {
+            throw new IllegalArgumentException(key + " 必须为正数: " + millis);
+        }
+        return millis;
     }
 
     // T5（cache-05）：索引懒重建失败冷却退避窗口（对齐熔断冷却先例 redis.breaker.cooldownMillis）

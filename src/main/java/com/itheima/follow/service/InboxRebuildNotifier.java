@@ -5,6 +5,7 @@ import com.itheima.exception.CacheException;
 import com.itheima.follow.model.dto.InboxRebuildMessage;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;
+import com.itheima.mq.MqDeliveryDispatcher;
 import com.itheima.mq.MqMessage;
 import com.itheima.mq.MqPublisher;
 import com.itheima.mq.MqTopology;
@@ -27,12 +28,20 @@ import java.util.logging.Logger;
  * 由下次关注 / 取关或读侧"未同步 ⇒ 回退纯拉"兜底），**关注 / 取关接口的响应与语义一概不变**；
  * **不触碰 {@code /feed} 读路径**（读侧自 T23 起为两路读窗口，与本投递解耦）。
  *
+ * <p><b>异步投递（feed3-T31，治 NEEDS 4.1 N8）</b>：「序列化 + publish + waitForConfirms」经
+ * {@link MqDeliveryDispatcher}（专用单 worker + 有界队列）在后台线程完成，关注 / 取关接口 RT 不再等
+ * confirm（最长 5s）；队列满 / 已关停 ⇒ 任务被丢弃并记 WARNING（降级，残余②口径）。
+ * 本方法的日志点 / 级别 / 消息内容**一概不变**，只是执行线程从 Web 线程换为 {@code mq-delivery}：
+ * 根捕获（SEVERE + 栈）随任务体走（LOG_CONVENTION §四"非 Web 线程"纪律 1）；{@code req=} 串联由
+ * dispatcher 的 {@code LogContext.wrap} 在提交线程捕获完成（纪律 2）。投递序 = 提交序（单 worker），
+ * 同一用户的重建消息不会因异步化而乱序。
+ *
  * <p><b>投递点口径</b>：由调用方（{@code FollowService}）在**事务提交之后**调用，位置与既有
  * "缓存双写"并列（先例：同方法的 {@code followCache.cacheFollow} / {@code cacheUnfollow}；
  * 本项目无事务同步 / afterCommit 机制）；晚于里程碑 INFO，与 {@code LOG_CONVENTION} §3.6 一致。
  *
- * <p><b>依赖（IoC 约束）</b>：{@code MqPublisher} / {@code JacksonCodec} 均按**具体类**注入——
- * IoC 按具体类解析依赖（{@code beans.get(paramType)}），写接口会取不到 Bean 而硬 fail-fast。
+ * <p><b>依赖（IoC 约束）</b>：{@code MqPublisher} / {@code JacksonCodec} / {@code MqDeliveryDispatcher}
+ * 均按**具体类**注入——IoC 按具体类解析依赖（{@code beans.get(paramType)}），写接口会取不到 Bean 而硬 fail-fast。
  *
  * <p><b>日志口径（§3.1）</b>：序列化失败 = 该链唯一捕获点 → WARNING **持栈**；投递未确认沿用
  * {@link MqPublisher} 口径——不刷 WARNING（broker 不可用是连接级故障，MQ 侧已记一次），
@@ -47,15 +56,17 @@ public class InboxRebuildNotifier {
 
     private final MqPublisher publisher;
     private final JacksonCodec codec;
+    private final MqDeliveryDispatcher dispatcher;
 
     @InjectConstructor
-    public InboxRebuildNotifier(MqPublisher publisher, JacksonCodec codec) {
+    public InboxRebuildNotifier(MqPublisher publisher, JacksonCodec codec, MqDeliveryDispatcher dispatcher) {
         this.publisher = publisher;
         this.codec = codec;
+        this.dispatcher = dispatcher;
     }
 
     /**
-     * 投递"收件箱需要重建"事件（只带 userId）。
+     * 投递"收件箱需要重建"事件（只带 userId）——**异步**：入队即返回（入队失败也已降级，见下）。
      *
      * <p>幂等性说明：MQ 侧不保证只投一次（本期无重试，但客户端 automatic recovery 可能重发）；
      * 接收侧重建是**整窗重算同一窗口**（单事务清空 `feed_inbox` + 按当前关注关系重写窗口 +
@@ -66,13 +77,16 @@ public class InboxRebuildNotifier {
      * @param userId 收件箱归属者（= 关注 / 取关的**发起方**，不是被关注的博主）
      */
     public void publishInboxRebuild(long userId) {
-        try {
-            doPublish(userId);
-        } catch (RuntimeException e) {
-            // 契约"绝不抛"的最后兜底：任何意外运行时异常都不得穿透到关注 / 取关接口（需人介入 → SEVERE + 栈）。
-            // 正常路径不经过这里（序列化失败已在内层按降级 WARNING 处理）。
-            LOGGER.log(Level.SEVERE, "收件箱重建投递异常（已兜底，不影响关注/取关）, userId=" + userId, e);
-        }
+        dispatcher.submit(() -> {
+            try {
+                doPublish(userId);
+            } catch (RuntimeException e) {
+                // 契约"绝不抛"的最后兜底（随任务体在投递线程执行，LOG_CONVENTION §四"非 Web 线程"纪律 1）：
+                // 任何意外运行时异常都不得影响业务（需人介入 → SEVERE + 栈）。
+                // 正常路径不经过这里（序列化失败已在内层按降级 WARNING 处理）。
+                LOGGER.log(Level.SEVERE, "收件箱重建投递异常（已兜底，不影响关注/取关）, userId=" + userId, e);
+            }
+        }, "rebuild userId=" + userId);
     }
 
     /** 投递主体：序列化失败 → WARNING（该链唯一捕获点，持栈）；未确认 → 只留默认不输出的 FINE 诊断。 */
