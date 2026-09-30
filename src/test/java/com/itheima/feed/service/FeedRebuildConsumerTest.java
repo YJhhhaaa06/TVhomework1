@@ -88,7 +88,7 @@ class FeedRebuildConsumerTest {
 
     @Test
     void handleRejectsMalformedJson() {
-        // 非法 JSON → 抛出（由容器根捕获记 SEVERE + 栈后一次性转死信），本类不吞、不二次记栈
+        // 非法 JSON → 抛出（由容器先本地有限重试、耗尽才转死信），本类不吞、不二次记栈
         assertThrows(RuntimeException.class, () -> consumer.handle(MqTopology.RK_REBUILD_INBOX,
                 "{not-json".getBytes(StandardCharsets.UTF_8)));
         verify(rebuildService, never()).rebuildInbox(anyLong());

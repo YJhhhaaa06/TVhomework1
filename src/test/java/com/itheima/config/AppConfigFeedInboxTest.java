@@ -25,7 +25,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 这两个值分别是 fanout 迭代步长与重建切片步长，0 / 负数会让 fanout 空转、重建死循环）；
  * feed3-T31 追加异步投递参数——{@code feed.delivery.queueCapacity} → {@code getFeedDeliveryQueueCapacity()}、
  * {@code feed.delivery.drainTimeoutMillis} → {@code getFeedDeliveryDrainTimeoutMillis()}（**非正数 fail-fast**——
- * 非正分别等价"投递永远无法入队"与"关停等待无上界"）。
+ * 非正分别等价"投递永远无法入队"与"关停等待无上界"）；
+ * feed3-T32 追加消费重试与死信 TTL——{@code feed.consume.retry.maxRetries} → {@code getFeedConsumeRetryMaxRetries()}、
+ * {@code feed.consume.retry.backoffMillis} → {@code getFeedConsumeRetryBackoffMillis()}、
+ * {@code feed.dlq.ttlMillis} → {@code getFeedDlqTtlMillis()}（前两者**负数 fail-fast**（0 = 关闭重试 / 不等待，合法）、
+ * 后者**非正数 fail-fast**——非正 = 死信证据全丢）。
  *
  * <p>两条契约：① 绑定 = classpath `app.properties` 的现值（秒口径 = 分钟 × 60）；
  * ② **键缺失 / 值为空 → 回退默认**（TTL 60 分钟 / K=20 / C=200）——收件箱是真相表的派生读缓存、
@@ -305,6 +309,107 @@ class AppConfigFeedInboxTest {
         try {
             assertThrows(NumberFormatException.class, AppConfig::getFeedDeliveryQueueCapacity);
             assertThrows(NumberFormatException.class, AppConfig::getFeedDeliveryDrainTimeoutMillis);
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    // ===== feed 三期消费重试与死信 TTL（feed3-T32）=====
+
+    /** T32 默认值：重试次数 / 退避毫秒 / DLQ TTL 毫秒。 */
+    private static final int DEFAULT_CONSUME_MAX_RETRIES = 2;
+    private static final long DEFAULT_CONSUME_BACKOFF_MILLIS = 1000L;
+    private static final long DEFAULT_DLQ_TTL_MILLIS = 604_800_000L;
+
+    @Test
+    void consumeRetryAndDlqTtlParamsBoundFromAppProperties() throws IOException {
+        assertEquals(Integer.parseInt(propString("feed.consume.retry.maxRetries")),
+                AppConfig.getFeedConsumeRetryMaxRetries());
+        assertEquals(Long.parseLong(propString("feed.consume.retry.backoffMillis")),
+                AppConfig.getFeedConsumeRetryBackoffMillis());
+        assertEquals(Long.parseLong(propString("feed.dlq.ttlMillis")), AppConfig.getFeedDlqTtlMillis());
+
+        assertTrue(AppConfig.getFeedConsumeRetryMaxRetries() >= 0,
+                "重试次数不得为负（0 = 显式关闭重试，合法）");
+        assertTrue(AppConfig.getFeedConsumeRetryBackoffMillis() >= 0,
+                "退避毫秒不得为负（0 = 不等待连续重试，合法）");
+        assertTrue(AppConfig.getFeedDlqTtlMillis() > 0, "DLQ TTL 必须为正（非正 = 证据全丢）");
+    }
+
+    @Test
+    void consumeRetryAndDlqTtlParamsFallBackToDefaultsWhenKeysMissing() throws Exception {
+        replaceProps(new Properties());
+        try {
+            assertEquals(DEFAULT_CONSUME_MAX_RETRIES, AppConfig.getFeedConsumeRetryMaxRetries(),
+                    "键缺失应回退默认 2（可降级；不得 fail-fast）");
+            assertEquals(DEFAULT_CONSUME_BACKOFF_MILLIS, AppConfig.getFeedConsumeRetryBackoffMillis(),
+                    "键缺失应回退默认 1000");
+            assertEquals(DEFAULT_DLQ_TTL_MILLIS, AppConfig.getFeedDlqTtlMillis(), "键缺失应回退默认 7 天");
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    @Test
+    void blankConsumeRetryAndDlqTtlKeysFallBackToDefaults() throws Exception {
+        Properties blank = new Properties();
+        blank.setProperty("feed.consume.retry.maxRetries", "   ");
+        blank.setProperty("feed.consume.retry.backoffMillis", "   ");
+        blank.setProperty("feed.dlq.ttlMillis", "   ");
+        replaceProps(blank);
+        try {
+            assertEquals(DEFAULT_CONSUME_MAX_RETRIES, AppConfig.getFeedConsumeRetryMaxRetries());
+            assertEquals(DEFAULT_CONSUME_BACKOFF_MILLIS, AppConfig.getFeedConsumeRetryBackoffMillis());
+            assertEquals(DEFAULT_DLQ_TTL_MILLIS, AppConfig.getFeedDlqTtlMillis());
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    /** 负数 fail-fast（0 合法 = 关闭重试 / 不等待）；DLQ TTL 非正 fail-fast（0 / 负 = 证据全丢）。 */
+    @Test
+    void negativeRetryParamsAndNonPositiveDlqTtlFailFast() throws Exception {
+        Properties invalid = new Properties();
+        invalid.setProperty("feed.consume.retry.maxRetries", "-1");
+        invalid.setProperty("feed.consume.retry.backoffMillis", "-5");
+        invalid.setProperty("feed.dlq.ttlMillis", "0");
+        replaceProps(invalid);
+        try {
+            assertThrows(IllegalArgumentException.class, AppConfig::getFeedConsumeRetryMaxRetries);
+            assertThrows(IllegalArgumentException.class, AppConfig::getFeedConsumeRetryBackoffMillis);
+            assertThrows(IllegalArgumentException.class, AppConfig::getFeedDlqTtlMillis);
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    /** 零值合法：maxRetries=0（关闭重试）/ backoffMillis=0（不等待）不得被误拒。 */
+    @Test
+    void zeroRetryParamsAreLegal() throws Exception {
+        Properties zero = new Properties();
+        zero.setProperty("feed.consume.retry.maxRetries", "0");
+        zero.setProperty("feed.consume.retry.backoffMillis", "0");
+        replaceProps(zero);
+        try {
+            assertEquals(0, AppConfig.getFeedConsumeRetryMaxRetries());
+            assertEquals(0L, AppConfig.getFeedConsumeRetryBackoffMillis());
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    /** 键存在但非数字 → 照旧抛（fail-fast 家族口径）。 */
+    @Test
+    void nonNumericConsumeRetryParamsFailFast() throws Exception {
+        Properties invalid = new Properties();
+        invalid.setProperty("feed.consume.retry.maxRetries", "abc");
+        invalid.setProperty("feed.consume.retry.backoffMillis", "1.5");
+        invalid.setProperty("feed.dlq.ttlMillis", "7d");
+        replaceProps(invalid);
+        try {
+            assertThrows(NumberFormatException.class, AppConfig::getFeedConsumeRetryMaxRetries);
+            assertThrows(NumberFormatException.class, AppConfig::getFeedConsumeRetryBackoffMillis);
+            assertThrows(NumberFormatException.class, AppConfig::getFeedDlqTtlMillis);
         } finally {
             replaceProps(originalProps);
         }

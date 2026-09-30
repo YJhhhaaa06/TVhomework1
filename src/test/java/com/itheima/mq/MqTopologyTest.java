@@ -46,6 +46,16 @@ class MqTopologyTest {
         assertEquals(MqTopology.RK_DLQ, args.get("x-dead-letter-routing-key"));
     }
 
+    /** feed3-T32：DLQ 声明带消息 TTL（值由调用方注入，本类只做形态收敛）。 */
+    @Test
+    void dlqArgsCarryMessageTtl() {
+        Map<String, Object> args = MqTopology.dlqArgs(604_800_000L);
+
+        assertEquals(604_800_000L, args.get("x-message-ttl"), "DLQ 必须带 x-message-ttl（证据保留窗口有界）");
+        assertEquals(1, args.size(), "DLQ 参数只含 TTL（自身不设死信参数，防环）");
+        assertEquals(30_000L, MqTopology.dlqArgs(30_000L).get("x-message-ttl"), "TTL 与入参同源");
+    }
+
     private static Set<String> allNames() {
         Set<String> names = new LinkedHashSet<>();
         names.add(MqTopology.EXCHANGE_PUSH);

@@ -26,9 +26,11 @@ import java.util.logging.Logger;
  * <p><b>init() 绝不抛</b>：IoC 会把 {@code init()} 异常包成 RuntimeException 上抛并**阻断 Tomcat 启动**，
  * 故注册动作整体 try/catch（降级 WARNING；MQ 不可用时本就注册不上，关注 / 取关与读路径均不受影响）。
  *
- * <p><b>失败出口</b>：本类 handler **只对"载荷不可用"抛异常**（空载荷 / 非法 JSON）——交由容器根捕获
- * 记 SEVERE + 栈后 {@code basicNack(requeue=false)} 一次性转死信（保留证据、不静默丢弃、不重入队）；
- * 重建过程自身的 Redis / DB 失败**已在 {@link FeedRebuildService} 内降级吞掉**（裁决：ACK），
+ * <p><b>失败出口</b>：本类 handler **只对"载荷不可用"抛异常**（空载荷 / 非法 JSON）——交由容器
+ * **先本地有限重试**（feed3-T32：退避、次数有界）、**仍失败才**记 SEVERE + 栈后
+ * {@code basicNack(requeue=false)} 转死信（保留证据、不静默丢弃、不重入队）；
+ * 重建过程自身的 Redis / DB 失败**仍在 {@link FeedRebuildService} 内降级吞掉**（裁决：ACK——
+ * T32 拍板**重试不接管重建链**：其缺口已有读态闸门（未同步 ⇒ 回退纯拉）与下次关注 / 取关重建兜底），
  * 故不会走到死信出口。本类**不重复记栈**（§3.1 附加纪律 2：一次失败只允许一条带堆栈的记录）。
  *
  * <p><b>通配绑定前向兼容</b>：{@code feed.rebuild.queue} 以 {@code feed.rebuild.#} 通配绑定，

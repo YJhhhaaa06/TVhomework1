@@ -41,7 +41,8 @@ import java.util.logging.Logger;
  * 同一条游标迭代 + `INSERT IGNORE` + 写后失效三件套）。与 fanout 的两处差别：① 消费时**复查**
  * 大V（已重升级 ⇒ 早退，可见性由发件箱腿保证，不造无谓上行残影行）；② **不失效发件箱缓存**
  * （补推不产生新内容，且发件箱缓存的新鲜度已由"每次发布无条件 DEL"与作者身份解耦）。
- * 补推**零删除**、重复投递幂等（唯一键 + IGNORE）；失败只降级（缺口补偿统一归 feed3-T33）。
+ * 补推**零删除**、重复投递幂等（唯一键 + IGNORE）；**消费执行失败**同 fanout 交消费容器有限重试
+ * （T32，重放幂等）、耗尽转死信；**投递**缺口补偿统一归 feed3-T33。
  *
  * <p><b>粉丝列表读法</b>（feed3-T30 改写；一期红线"不新增全量粉丝读"沿用）：**游标（keyset）直读
  * DB、不回填缓存**——逐批 {@link FollowDao#getFollowerUserIdsAfter}（{@code user_id > cursor} 升序
@@ -65,15 +66,16 @@ import java.util.logging.Logger;
  * 它与收件箱失效**共用**"首次失败即停用后续失效尝试"的开关（{@code delAbandoned} 由其返回值初始化），
  * 以使一次 Redis 故障只留**一条**带堆栈记录（§3.1 附加纪律 2）。
  *
- * <p><b>失败面</b>（契约"绝不抛"，末尾 SEVERE 兜底；消费侧一律降级 ACK，不转死信）：
+ * <p><b>失败面（feed3-T32 起：可重试失败抛出，交消费容器有限重试）</b>：
  * <ul>
- *   <li>粉丝游标读取失败 → 记 WARNING（结论行，源头持栈）并中止本次 fanout；</li>
- *   <li>DB 落库失败 → 记 WARNING（结论行，源头持栈）并**短路**本次 fanout（同旧 Redis 写失败口径：
- *       外部依赖整体不可用时不得把"窗口 DB 查 + 降级日志"按批数各刷一遍）；未落库的粉丝由后续重建 /
- *       丢消息兜底路径自愈（可靠性加固属三期）；</li>
- *   <li>缓存失效 DEL 失败 → **不停写**（DB 真相优先）：首次记 WARNING（**持栈**——该链唯一捕获点）
- *       + 打点一次（不按批刷），并**停用后续批次的失效尝试**（首次失败即视为"缓存不可用"，同 T18
- *       "不放大依赖故障"取向）；落库一路继续到底，残留缓存由 TTL / 重建 / 下次写失效兜底。</li>
+ *   <li>粉丝游标读取失败 → 结论行 WARNING（源头回调持 SEVERE + 栈）后**抛出**——由消费容器
+ *       本地退避重试（幂等重放：重试从本方法入口整体重跑）；重试耗尽转死信留证；</li>
+ *   <li>DB 落库失败 → 同上（不再"短路 ACK"：DB 抖动 / 死锁等瞬时失败由重试自愈；
+ *       持续失败进 DLQ 保留证据）；</li>
+ *   <li>缓存失效 DEL 失败 → **不停写**（DB 真相优先、读自愈兜底）：首次记 WARNING（**持栈**——
+ *       该链唯一捕获点）+ 打点一次（不按批刷），并**停用后续批次的失效尝试**（首次失败即视为
+ *       "缓存不可用"，同 T18"不放大依赖故障"取向）。**缓存失败不抛**——重试对"读自愈兜底"的
+ *       失效通道无意义，残留缓存由 TTL / 重建 / 下次写失效兜底。</li>
  * </ul>
  *
  * <p><b>日志与打点口径</b>：游标读 / DB 落库两类失败里源头（本类事务回调——
@@ -111,18 +113,17 @@ public class FeedInboxWriter {
     /**
      * 写扩散一条内容：向作者的所有粉丝收件箱落库 {@code contentId}，并失效其收件箱缓存。
      *
-     * <p>幂等（INSERT IGNORE；同一内容重复投递无副作用）。任何失败都不抛出。
+     * <p>幂等（INSERT IGNORE；同一内容重复投递 / 重试重放无副作用）。
+     *
+     * <p><b>失败面（feed3-T32 起）</b>：粉丝游标读失败 / DB 落库失败 / 意外异常**抛出**——
+     * 由消费容器本地有限重试（幂等重放）；重试耗尽转死信留证。缓存失效失败仍降级吞掉
+     * （读自愈兜底，见类注释）。
      *
      * @param contentId 新内容 id
      * @param authorId  作者 id（大V判定 + 粉丝列表来源）
      */
     public void fanout(long contentId, long authorId) {
-        try {
-            doFanout(contentId, authorId);
-        } catch (RuntimeException e) {
-            // 契约"绝不抛"的最后兜底：不得让异常穿透消费容器去转死信（需人介入 → SEVERE + 栈）
-            LOGGER.log(Level.SEVERE, "写扩散异常（已兜底，不影响发布）, contentId=" + contentId, e);
-        }
+        doFanout(contentId, authorId);
     }
 
     private void doFanout(long contentId, long authorId) {
@@ -144,17 +145,16 @@ public class FeedInboxWriter {
             try {
                 fanIds = readFollowerBatch(authorId, cursor, fanoutBatch);
             } catch (RuntimeException e) {
-                // 游标查询的 DB 失败：源头回调已持 SEVERE + 栈 → 此处只记结论行（不带栈）
-                LOGGER.log(Level.WARNING, "写扩散中止（粉丝游标读取失败，不影响发布）, contentId=" + contentId
+                // 游标查询的 DB 失败：源头回调已持 SEVERE + 栈 → 此处只记结论行（不带栈），
+                // 再抛出交消费容器有限重试（feed3-T32：幂等重放；耗尽转死信）
+                LOGGER.log(Level.WARNING, "写扩散失败（粉丝游标读取失败，交消费重试）, contentId=" + contentId
                         + ", authorId=" + authorId + ", cursor=" + cursor);
-                return;
+                throw e;
             }
             if (fanIds.isEmpty()) {
                 return;
             }
-            if (!insertBatch(contentId, fanIds)) {
-                return;
-            }
+            insertBatch(contentId, fanIds);
             if (!delAbandoned) {
                 // 首次 DEL 失败即视为"缓存不可用"，后续批次不再尝试（同 T18"不放大依赖故障"取向；
                 // DB 真相优先，落库一路继续到底，残留缓存由 TTL / 重建 / 下次写失效兜底）
@@ -174,7 +174,8 @@ public class FeedInboxWriter {
      * fanout 与降级补推（feed3-T28-B）**共用**本次遍历语义。
      *
      * <p>SQLException 在本链唯一捕获点（回调即源头，§3.1 附加纪律 2）记 SEVERE + 栈后包
-     * {@link ServerException}；调用方只补结论行（不带栈）。读与写各自独立事务连接借还（不合并）。
+     * {@link ServerException}；调用方只补结论行（不带栈）后**抛出**（feed3-T32：交消费容器重试）。
+     * 读与写各自独立事务连接借还（不合并）。
      */
     private List<Long> readFollowerBatch(long authorId, long cursor, int batch) {
         return transactionTemplate.execute(conn -> {
@@ -204,25 +205,15 @@ public class FeedInboxWriter {
      * <p><b>消费时复查大V</b>：若消费时刻作者**已重新升级**（降级后又被关注回线）⇒ 跳过——可见性
      * 由"大V发件箱腿"保证（N == K 同量级），不产生无谓的上行残影行；再次降级会有新 edge、新补推。
      *
-     * <p><b>失败面</b>（契约"绝不抛"，末尾 SEVERE 兜底；补推失败只降级，缺口补偿统一归 feed3-T33）：
-     * <ul>
-     *   <li>存量内容读取失败 → 结论行 WARNING（不带栈；源头回调已持 SEVERE + 栈）并中止；</li>
-     *   <li>粉丝游标读取失败 → 记 WARNING（结论行）并中止（口径同 fanout）；</li>
-     *   <li>落库失败 → 记 WARNING（结论行，源头持栈）并**短路**本次补推（同"外部依赖整体不可用
-     *       不按批刷日志"口径）；</li>
-     *   <li>缓存失效 DEL 失败 → **不停写**（DB 真相优先）：首次记 WARNING + 打点一次（不按批刷）
-     *       并停用后续批次的失效尝试。</li>
-     * </ul>
+     * <p><b>失败面（feed3-T32 起：可重试失败抛出）</b>：存量内容读取 / 粉丝游标读取 / 落库失败 →
+     * 结论行 WARNING（源头回调已持 SEVERE + 栈）后**抛出**——交消费容器有限重试（重放幂等）；
+     * 耗尽转死信留证。缓存失效 DEL 失败仍**降级吞掉**并停用后续失效尝试（口径同 fanout：
+     * 读自愈兜底，重试无意义）。**投递**缺口补偿统一归 feed3-T33（本类只管消费执行）。
      *
      * @param authorId 降级的作者（现任粉丝 = 消费时刻 {@code follow} 表中其关注者集合）
      */
     public void backfillAuthor(long authorId) {
-        try {
-            doBackfill(authorId);
-        } catch (RuntimeException e) {
-            // 契约"绝不抛"的最后兜底：不得让异常穿透消费容器去转死信（需人介入 → SEVERE + 栈）
-            LOGGER.log(Level.SEVERE, "降级补推异常（已兜底，不影响关注/取关）, authorId=" + authorId, e);
-        }
+        doBackfill(authorId);
     }
 
     private void doBackfill(long authorId) {
@@ -234,10 +225,12 @@ public class FeedInboxWriter {
         List<Long> contentIds;
         try {
             contentIds = loadRecentContentIds(authorId);
-        } catch (ServerException e) {
-            // 源头（查询回调 / TransactionTemplate）已持 SEVERE + 栈 → 此处只记结论行、不带栈
-            LOGGER.log(Level.WARNING, "降级补推中止（存量内容读取失败，降级）, authorId=" + authorId);
-            return;
+        } catch (RuntimeException e) {
+            // 捕获面取 RuntimeException（含"池关闭 ISE"等非 ServerException 的运行时出口——评审 🟡2 统一口径）：
+            // ServerException 时源头（查询回调 / TransactionTemplate）已持 SEVERE + 栈，其余由容器终态持栈；
+            // 本处只记结论行（不带栈），再抛出交消费容器有限重试（feed3-T32）
+            LOGGER.log(Level.WARNING, "降级补推失败（存量内容读取失败，交消费重试）, authorId=" + authorId);
+            throw e;
         }
         if (contentIds.isEmpty()) {
             // 无存量内容 ⇒ 无行可补（不读粉丝、不发 SQL、不失效缓存）
@@ -252,17 +245,15 @@ public class FeedInboxWriter {
             try {
                 fanIds = readFollowerBatch(authorId, cursor, fanoutBatch);
             } catch (RuntimeException e) {
-                // 游标查询的 DB 失败：源头回调已持 SEVERE + 栈 → 此处只记结论行（不带栈）
-                LOGGER.log(Level.WARNING, "降级补推中止（粉丝游标读取失败，降级）, authorId=" + authorId
+                // 游标查询的 DB 失败：源头回调已持 SEVERE + 栈 → 此处只记结论行（不带栈），再抛出
+                LOGGER.log(Level.WARNING, "降级补推失败（粉丝游标读取失败，交消费重试）, authorId=" + authorId
                         + ", cursor=" + cursor);
-                return;
+                throw e;
             }
             if (fanIds.isEmpty()) {
                 return;
             }
-            if (!insertBackfillBatch(authorId, contentIds, fanIds)) {
-                return;
-            }
+            insertBackfillBatch(authorId, contentIds, fanIds);
             if (!delAbandoned) {
                 // 首次 DEL 失败即视为"缓存不可用"，后续批次不再尝试（同 fanout 口径）
                 delAbandoned = !delInboxBatch("authorId=" + authorId, fanIds);
@@ -279,7 +270,7 @@ public class FeedInboxWriter {
      * 取作者最近 K 条内容 id（{@code is_deleted = 0}，降序；K = 重建 / 收件箱窗口口径）。
      *
      * <p>SQLException 在本链唯一捕获点（回调即源头，§3.1 附加纪律 2）记 SEVERE + 栈后包
-     * {@link ServerException}；调用方只补结论行（不带栈）。
+     * {@link ServerException}；调用方只补结论行（不带栈）后**抛出**（feed3-T32：交消费容器重试）。
      */
     private List<Long> loadRecentContentIds(long authorId) {
         int perAuthorLimit = AppConfig.getFeedInboxWindowPerAuthor();
@@ -303,11 +294,10 @@ public class FeedInboxWriter {
      * 单条参数规模 = 2 × 批量 ≤ 400——按内容而非按"粉丝 × 内容"对拼条，避免放大单条语句规模）。
      *
      * <p>SQLException 在本链唯一捕获点（回调即源头）记 SEVERE + 栈后包 {@link ServerException}；
-     * 调用方只补结论行（不带栈）。任一条失败 ⇒ 整批回滚（同"一批同生共死"口径）。
-     *
-     * @return true = 本批已提交；false = 落库失败（已记结论行，调用方应短路本次补推）
+     * 失败**抛出**（feed3-T32）：由消费容器有限重试（幂等重放）；耗尽转死信。任一条失败 ⇒
+     * 整批回滚（同"一批同生共死"口径）。
      */
-    private boolean insertBackfillBatch(long authorId, List<Long> contentIds, List<Long> fanIds) {
+    private void insertBackfillBatch(long authorId, List<Long> contentIds, List<Long> fanIds) {
         try {
             transactionTemplate.execute(conn -> {
                 try {
@@ -322,12 +312,13 @@ public class FeedInboxWriter {
                     throw new ServerException("降级补推收件箱落库失败");
                 }
             });
-            return true;
-        } catch (ServerException e) {
-            // 源头（回调内 / TransactionTemplate）已持 SEVERE + 栈 → 此处只记结论行、不带栈
-            LOGGER.log(Level.WARNING, "降级补推中止（收件箱落库失败，降级）, authorId=" + authorId
+        } catch (RuntimeException e) {
+            // 捕获面取 RuntimeException（含池关闭等非 ServerException 出口——评审 🟡2 统一口径）；
+            // ServerException 时源头（回调内 / TransactionTemplate）已持 SEVERE + 栈 → 此处只补结论行
+            //（不带栈），再抛出（其余运行时异常由容器终态持栈）
+            LOGGER.log(Level.WARNING, "降级补推失败（收件箱落库失败，交消费重试）, authorId=" + authorId
                     + ", fanCount=" + fanIds.size());
-            return false;
+            throw e;
         }
     }
 
@@ -385,9 +376,10 @@ public class FeedInboxWriter {
     /**
      * 单批落库（独立事务连接借还；SQLException 在本链唯一捕获点记 SEVERE + 栈后包 {@link ServerException}）。
      *
-     * @return true = 本批已提交；false = 落库失败（已记结论行，调用方应短路本次 fanout）
+     * <p>失败**抛出**（feed3-T32）：由消费容器有限重试（幂等重放——INSERT IGNORE 重复执行无副作用）；
+     * 耗尽转死信。调用方不再"短路 ACK"。
      */
-    private boolean insertBatch(long contentId, List<Long> fanIds) {
+    private void insertBatch(long contentId, List<Long> fanIds) {
         try {
             transactionTemplate.execute(conn -> {
                 try {
@@ -399,12 +391,13 @@ public class FeedInboxWriter {
                     throw new ServerException("写扩散收件箱落库失败");
                 }
             });
-            return true;
-        } catch (ServerException e) {
-            // 源头（回调内 / TransactionTemplate）已持 SEVERE + 栈 → 此处只记结论行、不带栈
-            LOGGER.log(Level.WARNING, "写扩散中止（收件箱落库失败，降级）, contentId=" + contentId
+        } catch (RuntimeException e) {
+            // 捕获面取 RuntimeException（含池关闭等非 ServerException 出口——评审 🟡2 统一口径）；
+            // ServerException 时源头（回调内 / TransactionTemplate）已持 SEVERE + 栈 → 此处只补结论行
+            //（不带栈），再抛出（其余运行时异常由容器终态持栈）
+            LOGGER.log(Level.WARNING, "写扩散失败（收件箱落库失败，交消费重试）, contentId=" + contentId
                     + ", fanCount=" + fanIds.size());
-            return false;
+            throw e;
         }
     }
 

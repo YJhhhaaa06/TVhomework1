@@ -7,6 +7,7 @@ import com.itheima.cache.RedisAccess;
 import com.itheima.config.AppConfig;
 import com.itheima.content.dao.ContentDao;
 import com.itheima.exception.CacheException;
+import com.itheima.exception.ServerException;
 import com.itheima.feed.dao.FeedInboxDao;
 import com.itheima.follow.dao.FollowDao;
 import com.itheima.util.LogProbe;
@@ -34,6 +35,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -51,8 +53,10 @@ import static org.mockito.Mockito.when;
 /**
  * {@link FeedInboxWriter} 单测（feed2-21 T21；由 feed1-18 T18 的 FeedInboxCacheTest 改写；
  * feed2-23 T23 增"大V发件箱写后失效"；**feed3-T30 改写粉丝遍历隔离手法**：mock
- * {@link FollowDao} 的 keyset 游标读（原 mock {@code FollowCache.getFollowerWindow} 的 offset 窗口））：
- * 游标迭代 / DB 真相批量落库 / 写后失效 DEL（outbox + 收件箱）/ 大V跳过 / 各类降级 / FEED 域打点。
+ * {@link FollowDao} 的 keyset 游标读（原 mock {@code FollowCache.getFollowerWindow} 的 offset 窗口）；
+ * **feed3-T32 改写失败面口径**：DB 类失败（游标读 / 落库 / 意外异常）由"吞掉"改为**抛出**
+ * （交消费容器有限重试），仅缓存失效 DEL 失败仍降级吞掉）：
+ * 游标迭代 / DB 真相批量落库 / 写后失效 DEL（outbox + 收件箱）/ 大V跳过 / 失败面 / FEED 域打点。
  *
  * <p>隔离手法：mock {@link FollowDao}（游标直读）/ {@link FeedInboxDao}（落库）/
  * {@link TransactionTemplate}（回调打到 mock {@link Connection}）/ {@link FeedBigVRouter}（大V判定）/
@@ -251,15 +255,17 @@ class FeedInboxWriterTest {
         assertTrue(probe.atLevel(Level.WARNING).isEmpty(), "大V跳过属常态路由，不应记 WARNING");
     }
 
-    // ==================== 降级路径 ====================
+    // ==================== 失败面（feed3-T32：DB 类抛出 / 缓存失败降级） ====================
 
     @Test
-    void fanoutDegradesOnFollowerCursorFailureWithoutDoubleStack() throws SQLException {
+    void fanoutThrowsOnFollowerCursorFailureWithSingleStackedSourceLog() throws SQLException {
+        // feed3-T32：游标读失败不再降级吞掉——抛出交消费容器有限重试（耗尽转死信）
         when(followDao.getFollowerUserIdsAfter(any(), eq(AUTHOR), anyLong(), anyInt()))
                 .thenThrow(new SQLException("db down"));
 
-        assertDoesNotThrow(() -> writer.fanout(CONTENT, AUTHOR));
+        ServerException thrown = assertThrows(ServerException.class, () -> writer.fanout(CONTENT, AUTHOR));
 
+        assertTrue(thrown.getMessage().contains("写扩散粉丝游标查询失败"), "异常应可定位失败阶段");
         // 源头（游标查询回调）持 SEVERE + 栈恰一条；结论行 WARNING 恰一条、不带栈
         List<LogRecord> severe = probe.atLevel(Level.SEVERE);
         assertEquals(1, severe.size(), () -> "应恰一条 SEVERE，实际: " + probe.records());
@@ -267,7 +273,7 @@ class FeedInboxWriterTest {
         assertNotNull(severe.getFirst().getThrown(), "游标读失败是该链唯一捕获点 → 持栈");
         List<LogRecord> warnings = probe.atLevel(Level.WARNING);
         assertEquals(1, warnings.size(), () -> "应恰一条 WARNING，实际: " + probe.records());
-        assertTrue(warnings.getFirst().getMessage().contains("写扩散中止"));
+        assertTrue(warnings.getFirst().getMessage().contains("交消费重试"), "结论行应表明交容器重试");
         assertNull(warnings.getFirst().getThrown(), "源头已持栈 → 此处为结论行、不带栈");
         verify(transactionTemplate, times(1)).execute(any());   // 仅一次失败的游标读
         verify(feedInboxDao, never()).insertIgnoreBatch(any(), anyLong(), any());
@@ -276,16 +282,17 @@ class FeedInboxWriterTest {
     }
 
     @Test
-    void fanoutDegradesOnDbWriteFailureAndStopsIterating() throws SQLException {
-        // DB 全不可用时，不得把"游标读 + 降级日志"按批数各刷一遍：首批落库失败即短路本次 fanout
+    void fanoutThrowsOnDbWriteFailure() throws SQLException {
+        // feed3-T32：落库失败不再"短路 ACK"——抛出后循环即止，交消费容器重试（幂等重放）
         stubPages(List.of(ids(1, BATCH), ids(BATCH + 1, BATCH + 10)));
         when(feedInboxDao.insertIgnoreBatch(eq(conn), eq(CONTENT), any()))
                 .thenThrow(new SQLException("db down"));
 
-        assertDoesNotThrow(() -> writer.fanout(CONTENT, AUTHOR));
+        ServerException thrown = assertThrows(ServerException.class, () -> writer.fanout(CONTENT, AUTHOR));
 
+        assertTrue(thrown.getMessage().contains("写扩散收件箱落库失败"));
         verify(followDao, times(1)).getFollowerUserIdsAfter(eq(conn), eq(AUTHOR), anyLong(), anyInt());
-        verify(transactionTemplate, times(2)).execute(any());   // 1 读 + 1 失败写
+        verify(transactionTemplate, times(2)).execute(any());   // 1 读 + 1 失败写（抛出即止，不再续读）
         verify(redis, times(1)).executeVoid(any());   // 仅 outbox 失效（先于落库，已成功）
         List<LogRecord> severe = probe.atLevel(Level.SEVERE);
         assertEquals(1, severe.size(), () -> "应恰一条 SEVERE，实际: " + probe.records());
@@ -345,16 +352,34 @@ class FeedInboxWriterTest {
     }
 
     @Test
-    void fanoutNeverThrowsOnUnexpectedError() {
-        // 契约"绝不抛"的最后兜底：异常不得穿透消费容器去转死信
+    void fanoutThrowsOnUnexpectedError() {
+        // feed3-T32：意外异常不再"末尾 SEVERE 兜底吞掉"——直接抛出，交消费容器重试 / 耗尽转死信
+        // （比静默 ACK 更好：DLQ 留证据；本类不再记栈——重试终态由容器持栈）
         when(bigVRouter.isBigV(AUTHOR)).thenThrow(new IllegalStateException("boom"));
 
-        assertDoesNotThrow(() -> writer.fanout(CONTENT, AUTHOR));
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> writer.fanout(CONTENT, AUTHOR));
 
-        List<LogRecord> severe = probe.atLevel(Level.SEVERE);
-        assertEquals(1, severe.size(), () -> "应恰一条 SEVERE，实际: " + probe.records());
-        assertTrue(severe.getFirst().getMessage().contains("写扩散异常（已兜底"));
-        assertNotNull(severe.getFirst().getThrown());
+        assertEquals("boom", thrown.getMessage(), "原异常原样穿透（不包装、不吞）");
+        assertTrue(probe.records().isEmpty(), () -> "本类不重复记录（重试终态由容器持栈）: " + probe.records());
+    }
+
+    /** 评审 🟡2 统一捕获面：非 ServerException 的运行时出口（如池关闭 ISE）也记结论行后抛出。 */
+    @Test
+    void fanoutRecordsConclusionLineForNonServerRuntimeAndRethrows() throws SQLException {
+        stubPages(List.of(List.of(11L)));
+        when(feedInboxDao.insertIgnoreBatch(eq(conn), eq(CONTENT), any()))
+                .thenThrow(new IllegalStateException("pool closed"));
+
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> writer.fanout(CONTENT, AUTHOR));
+
+        assertEquals("pool closed", thrown.getMessage(), "原异常原样上抛（不包装）");
+        List<LogRecord> warnings = probe.atLevel(Level.WARNING);
+        assertEquals(1, warnings.size(), () -> "应恰一条结论行，实际: " + probe.records());
+        assertTrue(warnings.getFirst().getMessage().contains("交消费重试"));
+        assertNull(warnings.getFirst().getThrown(), "结论行不带栈");
+        assertTrue(probe.atLevel(Level.SEVERE).isEmpty(), "该边角在业务侧无 SEVERE（重试终态由容器持栈）");
     }
 
     // ==================== 降级补推（feed3-T28-B） ====================
@@ -424,48 +449,69 @@ class FeedInboxWriterTest {
     }
 
     @Test
-    void backfillDegradesOnContentLoadFailureWithoutDoubleStack() throws SQLException {
+    void backfillThrowsOnContentLoadFailureWithSourceStack() throws SQLException {
+        // feed3-T32：补推的存量内容读取失败不再吞掉——抛出交消费容器有限重试
         when(contentDao.findRecentContentIdsByAuthor(any(), any(), anyInt()))
                 .thenThrow(new SQLException("db down"));
 
-        assertDoesNotThrow(() -> writer.backfillAuthor(AUTHOR));
+        ServerException thrown = assertThrows(ServerException.class, () -> writer.backfillAuthor(AUTHOR));
 
+        assertTrue(thrown.getMessage().contains("降级补推存量内容查询失败"));
         assertSingleStackedSevere("降级补推存量内容查询失败");
-        assertTrue(probe.atLevel(Level.WARNING).getFirst().getMessage().contains("降级补推中止（存量内容读取失败"));
+        assertTrue(probe.atLevel(Level.WARNING).getFirst().getMessage().contains("交消费重试"));
         verify(followDao, never()).getFollowerUserIdsAfter(any(), anyLong(), anyLong(), anyInt());
         verify(redis, never()).executeVoid(any());
     }
 
     @Test
-    void backfillDegradesOnCursorFailureWithoutDoubleStack() throws SQLException {
+    void backfillThrowsOnCursorFailureWithSourceStack() throws SQLException {
         when(contentDao.findRecentContentIdsByAuthor(conn, List.of(AUTHOR), K))
                 .thenReturn(Map.of(AUTHOR, List.of(101L)));
         when(followDao.getFollowerUserIdsAfter(any(), eq(AUTHOR), anyLong(), anyInt()))
                 .thenThrow(new SQLException("db down"));
 
-        assertDoesNotThrow(() -> writer.backfillAuthor(AUTHOR));
+        ServerException thrown = assertThrows(ServerException.class, () -> writer.backfillAuthor(AUTHOR));
 
+        assertTrue(thrown.getMessage().contains("写扩散粉丝游标查询失败"));
         assertSingleStackedSevere("写扩散粉丝游标查询失败");
-        assertTrue(probe.atLevel(Level.WARNING).getFirst().getMessage().contains("降级补推中止（粉丝游标读取失败"));
+        assertTrue(probe.atLevel(Level.WARNING).getFirst().getMessage().contains("交消费重试"));
         verify(feedInboxDao, never()).insertIgnoreBatch(any(), anyLong(), any());
         verify(redis, never()).executeVoid(any());
     }
 
     @Test
-    void backfillDegradesOnDbWriteFailureAndStopsIterating() throws SQLException {
+    void backfillThrowsOnDbWriteFailure() throws SQLException {
         stubPages(List.of(ids(1, BATCH), ids(BATCH + 1, BATCH + 10)));
         when(contentDao.findRecentContentIdsByAuthor(conn, List.of(AUTHOR), K))
                 .thenReturn(Map.of(AUTHOR, List.of(101L)));
         when(feedInboxDao.insertIgnoreBatch(eq(conn), anyLong(), any()))
                 .thenThrow(new SQLException("db down"));
 
-        assertDoesNotThrow(() -> writer.backfillAuthor(AUTHOR));
+        ServerException thrown = assertThrows(ServerException.class, () -> writer.backfillAuthor(AUTHOR));
 
-        // 首批落库失败即短路（不按批刷日志）：只读了一页、无任何 DEL
+        assertTrue(thrown.getMessage().contains("降级补推收件箱落库失败"));
+        // 首批落库失败即抛出（不按批刷日志、不再续读）：只读了一页、无任何 DEL
         verify(followDao, times(1)).getFollowerUserIdsAfter(eq(conn), eq(AUTHOR), anyLong(), anyInt());
         verify(redis, never()).executeVoid(any());
         assertSingleStackedSevere("降级补推收件箱落库失败");
-        assertTrue(probe.atLevel(Level.WARNING).getFirst().getMessage().contains("降级补推中止（收件箱落库失败"));
+        assertTrue(probe.atLevel(Level.WARNING).getFirst().getMessage().contains("交消费重试"));
+    }
+
+    /** 评审 🟡2 统一捕获面（补推侧）：非 ServerException 的运行时出口同样记结论行后抛出。 */
+    @Test
+    void backfillRecordsConclusionLineForNonServerRuntimeAndRethrows() throws SQLException {
+        when(contentDao.findRecentContentIdsByAuthor(any(), any(), anyInt()))
+                .thenThrow(new IllegalStateException("pool closed"));
+
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> writer.backfillAuthor(AUTHOR));
+
+        assertEquals("pool closed", thrown.getMessage(), "原异常原样上抛（不包装）");
+        List<LogRecord> warnings = probe.atLevel(Level.WARNING);
+        assertEquals(1, warnings.size(), () -> "应恰一条结论行，实际: " + probe.records());
+        assertTrue(warnings.getFirst().getMessage().contains("交消费重试"));
+        assertNull(warnings.getFirst().getThrown(), "结论行不带栈");
+        verify(followDao, never()).getFollowerUserIdsAfter(any(), anyLong(), anyLong(), anyInt());
     }
 
     @Test
@@ -492,16 +538,15 @@ class FeedInboxWriterTest {
     }
 
     @Test
-    void backfillNeverThrowsOnUnexpectedError() {
-        // 契约"绝不抛"的最后兜底：异常不得穿透消费容器去转死信
+    void backfillThrowsOnUnexpectedError() {
+        // feed3-T32：意外异常不再"末尾 SEVERE 兜底吞掉"——直接抛出，交消费容器重试 / 耗尽转死信
         when(bigVRouter.isBigV(AUTHOR)).thenThrow(new IllegalStateException("boom"));
 
-        assertDoesNotThrow(() -> writer.backfillAuthor(AUTHOR));
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> writer.backfillAuthor(AUTHOR));
 
-        List<LogRecord> severe = probe.atLevel(Level.SEVERE);
-        assertEquals(1, severe.size(), () -> "应恰一条 SEVERE，实际: " + probe.records());
-        assertTrue(severe.getFirst().getMessage().contains("降级补推异常（已兜底"));
-        assertNotNull(severe.getFirst().getThrown());
+        assertEquals("boom", thrown.getMessage(), "原异常原样穿透（不包装、不吞）");
+        assertTrue(probe.records().isEmpty(), () -> "本类不重复记录（重试终态由容器持栈）: " + probe.records());
     }
 
     /** 断言"恰一条 SEVERE、含指定文案、持栈"——补推链各类失败共用的源头持栈口径。 */

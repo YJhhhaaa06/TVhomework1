@@ -561,6 +561,77 @@ public final class AppConfig {
         return millis;
     }
 
+    // ===== feed 三期消费重试与死信 TTL（feed3-T32）=====
+
+    /**
+     * 消费失败的**本地重试次数上限**（feed3-T32）：键 {@code feed.consume.retry.maxRetries}（默认 2）。
+     *
+     * <p><b>用途</b>：{@link com.itheima.mq.MqConsumerContainer} 处理器抛异常后，在消费线程内
+     * 退避重试本值次；**仍失败才 {@code basicNack(requeue=false)} 转死信**（治 NEEDS 4.1 {@code N9}：
+     * 瞬时失败不再"一次即出主流程"）。总尝试次数 = 本值 + 1；总等待上界 = 本值 ×
+     * {@link #getFeedConsumeRetryBackoffMillis()}（有界，无热循环）。
+     *
+     * <p><b>容错口径</b>：键缺失 / 空 → 默认 2；键存在但非数字 → 照旧抛（fail-fast）。
+     * **取值不得为负**（{@code >= 0}）：**0 是显式关闭重试**（退回"一次失败即转死信"的一期语义）、
+     * 合法取值；负数无意义，故在本方法内 fail-fast 拦下。
+     */
+    public static int getFeedConsumeRetryMaxRetries() {
+        return validateNonNegativeInt("feed.consume.retry.maxRetries",
+                getInt("feed.consume.retry.maxRetries", 2));
+    }
+
+    /**
+     * 消费重试的**单次退避等待**（毫秒，feed3-T32）：键 {@code feed.consume.retry.backoffMillis}（默认 1000）。
+     *
+     * <p><b>用途</b>：{@link com.itheima.mq.MqConsumerContainer} 每次重试前在消费线程内
+     * {@code Thread.sleep} 本值——固定退避（次数为个位数，指数曲线的收益不显著，固定值使
+     * "总等待 = 次数 × 本值"简单可证）。**同线程退避不阻塞其它队列**（口径见容器类注释）。
+     * 关停时 {@code shutdownNow} 中断等待（容器放弃重试、消息随连接关闭回主队列）。
+     *
+     * <p><b>容错口径</b>：键缺失 / 空 → 默认 1000；键存在但非数字 → 照旧抛（fail-fast）。
+     * **取值不得为负**（{@code >= 0}）：**0 = 不等待连续重试**（仍有次数上限，非热循环）、合法；负数 fail-fast。
+     */
+    public static long getFeedConsumeRetryBackoffMillis() {
+        return validateNonNegativeLong("feed.consume.retry.backoffMillis",
+                getLong("feed.consume.retry.backoffMillis", 1000L));
+    }
+
+    /**
+     * 死信队列的**消息 TTL**（毫秒，feed3-T32）：键 {@code feed.dlq.ttlMillis}（默认 604800000 = 7 天）。
+     *
+     * <p><b>用途</b>：{@link com.itheima.mq.MqTopology#dlqArgs(long)} 的 {@code x-message-ttl} 参数——
+     * 死信消息在 DLQ 内保留本时长后由 broker 自动删除（DLQ 自身无 DLX，到期即丢弃）。
+     * <b>取值理由（"保留证据"与容量的平衡）</b>：DLQ 收的是"重试耗尽"的异常消息（量小），
+     * 7 天覆盖"发现异常 → 排障（含周末）→ 复现"的完整窗口，又不无限堆积（一期遗留的容量议题）。
+     *
+     * <p><b>注意（迁移）</b>：TTL 属队列声明参数，broker 拒绝同名不同参的重复声明（406
+     * PRECONDITION_FAILED）——**调整本值须先删除既有 {@code feed.dlq} 队列**（消息会一并删，
+     * 必要时先人工导出）。
+     *
+     * <p><b>容错口径</b>：键缺失 / 空 → 默认 7 天；键存在但非数字 → 照旧抛（fail-fast）。
+     * **取值必须为正数**：非正 = 消息写入即过期（证据全丢）或语义混乱，故在本方法内 fail-fast。
+     */
+    public static long getFeedDlqTtlMillis() {
+        return validatePositiveMillis("feed.dlq.ttlMillis",
+                getLong("feed.dlq.ttlMillis", 604_800_000L));
+    }
+
+    /** 非负整数校验（feed3-T32）：仅负数非法（0 有显式语义，如"关闭重试"），形态对齐校验家族。 */
+    private static int validateNonNegativeInt(String key, int value) {
+        if (value < 0) {
+            throw new IllegalArgumentException(key + " 不得为负数: " + value);
+        }
+        return value;
+    }
+
+    /** 非负长整校验（feed3-T32）：仅负数非法（0 有显式语义，如"不等待连续重试"），形态对齐校验家族。 */
+    private static long validateNonNegativeLong(String key, long value) {
+        if (value < 0) {
+            throw new IllegalArgumentException(key + " 不得为负数: " + value);
+        }
+        return value;
+    }
+
     // T5（cache-05）：索引懒重建失败冷却退避窗口（对齐熔断冷却先例 redis.breaker.cooldownMillis）
 
     public static long getContentIndexRebuildCooldownMillis() {

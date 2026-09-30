@@ -37,7 +37,7 @@ public final class MqTopology {
 
     public static final String QUEUE_REBUILD = "feed.rebuild.queue";
 
-    /** 死信队列：自身不设死信参数（防环）；一期不设 TTL（保留证据，容量议题留三期）。 */
+    /** 死信队列：自身不设死信参数（防环）；feed3-T32 起设**消息 TTL**（{@link #dlqArgs(long)}），到期自动删除。 */
     public static final String QUEUE_DLQ = "feed.dlq";
 
     // ==================== 路由键 ====================
@@ -72,5 +72,20 @@ public final class MqTopology {
         return Map.of(
                 "x-dead-letter-exchange", EXCHANGE_DLX,
                 "x-dead-letter-routing-key", RK_DLQ);
+    }
+
+    /**
+     * 死信队列自身的声明参数（feed3-T32）：{@code x-message-ttl} = 消息保留时长（毫秒）——
+     * 到期由 broker 自动删除（DLQ 无 DLX，到期即丢弃），证据保留窗口有界（治 NEEDS 4.1 {@code N9}
+     * 的"DLQ 无 TTL 无限堆积"）。
+     *
+     * <p>值由调用方注入（{@code MqTopologyDeclarer} 取 {@code AppConfig.getFeedDlqTtlMillis()}）——
+     * 本类保持"命名与形态唯一源"，不承担配置读取职责。
+     *
+     * <p><b>注意</b>：TTL 属队列声明参数，broker 拒绝同名不同参声明（406）——调整取值须先删除
+     * 既有 {@code feed.dlq} 队列（详见 {@code AppConfig#getFeedDlqTtlMillis()} 的迁移注）。
+     */
+    public static Map<String, Object> dlqArgs(long ttlMillis) {
+        return Map.of("x-message-ttl", ttlMillis);
     }
 }

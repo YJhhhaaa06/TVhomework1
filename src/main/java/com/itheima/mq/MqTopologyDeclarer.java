@@ -1,5 +1,6 @@
 package com.itheima.mq;
 
+import com.itheima.config.AppConfig;
 import com.itheima.ioc.annotation.Component;
 import com.rabbitmq.client.BuiltinExchangeType;
 import com.rabbitmq.client.Channel;
@@ -11,6 +12,9 @@ import java.io.IOException;
  *
  * <p>每次"建立新连接"后调用一次（见 {@link MqConnectionManager}）。声明全部 <b>durable</b>，
  * 对齐一期"应用重启 flushDb 清 Redis 收件箱 → 靠重建自愈、broker 侧消息不受影响"的可靠性口径。
+ *
+ * <p><b>feed3-T32</b>：DLQ 声明带 {@code x-message-ttl}（{@link AppConfig#getFeedDlqTtlMillis()}）——
+ * 死信证据保留窗口有界。TTL 属队列声明参数，**改值须先删旧队列**（见该 getter 的迁移注）。
  *
  * <p>独立成类而非内联进连接管理：单测可对声明做精确断言（mock {@link Channel} 后 verify 调用），
  * 未来加拓扑也只改这一处。
@@ -31,8 +35,9 @@ public class MqTopologyDeclarer {
 
         channel.queueDeclare(MqTopology.QUEUE_PUSH, true, false, false, MqTopology.deadLetterArgs());
         channel.queueDeclare(MqTopology.QUEUE_REBUILD, true, false, false, MqTopology.deadLetterArgs());
-        // DLQ 自身不设死信参数（防环）
-        channel.queueDeclare(MqTopology.QUEUE_DLQ, true, false, false, null);
+        // DLQ 自身不设死信参数（防环）；feed3-T32 起设消息 TTL（证据保留窗口有界，不无限堆积）
+        channel.queueDeclare(MqTopology.QUEUE_DLQ, true, false, false,
+                MqTopology.dlqArgs(AppConfig.getFeedDlqTtlMillis()));
 
         channel.queueBind(MqTopology.QUEUE_PUSH, MqTopology.EXCHANGE_PUSH, MqTopology.BIND_PUSH_ALL);
         channel.queueBind(MqTopology.QUEUE_REBUILD, MqTopology.EXCHANGE_REBUILD, MqTopology.BIND_REBUILD_ALL);

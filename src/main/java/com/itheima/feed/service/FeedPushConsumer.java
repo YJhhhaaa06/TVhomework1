@@ -28,9 +28,10 @@ import java.util.logging.Logger;
  * <p><b>init() 绝不抛</b>：IoC 会把 {@code init()} 异常包成 RuntimeException 上抛并**阻断 Tomcat 启动**，
  * 故注册动作整体 try/catch（降级 WARNING；MQ 不可用时本就注册不上，读路径也不受影响）。
  *
- * <p><b>失败出口</b>：本类 handler **不吞异常**——解析失败（空载荷 / 非法 JSON）直接抛出，
- * 由 {@link MqConsumerContainer} 的任务体最外层根捕获记 SEVERE + 栈后
- * {@code basicNack(requeue=false)} 一次性转死信（不重入队，结构上无热循环）。
+ * <p><b>失败出口</b>：本类 handler **不吞异常**——解析失败（空载荷 / 非法 JSON）与写扩散链的
+ * DB 类失败（feed3-T32 起 {@link FeedInboxWriter} 不再降级吞掉）一律抛出，由
+ * {@link MqConsumerContainer} **先本地有限重试**（feed3-T32：退避、次数有界）、**仍失败才**记
+ * SEVERE + 栈后 {@code basicNack(requeue=false)} 转死信（不重入队，无热循环）。
  * 本类**不重复记栈**（§3.1 附加纪律 2：一次失败只允许一条带堆栈的记录）。
  *
  * <p><b>通配绑定前向兼容</b>：{@code feed.push.queue} 以 {@code feed.push.#} 通配绑定，
