@@ -29,6 +29,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -47,6 +48,8 @@ class InboxRebuildNotifierTest {
 
     private MqPublisher publisher;
     private MqDeliveryDispatcher dispatcher;
+    /** 去抖窗口 0 = 显式关闭（feed3-T33-A）：既有用例保持"事件即投递"语义，不受窗口影响。 */
+    private InboxRebuildDebouncer debouncer;
     private InboxRebuildNotifier notifier;
     private LogProbe probe;
 
@@ -54,13 +57,15 @@ class InboxRebuildNotifierTest {
     void setUp() {
         publisher = mock(MqPublisher.class);
         dispatcher = new MqDeliveryDispatcher(8, 1000);
-        notifier = new InboxRebuildNotifier(publisher, new JacksonCodec(), dispatcher);
+        debouncer = new InboxRebuildDebouncer(0L);
+        notifier = new InboxRebuildNotifier(publisher, new JacksonCodec(), dispatcher, debouncer);
         probe = LogProbe.attachTo(LogUtil.getLogger(InboxRebuildNotifier.class));
     }
 
     @AfterEach
     void tearDown() {
         probe.detach();
+        debouncer.destroy();
         dispatcher.destroy();
     }
 
@@ -97,7 +102,7 @@ class InboxRebuildNotifierTest {
     void serializationFailureSkipsPublishWithStackedWarning() {
         JacksonCodec broken = mock(JacksonCodec.class);
         when(broken.toJson(any())).thenThrow(new CacheException("serialize failed"));
-        InboxRebuildNotifier degraded = new InboxRebuildNotifier(publisher, broken, dispatcher);
+        InboxRebuildNotifier degraded = new InboxRebuildNotifier(publisher, broken, dispatcher, debouncer);
 
         assertDoesNotThrow(() -> degraded.publishInboxRebuild(USER));
 
@@ -112,7 +117,7 @@ class InboxRebuildNotifierTest {
     void nullJsonSkipsPublishWithWarning() {
         JacksonCodec nullCodec = mock(JacksonCodec.class);
         when(nullCodec.toJson(any())).thenReturn(null);
-        InboxRebuildNotifier degraded = new InboxRebuildNotifier(publisher, nullCodec, dispatcher);
+        InboxRebuildNotifier degraded = new InboxRebuildNotifier(publisher, nullCodec, dispatcher, debouncer);
 
         assertDoesNotThrow(() -> degraded.publishInboxRebuild(USER));
 
@@ -151,6 +156,27 @@ class InboxRebuildNotifierTest {
         assertTrue(elapsedMs < 200, "关注/取关线程不应等 confirm，实测 " + elapsedMs + "ms");
         assertTrue(confirmed.await(2, TimeUnit.SECONDS), "投递应最终在 worker 上完成");
         verify(publisher).publish(any());
+    }
+
+    /** T33-A 接入留证：同一用户的连点 / 批量关注在窗口内**只投一条**重建消息（经去抖器 + dispatcher 全链）。 */
+    @Test
+    void burstOfRebuildRequestsForSameUserIsDebouncedToOneDelivery() throws Exception {
+        InboxRebuildDebouncer windowed = new InboxRebuildDebouncer(150L);
+        try {
+            when(publisher.publish(any())).thenReturn(true);
+            InboxRebuildNotifier debounced =
+                    new InboxRebuildNotifier(publisher, new JacksonCodec(), dispatcher, windowed);
+
+            debounced.publishInboxRebuild(USER);
+            debounced.publishInboxRebuild(USER);
+            debounced.publishInboxRebuild(USER);
+
+            verify(publisher, timeout(2000)).publish(any());
+            Thread.sleep(300L);   // 再等两个窗口：确认只投了一条（前两次的排期已被取消）
+            verify(publisher, times(1)).publish(any());
+        } finally {
+            windowed.destroy();
+        }
     }
 
     /** 轮询等待 worker 侧日志落地（异步化后日志在 mq-delivery 线程写入，与断言存在时序差）。 */

@@ -632,6 +632,28 @@ public final class AppConfig {
         return value;
     }
 
+    // ===== feed 三期去抖与投递补偿（feed3-T33）=====
+
+    /**
+     * 收件箱重建请求的**去抖窗口**（毫秒，feed3-T33-A）：键 {@code feed.rebuild.debounceMillis}（默认 1000）。
+     *
+     * <p><b>用途</b>：{@link com.itheima.follow.service.InboxRebuildDebouncer} 的尾沿（trailing）窗口 ——
+     * 同一 userId 在窗口内的多次关注 / 取关只在窗口末尾投**一条**重建消息。治 NEEDS 4.1 {@code N11}
+     * 去抖面：T31 后投递单 worker 串行 + 消费 prefetch=1 ⇒ 重建消息基本不重叠 ⇒ 既有
+     * {@code FeedRebuildService} 的 {@code SET NX EX} 锁去重几乎不生效 ⇒ "N 次连续关注 ≈ N 次整窗重算"。
+     *
+     * <p><b>取值理由（默认 1000ms）</b>：关注后用户行为通常是"直接进博主个人空间、或继续刷别的视频"，
+     * 相对于**本就异步**的收件箱重建，这点额外延迟用户无感；窗口同时覆盖"手动连点"与"批量关注"的间隔。
+     *
+     * <p><b>容错口径</b>：键缺失 / 空 → 默认 1000，不得让应用起不来；键存在但非数字 → 照旧抛（fail-fast）。
+     * **取值不得为负**（{@code >= 0}）：**0 = 显式关闭去抖**（退回"事件即投递"的既有行为）、合法取值；
+     * 负数无意义 → 在本方法内 fail-fast（先例 = T32 的 {@link #getFeedConsumeRetryMaxRetries()}）。
+     */
+    public static long getFeedRebuildDebounceMillis() {
+        return validateNonNegativeLong("feed.rebuild.debounceMillis",
+                getLong("feed.rebuild.debounceMillis", 1000L));
+    }
+
     // T5（cache-05）：索引懒重建失败冷却退避窗口（对齐熔断冷却先例 redis.breaker.cooldownMillis）
 
     public static long getContentIndexRebuildCooldownMillis() {

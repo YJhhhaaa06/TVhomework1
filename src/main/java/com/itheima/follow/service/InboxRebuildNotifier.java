@@ -36,12 +36,20 @@ import java.util.logging.Logger;
  * dispatcher 的 {@code LogContext.wrap} 在提交线程捕获完成（纪律 2）。投递序 = 提交序（单 worker），
  * 同一用户的重建消息不会因异步化而乱序。
  *
+ * <p><b>去抖（feed3-T33-A，治 NEEDS 4.1 {@code N11} 的去抖面）</b>：本方法**不再直接入 dispatcher**，
+ * 而是先登记到 {@link InboxRebuildDebouncer}（per-user 尾沿合并，窗口 = {@code feed.rebuild.debounceMillis}
+ * 默认 1000ms）；窗口到期后仍经 {@code dispatcher.submit} 走**同一条**异步投递链（T31 的 RT 解耦 /
+ * 队列满降级 / 关停 drain 一概复用）。**重建语义零改动**（仍整窗重算 + "存在即已同步"），改变的只是
+ * "同一用户的连点 / 批量关注投几条"；可见性上界由"投递 + 消费"变为"**窗口 + 投递 + 消费**"
+ * （残余见去抖器类注释与 NEEDS 4.0 T33 段）。
+ *
  * <p><b>投递点口径</b>：由调用方（{@code FollowService}）在**事务提交之后**调用，位置与既有
  * "缓存双写"并列（先例：同方法的 {@code followCache.cacheFollow} / {@code cacheUnfollow}；
  * 本项目无事务同步 / afterCommit 机制）；晚于里程碑 INFO，与 {@code LOG_CONVENTION} §3.6 一致。
  *
- * <p><b>依赖（IoC 约束）</b>：{@code MqPublisher} / {@code JacksonCodec} / {@code MqDeliveryDispatcher}
- * 均按**具体类**注入——IoC 按具体类解析依赖（{@code beans.get(paramType)}），写接口会取不到 Bean 而硬 fail-fast。
+ * <p><b>依赖（IoC 约束）</b>：{@code MqPublisher} / {@code JacksonCodec} / {@code MqDeliveryDispatcher} /
+ * {@code InboxRebuildDebouncer} 均按**具体类**注入——IoC 按具体类解析依赖（{@code beans.get(paramType)}），
+ * 写接口会取不到 Bean 而硬 fail-fast。
  *
  * <p><b>日志口径（§3.1）</b>：序列化失败 = 该链唯一捕获点 → WARNING **持栈**；投递未确认沿用
  * {@link MqPublisher} 口径——不刷 WARNING（broker 不可用是连接级故障，MQ 侧已记一次），
@@ -57,12 +65,16 @@ public class InboxRebuildNotifier {
     private final MqPublisher publisher;
     private final JacksonCodec codec;
     private final MqDeliveryDispatcher dispatcher;
+    /** 重建请求去抖（feed3-T33-A）：把"同一用户的连点 / 批量关注"合并为一条重建投递。 */
+    private final InboxRebuildDebouncer debouncer;
 
     @InjectConstructor
-    public InboxRebuildNotifier(MqPublisher publisher, JacksonCodec codec, MqDeliveryDispatcher dispatcher) {
+    public InboxRebuildNotifier(MqPublisher publisher, JacksonCodec codec,
+                                MqDeliveryDispatcher dispatcher, InboxRebuildDebouncer debouncer) {
         this.publisher = publisher;
         this.codec = codec;
         this.dispatcher = dispatcher;
+        this.debouncer = debouncer;
     }
 
     /**
@@ -77,7 +89,9 @@ public class InboxRebuildNotifier {
      * @param userId 收件箱归属者（= 关注 / 取关的**发起方**，不是被关注的博主）
      */
     public void publishInboxRebuild(long userId) {
-        dispatcher.submit(() -> {
+        // feed3-T33-A：先入**去抖桶**（窗口内同一 userId 只保留最后一次，见 InboxRebuildDebouncer）——
+        // 去抖器在**调用线程**捕获 reqId，到期在调度线程恢复后再提交给 dispatcher，req= 链不断裂。
+        debouncer.schedule(userId, () -> dispatcher.submit(() -> {
             try {
                 doPublish(userId);
             } catch (RuntimeException e) {
@@ -86,7 +100,7 @@ public class InboxRebuildNotifier {
                 // 正常路径不经过这里（序列化失败已在内层按降级 WARNING 处理）。
                 LOGGER.log(Level.SEVERE, "收件箱重建投递异常（已兜底，不影响关注/取关）, userId=" + userId, e);
             }
-        }, "rebuild userId=" + userId);
+        }, "rebuild userId=" + userId));
     }
 
     /** 投递主体：序列化失败 → WARNING（该链唯一捕获点，持栈）；未确认 → 只留默认不输出的 FINE 诊断。 */
