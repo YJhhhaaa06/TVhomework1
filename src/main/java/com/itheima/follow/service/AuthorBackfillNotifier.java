@@ -103,7 +103,7 @@ public class AuthorBackfillNotifier {
         if (!deliveryBuffer.publish(MqMessage.push(MqTopology.RK_PUSH_BACKFILL, body))) {
             // 降级口径：不可用时 MqDeliveryBuffer 只暂存并留 FINE 诊断（不刷 WARNING）；
             // 真正发布失败的 WARNING + 栈由 MqPublisher 持（那里是该链唯一捕获点），此处不重复记
-            LOGGER.fine("降级补推投递未确认（降级或已暂存待补偿，不影响关注/取关）, authorId=" + authorId);
+            LOGGER.fine("降级补推投递未确认（降级 / 已暂存待补偿 / 关停丢弃，不影响关注/取关）, authorId=" + authorId);
         }
     }
 }

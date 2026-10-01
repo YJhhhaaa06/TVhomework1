@@ -37,7 +37,12 @@ import java.util.logging.Logger;
  *       可用即重放。**为什么必须有它**：{@code ConnectionFactory.automaticRecoveryEnabled = true} 下
  *       **运行期断线由客户端自动恢复、不经过 {@code MqConnectionManager.establish()}、不通知任何
  *       listener** ⇒ 只挂 {@code onConnected} 覆盖不到最常见的故障模式（运行期 MQ 挂 → 起），方案会形同
- *       虚设。</li>
+ *       虚设。<br>
+ *       <b>已知取舍（登记）</b>：门槛用 {@code provider.isAvailable()}（本地读、**不触发重连**）——若应用
+ *       **从未建立过连接**（启动时 broker 不可达）且此后**无任何业务投递**，则 {@code isAvailable()} 恒
+ *       false ⇒ 探测**不自驱重连**，缓冲要等**下一次任意业务投递**（触发 {@code ensureConnected()} →
+ *       {@code establish()} → {@code onConnected()}）才重放 ⇒ "恢复后可补偿上界 = 探测周期"在**该窄路径**
+ *       不成立（自愈于下次业务事件；e2e 覆盖的"运行期断线 → 客户端自动恢复"主路径不受影响）。</li>
  *   <li><b>加速通道 = {@link MqConnectionListener#onConnected()}</b>：令"首次连不上 → 惰性重连成功"
  *       这条路径立即重放，不必等下一个探测周期。</li>
  * </ul>
@@ -182,8 +187,11 @@ public class MqDeliveryBuffer implements Initializable, Disposable {
     }
 
     /**
-     * 定时探测（主通道）：缓冲非空且连接可用才重放；**任何异常都吞掉**——任务体抛出会让
+     * 定时探测（主通道）：缓冲非空且连接**本地可用**才重放；**任何异常都吞掉**——任务体抛出会让
      * {@code scheduleWithFixedDelay} 永久停摆。包级可见：单测可直接驱动该路径（不依赖真实计时）。
+     *
+     * <p>门槛用 {@code isAvailable()}（不触发重连）⇒"从未建过连接且此后无业务投递"时探测不自驱重连、
+     * 缓冲等下次业务投递才重放（**已知取舍**，见类注释"主通道"项）。
      */
     void probe() {
         try {

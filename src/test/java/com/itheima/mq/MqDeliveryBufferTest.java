@@ -115,6 +115,25 @@ class MqDeliveryBufferTest {
         verify(publisher, never()).publish(any());
     }
 
+    /** flush 重放中"单条未确认"⇒ 放回队尾并结束本轮（剩余保留、不丢消息；重放 = 至少一次语义）。 */
+    @Test
+    void unconfirmedDuringReplayIsRequeuedAndKeptForNextProbe() {
+        when(provider.ensureConnected()).thenReturn(false);
+        buffer.publish(message("feed.push.content"));
+        buffer.publish(message("feed.push.content"));
+        assertEquals(2, buffer.pendingCount());
+
+        // 连接恢复，但 broker 未确认（nack / 超时）⇒ 放回队尾、本轮结束
+        when(provider.isAvailable()).thenReturn(true);
+        when(provider.ensureConnected()).thenReturn(true);
+        when(publisher.publish(any())).thenReturn(false);
+
+        buffer.probe();
+
+        assertEquals(2, buffer.pendingCount(), "未确认的消息应放回队尾保留（重放 = 至少一次）");
+        verify(publisher, times(1)).publish(any());
+    }
+
     @Test
     void overflowDropsNewestWithThrottledWarning() {
         when(provider.ensureConnected()).thenReturn(false);
