@@ -654,6 +654,26 @@ public final class AppConfig {
                 getLong("feed.rebuild.debounceMillis", 1000L));
     }
 
+    /**
+     * 投递补偿缓冲的**有界容量**（feed3-T33-B）：键 {@code feed.compensate.bufferCapacity}（默认 10000）。
+     *
+     * <p><b>用途</b>：{@link com.itheima.mq.MqDeliveryBuffer} 的内存待重放队列长度 —— MQ 不可用期
+     * "确定未投出"的消息暂存于此，连接恢复后重放（三类消息统一经过：写扩散 / 降级补推 / 收件箱重建）。
+     * 「进入本类」的**唯一判据**是 {@code MqConnectionProvider.ensureConnected()} 返回 false
+     * （确定没投出去）；确认超时 / nack 不入缓冲（既有降级口径不动）。
+     *
+     * <p><b>取值理由（默认 10000）</b>：按"故障 10 分钟 × 每秒 10 条投递"的量级估算（单条载荷仅
+     * 十几到几十字节）⇒ 内存占用可忽略，而批量发布 / 关注场景下足以覆盖常见故障时长。
+     *
+     * <p><b>容错口径</b>：键缺失 / 空 → 默认 10000，不得让应用起不来；键存在但非数字 → 照旧抛（fail-fast）。
+     * **取值必须为正数**：非正会让缓冲永远无法入队（补偿功能整体失效），故在本方法内 fail-fast
+     * （复用 {@link #validatePositiveBatch}，先例 = T29 批量尺寸 / T31 投递队列容量）。
+     */
+    public static int getFeedCompensateBufferCapacity() {
+        return validatePositiveBatch("feed.compensate.bufferCapacity",
+                getInt("feed.compensate.bufferCapacity", 10_000));
+    }
+
     // T5（cache-05）：索引懒重建失败冷却退避窗口（对齐熔断冷却先例 redis.breaker.cooldownMillis）
 
     public static long getContentIndexRebuildCooldownMillis() {

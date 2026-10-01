@@ -5,6 +5,7 @@ import com.itheima.exception.CacheException;
 import com.itheima.follow.model.dto.InboxRebuildMessage;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;
+import com.itheima.mq.MqDeliveryBuffer;
 import com.itheima.mq.MqDeliveryDispatcher;
 import com.itheima.mq.MqMessage;
 import com.itheima.mq.MqPublisher;
@@ -47,7 +48,7 @@ import java.util.logging.Logger;
  * "缓存双写"并列（先例：同方法的 {@code followCache.cacheFollow} / {@code cacheUnfollow}；
  * 本项目无事务同步 / afterCommit 机制）；晚于里程碑 INFO，与 {@code LOG_CONVENTION} §3.6 一致。
  *
- * <p><b>依赖（IoC 约束）</b>：{@code MqPublisher} / {@code JacksonCodec} / {@code MqDeliveryDispatcher} /
+ * <p><b>依赖（IoC 约束）</b>：{@code MqDeliveryBuffer} / {@code JacksonCodec} / {@code MqDeliveryDispatcher} /
  * {@code InboxRebuildDebouncer} 均按**具体类**注入——IoC 按具体类解析依赖（{@code beans.get(paramType)}），
  * 写接口会取不到 Bean 而硬 fail-fast。
  *
@@ -62,16 +63,17 @@ public class InboxRebuildNotifier {
 
     private static final Logger LOGGER = LogUtil.getLogger(InboxRebuildNotifier.class);
 
-    private final MqPublisher publisher;
+    /** 投递入口（feed3-T33-B 起：经 {@link MqDeliveryBuffer}，MQ 不可用时暂存、恢复后重放）。 */
+    private final MqDeliveryBuffer deliveryBuffer;
     private final JacksonCodec codec;
     private final MqDeliveryDispatcher dispatcher;
     /** 重建请求去抖（feed3-T33-A）：把"同一用户的连点 / 批量关注"合并为一条重建投递。 */
     private final InboxRebuildDebouncer debouncer;
 
     @InjectConstructor
-    public InboxRebuildNotifier(MqPublisher publisher, JacksonCodec codec,
+    public InboxRebuildNotifier(MqDeliveryBuffer deliveryBuffer, JacksonCodec codec,
                                 MqDeliveryDispatcher dispatcher, InboxRebuildDebouncer debouncer) {
-        this.publisher = publisher;
+        this.deliveryBuffer = deliveryBuffer;
         this.codec = codec;
         this.dispatcher = dispatcher;
         this.debouncer = debouncer;
@@ -118,10 +120,10 @@ public class InboxRebuildNotifier {
             LOGGER.log(Level.WARNING, "收件箱重建投递跳过（载荷序列化失败，不影响关注/取关）, userId=" + userId, e);
             return;
         }
-        if (!publisher.publish(MqMessage.rebuild(MqTopology.RK_REBUILD_INBOX, body))) {
-            // MqPublisher 的降级口径：不可用时既不访问 broker 也不记日志（避免每请求刷日志）；
+        if (!deliveryBuffer.publish(MqMessage.rebuild(MqTopology.RK_REBUILD_INBOX, body))) {
+            // 降级口径：不可用时 MqDeliveryBuffer 只暂存并留 FINE 诊断（不刷 WARNING）；
             // 真正发布失败的 WARNING + 栈由 MqPublisher 持（那里是该链唯一捕获点），此处不重复记
-            LOGGER.fine("收件箱重建投递未确认（降级，不影响关注/取关）, userId=" + userId);
+            LOGGER.fine("收件箱重建投递未确认（降级或已暂存待补偿，不影响关注/取关）, userId=" + userId);
         }
     }
 }

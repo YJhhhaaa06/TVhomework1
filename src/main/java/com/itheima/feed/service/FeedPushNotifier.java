@@ -5,6 +5,7 @@ import com.itheima.exception.CacheException;
 import com.itheima.feed.model.dto.FeedPushMessage;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;
+import com.itheima.mq.MqDeliveryBuffer;
 import com.itheima.mq.MqDeliveryDispatcher;
 import com.itheima.mq.MqMessage;
 import com.itheima.mq.MqPublisher;
@@ -32,7 +33,11 @@ import java.util.logging.Logger;
  * 的既有范式，先例：同方法的 {@code contentCache.addContent}；本项目无事务同步 / afterCommit 机制）。
  * 晚于里程碑 INFO → 与 {@code LOG_CONVENTION} §3.6"事务提交后、缓存同步前"的位置口径一致。
  *
- * <p><b>依赖（IoC 约束）</b>：{@code MqPublisher} / {@code JacksonCodec} / {@code MqDeliveryDispatcher}
+ * <p><b>投递入口（feed3-T33-B）</b>：改为经 {@link MqDeliveryBuffer} 投递——MQ 不可用时该消息**暂存**
+ * （有界内存缓冲），连接恢复后重放（三类消息统一；消费侧幂等 ⇒ 重放零副作用）。可用时语义与
+ * {@link MqPublisher} 完全一致（未确认仍只降级）。
+ *
+ * <p><b>依赖（IoC 约束）</b>：{@code MqDeliveryBuffer} / {@code JacksonCodec} / {@code MqDeliveryDispatcher}
  * 均按**具体类**注入——IoC 按具体类解析依赖（{@code beans.get(paramType)}），写接口会取不到 Bean 而硬 fail-fast。
  *
  * <p><b>日志口径（§3.1）</b>：序列化失败 = 该链唯一捕获点 → WARNING **持栈**；投递未确认
@@ -44,13 +49,15 @@ public class FeedPushNotifier {
 
     private static final Logger LOGGER = LogUtil.getLogger(FeedPushNotifier.class);
 
-    private final MqPublisher publisher;
+    /** 投递入口（feed3-T33-B 起：经缓冲器，不可用时暂存、恢复后重放）。 */
+    private final MqDeliveryBuffer deliveryBuffer;
     private final JacksonCodec codec;
     private final MqDeliveryDispatcher dispatcher;
 
     @InjectConstructor
-    public FeedPushNotifier(MqPublisher publisher, JacksonCodec codec, MqDeliveryDispatcher dispatcher) {
-        this.publisher = publisher;
+    public FeedPushNotifier(MqDeliveryBuffer deliveryBuffer, JacksonCodec codec,
+                            MqDeliveryDispatcher dispatcher) {
+        this.deliveryBuffer = deliveryBuffer;
         this.codec = codec;
         this.dispatcher = dispatcher;
     }
@@ -92,10 +99,10 @@ public class FeedPushNotifier {
             LOGGER.log(Level.WARNING, "写扩散投递跳过（载荷序列化失败，不影响发布）, contentId=" + contentId, e);
             return;
         }
-        if (!publisher.publish(MqMessage.push(MqTopology.RK_PUSH_CONTENT, body))) {
-            // MqPublisher 的降级口径：不可用时既不访问 broker 也不记日志（避免每请求刷日志）；
+        if (!deliveryBuffer.publish(MqMessage.push(MqTopology.RK_PUSH_CONTENT, body))) {
+            // 降级口径：不可用时 MqDeliveryBuffer 只暂存并留 FINE 诊断（不刷 WARNING）；
             // 真正发布失败的 WARNING + 栈由 MqPublisher 持（那里是该链唯一捕获点），此处不重复记
-            LOGGER.fine("写扩散投递未确认（降级，不影响发布）, contentId=" + contentId);
+            LOGGER.fine("写扩散投递未确认（降级或已暂存待补偿，不影响发布）, contentId=" + contentId);
         }
     }
 }

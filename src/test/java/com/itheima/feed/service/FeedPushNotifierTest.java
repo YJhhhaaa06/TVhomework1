@@ -3,6 +3,7 @@ package com.itheima.feed.service;
 import com.itheima.cache.JacksonCodec;
 import com.itheima.exception.CacheException;
 import com.itheima.feed.model.dto.FeedPushMessage;
+import com.itheima.mq.MqDeliveryBuffer;
 import com.itheima.mq.MqDeliveryDispatcher;
 import com.itheima.mq.MqMessage;
 import com.itheima.mq.MqPublisher;
@@ -46,16 +47,16 @@ class FeedPushNotifierTest {
     private static final long CONTENT = 42L;
     private static final long AUTHOR = 9L;
 
-    private MqPublisher publisher;
+    private MqDeliveryBuffer deliveryBuffer;
     private MqDeliveryDispatcher dispatcher;
     private FeedPushNotifier notifier;
     private LogProbe probe;
 
     @BeforeEach
     void setUp() {
-        publisher = mock(MqPublisher.class);
+        deliveryBuffer = mock(MqDeliveryBuffer.class);
         dispatcher = new MqDeliveryDispatcher(8, 1000);
-        notifier = new FeedPushNotifier(publisher, new JacksonCodec(), dispatcher);
+        notifier = new FeedPushNotifier(deliveryBuffer, new JacksonCodec(), dispatcher);
         probe = LogProbe.attachTo(LogUtil.getLogger(FeedPushNotifier.class));
     }
 
@@ -67,12 +68,12 @@ class FeedPushNotifierTest {
 
     @Test
     void publishesJsonPayloadToPushExchangeAndContentRoutingKey() {
-        when(publisher.publish(any())).thenReturn(true);
+        when(deliveryBuffer.publish(any())).thenReturn(true);
 
         notifier.publishContentPublished(CONTENT, AUTHOR);
 
         ArgumentCaptor<MqMessage> captor = ArgumentCaptor.forClass(MqMessage.class);
-        verify(publisher, timeout(2000)).publish(captor.capture());
+        verify(deliveryBuffer, timeout(2000)).publish(captor.capture());
         MqMessage message = captor.getValue();
         assertEquals(MqTopology.EXCHANGE_PUSH, message.exchange());
         assertEquals(MqTopology.RK_PUSH_CONTENT, message.routingKey());
@@ -85,11 +86,11 @@ class FeedPushNotifierTest {
 
     @Test
     void publishFailureIsSwallowedWithoutWarning() {
-        when(publisher.publish(any())).thenReturn(false);
+        when(deliveryBuffer.publish(any())).thenReturn(false);
 
         assertDoesNotThrow(() -> notifier.publishContentPublished(CONTENT, AUTHOR));
 
-        verify(publisher, timeout(2000)).publish(any());
+        verify(deliveryBuffer, timeout(2000)).publish(any());
         assertTrue(probe.records().isEmpty(),
                 "沿用 MqPublisher 口径：未确认 / 不可用不刷 WARNING（只留默认不输出的 FINE）");
     }
@@ -98,7 +99,7 @@ class FeedPushNotifierTest {
     void serializationFailureSkipsPublishWithStackedWarning() {
         JacksonCodec broken = mock(JacksonCodec.class);
         when(broken.toJson(any())).thenThrow(new CacheException("serialize failed"));
-        FeedPushNotifier degraded = new FeedPushNotifier(publisher, broken, dispatcher);
+        FeedPushNotifier degraded = new FeedPushNotifier(deliveryBuffer, broken, dispatcher);
 
         assertDoesNotThrow(() -> degraded.publishContentPublished(CONTENT, AUTHOR));
 
@@ -106,26 +107,26 @@ class FeedPushNotifierTest {
         assertEquals(1, warnings.size(), () -> "应恰一条 WARNING，实际: " + probe.records());
         assertTrue(warnings.getFirst().getMessage().contains("载荷序列化失败"));
         assertNotNull(warnings.getFirst().getThrown(), "序列化失败是该链唯一捕获点 → 必须持栈");
-        verify(publisher, never()).publish(any());
+        verify(deliveryBuffer, never()).publish(any());
     }
 
     @Test
     void nullJsonSkipsPublish() {
         JacksonCodec nullCodec = mock(JacksonCodec.class);
         when(nullCodec.toJson(any())).thenReturn(null);
-        FeedPushNotifier degraded = new FeedPushNotifier(publisher, nullCodec, dispatcher);
+        FeedPushNotifier degraded = new FeedPushNotifier(deliveryBuffer, nullCodec, dispatcher);
 
         assertDoesNotThrow(() -> degraded.publishContentPublished(CONTENT, AUTHOR));
 
         awaitLogs(Level.WARNING);
-        verify(publisher, never()).publish(any());
+        verify(deliveryBuffer, never()).publish(any());
         assertEquals(1, probe.atLevel(Level.WARNING).size());
     }
 
     @Test
     void unexpectedRuntimeFailureIsSwallowedWithSevereStack() {
         // 契约"绝不抛"的最后兜底：模拟下游越界抛异常（例如 MqPublisher"不抛"契约被破坏）
-        when(publisher.publish(any())).thenThrow(new IllegalStateException("boom"));
+        when(deliveryBuffer.publish(any())).thenThrow(new IllegalStateException("boom"));
 
         assertDoesNotThrow(() -> notifier.publishContentPublished(CONTENT, AUTHOR));
 
@@ -139,7 +140,7 @@ class FeedPushNotifierTest {
     @Test
     void submitReturnsBeforeConfirmCompletes() throws Exception {
         CountDownLatch confirmed = new CountDownLatch(1);
-        when(publisher.publish(any())).thenAnswer(invocation -> {
+        when(deliveryBuffer.publish(any())).thenAnswer(invocation -> {
             Thread.sleep(300); // 模拟 waitForConfirms 慢确认
             confirmed.countDown();
             return true;
@@ -151,7 +152,7 @@ class FeedPushNotifierTest {
 
         assertTrue(elapsedMs < 200, "发布线程不应等 confirm，实测 " + elapsedMs + "ms");
         assertTrue(confirmed.await(2, TimeUnit.SECONDS), "投递应最终在 worker 上完成");
-        verify(publisher).publish(any());
+        verify(deliveryBuffer).publish(any());
     }
 
     /** 轮询等待 worker 侧日志落地（异步化后日志在 mq-delivery 线程写入，与断言存在时序差）。 */

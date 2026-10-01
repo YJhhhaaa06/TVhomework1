@@ -3,6 +3,7 @@ package com.itheima.follow.service;
 import com.itheima.cache.JacksonCodec;
 import com.itheima.exception.CacheException;
 import com.itheima.follow.model.dto.InboxRebuildMessage;
+import com.itheima.mq.MqDeliveryBuffer;
 import com.itheima.mq.MqDeliveryDispatcher;
 import com.itheima.mq.MqMessage;
 import com.itheima.mq.MqPublisher;
@@ -46,7 +47,7 @@ class InboxRebuildNotifierTest {
 
     private static final long USER = 7L;
 
-    private MqPublisher publisher;
+    private MqDeliveryBuffer deliveryBuffer;
     private MqDeliveryDispatcher dispatcher;
     /** 去抖窗口 0 = 显式关闭（feed3-T33-A）：既有用例保持"事件即投递"语义，不受窗口影响。 */
     private InboxRebuildDebouncer debouncer;
@@ -55,10 +56,10 @@ class InboxRebuildNotifierTest {
 
     @BeforeEach
     void setUp() {
-        publisher = mock(MqPublisher.class);
+        deliveryBuffer = mock(MqDeliveryBuffer.class);
         dispatcher = new MqDeliveryDispatcher(8, 1000);
         debouncer = new InboxRebuildDebouncer(0L);
-        notifier = new InboxRebuildNotifier(publisher, new JacksonCodec(), dispatcher, debouncer);
+        notifier = new InboxRebuildNotifier(deliveryBuffer, new JacksonCodec(), dispatcher, debouncer);
         probe = LogProbe.attachTo(LogUtil.getLogger(InboxRebuildNotifier.class));
     }
 
@@ -71,12 +72,12 @@ class InboxRebuildNotifierTest {
 
     @Test
     void publishesJsonPayloadToRebuildExchangeAndInboxRoutingKey() {
-        when(publisher.publish(any())).thenReturn(true);
+        when(deliveryBuffer.publish(any())).thenReturn(true);
 
         notifier.publishInboxRebuild(USER);
 
         ArgumentCaptor<MqMessage> captor = ArgumentCaptor.forClass(MqMessage.class);
-        verify(publisher, timeout(2000)).publish(captor.capture());
+        verify(deliveryBuffer, timeout(2000)).publish(captor.capture());
         MqMessage message = captor.getValue();
         assertEquals(MqTopology.EXCHANGE_REBUILD, message.exchange());
         assertEquals(MqTopology.RK_REBUILD_INBOX, message.routingKey());
@@ -89,11 +90,11 @@ class InboxRebuildNotifierTest {
 
     @Test
     void publishFailureIsSwallowedWithoutWarning() {
-        when(publisher.publish(any())).thenReturn(false);
+        when(deliveryBuffer.publish(any())).thenReturn(false);
 
         assertDoesNotThrow(() -> notifier.publishInboxRebuild(USER));
 
-        verify(publisher, timeout(2000)).publish(any());
+        verify(deliveryBuffer, timeout(2000)).publish(any());
         assertTrue(probe.records().isEmpty(),
                 "沿用 MqPublisher 口径：未确认 / 不可用不刷 WARNING（只留默认不输出的 FINE）");
     }
@@ -102,7 +103,7 @@ class InboxRebuildNotifierTest {
     void serializationFailureSkipsPublishWithStackedWarning() {
         JacksonCodec broken = mock(JacksonCodec.class);
         when(broken.toJson(any())).thenThrow(new CacheException("serialize failed"));
-        InboxRebuildNotifier degraded = new InboxRebuildNotifier(publisher, broken, dispatcher, debouncer);
+        InboxRebuildNotifier degraded = new InboxRebuildNotifier(deliveryBuffer, broken, dispatcher, debouncer);
 
         assertDoesNotThrow(() -> degraded.publishInboxRebuild(USER));
 
@@ -110,26 +111,26 @@ class InboxRebuildNotifierTest {
         assertEquals(1, warnings.size(), () -> "应恰一条 WARNING，实际: " + probe.records());
         assertTrue(warnings.getFirst().getMessage().contains("载荷序列化失败"));
         assertNotNull(warnings.getFirst().getThrown(), "序列化失败是该链唯一捕获点 → 必须持栈");
-        verify(publisher, never()).publish(any());
+        verify(deliveryBuffer, never()).publish(any());
     }
 
     @Test
     void nullJsonSkipsPublishWithWarning() {
         JacksonCodec nullCodec = mock(JacksonCodec.class);
         when(nullCodec.toJson(any())).thenReturn(null);
-        InboxRebuildNotifier degraded = new InboxRebuildNotifier(publisher, nullCodec, dispatcher, debouncer);
+        InboxRebuildNotifier degraded = new InboxRebuildNotifier(deliveryBuffer, nullCodec, dispatcher, debouncer);
 
         assertDoesNotThrow(() -> degraded.publishInboxRebuild(USER));
 
         awaitLogs(Level.WARNING);
-        verify(publisher, never()).publish(any());
+        verify(deliveryBuffer, never()).publish(any());
         assertEquals(1, probe.atLevel(Level.WARNING).size());
     }
 
     @Test
     void unexpectedRuntimeFailureIsSwallowedWithSevereStack() {
         // 契约"绝不抛"的最后兜底：模拟下游越界抛异常（例如 MqPublisher"不抛"契约被破坏）
-        when(publisher.publish(any())).thenThrow(new IllegalStateException("boom"));
+        when(deliveryBuffer.publish(any())).thenThrow(new IllegalStateException("boom"));
 
         assertDoesNotThrow(() -> notifier.publishInboxRebuild(USER));
 
@@ -143,7 +144,7 @@ class InboxRebuildNotifierTest {
     @Test
     void submitReturnsBeforeConfirmCompletes() throws Exception {
         CountDownLatch confirmed = new CountDownLatch(1);
-        when(publisher.publish(any())).thenAnswer(invocation -> {
+        when(deliveryBuffer.publish(any())).thenAnswer(invocation -> {
             Thread.sleep(300); // 模拟 waitForConfirms 慢确认
             confirmed.countDown();
             return true;
@@ -155,7 +156,7 @@ class InboxRebuildNotifierTest {
 
         assertTrue(elapsedMs < 200, "关注/取关线程不应等 confirm，实测 " + elapsedMs + "ms");
         assertTrue(confirmed.await(2, TimeUnit.SECONDS), "投递应最终在 worker 上完成");
-        verify(publisher).publish(any());
+        verify(deliveryBuffer).publish(any());
     }
 
     /** T33-A 接入留证：同一用户的连点 / 批量关注在窗口内**只投一条**重建消息（经去抖器 + dispatcher 全链）。 */
@@ -163,17 +164,17 @@ class InboxRebuildNotifierTest {
     void burstOfRebuildRequestsForSameUserIsDebouncedToOneDelivery() throws Exception {
         InboxRebuildDebouncer windowed = new InboxRebuildDebouncer(150L);
         try {
-            when(publisher.publish(any())).thenReturn(true);
+            when(deliveryBuffer.publish(any())).thenReturn(true);
             InboxRebuildNotifier debounced =
-                    new InboxRebuildNotifier(publisher, new JacksonCodec(), dispatcher, windowed);
+                    new InboxRebuildNotifier(deliveryBuffer, new JacksonCodec(), dispatcher, windowed);
 
             debounced.publishInboxRebuild(USER);
             debounced.publishInboxRebuild(USER);
             debounced.publishInboxRebuild(USER);
 
-            verify(publisher, timeout(2000)).publish(any());
+            verify(deliveryBuffer, timeout(2000)).publish(any());
             Thread.sleep(300L);   // 再等两个窗口：确认只投了一条（前两次的排期已被取消）
-            verify(publisher, times(1)).publish(any());
+            verify(deliveryBuffer, times(1)).publish(any());
         } finally {
             windowed.destroy();
         }

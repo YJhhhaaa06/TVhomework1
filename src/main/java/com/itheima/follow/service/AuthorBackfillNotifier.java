@@ -5,6 +5,7 @@ import com.itheima.exception.CacheException;
 import com.itheima.follow.model.dto.AuthorBackfillMessage;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;
+import com.itheima.mq.MqDeliveryBuffer;
 import com.itheima.mq.MqDeliveryDispatcher;
 import com.itheima.mq.MqMessage;
 import com.itheima.mq.MqPublisher;
@@ -25,18 +26,19 @@ import java.util.logging.Logger;
  * 断档消除，且**不依赖**该粉丝的下一次关注 / 取关。
  *
  * <p><b>红线</b>：本类**任何情况下都不抛异常**——投递失败只降级（该次补推缺失，由下次重建 /
- * 再次降级 edge 兜底；跨 MQ 故障的缺口补偿统一归 feed3-T33，**不在此另写补偿**），
- * **关注 / 取关接口的响应与语义一概不变**；**不触碰 {@code /feed} 读路径**。
+ * 再次降级 edge 兜底；**投递缺口由 {@link MqDeliveryBuffer} 暂存并在 MQ 恢复后重放**（feed3-T33-B），
+ * 本类**不另写补偿**），**关注 / 取关接口的响应与语义一概不变**；**不触碰 {@code /feed} 读路径**。
  *
  * <p><b>异步投递（沿 feed3-T31 管线）</b>：「序列化 + publish + waitForConfirms」经
  * {@link MqDeliveryDispatcher}（专用单 worker + 有界队列）在后台线程完成，取关接口 RT 不再等
- * confirm；队列满 / 已关停 ⇒ 任务被丢弃并记 WARNING（降级）。
+ * confirm；队列满 / 已关停 ⇒ 任务被丢弃并记 WARNING（降级）。**投递入口自 feed3-T33-B 起为
+ * {@link MqDeliveryBuffer}**（MQ 不可用时暂存、恢复后重放；可用时语义与 {@link MqPublisher} 一致）。
  *
  * <p><b>投递点口径</b>：由调用方（{@code FollowService}）在**事务提交之后**、且**仅当**
  * 迁移 = {@code DOWNGRADED} 时调用（与 {@code logBigVTransition} 同源信号，先例 =
  * {@code InboxRebuildNotifier} 的"提交后副作用"）。
  *
- * <p><b>依赖（IoC 约束）</b>：{@code MqPublisher} / {@code JacksonCodec} / {@code MqDeliveryDispatcher}
+ * <p><b>依赖（IoC 约束）</b>：{@code MqDeliveryBuffer} / {@code JacksonCodec} / {@code MqDeliveryDispatcher}
  * 均按**具体类**注入——IoC 按具体类解析依赖（{@code beans.get(paramType)}），写接口会取不到 Bean 而硬 fail-fast。
  *
  * <p><b>日志口径（§3.1）</b>：序列化失败 = 该链唯一捕获点 → WARNING **持栈**；投递未确认沿用
@@ -50,14 +52,14 @@ public class AuthorBackfillNotifier {
 
     private static final Logger LOGGER = LogUtil.getLogger(AuthorBackfillNotifier.class);
 
-    private final MqPublisher publisher;
+    private final MqDeliveryBuffer deliveryBuffer;
     private final JacksonCodec codec;
     private final MqDeliveryDispatcher dispatcher;
 
     @InjectConstructor
-    public AuthorBackfillNotifier(MqPublisher publisher, JacksonCodec codec,
+    public AuthorBackfillNotifier(MqDeliveryBuffer deliveryBuffer, JacksonCodec codec,
                                   MqDeliveryDispatcher dispatcher) {
-        this.publisher = publisher;
+        this.deliveryBuffer = deliveryBuffer;
         this.codec = codec;
         this.dispatcher = dispatcher;
     }
@@ -98,10 +100,10 @@ public class AuthorBackfillNotifier {
             LOGGER.log(Level.WARNING, "降级补推投递跳过（载荷序列化失败，不影响关注/取关）, authorId=" + authorId, e);
             return;
         }
-        if (!publisher.publish(MqMessage.push(MqTopology.RK_PUSH_BACKFILL, body))) {
-            // MqPublisher 的降级口径：不可用时既不访问 broker 也不记日志（避免每请求刷日志）；
+        if (!deliveryBuffer.publish(MqMessage.push(MqTopology.RK_PUSH_BACKFILL, body))) {
+            // 降级口径：不可用时 MqDeliveryBuffer 只暂存并留 FINE 诊断（不刷 WARNING）；
             // 真正发布失败的 WARNING + 栈由 MqPublisher 持（那里是该链唯一捕获点），此处不重复记
-            LOGGER.fine("降级补推投递未确认（降级，不影响关注/取关）, authorId=" + authorId);
+            LOGGER.fine("降级补推投递未确认（降级或已暂存待补偿，不影响关注/取关）, authorId=" + authorId);
         }
     }
 }

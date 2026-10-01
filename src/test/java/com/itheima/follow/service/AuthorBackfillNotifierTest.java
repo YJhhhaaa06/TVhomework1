@@ -3,6 +3,7 @@ package com.itheima.follow.service;
 import com.itheima.cache.JacksonCodec;
 import com.itheima.exception.CacheException;
 import com.itheima.follow.model.dto.AuthorBackfillMessage;
+import com.itheima.mq.MqDeliveryBuffer;
 import com.itheima.mq.MqDeliveryDispatcher;
 import com.itheima.mq.MqMessage;
 import com.itheima.mq.MqPublisher;
@@ -45,16 +46,16 @@ class AuthorBackfillNotifierTest {
 
     private static final long AUTHOR = 9L;
 
-    private MqPublisher publisher;
+    private MqDeliveryBuffer deliveryBuffer;
     private MqDeliveryDispatcher dispatcher;
     private AuthorBackfillNotifier notifier;
     private LogProbe probe;
 
     @BeforeEach
     void setUp() {
-        publisher = mock(MqPublisher.class);
+        deliveryBuffer = mock(MqDeliveryBuffer.class);
         dispatcher = new MqDeliveryDispatcher(8, 1000);
-        notifier = new AuthorBackfillNotifier(publisher, new JacksonCodec(), dispatcher);
+        notifier = new AuthorBackfillNotifier(deliveryBuffer, new JacksonCodec(), dispatcher);
         probe = LogProbe.attachTo(LogUtil.getLogger(AuthorBackfillNotifier.class));
     }
 
@@ -66,12 +67,12 @@ class AuthorBackfillNotifierTest {
 
     @Test
     void publishesJsonPayloadToPushExchangeAndBackfillRoutingKey() {
-        when(publisher.publish(any())).thenReturn(true);
+        when(deliveryBuffer.publish(any())).thenReturn(true);
 
         notifier.publishAuthorBackfill(AUTHOR);
 
         ArgumentCaptor<MqMessage> captor = ArgumentCaptor.forClass(MqMessage.class);
-        verify(publisher, timeout(2000)).publish(captor.capture());
+        verify(deliveryBuffer, timeout(2000)).publish(captor.capture());
         MqMessage message = captor.getValue();
         // 走 push 家族（"非必要不入配置"：feed.push.# 通配绑定已覆盖，无新交换机 / 队列）
         assertEquals(MqTopology.EXCHANGE_PUSH, message.exchange());
@@ -85,11 +86,11 @@ class AuthorBackfillNotifierTest {
 
     @Test
     void publishFailureIsSwallowedWithoutWarning() {
-        when(publisher.publish(any())).thenReturn(false);
+        when(deliveryBuffer.publish(any())).thenReturn(false);
 
         assertDoesNotThrow(() -> notifier.publishAuthorBackfill(AUTHOR));
 
-        verify(publisher, timeout(2000)).publish(any());
+        verify(deliveryBuffer, timeout(2000)).publish(any());
         assertTrue(probe.records().isEmpty(),
                 "沿用 MqPublisher 口径：未确认 / 不可用不刷 WARNING（只留默认不输出的 FINE）");
     }
@@ -98,7 +99,7 @@ class AuthorBackfillNotifierTest {
     void serializationFailureSkipsPublishWithStackedWarning() {
         JacksonCodec broken = mock(JacksonCodec.class);
         when(broken.toJson(any())).thenThrow(new CacheException("serialize failed"));
-        AuthorBackfillNotifier degraded = new AuthorBackfillNotifier(publisher, broken, dispatcher);
+        AuthorBackfillNotifier degraded = new AuthorBackfillNotifier(deliveryBuffer, broken, dispatcher);
 
         assertDoesNotThrow(() -> degraded.publishAuthorBackfill(AUTHOR));
 
@@ -106,26 +107,26 @@ class AuthorBackfillNotifierTest {
         assertEquals(1, warnings.size(), () -> "应恰一条 WARNING，实际: " + probe.records());
         assertTrue(warnings.getFirst().getMessage().contains("载荷序列化失败"));
         assertNotNull(warnings.getFirst().getThrown(), "序列化失败是该链唯一捕获点 → 必须持栈");
-        verify(publisher, never()).publish(any());
+        verify(deliveryBuffer, never()).publish(any());
     }
 
     @Test
     void nullJsonSkipsPublishWithWarning() {
         JacksonCodec nullCodec = mock(JacksonCodec.class);
         when(nullCodec.toJson(any())).thenReturn(null);
-        AuthorBackfillNotifier degraded = new AuthorBackfillNotifier(publisher, nullCodec, dispatcher);
+        AuthorBackfillNotifier degraded = new AuthorBackfillNotifier(deliveryBuffer, nullCodec, dispatcher);
 
         assertDoesNotThrow(() -> degraded.publishAuthorBackfill(AUTHOR));
 
         awaitLogs(Level.WARNING);
-        verify(publisher, never()).publish(any());
+        verify(deliveryBuffer, never()).publish(any());
         assertEquals(1, probe.atLevel(Level.WARNING).size());
     }
 
     @Test
     void unexpectedRuntimeFailureIsSwallowedWithSevereStack() {
         // 契约"绝不抛"的最后兜底：模拟下游越界抛异常（例如 MqPublisher"不抛"契约被破坏）
-        when(publisher.publish(any())).thenThrow(new IllegalStateException("boom"));
+        when(deliveryBuffer.publish(any())).thenThrow(new IllegalStateException("boom"));
 
         assertDoesNotThrow(() -> notifier.publishAuthorBackfill(AUTHOR));
 
@@ -139,7 +140,7 @@ class AuthorBackfillNotifierTest {
     @Test
     void submitReturnsBeforeConfirmCompletes() throws Exception {
         CountDownLatch confirmed = new CountDownLatch(1);
-        when(publisher.publish(any())).thenAnswer(invocation -> {
+        when(deliveryBuffer.publish(any())).thenAnswer(invocation -> {
             Thread.sleep(300); // 模拟 waitForConfirms 慢确认
             confirmed.countDown();
             return true;
@@ -151,7 +152,7 @@ class AuthorBackfillNotifierTest {
 
         assertTrue(elapsedMs < 200, "关注/取关线程不应等 confirm，实测 " + elapsedMs + "ms");
         assertTrue(confirmed.await(2, TimeUnit.SECONDS), "投递应最终在 worker 上完成");
-        verify(publisher).publish(any());
+        verify(deliveryBuffer).publish(any());
     }
 
     /** 轮询等待 worker 侧日志落地（异步化后日志在 mq-delivery 线程写入，与断言存在时序差）。 */
