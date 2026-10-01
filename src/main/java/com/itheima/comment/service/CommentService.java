@@ -201,7 +201,6 @@ public class CommentService {
                     commentDao.updateReplyCount(conn, effectiveParentId[0], 1);
                 }
                 contentDao.updateCommentCount(conn, contentId, 1);
-                contentCache.notifyCommentCountChanged(contentId);
                 return commentDao.findCommentById(conn, commentId);
             } catch (SQLException e) {
                 LOGGER.log(Level.SEVERE, "评论添加失败", e);
@@ -210,6 +209,10 @@ public class CommentService {
         });
 
         // 缓存更新放在事务提交后（T3 4.5 业务显式失效，读自愈回填）：
+        // T34（U-22）：评论计数失效自事务回调内移出——原"事务内先失效"会在提交前留出窗口，
+        // 并发读者可在窗口内按旧计数回填缓存（Cache-Aside 读自愈，表现为计数短暂陈旧）；
+        // 移提交后与删除路径（doDeleteComment）同范式；notify 只做失效、失败不外抛（缓存不得导致业务失败）。
+        contentCache.notifyCommentCountChanged(contentId);
         // T10-A 失效重映射——增主楼 → 失效 roots+count（读懒建窗口）；增回复 → 定向 HDEL 所在主楼 replies field
         if (newComment != null) {
             Long effectiveParent = effectiveParentId[0];
