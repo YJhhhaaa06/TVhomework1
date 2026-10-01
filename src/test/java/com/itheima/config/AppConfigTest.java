@@ -10,6 +10,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.Properties;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -124,6 +125,135 @@ class AppConfigTest {
             assertThrows(NumberFormatException.class, () -> AppConfig.getInt("t18.bad.int", 1));
         } finally {
             replaceProps(originalProps);
+        }
+    }
+
+    // ===== feed 二期大V占位路由键（feed2-21 T21）=====
+
+    @Test
+    void feedBigVThresholdDefaultsToAppProperties() throws IOException {
+        String fromFile = propString("feed.bigv.threshold");
+        assertEquals(Integer.parseInt(fromFile), AppConfig.getFeedBigVThreshold());
+        assertEquals(10000, AppConfig.getFeedBigVThreshold(), "占位默认值（app.properties 与代码默认值一致）");
+    }
+
+    @Test
+    void feedBigVThresholdMissingKeyFallsBackToDefault() throws Exception {
+        Properties p = new Properties();
+        p.setProperty("feed.bigv.userIds", "");
+        replaceProps(p);
+        try {
+            assertEquals(10000, AppConfig.getFeedBigVThreshold(), "键缺失 → 带默认值读取（不 fail-fast）");
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    @Test
+    void feedBigVUserIdsParsesListAndToleratesBlankTokens() throws Exception {
+        Properties p = new Properties();
+        p.setProperty("feed.bigv.userIds", "7, 8 ,,9,");
+        replaceProps(p);
+        try {
+            assertEquals(Set.of(7L, 8L, 9L), AppConfig.getFeedBigVUserIds());
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    @Test
+    void feedBigVUserIdsEmptyOrMissingMeansNoList() throws Exception {
+        Properties p = new Properties();
+        p.setProperty("feed.bigv.userIds", "   ");
+        replaceProps(p);
+        try {
+            assertTrue(AppConfig.getFeedBigVUserIds().isEmpty());
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    @Test
+    void feedBigVUserIdsInvalidTokenFailsFast() throws Exception {
+        Properties p = new Properties();
+        p.setProperty("feed.bigv.userIds", "7,abc");
+        replaceProps(p);
+        try {
+            assertThrows(IllegalArgumentException.class, AppConfig::getFeedBigVUserIds);
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    // ===== feed 三期大V热更键（feed3-T27-A）=====
+
+    @Test
+    void feedBigVConfigFileDefaultsToEmptyAndIsConfigurable() throws Exception {
+        assertEquals("", propString("feed.bigv.configFile"),
+                "app.properties 应留空 = 默认不启用外部热更文件（既有跑法零影响）");
+
+        Properties p = new Properties();
+        p.setProperty("feed.bigv.configFile", "/tmp/bigv-test.properties");
+        replaceProps(p);
+        try {
+            assertEquals("/tmp/bigv-test.properties", AppConfig.getFeedBigVConfigFile(),
+                    "键存在 ⇒ 原样返回（测试可经 FEED_BIGV_CONFIGFILE 指向测试清单）");
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    @Test
+    void feedBigVRefreshMillisDefaultsToAppProperties() throws Exception {
+        String fromFile = propString("feed.bigv.refreshMillis");
+        assertEquals(Long.parseLong(fromFile), AppConfig.getFeedBigVRefreshMillis());
+        assertEquals(5000L, AppConfig.getFeedBigVRefreshMillis(), "默认值与 app.properties 一致");
+    }
+
+    // ===== feed 三期大V滞回键（feed3-T28-A）=====
+
+    @Test
+    void feedBigVDowngradeRatioDefaultsToAppProperties() throws Exception {
+        String fromFile = propString("feed.bigv.downgradeRatio");
+        assertEquals(Double.parseDouble(fromFile), AppConfig.getFeedBigVDowngradeRatio());
+        assertEquals(0.8, AppConfig.getFeedBigVDowngradeRatio(), "默认值与 app.properties 一致");
+    }
+
+    @Test
+    void feedBigVDowngradeRatioMissingKeyFallsBackToDefault() throws Exception {
+        replaceProps(new Properties());
+        try {
+            assertEquals(0.8, AppConfig.getFeedBigVDowngradeRatio(), "键缺失 → 带默认值读取（不 fail-fast）");
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    @Test
+    void feedBigVDowngradeRatioAcceptsOneAsEquivalentOff() throws Exception {
+        Properties p = new Properties();
+        p.setProperty("feed.bigv.downgradeRatio", "1.0");
+        replaceProps(p);
+        try {
+            assertEquals(1.0, AppConfig.getFeedBigVDowngradeRatio(),
+                    "1.0 = 滞回等价关闭（降级线等于升级线）；既有 FEED_BIGV_THRESHOLD=1 留证手法依赖本取值合法");
+        } finally {
+            replaceProps(originalProps);
+        }
+    }
+
+    @Test
+    void feedBigVDowngradeRatioOutOfRangeFailsFast() throws Exception {
+        for (String bad : new String[]{"1.5", "0", "-0.1", "abc", "NaN", "Infinity"}) {
+            Properties p = new Properties();
+            p.setProperty("feed.bigv.downgradeRatio", bad);
+            replaceProps(p);
+            try {
+                assertThrows(IllegalArgumentException.class, AppConfig::getFeedBigVDowngradeRatio,
+                        "系数必须在 (0, 1]：" + bad);
+            } finally {
+                replaceProps(originalProps);
+            }
         }
     }
 

@@ -4,6 +4,7 @@ import com.itheima.follow.dao.FollowDao;
 import com.itheima.common.model.dto.PageResult;
 import com.itheima.cache.ZSetCache;
 import com.itheima.user.dao.UserDao;
+import com.itheima.user.service.AutoBigVStateService;
 import com.itheima.exception.ConflictException;
 import com.itheima.exception.ServerException;
 import com.itheima.ioc.annotation.Component;
@@ -28,23 +29,40 @@ public class FollowService {
     private final UserDao userDao;
     private final FollowCache followCache;
     private final TransactionTemplate transactionTemplate;
+    private final InboxRebuildNotifier inboxRebuildNotifier;
+    /**
+     * 自动大V状态维护（feed3-T28-A，**写侧判定单点**，落 user 域——见其类注释的包环理由）：
+     * 关注 / 取关改变被关注者粉丝数 ⇒ 在同一事务内做滞回升降级，产出 edge 信号。
+     */
+    private final AutoBigVStateService autoBigVState;
+    /**
+     * 降级补推投递（feed3-T28-B）：只在 edge = {@code DOWNGRADED} 时投递（异步、失败只降级）——
+     * 落 follow 域，避免新增 {@code follow → feed} 包环（同 {@link InboxRebuildNotifier} 先例）。
+     */
+    private final AuthorBackfillNotifier authorBackfillNotifier;
     private static final Logger LOGGER =
             LogUtil.getLogger(FollowService.class);
 
     @InjectConstructor
     public FollowService(FollowDao followDao, UserDao userDao, FollowCache followCache,
-                         TransactionTemplate transactionTemplate) {
+                         TransactionTemplate transactionTemplate,
+                         InboxRebuildNotifier inboxRebuildNotifier,
+                         AutoBigVStateService autoBigVState,
+                         AuthorBackfillNotifier authorBackfillNotifier) {
         this.followDao = followDao;
         this.userDao = userDao;
         this.followCache = followCache;
         this.transactionTemplate = transactionTemplate;
+        this.inboxRebuildNotifier = inboxRebuildNotifier;
+        this.autoBigVState = autoBigVState;
+        this.authorBackfillNotifier = authorBackfillNotifier;
     }
 
     public void follow(long userId, long followedUserId) {
         if (userId == followedUserId) {
             throw new ConflictException("不能关注自己");
         }
-        transactionTemplate.execute(conn -> {
+        AutoBigVStateService.Transition bigVTransition = transactionTemplate.execute(conn -> {
             // 先检查是否已关注
             boolean alreadyFollowed = followDao.isFollowing(conn, userId, followedUserId);
             if (alreadyFollowed) {
@@ -54,7 +72,9 @@ public class FollowService {
                 followDao.addFollow(conn, userId, followedUserId);
                 userDao.updateFollowCount(conn, userId, 1);
                 userDao.updateFollowerCount(conn, followedUserId, 1);
-                return null;
+                // feed3-T28-A：滞回判定紧接计数之后、**同一事务同一 conn**（fail-atomic）——
+                // 判定输入是刚写入的 DB 真值；失败则整体回滚（语义与上面两个计数失败同口径）
+                return autoBigVState.evaluate(conn, followedUserId);
             } catch (SQLException e) {
                 LOGGER.log(Level.SEVERE, "关注失败, userId=" + userId + ", followedUserId=" + followedUserId, e);
                 throw new ServerException("关注失败");
@@ -62,8 +82,39 @@ public class FollowService {
         });
         // 里程碑（T9）：关系状态迁移（关注）——DB 已提交即记；置于缓存双写之前
         LOGGER.log(Level.INFO, "关注成功, userId=" + userId + ", followedUserId=" + followedUserId);
+        // feed3-T28-A / T28-B：自动大V状态迁移的提交后副作用（记日志 + 降级 edge ⇒ 补推投递）
+        handleBigVTransition(followedUserId, bigVTransition);
         // DB 提交后缓存双写（NEEDS 4.10：MULTI 原子，失败双 DEL 自愈，不影响主流程）
         followCache.cacheFollow(userId, followedUserId);
+        // feed1-19（T19）收件箱失效联动（影子期，只写不读）：关注改变了"我关注的博主集合"，
+        // 我自己的收件箱快照失效 → 提交后投递重建消息（同上属"提交后副作用"，**失败只降级**，
+        // InboxRebuildNotifier 内部不抛）——本方法的响应 / 返回值 / 既有语义一概不变。
+        inboxRebuildNotifier.publishInboxRebuild(userId);
+    }
+
+    /**
+     * 自动大V状态迁移的提交后副作用（feed3-T28-A 立，feed3-T28-B 增补推投递）：**只在事务提交后调用**——
+     * 对齐 §3.6"成功里程碑只在 DB 已提交之后写"（事务回滚时该方法不可达；失败由
+     * {@code AutoBigVStateService} 的 SEVERE + 栈承载）。
+     *
+     * <p>{@link AutoBigVStateService.Transition#NONE}（绝大多数请求：带内 / 状态本就一致）不记、
+     * 也不投递，保持 INFO 稀疏、投递零开销。
+     *
+     * <p><b>降级行（{@code DOWNGRADED}）双重职责</b>：① INFO 留痕——运维可按本行追溯"谁在何时脱离
+     * 大V"（只记标识，不含粉丝数等易漂移值）；② **触发降级补推**（feed3-T28-B）——投递
+     * {@link AuthorBackfillNotifier#publishAuthorBackfill(long)}（异步、失败只降级），把该作者的
+     * 存量内容补进其现任粉丝收件箱（幂等、只追增）。注意 {@code follow} 路径在"配置漂移导致状态行
+     * 已不该存在"时也可能产出 {@code DOWNGRADED}（如阈值上调后首次关注补齐），故两处同口径投递。
+     */
+    private void handleBigVTransition(long followedUserId, AutoBigVStateService.Transition transition) {
+        if (transition == AutoBigVStateService.Transition.NONE) {
+            return;
+        }
+        LOGGER.log(Level.INFO,
+                "自动大V状态迁移, followedUserId=" + followedUserId + ", transition=" + transition);
+        if (transition == AutoBigVStateService.Transition.DOWNGRADED) {
+            authorBackfillNotifier.publishAuthorBackfill(followedUserId);
+        }
     }
 
     /**
@@ -169,7 +220,7 @@ public class FollowService {
         if (userId == followedUserId) {
             throw new ConflictException( "不能取关自己");
         }
-        transactionTemplate.execute(conn -> {
+        AutoBigVStateService.Transition bigVTransition = transactionTemplate.execute(conn -> {
             // 先检查是否已关注
             boolean isFollowing = followDao.isFollowing(conn, userId, followedUserId);
             if (!isFollowing) {
@@ -179,7 +230,8 @@ public class FollowService {
                 followDao.deleteFollow(conn, userId, followedUserId);
                 userDao.updateFollowCount(conn, userId, -1);
                 userDao.updateFollowerCount(conn, followedUserId, -1);
-                return null;
+                // feed3-T28-A：口径同 follow（同事务 fail-atomic；掉粉是滞回"降级"的唯一触发源）
+                return autoBigVState.evaluate(conn, followedUserId);
             } catch (SQLException e) {
                 LOGGER.log(Level.SEVERE, "取关失败, userId=" + userId + ", followedUserId=" + followedUserId, e);
                 throw new ServerException("取关失败");
@@ -187,7 +239,11 @@ public class FollowService {
         });
         // 里程碑（T9）：关系状态迁移（取关）——口径同 follow
         LOGGER.log(Level.INFO, "取关成功, userId=" + userId + ", followedUserId=" + followedUserId);
+        // feed3-T28-A / T28-B：自动大V状态迁移的提交后副作用（掉粉是滞回"降级"的唯一触发源）
+        handleBigVTransition(followedUserId, bigVTransition);
         // DB 提交后缓存双写（SREM，失败双 DEL 自愈，不影响主流程）
         followCache.cacheUnfollow(userId, followedUserId);
+        // feed1-19（T19）收件箱失效联动：口径同 follow（提交后投递、失败只降级、语义零变化）
+        inboxRebuildNotifier.publishInboxRebuild(userId);
     }
 }

@@ -26,6 +26,15 @@
 //   传入值只是**初始/兜底值**（首次请求失败时用它判断"本 chunk 是否到末页"）；首次成功响应后
 //   用响应回显的 `pageSize` 覆盖——信封大小由**后端域级常量**决定，前端不再写死"要多少条"，
 //   且 `fetchChunk` 可以只传 page、不传 pageSize（后端缺省即域级信封）。reset() 不回退该值。
+//
+// shortPageMeansEnd（"短页是否等于到底"，T23 新增；**默认 true = 既有行为**）：
+//   缺省语义 = "响应条数 < 信封大小 ⇒ 服务器已无更多"。**feed 域（有界窗口）必须传 false**：
+//   ① 页内装载会跳过取不到的条目（内容已软删 / 缓存空标记），返回条数天然可能少于 pageSize；
+//   ② 有界窗口的末尾页也可能因窗口截断而"短"。
+//   这两种"短页"都不是"到底"，按短页判定会让列表提前停住、少拉后面的内容。
+//   传 false 时**只以 `page >= totalPages` 判定到底**（服务端 totalPages 可信）——**空 list 也不算到底**：
+//   中间某页可能整页都被跳过（例如该页 100 条全被软删），若把空页当到底同样会漏掉后面的内容。
+//   请求次数上界 = totalPages（page 每拉一次必 +1），不会退化成"无限拉空页"。
 // ============================================================================
 
 /** 信封大小兜底值（未传 chunkSize / 首次请求失败时使用）。 */
@@ -47,6 +56,7 @@ export function createChunkedList({
   chunkSize = DEFAULT_CHUNK_SIZE,
   batchSize = 10,
   keyOf = defaultKeyOf,
+  shortPageMeansEnd = true,
 }) {
   let items = [];        // 已拉取全部条目（大 chunk 累积）
   let cursor = 0;        // 本地已消费位置
@@ -71,7 +81,12 @@ export function createChunkedList({
       if (typeof data.pageSize === 'number' && data.pageSize > 0) size = data.pageSize;
       const list = data.list || [];
       items = items.concat(list);
-      if (list.length < size || page >= totalPages) loadedAll = true;
+      // T23：短页是否等价"服务器已无更多"——见文件头 shortPageMeansEnd 说明
+      //   true（默认，既有行为）：响应页短于信封 ⇒ 到底
+      //   false（/feed）：**只有 `page >= totalPages` 才算到底**（短页与空页都不算——
+      //     中间页可能整页被跳过，空页当到底同样会漏内容；上界由 totalPages 保证）
+      const reachedEnd = shortPageMeansEnd && list.length < size;
+      if (reachedEnd || page >= totalPages) loadedAll = true;
     } finally {
       loading = false;
     }

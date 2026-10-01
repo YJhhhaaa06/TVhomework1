@@ -8,6 +8,7 @@ import com.itheima.like.dao.ContentLikeDao;
 import com.itheima.like.service.LikeService;
 import com.itheima.content.dao.ContentMediaDao;
 import com.itheima.exception.*;
+import com.itheima.feed.service.FeedPushNotifier;
 import com.itheima.ioc.annotation.Component;
 import com.itheima.ioc.annotation.InjectConstructor;
 import com.itheima.content.model.cache.CommentCacheDTO;
@@ -42,6 +43,7 @@ public class ContentService {
     private final CommentCache commentCache;
     private final ContentStatusFiller contentStatusFiller;
     private final TransactionTemplate transactionTemplate;
+    private final FeedPushNotifier feedPushNotifier;
     private static final Logger LOGGER =
             LogUtil.getLogger(ContentService.class);
 
@@ -52,7 +54,8 @@ public class ContentService {
                           ContentCache contentCache,
                           CommentCache commentCache,
                           ContentStatusFiller contentStatusFiller,
-                          TransactionTemplate transactionTemplate) {
+                          TransactionTemplate transactionTemplate,
+                          FeedPushNotifier feedPushNotifier) {
         this.contentDao = contentDao;
         this.contentMediaDao = contentMediaDao;
         this.commentDao = commentDao;
@@ -63,6 +66,7 @@ public class ContentService {
         this.commentCache = commentCache;
         this.contentStatusFiller = contentStatusFiller;
         this.transactionTemplate = transactionTemplate;
+        this.feedPushNotifier = feedPushNotifier;
     }
 
     // ===== 搜索 =====
@@ -208,6 +212,10 @@ public class ContentService {
         // 里程碑（T9）：发布成功 = DB 已提交（置于缓存同步之前——"内容已产生"即成功，
         // 缓存写失败另记 WARNING 且读自愈，不影响本条语义）
         LOGGER.log(Level.INFO, "添加视频成功, contentId=" + videoId + ", userId=" + uc.getUserId());
+        // feed1-18（T18）写扩散（影子期，只写不读）：事务提交后投递，由消费者写各粉丝收件箱。
+        // 与下方缓存同步同属"提交后副作用"，且**失败只降级**（FeedPushNotifier 内部不抛）——
+        // 本方法的响应 / 返回值 / 既有语义一概不变，/feed 读路径也零改动。
+        feedPushNotifier.publishContentPublished(videoId, uc.getUserId());
         // 事务提交后写 Redis 内容缓存（H3 修复：缓存写入不在事务内）
         contentCache.addContent(videoId);
         return videoId;
@@ -232,6 +240,8 @@ public class ContentService {
         });
         // 里程碑（T9）：发布成功 = DB 已提交（口径同 addVideo）
         LOGGER.log(Level.INFO, "添加动态成功, contentId=" + contentId + ", userId=" + uc.getUserId());
+        // feed1-18（T18）写扩散：口径同 addVideo（提交后投递、失败只降级、不影响本方法语义）
+        feedPushNotifier.publishContentPublished(contentId, uc.getUserId());
         // 事务提交后写 Redis 内容缓存（H3 修复：缓存写入不在事务内）
         contentCache.addContent(contentId);
         return contentId;

@@ -2,6 +2,7 @@ package com.itheima.util;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -23,7 +24,8 @@ import org.junit.jupiter.api.Assertions;
 public final class LogProbe extends Handler {
 
     private final Logger target;
-    private final List<LogRecord> records = new ArrayList<>();
+    /** 捕获目标 logger 的记录（feed3-T31 起被异步投递链首次真跨线程写入，故用 COW 保证读侧安全）。 */
+    private final List<LogRecord> records = new CopyOnWriteArrayList<>();
 
     private LogProbe(Logger target) {
         this.target = target;

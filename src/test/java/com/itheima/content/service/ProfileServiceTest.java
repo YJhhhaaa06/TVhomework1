@@ -96,7 +96,8 @@ class ProfileServiceTest {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(null);
 
         assertThrows(NotFoundException.class, () -> service.getProfile(7L, 8L, 1, 10));
-        verify(contentDao, never()).findContentIdsByUser(any(), anyLong());
+        verify(contentDao, never()).countContentByUser(any(), anyLong());
+        verify(contentDao, never()).findContentIdsByUserWindow(any(), anyLong(), anyInt(), anyInt());
         // T3：事务回调内抛业务异常（404）时同样不触碰缓存
         verify(contentCache, never()).getContentsBatch(anyList());
         verify(likeService, never()).batchIsContentLiked(anyLong(), anyList());
@@ -105,7 +106,7 @@ class ProfileServiceTest {
     @Test
     void getProfileNoContentAndNoCurrentUser() throws SQLException {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
-        when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(Collections.emptyList());
+        when(contentDao.countContentByUser(conn, 7L)).thenReturn(0);
 
         ProfileVO profile = service.getProfile(7L, null, 1, 10);
 
@@ -126,7 +127,8 @@ class ProfileServiceTest {
     @Test
     void getProfileNormalWithFollowAndLikedStatus() throws SQLException {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
-        when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L, 2L));
+        when(contentDao.countContentByUser(conn, 7L)).thenReturn(2);
+        when(contentDao.findContentIdsByUserWindow(conn, 7L, 0, 10)).thenReturn(java.util.List.of(1L, 2L));
         ContentCacheDTO dto1 = dto(1L);
         ContentCacheDTO dto2 = dto(2L);
         stubGetBatch(Map.of(1L, dto1, 2L, dto2));
@@ -151,7 +153,8 @@ class ProfileServiceTest {
     @Test
     void getProfileSkipsCacheMissAndQueriesLikedForSurvivors() throws SQLException {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
-        when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L, 2L));
+        when(contentDao.countContentByUser(conn, 7L)).thenReturn(2);
+        when(contentDao.findContentIdsByUserWindow(conn, 7L, 0, 10)).thenReturn(java.util.List.of(1L, 2L));
         ContentCacheDTO dto2 = dto(2L);
         // 1 为缓存 miss（null）；Map.of 不允许 null，用 HashMap
         Map<Long, ContentCacheDTO> values = new HashMap<>();
@@ -172,7 +175,8 @@ class ProfileServiceTest {
     @Test
     void getProfileSameUserSkipsFollowQueryButFillsLiked() throws SQLException {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
-        when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L));
+        when(contentDao.countContentByUser(conn, 7L)).thenReturn(1);
+        when(contentDao.findContentIdsByUserWindow(conn, 7L, 0, 10)).thenReturn(java.util.List.of(1L));
         ContentCacheDTO dto1 = dto(1L);
         stubGetBatch(Map.of(1L, dto1));
         when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
@@ -189,7 +193,8 @@ class ProfileServiceTest {
     @Test
     void getProfileNoCurrentUserSkipsFollowAndLiked() throws SQLException {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
-        when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L));
+        when(contentDao.countContentByUser(conn, 7L)).thenReturn(1);
+        when(contentDao.findContentIdsByUserWindow(conn, 7L, 0, 10)).thenReturn(java.util.List.of(1L));
         ContentCacheDTO dto1 = dto(1L);
         stubGetBatch(Map.of(1L, dto1));
         when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
@@ -205,7 +210,8 @@ class ProfileServiceTest {
     @Test
     void getProfileNullLikedMapLeavesLikedFalse() throws SQLException {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
-        when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L));
+        when(contentDao.countContentByUser(conn, 7L)).thenReturn(1);
+        when(contentDao.findContentIdsByUserWindow(conn, 7L, 0, 10)).thenReturn(java.util.List.of(1L));
         ContentCacheDTO dto1 = dto(1L);
         stubGetBatch(Map.of(1L, dto1));
         when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
@@ -219,19 +225,21 @@ class ProfileServiceTest {
     @Test
     void getProfileOutOfRangePageReturnsEmptyPage() throws SQLException {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
-        when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L));
+        when(contentDao.countContentByUser(conn, 7L)).thenReturn(1);
 
         ProfileVO profile = service.getProfile(7L, 8L, 3, 2);
 
         assertTrue(profile.getContentPage().getList().isEmpty());
         assertEquals(1, profile.getContentPage().getTotal());
-        verify(contentCache, never()).getContent(anyLong());
+        // 越界页（offset >= total）不发窗口 SQL
+        verify(contentDao, never()).findContentIdsByUserWindow(any(), anyLong(), anyInt(), anyInt());
     }
 
     @Test
     void getProfileMiddlePageSlicesCorrectly() throws SQLException {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
-        when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(java.util.List.of(1L, 2L, 3L));
+        when(contentDao.countContentByUser(conn, 7L)).thenReturn(3);
+        when(contentDao.findContentIdsByUserWindow(conn, 7L, 2, 2)).thenReturn(java.util.List.of(3L));
         ContentCacheDTO dto3 = dto(3L);
         stubGetBatch(Map.of(3L, dto3));
         when(contentCache.toContentVO(dto3)).thenReturn(vo(3L));
@@ -246,7 +254,7 @@ class ProfileServiceTest {
     @Test
     void getProfileNotFollowedSetsFalse() throws SQLException {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
-        when(contentDao.findContentIdsByUser(conn, 7L)).thenReturn(Collections.emptyList());
+        when(contentDao.countContentByUser(conn, 7L)).thenReturn(0);
         when(followCache.isFollowing(8L, 7L)).thenReturn(false);
 
         ProfileVO profile = service.getProfile(7L, 8L, 1, 10);
@@ -264,7 +272,7 @@ class ProfileServiceTest {
     @Test
     void getProfileContentQuerySqlErrorThrowsServerException() throws SQLException {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
-        when(contentDao.findContentIdsByUser(conn, 7L)).thenThrow(new SQLException("db down"));
+        when(contentDao.countContentByUser(conn, 7L)).thenThrow(new SQLException("db down"));
 
         assertThrows(ServerException.class, () -> service.getProfile(7L, 8L, 1, 10));
     }
@@ -276,8 +284,12 @@ class ProfileServiceTest {
     @Test
     void getProfileReadsCachesOutsideDbTransaction() throws SQLException {
         when(userDao.getUserForProfileById(conn, 7L)).thenReturn(user());
-        when(contentDao.findContentIdsByUser(conn, 7L)).thenAnswer(inv -> {
-            assertTrue(inTransaction[0], "作者内容 id 查询应在事务回调内执行");
+        when(contentDao.countContentByUser(conn, 7L)).thenAnswer(inv -> {
+            assertTrue(inTransaction[0], "作者内容数查询应在事务回调内执行");
+            return 1;
+        });
+        when(contentDao.findContentIdsByUserWindow(conn, 7L, 0, 10)).thenAnswer(inv -> {
+            assertTrue(inTransaction[0], "作者内容窗口查询应在事务回调内执行");
             return java.util.List.of(1L);
         });
         ContentCacheDTO dto1 = dto(1L);

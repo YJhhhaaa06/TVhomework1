@@ -17,7 +17,7 @@
 | 项    | 内容                                                                                                                  |
 | ---- | ------------------------------------------------------------------------------------------------------------------- |
 | 两层测试 | JUnit（`src/test/java`）= 服务层单元基准（mock，不碰 DB/HTTP）；pytest（`src/test/python`）= 端到端验收（真实 MySQL/Redis/Tomcat）。归属判据见 §〇.2 |
-| 测试环境 | 独立 Tomcat **18080**（与 IDEA 8080 隔离，端口不可覆盖）+ 独立测试库 Docker MySQL `TVDatabase_test`（127.0.0.1:3307）+ Redis（6379）       |
+| 测试环境 | 独立 Tomcat **18080**（与 IDEA 8080 隔离，端口不可覆盖）+ 独立测试库 Docker MySQL `TVDatabase_test`（127.0.0.1:3307）+ Redis（6379）+ RabbitMQ（5672，T16 起纳入预检；容器名 `rabbitmq`）       |
 | 数据隔离 | pytest 用例全部落在测试库 3307，生产库 TVDatabase 不再产生测试残留（见 §六）；媒体落独立测试目录 media-test（T2，与生产 stone 隔离），旧测试媒体只移不删地回收至 test_trash       |
 
 ### 快速上手
@@ -130,7 +130,7 @@ python tools\tv.py admin|cleanup|integrity|backup|init-test-db|test|cleanup-orph
 > 覆盖机制：上述路径均可在 `tools/run_tests*.py` 中通过同名 `TV_*` 环境变量覆盖（T1 落地，与 conftest.py 的 TV\_BASE\_URL 等先例一致）。HTTP 端口 18080/shutdown 18005 属安全隔离设计，**不可覆盖**。
 > 两个超时旋钮同样可覆盖：`TV_START_TIMEOUT`（就绪等待上限，默认 **180s**，T10）/ `TV_PYTEST_TIMEOUT`（pytest 整体刹车，默认 60s，T2）——见 §三 退出码 6 / 11。
 
-外部服务依赖：生产库 MySQL80（TVDatabase:3306）+ **独立测试库 Docker MySQL8.4（TVDatabase\_test:3307）** + Redis，均需运行中。
+外部服务依赖：生产库 MySQL80（TVDatabase:3306）+ **独立测试库 Docker MySQL8.4（TVDatabase\_test:3307）** + Redis + RabbitMQ（`rabbitmq` 容器，5672；T16 起），均需运行中。
 
 ***
 
@@ -160,7 +160,7 @@ python tools\run_tests.py stop     # 只关停独立 Tomcat
 | 7     | 停止失败且无法确认进程归属，需人工检查 |
 | 8     | 测试前置不满足（18080 未就绪）  |
 | 9     | 配置/挂载回读校验失败（server.xml 端口或 ROOT.war 媒体挂载改写后校验不符，拒绝启动） |
-| 10    | 测试环境未就绪（MySQL 3307 / Redis 6379 探测失败，秒级退出） |
+| 10    | 测试环境未就绪（MySQL 3307 / Redis 6379 / RabbitMQ 5672 探测失败，秒级退出） |
 | 11    | pytest 执行超时（默认 60s，`TV_PYTEST_TIMEOUT` 可覆盖）被强制终止 |
 | 12    | 媒体目录门禁拒绝（破坏权只信任硬编码白名单，任一失败 exit 12）：① 移动源（归一化后）不等于 run_tests.py 硬编码的 `DEFAULT_TEST_MEDIA_ROOT`（白名单）——env 覆盖到任何其它目录均无法移动、无人工确认通道；② 移动源命中生产媒体根（app.properties upload.path / 默认生产 stone 或其子目录）——白名单被人工改动指向生产时的第二道保险；③ 回收站落点（`TEST_TRASH_ROOT`）命中生产根或与移动源重叠/嵌套 |
 
@@ -190,7 +190,7 @@ pytest 阶段有整体超时刹车（T2，2026-09-05）：`subprocess.run(timeou
 
 - **就绪等待上限**（T10，2026-09-23）：**每 2s 探测一次**，上限**默认 180s**（`TV_START_TIMEOUT` 可覆盖）；到点仍未就绪 → `stop` + `exit 6`（退出码口径不变，日志仍为 `等待超时（<上限>s）`）。默认值依据 = **全量 `run.log` 实测（45 个就绪样本，三带分布）**：**40.1\~45.3s ×23**（主流，推断为 Tomcat 重展开 `webapps/ROOT` —— war 每次重建、约 8.2MB / 数百文件）/ **61.0\~65.4s ×4**（慢时段）/ **6.0\~6.6s ×18**（Tomcat 命中复用、未重展开）/ 1 次 **>90s** 触顶（即 T10 要消除的那次假失败）；**180s ≈ 最慢通过样本（65.4s）的 2.8 倍**，已落在抖动带之外（旧值 90s 仅 1.4 倍、正卡带内）。⚠️ "是否重展开"由 Tomcat 自己的 mtime 比较决定（两带并存），本窗口未追根因——不影响取值：上限要覆盖的是**慢带**。
 
-- **启动前环境预检**（T2，2026-09-05）：纯 socket 探测测试库 MySQL(3307) 与 Redis(6379)，不通即报「测试环境未就绪」并秒级退出（exit 10），不再空等至启动超时（6）。
+- **启动前环境预检**（T2，2026-09-05；T16 起扩展第三项 RabbitMQ(5672)）：纯 socket 探测测试库 MySQL(3307)、Redis(6379) 与 RabbitMQ(5672)，不通即报「测试环境未就绪」并秒级退出（exit 10），不再空等至启动超时（6）。应用自身的 MQ 降级能力不由预检负责（T17 单测覆盖），预检只约束测试环境。
 
 - 启动前检查：18080 若已有本应用则复用；若被未知程序占用则拒绝启动。
 
@@ -236,7 +236,7 @@ pytest 阶段有整体超时刹车（T2，2026-09-05）：`subprocess.run(timeou
 
 - **落盘目录随链路不同**：`all`/`start`/`test`（18080 实例）注入 `LOG_PATH=<CATALINA_BASE>/logs/system.log` → 四个文件都落 `.stage8-target\tomcat-test-18080\logs\`；`junit` 由 surefire 另注入 `LOG_PATH=${stage8.buildDir}/test-logs/system.log` → 落 `.stage8-target\test-logs\`（由此"测试日志不再写进运行日志目录"，N5）。
 - **文件名是轮转形态**：`<名>.<N>`，**N=0 为当前写入文件、N 越大越旧**（`log.maxBytes` / `log.fileCount` 控制）；读日志要取"前缀匹配 + mtime 最新"的那个文件，不要写死 `<名>.log`。
-- **pytest 怎么断言日志**（先例：`src/test/python/test_access_log.py`、`test_log_outputs.py`、`test_audit_log.py`、`test_milestone_log.py`）：① 选文件 = "`<名>.log*` 前缀匹配 + mtime 最新"，**必须排除 JUL 的 `<名>.<N>.lck` 锁文件**；② 断言分两类——**全文件不变式**（分流口径须对文件里每一行成立，如 error 只收 SEVERE、audit 只收合法审计行）与**本 run 记录**（"响应先于落盘返回"是常态 → 轮询至多 3s）；③ 精确定位"本次请求"的落盘记录**不要依赖行号增量**（落盘期间可能发生轮转），改用**唯一指纹**：把随机 marker 塞进请求参数、由异常栈回显，再向前回退到最近的 `ts=` 行即为该记录（`test_log_outputs.py` 的 `record_containing`），记录行上的 `req=` 可继续用来跨输出端回查；**审计行没有异常栈可回显** → 改用"**动作三元组指纹 + 全文件计数 delta**"（`test_audit_log.py` 的 `audited()`：`action=`/`operatorId=`/`target=` 的行数在执行操作前后必须恰好 +1；target id 全部取自本 run 新建对象，故测试库重建导致 id 复用、历史行仍在也不会误判）。归属判据见 §〇.2：**日志是否真的落盘、输出端之间是否串通**属"依赖真实堆栈副作用" → pytest；只到装配层（handler / level / 格式串 / 轮转参数）的断言归 JUnit。
+- **pytest 怎么断言日志**（先例：`src/test/python/test_access_log.py`、`test_log_outputs.py`、`test_audit_log.py`、`test_milestone_log.py`）：① 选文件 = "`<名>.log*` 前缀匹配 + mtime 最新"，**必须排除 JUL 的 `<名>.<N>.lck` 锁文件**；② 断言分两类——**全文件不变式**（分流口径须对文件里每一行成立，如 error 只收 SEVERE、audit 只收合法审计行）与**本 run 记录**（"响应先于落盘返回"是常态 → 轮询至多 3s）；③ 精确定位"本次请求"的落盘记录**不要依赖行号增量**（落盘期间可能发生轮转），改用**唯一指纹**：把随机 marker 塞进请求参数、由异常栈回显，再向前回退到最近的 `ts=` 行即为该记录（`test_log_outputs.py` 的 `record_containing`），记录行上的 `req=` 可继续用来跨输出端回查；**审计行没有异常栈可回显** → **T34 / `U-29` 起改用 `req=` 串联定位**（`test_audit_log.py` 的 `audited()`：先在 `access.log` 按（path + userId + 结果码）取**"调用前不存在的 `req=`"**作为本次请求的串联键，再按该 `req=` 在 `audit.log` 断言**恰一条** + 动作三元组指纹（`action=`/`operatorId=`/`target=`）逐字段一致；判据是 **req 值本身**，**不再依赖"单进程串行 + 不发生轮转"**——轮转把历史行切走也不影响）。归属判据见 §〇.2：**日志是否真的落盘、输出端之间是否串通**属"依赖真实堆栈副作用" → pytest；只到装配层（handler / level / 格式串 / 轮转参数）的断言归 JUnit。
 - **业务里程碑 INFO 的断言口径（T9 立的第三类写法，先例 `src/test/python/test_milestone_log.py`）**：① **"恰一条"仍用指纹 + 全文件计数 delta**（`milestone()`：执行前后必须恰好 +1），但指纹取**消息前缀**（`msg=关注成功, userId=`）而非对象 id——对象 id 只能从响应里拿到、无法用于"执行前"计数；随后把**新增那一行**与本 run 新建对象对齐（`userId=` / `contentId=` 出现在该行即证归属）。② **失败路径断言 = delta 恒 0**（`assert_no_milestone()`：401 / 409 等拒绝后指纹行数不得变化）。③ **手机号不变式必须先剥掉 `req=<16hex>`**：请求 id 是 16 位十六进制、天然命中 `1[3-9]\\d{9}`（实测 26 行假阳性），不剥会误报"日志出现明文手机号"。④ 单测侧的共享探针 = `src/test/java/com/itheima/util/LogProbe`（命名不匹配 surefire includes，不会被当用例跑）。
 - **事务基础设施 / 包装点定栈的断言口径（T11 立的第四类写法）**：① **"恰一条带堆栈"用 JUnit 探针 + 真实模板**（`src/test/java/com/itheima/util/TransactionTemplateTest`：真实 `TransactionTemplate` + 真实连接池，回调分别抛 `SQLException` / `BusinessException` / `IllegalStateException` → 断言"恰一条 SEVERE 带栈（且消息不含 SQL 文本）" / "0 条" / "0 条"）；② **真实基础设施异常**（连接池耗尽）在 `pool-test` 执行 fork 内做（`MyConnectionPoolTest#transactionTemplateLogsSevereWhenConnectionExhausted`——该 fork 已是 `DB_POOL_MAXSIZE=1` / `DB_POOL_TIMEOUTMS=500`，占满池即得 `SQLException("获取数据库连接超时")`）；③ **跨层联合断言**（内容装载链、评论树链）用真实模板 + mock DAO/Redis，断言堆栈恰落在包装点（`TransactionTemplate` / `CommentCache`）、装载层与吸收点两行均 `getThrown() == null`；④ **e2e 注不进基础设施异常** → 该类验收只由单测承担，pytest 侧只做回归（本任务对外行为零变化，故无新增 pytest 断言）。
 - **可预期业务拒绝的级别断言（T12 立的第五类写法，先例 `src/test/python/test_log_outputs.py` 的 `test_expected_rejections_are_warning_and_never_reach_error_output`）**：① 触发面用**本 run 新建的一次性用户**（401 旧密码错误 / 400 手机号不匹配 / 409 撞名），按其 `userId` + 端点 + 结果码在 `access.log` 上定位本请求的 `req=`（**不用行号增量**）；② 正向断言 = `system.log` 上同 `req` 的**源头结论行**存在且 `level=WARNING`，并检查其**紧随一行不是堆栈续行**（"不带栈"的落盘判据）；③ 反向断言 = `error.log` 里该 `req` **0 条**（**按 req 定向**，不做全文件计数——append=true 下历史 SEVERE 行仍在，全文件断言会误红）；④ 该口径属"**真失败才允许进 `error.log`**"（该端阈值 `SEVERE`）的负向验证，正面（500 类仍落）由 JUnit `assertExactlyOneStacked` + T4 的 `test_error_output_keeps_only_severe` 承担。
@@ -268,6 +268,48 @@ pytest 阶段有整体超时刹车（T2，2026-09-05）：`subprocess.run(timeou
   ```
 
 - **验证边界（T13）**：本任务**不改业务代码**，故**未新增 pytest 用例**（项目规则只约束业务改动；归属判据同 §〇.2——该工具是消费侧、不产生落盘副作用）；验收数字由**三方对账**承担：报告 ↔ **独立重算**（`ts=` 行数 / 结果码分布 / `slow` 计数）↔ **合成夹具**（`temp_script/t13_fixture_check.py`，23 项：轮转合并顺序 / 窗口 tail / 未识别与空行计数 / 4xx·5xx 分列 / slow 一致性 / 四端串联 / 只读性 / 非法参数）。**生产 / 本地直跑链路仍无实测数据**（`logs/` 现为空，属 R-11"已知缺口"）。
+
+### 4.7 读 Redis / MySQL 做断言的通道（`docker exec redis-cli`，feed1-18 T18；feed1-19 T19 扩展；feed2-21 T21 双通道；**feed2-22 T22 断言主体迁至 MySQL**；**feed2-23 T23 读侧回填 + 大V发件箱腿**）
+
+写扩散（T18）与收件箱重建（T19）的产物 `feed:inbox:{userId}` / `feed:inbox:full:{userId}` 原**只存在于 Redis**（应用侧无 HTTP 读接口，且红线要求 `/feed` 读路径零改动），故 pytest 需直读 Redis 才能断言。**feed2-21 T21** 起写扩散改为**落库 DB 真相表**（`feed_inbox`）+ 写后失效 DEL 缓存 ⇒ 双通道；**feed2-22 T22** 起重建也改为**只写 DB 真相（窗口）+ 同步状态、只失效缓存**（一期完整态标记退役）⇒ **断言主体 = MySQL**（`feed_inbox` 窗口 + `feed_inbox_sync`），**Redis 只剩"缓存不存在"的反向断言**（证明两处写入方都不写缓存）。**feed2-23 T23** 起 `/feed` 切**两路读**（收件箱腿 **miss → 回源 `feed_inbox` 并回填** `feed:inbox:{id}`、大V发件箱腿回填 `feed:outbox:{authorId}`）⇒ Redis 通道**新增正向断言"读后缓存存在"**（证明回填发生；仍只用 `EXISTS`），而**断言主体仍是 MySQL**（两路 oracle 的输入都取自 DB 真相）。
+
+- **手段 = 子进程 `docker exec <容器> redis-cli <命令>`**（容器名 `redis`；应用经 `app.properties` 固定连 `localhost:6379` = 该容器，db 0、无密码）。**零新依赖**——`src/test/python/requirements.txt` 保持 `pytest + requests` 两项，与既有 `mysql.exe` 子进程范式同构（先例 `test_content_paging.py` / `test_comment_delete.py` 的 `_mysql_path()` / `_run_sql()`）。
+- **本机已验证**：`docker exec redis redis-cli PING` → `PONG`。
+- **skip 口径（不误报失败）**：`docker` 不在 PATH、或容器不可用（`PING` 非 `PONG`）→ `pytest.skip("…无法读 Redis 收件箱")`——读通道是**手段**、不是被测能力。
+- **只读纪律**：只发读命令（`PING` / `ZSCORE` / `ZCARD` / `TTL` / **`EXISTS` / `ZREVRANGE`（T19 扩）**；**T22 起本通道只用 `PING` / `EXISTS`**）；该通道**不得**用于写 Redis，写路径只能是被测应用自己的真实链路。同理，T19 新增的 **MySQL oracle 通道**（`mysql.exe` 子进程 + `run_tests.py` 注入的 `DB_*`）**只发 SELECT**。
+- **落地样例**：
+  - `src/test/python/test_feed_push.py`（**T21 改写为落库语义**：3 例 = 粉丝收件箱 **DB 落库**收敛（直读 `feed_inbox`）/ 非粉丝零行 / `/feed` 拉模式口径哨兵；Redis 侧不再由本文件断言——DEL 的 e2e 断言归 `test_feed_rebuild.py` 的"收敛后再发布"序列）。
+  - **`src/test/python/test_feed_read.py`（feed2-23 T23 新增，7 例）**：`/feed` 两路读的端到端证据 —— ① 首屏与**两路 oracle** 逐条相等 + `total` / `totalPages` 口径；② `pageSize=2` 逐页切片；③ 深翻（`page = totalPages+2`）空 list 且 `total` 不变；④ **"短页 ≠ 到底"**（窗口内一条被作者软删 ⇒ 页内跳过 ⇒ 返回短于 pageSize 但 `total` 仍是窗口条数 = 前端 `shortPageMeansEnd=false` 的前提）；⑤ 未同步（全新用户）⇒ 空信封不报错（**不 skip**，降级跑同样成立）；⑥ 读过 `/feed` 后 `feed:inbox:{fan}` 缓存存在（回填）；⑦ 大V腿：作者按参数为大V时其内容**不在** `feed_inbox` 但 `/feed` 仍取到、且 `feed:outbox:{author}` 缓存存在（需 `FEED_BIGV_THRESHOLD=1` 跑，默认参数下自动 skip）。
+  - `src/test/python/test_feed_rebuild.py`（4 例 = 关注触发重建后 `feed_inbox_sync` 存在且 **`feed_inbox` 窗口与 MySQL oracle 逐条相等**（oracle = 每关注作者最近 K → 归并去重 → contentId 降序 → 裁剪 C，排除大V；K/C 与 bigV 参数按 `app.properties` 同源读取）+ **收件箱缓存三件套不存在**（窗口非空却不写缓存 ⇒ 证明"重建只失效不写"）/ 重建后 fanout 落库且缓存仍不存在 / 取关后窗口 == 新 oracle（空集）且仍标已同步 / `/feed` 哨兵）。
+  - **"逐条相等"的 oracle 口径（T19 立，T22 按窗口口径重写，T23 扩为两路）**：不拿应用自己的读路径当基准（那会"同样错就看不出来"），而是**独立复算**——直连 MySQL 用 `ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY id DESC)` 复算「每关注作者最近 K」→ 去重 → 降序 → `LIMIT C`，须**逐条等于** `SELECT content_id FROM feed_inbox WHERE user_id=? ORDER BY content_id DESC`；排序取 **contentId**（`content.id` 自增，实测两库"每作者内 id 序 ≡ create_time 序"名次零不一致）。**T23 读侧 oracle 扩为两路**：`SELECT DISTINCT` 合并「`feed_inbox` 该用户全部行」∪「关注的**大V作者**各自最近 N 条（`ROW_NUMBER()` 分区 + `LIMIT N`）」，再 `ORDER BY content_id DESC LIMIT M`；阈值 / 名单 / N / M 按 `app.properties` + `FEED_*` 环境变量**同源读取**，大V的子集判定与读侧批量 SQL **同源**（均取 DB 真值 `users.follower_count`）。该通道不可用时**一律 skip**（手段缺失，不代表能力回归）。
+
+### 4.8 feed 窗口核对工具（`tools/feed_shadow_check.py`，feed1-20 T20 → **feed2-25 T25 改写为二期口径**）
+
+> ⚠️ **口径变更（feed2-25 T25）**：一期（T20）以 Redis 完整态标记 `feed:inbox:full:` 分组、以 Redis ZSet 为比对对象、oracle = 拉模式**全量**；T21 落表、T22 重建"只失效不写"、T23 切读后该口径**已失真**（标记退役、真相源迁 DB、读侧有界窗口）。**T25 已按二期事实改写**——本节即为新口径。
+
+定位 = **二期切读后的窗口观测基线**：在**真实 / 准真实数据**上回答"已同步窗口与重建 oracle 是否一致（缺成员）+ 缓存回填覆盖率"，作为切读后时间线正确性的例行测量仪。
+
+- **真相源 = DB**：`feed_inbox`（时间线真相表，`uk_user_content(user_id, content_id)`）+ `feed_inbox_sync`（窗口同步状态，**存在即已同步**）。Redis `feed:inbox:{userId}` = **可降级读缓存**（写后失效、读 miss 回源回填），**无正确性含义**，故只作覆盖率观测。
+- **universe（DB 侧）**：`feed_inbox` 散行用户 **∪** `feed_inbox_sync` 用户（一条 `SELECT DISTINCT … UNION …`；不再取 Redis key）。`--user-id` 精查优先。
+- **分组语义（核心）**：**[A] 已同步**（`feed_inbox_sync` 有行）= **判定组**；**[B] 未同步**（只有 `feed_inbox` 散行）= **完整性未知、不是缺陷**（该用户从没成功重建过 ⇒ 读侧回退纯拉），只计数、不判失败。
+- **核对口径**：DB 窗口（`ORDER BY content_id DESC`）vs **独立重建 oracle**（与 `src/test/python/test_feed_rebuild.py:_oracle_window_ids` **同源**：`follow`（DB 真相）→ 每关注作者最近 K（`ROW_NUMBER() … ORDER BY id DESC`）→ 归并去重 → contentId 降序 → 裁剪 C，**排除大V**（阈值 / 名单与应用同参））。**不拿应用自己的读路径当基准**。
+  - `missing = oracle \\ DB窗口` ⇒ **有缺失即不一致（判失败）**；
+  - `extra = DB窗口 \\ oracle` ⇒ **只报告、不判失败**（合法来源：重建后 fanout 追加的新内容 / 表侧非严格有界 / 大V fail-open 历史残留，见 NEEDS 4.0 T22 残余②④）。**不做序列全等判定**。
+- **Redis（best-effort）**：主判定完全不依赖 Redis。docker / 容器 / `PING` 不可用 ⇒ 缓存覆盖率记 `null` + 提示，**不置退出码 2**。可用时扫描 `feed:inbox:*` 统计**已同步用户的回填覆盖率**；对存在的 key 比对成员集合 vs DB 窗口，差异只作 `cache_coverage.mismatch` 观测（不判失败）。任何 Redis 通道异常（含 PING 之后的单条命令失败 / 超时）都只降级为"覆盖率不可用"，**绝不抛出**。
+- **只读红线**：Redis 只发读命令（白名单 `PING` / `EXISTS` / `ZREVRANGE`；扫描走 `redis-cli --scan --pattern`，命令与 pattern 均硬编码），MySQL **只发单条 `SELECT`**（禁 `;` 多语句；另拒 `INTO OUTFILE` / `INTO DUMPFILE` / `FOR UPDATE` / `LOCK IN SHARE MODE`）；不写 / 不删 / 不改 Redis、DB、broker；报告只落 stdout（**不生成落盘文件**）。可证方式 = 代码级"单一 chokepoint" + 运行前后 Redis key 列表 / `DBSIZE` 快照 diff + DB 行数 diff（真实数据夹具）。
+- **扫描与前缀排除**：一期遗留标记 `feed:inbox:full:` **以** `feed:inbox:` 开头（前缀重叠）⇒ 遍历时**必须显式排除**；本工具按"先判长前缀再判短前缀 + 尾段强制数字"双保险（残留 key 由 TTL 回收，仍须防御）。`feed:rebuild:lock:` 不匹配该 glob，分类函数仍防御性排除。
+- **参数**：`--user-id <int>`（精查单用户）/ 缺省 = 全量扫描（DB universe）；`--json`；`--limit K`（opt-in，默认不限，超限截断并提示）；`--max-detail`；`--redis-container`；`--timeout`。**argparse 层面无任何写参数**。
+- **退出码**：0 = 核对完成且所有"已同步"窗口**无缺失成员**（含存在未同步组、含**空 universe 零数据报告**）；1 = 存在"已同步但缺成员（missing）"；2 = 参数 / **DB 通道**错误（缺 mysql、连库失败、只读白名单拒绝——友好文案、**无 Traceback**）。**Redis 通道不可用不置 2**。
+- **典型用法**：
+
+  ```powershell
+  python tools\tv.py feed-shadow                       # 全量扫描（经统一入口，注入声明环境 DB_*）
+  python tools\feed_shadow_check.py --user-id 42       # 精查单个用户
+  python tools\feed_shadow_check.py --json             # 机器可读（直调本脚本，经 tv.py 会有横幅）
+  ```
+
+- **判读提示**：核对是**快照**测量——恰逢 fanout 在写或重建在替换窗口时"missing"可能是瞬时；本工具**不加轮询重试**（轮询是 pytest 的手段，工具是测量仪），宜在低写入窗口执行。全量成本 ∝ 用户数 ×（3 次 mysql），宜例行用 `--user-id`、全量用于周期 / 审计。
+- **验证边界（T25）**：本任务**不改用 pytest 覆盖工具本身**（归属判据同 §〇.2——工具属消费侧、不产生落盘副作用，同 §4.6 的 `log_report.py` 先例）；验收由**合成夹具**（`temp_script/t25_fixture_check.py`：分类 / 分组 / missing-extra 判定 / 退出码 / 只读守卫 / 缓存覆盖与降级 / JSON 结构 / 空 universe）+ **真实数据夹具**（`temp_script/t25_seed_and_check.py`：种入真实 `feed_inbox` + `feed_inbox_sync` 行 → 一致 / 缺失 / 多余 / 未同步四态 + **前后快照零写入** + 自动清理）+ 全量回归 `test all` exit 0 承担。
 
 ***
 
@@ -351,11 +393,12 @@ python tools\tv.py --env prod integrity                  # 本次检查生产库
    Test-Path 'D:\dev\DevTools\tomcat\apache-tomcat-10.1.54\bin\catalina.bat'
    ```
 
-2. 确认测试环境外部依赖就绪（3307 测试库 / 6379 Redis，T2 起 `start/all` 会自动预检并秒级报错）：
+2. 确认测试环境外部依赖就绪（3307 测试库 / 6379 Redis / 5672 RabbitMQ，T2 起 `start/all` 会自动预检并秒级报错；第三项 T16 起）：
 
    ```powershell
    Test-NetConnection 127.0.0.1 -Port 3307 | Select-Object TcpTestSucceeded
    Test-NetConnection 127.0.0.1 -Port 6379 | Select-Object TcpTestSucceeded
+   Test-NetConnection 127.0.0.1 -Port 5672 | Select-Object TcpTestSucceeded
    ```
 
 3. 确认 18080 空闲：

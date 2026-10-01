@@ -184,7 +184,12 @@ def test_secrets_never_land_in_access_log(user_a):
     login_user(USER_A["phone"], USER_A["password"])
     token = user_a["token"]
 
-    content = "\n".join(read_access_lines())
+    # U-30（feed2-25 T25 修）：先剔除随机 `req=` 字段值再比对——`req` 是 16 位十六进制
+    # （8 位毫秒 + 4 位进程随机 tag + 4 位序号），其随机片段可与密码 / 手机号子串偶然重合，
+    # 朴素"整份 content 子串比对"会极低频误报（实测概率 ≈ 进程 tag 命中密码尾 4 位，1/65536）。
+    # 剔除后仍对其余字段（path / msg / userId / code / cost 等）做同一子串断言，**强度不降**。
+    content = "\n".join(REQ_RE.sub("req=<redacted>", line) for line in read_access_lines())
+    assert content.strip(), "access.log 内容为空，无法验证脱敏（前置失败）"
     for secret in (USER_A["password"], USER_A["phone"], token):
         assert secret not in content, (
             f"访问日志不得出现敏感值（password/phone/token 明文）: {secret!r} 长度={len(secret)}"

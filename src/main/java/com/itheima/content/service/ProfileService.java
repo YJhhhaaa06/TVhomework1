@@ -62,6 +62,9 @@ public class ProfileService {
         int followCount = followCache.getFollowCount(profileUserId);
 
         // T3：事务回调只做 DB 查询，不触碰任何缓存（缓存读见下方事务外段）
+        // feed2-25 T25（治 U-24）：装载侧由"全量 id 读 + 内存 subList 切片"改为**窗口 SQL**
+        // （count + `ORDER BY id DESC LIMIT ? OFFSET ?`）——单次成本 ∝ offset+pageSize，
+        // 不再 ∝ 该作者内容总量；复用 idx_user_id 反向索引扫描、无 DDL。
         ProfileDbData db = transactionTemplate.execute(conn -> {
             try {
                 User user = userDao.getUserForProfileById(conn, profileUserId);
@@ -69,12 +72,10 @@ public class ProfileService {
                     throw new NotFoundException("用户不存在");
                 }
 
-                List<Long> allIds = contentDao.findContentIdsByUser(conn, profileUserId);
-                int total = allIds.size();
+                int total = contentDao.countContentByUser(conn, profileUserId);
                 int offset = (page - 1) * pageSize;
-                int end = Math.min(offset + pageSize, total);
                 List<Long> pageIds = offset < total
-                        ? new ArrayList<>(allIds.subList(offset, end))
+                        ? contentDao.findContentIdsByUserWindow(conn, profileUserId, offset, pageSize)
                         : Collections.emptyList();
                 return new ProfileDbData(user, pageIds, total);
             } catch (SQLException e) {

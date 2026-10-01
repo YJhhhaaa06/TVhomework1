@@ -23,6 +23,18 @@ public final class CacheKeys {
     /** 内容索引 key 前缀：{@code content:index:}（生成、{@link #domainOf} 解析、SCAN 匹配同源，防漂移）。 */
     public static final String CONTENT_INDEX_PREFIX = "content:index:";
 
+    /** 写扩散收件箱 key 前缀：{@code feed:inbox:}（T18 新增；生成、{@link #domainOf} 解析同源，防漂移）。 */
+    public static final String FEED_INBOX_PREFIX = "feed:inbox:";
+
+    /**
+     * 收件箱**重建去重锁** key 前缀：{@code feed:rebuild:lock:}（T19 新增）。
+     *
+     * <p>一期唯一的"分布式锁"用法（SET NX EX + Lua CAS 释放）；锁只是**去重优化**、不承担正确性——
+     * TTL 到点即视为可重入：若届时真有并发重建交叉执行，最终产物是**两次快照的并集**
+     * （**只多不丢**，多出的成员由下一次重建收口），见 {@code FeedRebuildService} 类注释与任务回写的残余登记。
+     */
+    public static final String FEED_REBUILD_LOCK_PREFIX = "feed:rebuild:lock:";
+
     private CacheKeys() {
     }
 
@@ -138,6 +150,83 @@ public final class CacheKeys {
     }
 
     /**
+     * 粉丝收件箱（写扩散，feed1-18；feed2-21 T21 起语义升级为**可降级读缓存**）：
+     * {@code feed:inbox:{userId}}（ZSet&lt;contentId&gt;，**score = contentId**）。
+     *
+     * <p>score 取 contentId（自增单调）⇒ {@code ZRANGE} 升序 / 反向降序即"内容倒序"，与
+     * {@code /feed} 拉模式 {@code ORDER BY create_time DESC, id DESC} 的次序口径一致。
+     *
+     * <p>语义（NEEDS 4.0 写侧拍板）：**DB 真相 = {@code feed_inbox} 表**（T21 落库：写扩散 +
+     * 窗口重建的产物），本 key = 其上的**可降级读缓存**——**fanout（T21 起）与重建（T22 起）
+     * 均不再写本 key**，二者统一为「单写 DB 真相 + 写后失效」，只对相关用户 `DEL` 本 key
+     * 与 `empty:` / `partial:` 标记（读 miss 由 T23 回源 DB 并回填）。TTL
+     * （{@code feed.inbox.ttlMinutes}）仅为缓存淘汰，**无正确性含义**（正确性以 DB 真相
+     * + 窗口同步状态 {@code feed_inbox_sync} 为准）。
+     *
+     * <p>⚠️ 收纳边界（沿用）：本 key 只存 DB 可重算的内容，**不得塞"已读未读"这类不可重算状态**。
+     */
+    public static String feedInbox(long userId) {
+        return FEED_INBOX_PREFIX + userId;
+    }
+
+    /**
+     * 收件箱读缓存的**失效三件套**（feed2-22 T22 新增）：数据 key + {@link #empty(String)} +
+     * {@link #partial(String)}，供**所有失效点**（fanout 写后失效 / 重建写后失效）统一引用。
+     *
+     * <p>为什么必须三件套一起删（既有约定，见 {@link #partial(String)} 的警示与
+     * {@code FollowCache#invalidateKeysQuietly} 先例）：数据 key 失效后残留的空标记会让读"假空"，
+     * 残留的 `partial:` 会把"前缀"误判为完整集合（静默漏成员）⇒ 收口为单一方法与单一调用点，
+     * 防两处失效集漂移。
+     */
+    public static String[] feedInboxCacheKeys(long userId) {
+        String inboxKey = feedInbox(userId);
+        return new String[]{inboxKey, empty(inboxKey), partial(inboxKey)};
+    }
+
+    /** 收件箱重建去重锁：{@code feed:rebuild:lock:{userId}}（String，值 = 持有者 token，仅重建用）。 */
+    public static String feedRebuildLock(long userId) {
+        return FEED_REBUILD_LOCK_PREFIX + userId;
+    }
+
+    /**
+     * 大V发件箱读缓存 key 前缀：{@code feed:outbox:}（feed2-23 T23 新增；
+     * 生成、{@link #domainOf} 解析同源，防漂移）。
+     */
+    public static final String FEED_OUTBOX_PREFIX = "feed:outbox:";
+
+    /**
+     * 大V发件箱读缓存（feed2-23 T23）：{@code feed:outbox:{authorId}}
+     * （ZSet&lt;contentId&gt;，**score = contentId**）。
+     *
+     * <p>语义：大V作者的内容**不落表**（反面对照"发件箱落表"已判不做），其"最近 N 条"由
+     * **读时拉**合成——本 key = 该次拉取的**可降级读缓存**（miss → 回源 {@code content} 表按
+     * {@code idx_user_id}（物理 {@code (user_id, id)}）反向索引扫描取最近 N 条 → 回填）。
+     * score 取 contentId（自增单调）⇒ {@code ZREVRANGE key 0 N-1} 即"最近 N 条按内容倒序"，
+     * 与收件箱 {@link #feedInbox(long)} 的 score 口径同源。
+     *
+     * <p>失效点 = **既有 push 消费者**（{@code FeedInboxWriter.doFanout}，1 发布 = 1 DEL，
+     * **必须位于大V判定之前**——该判定命中即早退，否则大V发布永不失效本 key）；TTL
+     * （{@code feed.outbox.ttlMinutes}）只作缓存淘汰、**无正确性含义**（真相源 = {@code content} 表）。
+     * 命中率不承诺（NEEDS 4.0 读缓存拍板）。
+     */
+    public static String feedOutbox(long authorId) {
+        return FEED_OUTBOX_PREFIX + authorId;
+    }
+
+    /**
+     * 大V发件箱缓存的**失效两件套**（feed2-23 T23 新增）：数据 key + {@link #empty(String)}，
+     * 供唯一失效点（push 消费者）统一引用。
+     *
+     * <p>为什么是**两件套**而非收件箱那样的三件套：outbox 恒为"该作者最近 N 条"这一**有界窗口**，
+     * 不对"集合是否完整"作任何断言 ⇒ **无 {@code partial:} 语义**；但"无作品的大V"若不写空标记，
+     * 每个读请求都要回源一次 DB，故保留 {@code empty:}（短 TTL）吸收该情形。
+     */
+    public static String[] feedOutboxCacheKeys(long authorId) {
+        String outboxKey = feedOutbox(authorId);
+        return new String[]{outboxKey, empty(outboxKey)};
+    }
+
+    /**
      * 数据 key → 统计域解析（T7 新增，key 生成与解析同源，唯一源收敛于本方法）。
      *
      * <p>注意前缀重叠：{@code content:} 是 {@code content:comments:} / {@code content:index:} /
@@ -149,7 +238,13 @@ public final class CacheKeys {
      * content:index 归 CONTENT（索引归内容域）；content:like* 与 comment:like* 归 LIKE；
      * content:comments 与 comment:* 归 COMMENT；content:{id} 归 CONTENT；
      * user:following 与 user:follower（user:* 兜底）归 FOLLOW；**user:like* 与 user:commentLike*
-     * （T4 装载反转后的用户维度点赞成员）在 user:* 兜底之前归 LIKE**；未知/null 归 OTHER。
+     * （T4 装载反转后的用户维度点赞成员）在 user:* 兜底之前归 LIKE**；{@code feed:inbox:{id}}
+     * 归 **FEED**（feed1-18 写扩散收件箱）；未知/null 归 OTHER。
+     *
+     * <p>FEED 域成员（feed2-23 T23 收口）：{@code feed:inbox:{id}}（收件箱读缓存）、
+     * {@code feed:outbox:{id}}（T23 大V发件箱读缓存）、{@code feed:rebuild:lock:{id}}（重建去重锁）
+     * ——均以 {@code feed:} 开头，**无需为本方法新增分支**；一期完整态标记
+     * {@code feed:inbox:full:{id}} 已随 T22 退役（语义迁 {@code feed_inbox_sync} 表）。
      */
     public static CacheDomain domainOf(String dataKey) {
         if (dataKey == null) {
@@ -188,6 +283,14 @@ public final class CacheKeys {
         }
         if (dataKey.startsWith("user:")) {
             return CacheDomain.FOLLOW;
+        }
+        // feed: 与既有全部前缀无重叠（content: / comment: / user: / empty: / partial:），
+        // 但仍在 OTHER 兜底之前判定，与"生成与解析同源"的收敛口径一致。
+        // T19 起本分支覆盖收件箱成员集 feed:inbox:{id} 与重建锁 feed:rebuild:lock:{id}（均 FeedDomain）；
+        // feed2-23 T23 起并覆盖大V发件箱读缓存 feed:outbox:{id}（FeedDomain）；
+        // 一期完整态标记 feed:inbox:full:{id} 已随 feed2-22 T22 退役（前缀判定不受影响）
+        if (dataKey.startsWith("feed:")) {
+            return CacheDomain.FEED;
         }
         return CacheDomain.OTHER;
     }

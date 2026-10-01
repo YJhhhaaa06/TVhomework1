@@ -121,6 +121,31 @@ public class FollowDao {
         return result;
     }
 
+    // 粉丝方向**游标（keyset）窗口查询**（feed3-T30 新增）：按 user_id 升序取"游标之后"的 count 行。
+    // 依赖 idx_followed_user_user(followed_user_id, user_id)：等值列 + 范围列同序，免 filesort；
+    // 供 fanout 直读粉丝迭代（不回填缓存）——游标严格递增 ⇒ 同一遍历不重、无深 OFFSET 成本。
+    // 返回不足 count 行即表示 DB 已到底（调用方据此终止，与窗口查询口径一致）。
+    public List<Long> getFollowerUserIdsAfter(Connection conn, long followedUserId, long afterUserId, int count)
+            throws SQLException {
+        if (count <= 0 || afterUserId < 0) {
+            return new ArrayList<>();
+        }
+        List<Long> result = new ArrayList<>();
+        String sql = "SELECT user_id FROM follow WHERE followed_user_id = ? AND user_id > ? "
+                + "ORDER BY user_id LIMIT ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, followedUserId);
+            pstmt.setLong(2, afterUserId);
+            pstmt.setInt(3, count);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    result.add(rs.getLong("user_id"));
+                }
+            }
+        }
+        return result;
+    }
+
     // 检查是否已关注
     public boolean isFollowing(Connection conn, long userId, long followedUserId) throws SQLException {
         String sql = "SELECT COUNT(*) FROM follow WHERE user_id = ? AND followed_user_id = ?";

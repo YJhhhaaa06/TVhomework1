@@ -11,7 +11,12 @@ import { createChunkedList } from '../chunkedList.js';
 
 // T19：/feed 分块——信封大小由**后端 feed 域常量**（100）决定，请求**只传 `page`**；
 // 本地按 BATCH_SIZE 小批展示：本地余量足够时「加载更多」0 请求（较逐页 10 条请求数降约 1/10）。
-// 顺带获得跨 chunk 去重。
+// T23：/feed 已切为**有界窗口**（读侧总窗口 M=300，信封 100 ⇒ totalPages ≤ 3），前端据此两点适配：
+//   ① **跨 chunk 去重仍然必要**（`keyOf: (it) => it.id` + helper 的 seen 集合）：窗口每次请求都重算，
+//      翻页期间有新发布就会让同一 id 出现在相邻页，去重后**用户看不到重复卡片**；
+//   ② **`shortPageMeansEnd: false`**：页内跳过 null（内容已软删 / 缓存空标记）或窗口末尾都会产生"短页"，
+//      按"短页即到底"会提前停住、少拉后面的内容；改为**只以 `totalPages` 为准**（短页与空页都不算到底，
+//      中间页可能整页被跳过）。
 const CHUNK_SIZE = 100;
 const BATCH_SIZE = 10;
 let state = null;
@@ -48,6 +53,8 @@ async function loadFirst() {
     chunkSize: CHUNK_SIZE,
     batchSize: BATCH_SIZE,
     keyOf: (it) => it.id,
+    // T23：有界窗口下"短页 ≠ 到底"（见文件头说明）；仅本页启用，其它 chunkedList 调用点不受影响
+    shortPageMeansEnd: false,
   });
 
   try {

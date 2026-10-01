@@ -9,7 +9,9 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Component
 public class ContentDao {
@@ -196,6 +198,46 @@ public class ContentDao {
         return ids;
     }
 
+    /**
+     * 按作者**分页窗口**取内容 id（feed2-25 T25，治 `U-24`）：替代"全量 id 读 + 内存切片"。
+     *
+     * <p><b>为什么用 contentId 排序</b>：{@code content.id} 自增 ⇒ id 越大发布越晚，与
+     * {@link #findContentIdsByUser} 的 {@code ORDER BY create_time DESC, id DESC} 运行期次序一致
+     * （同秒并列时 id 即 tie-break；T22 窗口已用只读 SQL 在 3306 / 3307 实测"每作者内 id 序与
+     * create_time, id 序**名次零不一致**"）。
+     *
+     * <p><b>不新增索引</b>：`idx_user_id (user_id)` 的 InnoDB 二级索引物理为 {@code (user_id, id)}
+     * 升序 ⇒ {@code WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?} 反向索引扫描、**免 filesort**，
+     * 成本 ∝ {@code offset + pageSize}（而非该作者内容总量）；若沿用 create_time 排序则需对该作者
+     * 全部行 filesort（无 {@code (user_id, create_time)} 索引）。
+     *
+     * <p>⚠ 与 {@link #findContentIdsByUser}（全量；{@code ContentCache} 改名级联失效仍需全量）并存，
+     * 调用方按需选择：分页装载用本方法，'取该作者全部 id' 用原方法。
+     *
+     * @param offset   起始偏移（&lt; 0 不发 SQL，返回空列表）
+     * @param pageSize 页大小（&lt;= 0 不发 SQL，返回空列表）
+     */
+    public List<Long> findContentIdsByUserWindow(Connection conn, long userId,
+                                                 int offset, int pageSize) throws SQLException {
+        if (offset < 0 || pageSize <= 0) {
+            return Collections.emptyList();
+        }
+        String sql = "SELECT c.id FROM content c WHERE c.user_id = ? AND c.is_deleted = 0"
+                + " ORDER BY c.id DESC LIMIT ? OFFSET ?";
+        List<Long> ids = new ArrayList<>();
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, userId);
+            pstmt.setInt(2, pageSize);
+            pstmt.setInt(3, offset);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    ids.add(rs.getLong("id"));
+                }
+            }
+        }
+        return ids;
+    }
+
     public List<Long> findContentIdsByUsers(Connection conn, List<Long> userIds, int offset, int pageSize) throws SQLException {
         if (userIds == null || userIds.isEmpty()) {
             return Collections.emptyList();
@@ -222,6 +264,108 @@ public class ContentDao {
             }
         }
         return ids;
+    }
+
+    /**
+     * 每作者各取最近 {@code perAuthorLimit} 条内容 id（feed2-22 T22 窗口重算）：
+     * 每关注作者一个 {@code (SELECT … ORDER BY id DESC LIMIT ?)} 分支，`UNION ALL` 成一条语句
+     * （一趟往返；调用方按 {@code feed.rebuild.authorBatch}（feed3-T29）切分作者列表以约束 SQL 长度）。
+     *
+     * <p><b>排序口径 = contentId（自增单调）</b>：{@code content.id} 自增 ⇒ id 越大发布越晚，
+     * 与拉模式 {@code ORDER BY create_time DESC, id DESC} 的运行期次序一致（同秒并列时
+     * id 即 tie-break），且与"排序 / 归并 / 裁剪全按 contentId"的收件箱层口径同源
+     * （{@code feed_inbox} 不存时间字段）。
+     *
+     * <p><b>不新增索引</b>：`idx_user_id (user_id)` 的 InnoDB 二级索引物理为 {@code (user_id, id)}
+     * 升序 ⇒ `WHERE user_id = ? ORDER BY id DESC LIMIT ?` 反向索引扫描、免 filesort；
+     * 且每分支 `LIMIT` 可提前终止（无软删时实际取数 ≈ K 行）。⚠️ `is_deleted` 不在该索引中，
+     * 需回表过滤 ⇒ **最坏上界仍为该作者的内容量**（大量软删时扫描放大），不是纯粹 ∝ K。
+     *
+     * <p>⚠️ `UNION ALL` 的外层顺序不保证（由调用方归并），且**不指定 author 归属**
+     * （每条 id 已唯一确定作者，调用方无需按作者分组）。
+     *
+     * @param userIds        作者 id 列表（空 / null 不发 SQL，返回空列表）
+     * @param perAuthorLimit 每作者保留条数 K（&lt;= 0 不发 SQL，返回空列表）
+     */
+    public List<Long> findRecentContentIdsByUsers(Connection conn, List<Long> userIds,
+                                                  int perAuthorLimit) throws SQLException {
+        if (userIds == null || userIds.isEmpty() || perAuthorLimit <= 0) {
+            return Collections.emptyList();
+        }
+        StringBuilder sql = new StringBuilder();
+        for (int i = 0; i < userIds.size(); i++) {
+            if (i > 0) {
+                sql.append(" UNION ALL ");
+            }
+            sql.append("(SELECT id FROM content WHERE user_id = ? AND is_deleted = 0"
+                    + " ORDER BY id DESC LIMIT ?)");
+        }
+        List<Long> ids = new ArrayList<>();
+        try (PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+            int idx = 1;
+            for (Long userId : userIds) {
+                pstmt.setLong(idx++, userId);
+                pstmt.setInt(idx++, perAuthorLimit);
+            }
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    ids.add(rs.getLong("id"));
+                }
+            }
+        }
+        return ids;
+    }
+
+    /**
+     * 每作者各取最近 {@code perAuthorLimit} 条内容 id，**并带回作者归属**（feed2-23 T23 大V发件箱批量回源）。
+     *
+     * <p>与 {@link #findRecentContentIdsByUsers} 的唯一差别：本方法在分支里多选一列
+     * {@code user_id AS author_id}（`idx_user_id` 物理为 {@code (user_id, id)}，该列随索引即可取到），
+     * 于是**一趟查询**即可按作者切分结果、直接用于逐作者缓存回填——避免"不回源就不知道 id 归谁"。
+     *
+     * <p><b>排序口径 = contentId 降序</b>（同 {@link #findRecentContentIdsByUsers}，
+     * 与 {@code feed_inbox} 不存时间字段的收件箱层口径同源）；⚠️ `UNION ALL` 的**外层顺序不保证**，
+     * 故本方法在 Java 侧对每个作者的结果**显式降序重排**，不依赖引擎的拼接顺序。
+     *
+     * <p>⚠️ `is_deleted` 不在 `idx_user_id` 中、需回表过滤 ⇒ 每分支最坏上界为该作者的内容量
+     * （同 {@link #findRecentContentIdsByUsers} 的登记口径）。
+     *
+     * @param authorIds      作者 id 列表（空 / null / {@code perAuthorLimit <= 0} 不发 SQL，返回空映射）
+     * @param perAuthorLimit 每作者保留条数 N
+     * @return 作者 id → 该作者最近 N 条 contentId（降序）；**无内容的作者不出现在返回映射中**
+     */
+    public Map<Long, List<Long>> findRecentContentIdsByAuthor(Connection conn, List<Long> authorIds,
+                                                             int perAuthorLimit) throws SQLException {
+        if (authorIds == null || authorIds.isEmpty() || perAuthorLimit <= 0) {
+            return Collections.emptyMap();
+        }
+        StringBuilder sql = new StringBuilder();
+        for (int i = 0; i < authorIds.size(); i++) {
+            if (i > 0) {
+                sql.append(" UNION ALL ");
+            }
+            sql.append("(SELECT user_id AS author_id, id FROM content WHERE user_id = ? AND is_deleted = 0"
+                    + " ORDER BY id DESC LIMIT ?)");
+        }
+        Map<Long, List<Long>> byAuthor = new LinkedHashMap<>();
+        try (PreparedStatement pstmt = conn.prepareStatement(sql.toString())) {
+            int idx = 1;
+            for (Long authorId : authorIds) {
+                pstmt.setLong(idx++, authorId);
+                pstmt.setInt(idx++, perAuthorLimit);
+            }
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    byAuthor.computeIfAbsent(rs.getLong("author_id"), k -> new ArrayList<>())
+                            .add(rs.getLong("id"));
+                }
+            }
+        }
+        // UNION ALL 外层顺序不保证 ⇒ 显式降序重排（同时保证每作者内不重复）
+        for (List<Long> ids : byAuthor.values()) {
+            ids.sort(Collections.reverseOrder());
+        }
+        return byAuthor;
     }
 
     public int countContentByUsers(Connection conn, List<Long> userIds) throws SQLException {

@@ -13,13 +13,12 @@
 
 ## 读法（先例 `src/test/python/test_log_outputs.py`，本文件沿用同一套）
 - 输出端文件是轮转形态 `audit.log.<N>`；选文件 = "前缀匹配 + mtime 最新"，**排除 JUL 的 `.lck`**。
-- **不用行号增量定位本次记录**（落盘期间可能轮转 → 假绿/假红）：改用**唯一指纹** =
-  审计行的 `action=… operatorId=… target=… result=success` 三元组，其中 target / operatorId 全部
-  来自**本 run 新建的对象**（自建内容、自建评论、自建管理员、自建专用户）。定位口径 =
-  **全文件计数 delta**（`before` → `before+1`）：即便内容 id 因测试库重建而复用、历史行仍在，
-  本 run 的成功操作也只会让计数**恰好 +1**；"恰好一条"= 增量恰为 1（而不是"全文件只有 1 条"）。
-  **前提**：本 run 的审计量级远小于 `log.maxBytes`（出厂 10MB）、不发生轮转；若将来审计量级增长到会
-  轮转，需改为按 `req=` 定位（轮转会切走历史行，计数口径失效）。
+- **定位口径 = `req=` 串联**（T34 / `U-29` 改写）：先在 `access.log` 按（path + userId + 结果码）
+  取出**本次请求的 `req=`**（判据 = "调用前不存在的 req 值"⇒ 同端点被本 run 多次调用也不会取错），
+  再在 `audit.log` 按该 `req=` 断言**恰好一条**审计行且字段与操作指纹一致。
+- **不再依赖"单进程串行 + 不发生轮转"**：判据是 req 值本身，不是全文件行数 delta 或行位置
+  ⇒ 轮转把历史行切走 / 切进来都不影响；同一请求的 audit 与 access 两端共享同一个 `req=`（16 位十六进制）。
+  审计行的 `action=… operatorId=… target=… result=success` 指纹仍逐字段断言，强度不降。
 
 ## 前置
 `run_tests.py` 启动的独立实例（18080 + 测试库 3307）+ 注入
@@ -51,6 +50,7 @@ AUDIT_LINE_RE = re.compile(
     rf"^ts={TS} level=INFO logger=audit req={REQ} "
     rf"msg=action=\S+ operatorId=(?:\d+|-) target=\S+ result=success$"
 )
+REQ_RE = re.compile(rf"req=({REQ})")
 
 
 # ---------------------------------------------------------------------------
@@ -80,44 +80,83 @@ def audit_needle(action, operator_id, target):
     return f"action={action} operatorId={operator_id} target={target} result=success"
 
 
-def audit_count(needle):
-    """当前 audit.log 中含该指纹的行数（**全文件计数**，不做行号增量）。"""
-    return sum(1 for line in read_lines("audit.log*") if needle in line)
+def access_reqs_of(path, user_id, code):
+    """当前 access.log 里匹配（path + userId + 结果码）的访问行所带 `req=` 列表（按文件顺序）。"""
+    needle = f" path={path} userId={user_id} code={code} "
+    reqs = []
+    for line in read_lines("access.log*"):
+        if needle in line:
+            match = REQ_RE.search(line)
+            if match:
+                reqs.append(match.group(1))
+    return reqs
 
 
-def audited(request_fn, action, operator_id, target, timeout=5.0, expect_code=200):
+def wait_new_access_req(path, user_id, code, before_reqs, timeout=5.0):
+    """等待出现**调用前不存在**的 `req=`（= 本次请求的 access 行），返回该 req。
+
+    判据是 **req 值集合差**、不是行数 / 行位置 ⇒ 落盘期间发生轮转（历史行被切走或切进来）
+    也不影响正确性；轮转把整份旧文件切走后，本次行是新文件里唯一命中，仍被认作"新 req"。
+    """
+    deadline = time.time() + timeout
+    while True:
+        fresh = [r for r in access_reqs_of(path, user_id, code) if r not in before_reqs]
+        if fresh:
+            return fresh[-1]
+        if time.time() >= deadline:
+            raise AssertionError(
+                f"access.log 未在 {timeout}s 内出现本次访问行"
+                f"（path={path} userId={user_id} code={code}，目录 {ACCESS_LOG_DIR}）"
+            )
+        time.sleep(0.05)
+
+
+def audit_lines_of_req(req):
+    """audit.log 里属于该 `req=` 的全部审计行。"""
+    return [line for line in read_lines("audit.log*") if f"req={req} " in line]
+
+
+def audited(request_fn, action, operator_id, target, access_path, access_user_id,
+            timeout=5.0, expect_code=200):
     """执行 `request_fn()`（返回响应 JSON），断言：
     ① 响应 `code == expect_code`（对外行为零变化，走既有契约）；
-    ② 该操作点**本次恰好新增一条**审计记录，且行形态合规、字段完整。
+    ② 本次请求在 `audit.log` 里**恰好新增一条**审计记录，且行形态合规、字段与操作指纹一致。
 
-    返回 `(响应 JSON, 审计行)`。轮询覆盖"响应先于落盘"的窗口；末段再等一小段确认没有第二条
-    （"恰好一条"而不是"至少一条"）。
+    定位口径 = `req=` 串联（T34 / `U-29`）：先从 access 侧取"本次请求的 req"（req 值集合差），
+    再按该 req 在 audit 侧断言"恰一条"。**不依赖"不轮转"/"串行"**——判据是 req 值本身。
+
+    返回 `(响应 JSON, 审计行)`。轮询覆盖"响应先于落盘"的窗口；末段再等一小段确认同一 req
+    没有第二条（"恰好一条"而不是"至少一条"）。
     """
-    needle = audit_needle(action, operator_id, target)
-    before = audit_count(needle)
+    before_reqs = access_reqs_of(access_path, access_user_id, expect_code)
 
     body = request_fn()
     assert body.get("code") == expect_code, f"{action} 应 code={expect_code}（否则不会留痕）: {body}"
 
+    req = wait_new_access_req(access_path, access_user_id, expect_code, before_reqs, timeout)
+
     deadline = time.time() + timeout
-    while audit_count(needle) < before + 1:
+    while not audit_lines_of_req(req):
         if time.time() >= deadline:
             tail = [ln[:160] for ln in read_lines("audit.log*")[-3:]]
             raise AssertionError(
                 f"audit.log 未在 {timeout}s 内出现 {action} 的审计记录"
-                f"（指纹 {needle!r}，当前 {audit_count(needle)} 条，目录 {ACCESS_LOG_DIR}）；"
-                f"文件尾部 3 行 = {tail}"
+                f"（req={req}，当前 0 条，目录 {ACCESS_LOG_DIR}）；文件尾部 3 行 = {tail}"
             )
         time.sleep(0.05)
-    time.sleep(0.2)  # 稳定窗口：确认只新增这一条
+    time.sleep(0.2)  # 稳定窗口：确认同一 req 只写了一条
 
-    hits = [ln for ln in read_lines("audit.log*") if needle in ln]
-    assert len(hits) == before + 1, (
-        f"{action} 本次应只新增 1 条审计记录，实得 {len(hits) - before} 条：\n"
+    hits = audit_lines_of_req(req)
+    assert len(hits) == 1, (
+        f"本次请求（req={req}）应只写 1 条审计记录，实得 {len(hits)} 条：\n"
         + "\n".join(ln[:200] for ln in hits[-3:])
     )
 
-    line = hits[-1]  # 追加写 → 最后一条即本次记录
+    line = hits[0]
+    assert audit_needle(action, operator_id, target) in line, (
+        f"req={req} 的审计行应与操作指纹一致"
+        f"（期望 {audit_needle(action, operator_id, target)!r}）: {line[:240]}"
+    )
     assert AUDIT_LINE_RE.match(line), (
         f"审计行不符合单行结构化形态（时间须带 3 位毫秒与带冒号时区、字段须齐）: {line[:240]}"
     )
@@ -256,6 +295,7 @@ class TestAdminAudit:
                                   params={"contentId": audit_content},
                                   headers=headers, timeout=10).json(),
             "admin.content.hide", admin_id, f"contentId:{audit_content}",
+            "/api/admin/content/hide", admin_id,
         )
         assert f" operatorId={admin_id} " in line, f"操作者应为发起请求的管理员: {line[:200]}"
 
@@ -264,6 +304,7 @@ class TestAdminAudit:
                                   params={"contentId": audit_content},
                                   headers=headers, timeout=10).json(),
             "admin.content.unhide", admin_id, f"contentId:{audit_content}",
+            "/api/admin/content/unhide", admin_id,
         )
 
     def test_comment_delete_is_audited(self, base_url, admin_user, audit_content, token_a):
@@ -288,6 +329,7 @@ class TestAdminAudit:
                                   params={"commentId": comment_id},
                                   headers={"token": admin_user["token"]}, timeout=10).json(),
             "admin.comment.delete", admin_user["id"], f"commentId:{comment_id}",
+            "/api/admin/comment/delete", admin_user["id"],
         )
 
     def test_media_restore_is_audited(self, base_url, admin_user, missing_media_of_audit_content):
@@ -305,6 +347,7 @@ class TestAdminAudit:
                 timeout=60,
             ).json(),
             "admin.media.restore", admin_user["id"], f"mediaId:{media_id}",
+            "/api/admin/media/restore", admin_user["id"],
         )
         assert body.get("data", {}).get("fileExists") is True, f"恢复后文件应存在: {body}"
         assert os.path.isfile(item["expectedPath"]), "恢复应把文件写回原路径"
@@ -326,6 +369,7 @@ class TestUserAudit:
                                            "Content-Type": "application/json"},
                                   json={"userName": new_name}, timeout=10).json(),
             "user.changeUserName", audit_user["id"], f"userId:{audit_user['id']}",
+            "/user/changeUserName", audit_user["id"],
         )
 
     def test_change_password_is_audited_and_has_no_sensitive_values(self, base_url, audit_user):
@@ -339,6 +383,7 @@ class TestUserAudit:
                                         "oldPassword": audit_user["password"],
                                         "newPassword": new_password}, timeout=10).json(),
             "user.changePassword", audit_user["id"], f"userId:{audit_user['id']}",
+            "/user/changePassword", audit_user["id"],
         )
 
         text = "\n".join(read_lines("audit.log*"))
@@ -366,6 +411,7 @@ def test_audit_log_is_wellformed_and_isolated(base_url, audit_user):
                               json={"userName": f"testA_audit_iso_{uuid.uuid4().hex[:8]}"},
                               timeout=10).json(),
         "user.changeUserName", audit_user["id"], f"userId:{audit_user['id']}",
+        "/user/changeUserName", audit_user["id"],
     )
 
     audit_lines = [ln for ln in read_lines("audit.log*") if ln.startswith("ts=")]

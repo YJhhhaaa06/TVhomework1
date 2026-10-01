@@ -1,6 +1,7 @@
 package com.itheima.content.service;
 
 import com.itheima.content.dao.ContentDao;
+import com.itheima.feed.service.FeedReadService;
 import com.itheima.follow.service.FollowCache;
 import com.itheima.like.service.LikeService;
 import com.itheima.exception.ServerException;
@@ -30,6 +31,7 @@ class FeedServiceTest {
     private ContentCache contentCache;
     private LikeService likeService;
     private TransactionTemplate tt;
+    private FeedReadService feedReadService;
     private Connection conn;
     private FeedService service;
     /** 事务回调执行中标志（T3：断言缓存读发生在事务回调之外）。 */
@@ -42,9 +44,13 @@ class FeedServiceTest {
         contentCache = mock(ContentCache.class);
         likeService = mock(LikeService.class);
         tt = mock(TransactionTemplate.class);
+        feedReadService = mock(FeedReadService.class);
         conn = mock(Connection.class);
         inTransaction = new boolean[1];
-        service = new FeedService(followCache, contentDao, contentCache, likeService, tt);
+        service = new FeedService(followCache, contentDao, contentCache, likeService, tt, feedReadService);
+        // T23：默认"未同步"→ 走纯拉，使下方既有用例继续逐字校验纯拉语义（synced 路径另有用例）
+        when(feedReadService.readWindow(anyLong()))
+                .thenReturn(new FeedReadService.FeedReadResult(false, Collections.emptyList()));
         when(tt.execute(any(TransactionTemplate.TransactionAction.class))).thenAnswer(inv -> {
             TransactionTemplate.TransactionAction<?> action = inv.getArgument(0);
             inTransaction[0] = true;
@@ -56,6 +62,12 @@ class FeedServiceTest {
         });
         // T8：feed 页内改批量读；默认空映射，用例内自行覆盖
         when(contentCache.getContentsBatch(anyList())).thenReturn(Collections.emptyMap());
+    }
+
+    /** T23：把读侧窗口桩成"已同步 + 指定窗口"（调用方随之走窗口切片路径）。 */
+    private void stubWindow(List<Long> windowIds) {
+        when(feedReadService.readWindow(7L))
+                .thenReturn(new FeedReadService.FeedReadResult(true, windowIds));
     }
 
     /** getContentsBatch 桩（id → DTO，null 值=缓存 miss 跳过）。 */
@@ -237,5 +249,115 @@ class FeedServiceTest {
 
         assertEquals(1, result.getList().size());
         assertTrue(result.getList().get(0).getIsLiked());
+    }
+
+    // ==================== T23：synced 路径（有界窗口切片 + 深翻禁止） ====================
+
+    /** synced：按 `(page-1)*pageSize` 在窗口上切片，且 `total` = 窗口条数（而非关注者内容总数）。 */
+    @Test
+    void syncedSlicesPageFromWindowAndUsesWindowTotal() throws SQLException {
+        stubWindow(List.of(10L, 9L, 8L, 7L, 6L));
+        ContentCacheDTO dto8 = dto(8L);
+        ContentCacheDTO dto7 = dto(7L);
+        stubGetBatch(Map.of(8L, dto8, 7L, dto7));
+        when(contentCache.toContentVO(dto8)).thenReturn(vo(8L));
+        when(contentCache.toContentVO(dto7)).thenReturn(vo(7L));
+
+        PageResult<ContentVO> result = service.getFeed(7L, 2, 2);
+
+        assertEquals(List.of(8L, 7L), List.of(result.getList().get(0).getId(), result.getList().get(1).getId()));
+        assertEquals(5, result.getTotal());
+        assertEquals(3, result.getTotalPages());
+        // 窗口路径不得再触纯拉的 DAO（DB 成本已由窗口承担）
+        verify(contentDao, never()).countContentByUsers(any(), anyList());
+        verify(contentDao, never()).findContentIdsByUsers(any(), anyList(), anyInt(), anyInt());
+        verify(followCache, never()).getFollowingIds(anyLong());
+    }
+
+    /** synced：越过窗口（深翻）→ **空页**，且 `total` 保持窗口条数（前端据此自然停止翻页）。 */
+    @Test
+    void syncedDeepPageBeyondWindowReturnsEmptyButKeepsTotal() {
+        stubWindow(List.of(5L, 4L, 3L));
+
+        PageResult<ContentVO> result = service.getFeed(7L, 3, 2);   // offset=4 >= total=3
+
+        assertTrue(result.getList().isEmpty());
+        assertEquals(3, result.getTotal());
+        verify(likeService, never()).batchIsContentLiked(anyLong(), anyList());
+    }
+
+    /** synced：末页正常返回不足一页（窗口 3 条 + pageSize 2 ⇒ 第 2 页 1 条）。 */
+    @Test
+    void syncedLastPageMayBeShort() {
+        stubWindow(List.of(5L, 4L, 3L));
+        ContentCacheDTO dto3 = dto(3L);
+        stubGetBatch(Map.of(3L, dto3));
+        when(contentCache.toContentVO(dto3)).thenReturn(vo(3L));
+
+        PageResult<ContentVO> result = service.getFeed(7L, 2, 2);
+
+        assertEquals(1, result.getList().size());
+        assertEquals(3L, result.getList().get(0).getId());
+        assertEquals(3, result.getTotal());
+    }
+
+    /** synced：页内缓存 miss（null）跳过 ⇒ 返回**短于 pageSize**，但 `total` 不变（"短页 ≠ 到底"）。 */
+    @Test
+    void syncedCacheMissSkipsEntryButKeepsTotal() {
+        stubWindow(List.of(3L, 2L, 1L));
+        Map<Long, ContentCacheDTO> values = new HashMap<>();
+        values.put(3L, dto(3L));
+        values.put(2L, null);          // 缓存 miss → 跳过
+        values.put(1L, null);
+        stubGetBatch(values);
+        when(contentCache.toContentVO(any(ContentCacheDTO.class))).thenAnswer(inv -> {
+            ContentCacheDTO d = inv.getArgument(0);
+            return d == null ? null : vo(d.getId());
+        });
+
+        PageResult<ContentVO> result = service.getFeed(7L, 1, 3);
+
+        assertEquals(1, result.getList().size());
+        assertEquals(3L, result.getList().get(0).getId());
+        assertEquals(3, result.getTotal());          // 含被跳过的条目 ⇒ 短页不是"到底"
+        assertEquals(1, result.getTotalPages());
+    }
+
+    /** synced：窗口路径的装载仍**在事务之外**（T3 口径在切读后不变）。 */
+    @Test
+    void syncedLoadsOutsideDbTransaction() {
+        stubWindow(List.of(1L));
+        ContentCacheDTO dto1 = dto(1L);
+        when(contentCache.getContentsBatch(anyList())).thenAnswer(inv -> {
+            assertFalse(inTransaction[0], "窗口路径的内容缓存读同样不应在事务回调内执行");
+            return Map.of(1L, dto1);
+        });
+        when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
+        when(likeService.batchIsContentLiked(7L, List.of(1L))).thenAnswer(inv -> {
+            assertFalse(inTransaction[0], "窗口路径的点赞缓存读同样不应在事务回调内执行");
+            return Map.of(1L, true);
+        });
+
+        PageResult<ContentVO> result = service.getFeed(7L, 1, 10);
+
+        assertEquals(1, result.getList().size());
+        assertTrue(result.getList().get(0).getIsLiked());
+    }
+
+    /** 未同步：读侧返回 synced=false ⇒ 逐字走纯拉（判定与回退接线在本任务内完成）。 */
+    @Test
+    void unsyncedFallsBackToPurePull() throws SQLException {
+        when(followCache.getFollowingIds(7L)).thenReturn(List.of(7L));
+        when(contentDao.countContentByUsers(conn, List.of(7L))).thenReturn(1);
+        when(contentDao.findContentIdsByUsers(conn, List.of(7L), 0, 10)).thenReturn(List.of(1L));
+        ContentCacheDTO dto1 = dto(1L);
+        stubGetBatch(Map.of(1L, dto1));
+        when(contentCache.toContentVO(dto1)).thenReturn(vo(1L));
+
+        PageResult<ContentVO> result = service.getFeed(7L, 1, 10);
+
+        assertEquals(1, result.getList().size());
+        assertEquals(1, result.getTotal());
+        verify(contentDao).countContentByUsers(conn, List.of(7L));
     }
 }
